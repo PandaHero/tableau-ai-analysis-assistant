@@ -109,13 +109,12 @@ Thumbs.db
 *.pyo
 *.pyd
 
-# Exclude parent directory files
-../*
-!../.gitignore
-
-# Exclude specific directories
+# Exclude specific directories (third-party code)
 deepagents-master/
 tableau-mcp-main/
+
+# Data files
+data/*.db
 
 # Exclude Tableau temp files
 *.twbr
