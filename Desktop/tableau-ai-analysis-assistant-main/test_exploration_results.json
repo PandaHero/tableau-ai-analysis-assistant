@@ -1,0 +1,77 @@
+[
+  {
+    "id": "exploration_open",
+    "name": "开放式探索 - 销售数据洞察",
+    "question": "销售数据有什么洞察？",
+    "understanding": {
+      "passed": true
+    },
+    "planning": {
+      "passed": true
+    },
+    "execution": {
+      "passed": false
+    },
+    "overall": false
+  },
+  {
+    "id": "exploration_trend",
+    "name": "趋势探索 - 销售趋势分析",
+    "question": "分析销售额的趋势",
+    "understanding": {
+      "passed": false
+    },
+    "planning": {
+      "passed": false
+    },
+    "execution": {
+      "passed": false
+    },
+    "overall": false
+  },
+  {
+    "id": "exploration_compare",
+    "name": "对比探索 - 省份表现对比",
+    "question": "比较各省份的表现",
+    "understanding": {
+      "passed": false
+    },
+    "planning": {
+      "passed": false
+    },
+    "execution": {
+      "passed": false
+    },
+    "overall": false
+  },
+  {
+    "id": "exploration_why",
+    "name": "原因探索 - 为什么销售下降",
+    "question": "为什么销售额下降了？",
+    "understanding": {
+      "passed": true
+    },
+    "planning": {
+      "passed": false
+    },
+    "execution": {
+      "passed": false
+    },
+    "overall": false
+  },
+  {
+    "id": "exploration_pattern",
+    "name": "模式探索 - 发现销售模式",
+    "question": "销售数据中有什么模式？",
+    "understanding": {
+      "passed": true
+    },
+    "planning": {
+      "passed": true
+    },
+    "execution": {
+      "passed": false
+    },
+    "overall": false
+  }
+]

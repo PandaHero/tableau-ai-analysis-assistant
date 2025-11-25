@@ -1,0 +1,61 @@
+# Core Dependencies - Updated to 1.0+ versions (2025-10-30)
+langchain>=1.0.3  # Core LangChain framework - MAJOR UPDATE
+langgraph>=1.0.2  # State machine and graph-based workflows - MAJOR UPDATE
+langsmith>=0.4.38  # LangSmith tracing and monitoring
+langchain-openai>=1.0.1  # OpenAI integrations - MAJOR UPDATE
+langchain-community>=0.4.1  # Community integrations (使用 >= 以避免版本冲突)
+langchain-core>=1.0.2  # Core abstractions - MAJOR UPDATE
+langchain-classic>=1.0.0  # Compatibility layer for legacy code
+langchain-text-splitters>=1.0.0  # Text splitting utilities
+langgraph-prebuilt>=1.0.2  # Pre-built LangGraph components
+langgraph-sdk>=0.2.9  # LangGraph SDK tools
+
+# Web Framework
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+
+# Data Processing
+pandas>=2.2.3  # 使用>=以允许预编译版本
+numpy>=2.1.3  # 使用>=以允许预编译版本
+
+# Tableau Integration
+langchain-tableau>=0.4.39
+tableauhyperapi>=0.0.18000  # Tableau Hyper API for direct SQL queries
+psycopg2-binary>=2.9.0  # PostgreSQL driver for Repository access
+
+# Environment
+python-dotenv==1.0.1
+
+# Data Validation
+pydantic>=2.10.3
+pydantic-settings>=2.6.1  # 使用 >= 以避免版本冲突
+
+# JSON Processing
+json-repair>=0.30.0  # JSON修复和格式化,用于处理LLM输出的不规范JSON
+
+# Date & Time
+python-dateutil==2.9.0
+chinesecalendar>=1.9.0  # 中国节假日支持（可选，用于工作日判断）
+# lunarcalendar>=0.0.9  # 农历转换支持（可选，需要编译工具）
+
+# HTTP Client
+httpx>=0.28.1
+requests>=2.32.3  # 使用 >= 以避免版本冲突
+aiohttp>=3.9.0
+
+# JWT Authentication
+PyJWT>=2.8.0
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+
+# Code Quality
+black==24.10.0
+flake8==7.1.1
+mypy==1.13.0
+
+# Development
+ipython==9.0.2
