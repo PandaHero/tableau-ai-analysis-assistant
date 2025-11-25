@@ -25,7 +25,7 @@
 ```
 DeepAgent (主编排器)
 ├─ 内置中间件 (规划、文件、总结、缓存)
-├─ 自定义中间件 (Tableau 专用)
+├─ 自定义中间件 (Tableau 专用，2个)
 ├─ 4 个子代理 (理解、规划、洞察、重规划)
 └─ Tableau 工具集
 ```
@@ -36,27 +36,26 @@ DeepAgent (主编排器)
 ```python
 agent = create_deep_agent(
     model="claude-sonnet-4-5",
-    tools=[vizql_query, get_metadata, map_fields, parse_date],
+    tools=[vizql_query, get_metadata, semantic_map_fields, parse_date],
     middleware=[TableauMetadataMiddleware(), VizQLQueryMiddleware()],
-    subagents=[understanding_agent, planning_agent, insight_agent],
+    subagents=[understanding_agent, planning_agent, insight_agent, replanner_agent],
     backend=CompositeBackend(...)
 )
 ```
 
-### 2. 子代理系统
+### 2. 子代理系统（4个）
 
 | 子代理 | 职责 | 工具 |
 |--------|------|------|
-| understanding-agent | 理解问题意图 | get_metadata, map_fields |
-| planning-agent | 生成查询计划 | get_metadata, parse_date |
+| understanding-agent | 理解问题意图，分解子问题 | get_metadata, semantic_map_fields |
+| planning-agent | 生成查询计划（为每个子问题生成subtask） | get_metadata, semantic_map_fields, parse_date |
 | insight-agent | 分析结果生成洞察 | read_file, write_file |
-| replanner-agent | 评估并重新规划 | get_metadata |
+| replanner-agent | 评估结果，决定是否需要重规划 | get_metadata |
 
-### 3. 自定义中间件
+### 3. 自定义中间件（2个）
 
-- **TableauMetadataMiddleware** - 元数据管理
-- **VizQLQueryMiddleware** - 查询执行
-- **InsightGenerationMiddleware** - 洞察生成
+- **TableauMetadataMiddleware** - 自动注入元数据查询工具
+- **VizQLQueryMiddleware** - 自动注入 VizQL 查询工具
 
 ### 4. 后端配置
 
@@ -76,17 +75,41 @@ CompositeBackend(
 ```
 用户: "2016年各地区的销售额"
   ↓
-主 Agent: 创建任务列表 (write_todos)
+主 Agent 接收查询
   ↓
-主 Agent: task(understanding-agent) → 理解意图
+主 Agent: task(understanding-agent)
+  ├─ Understanding Agent 分析问题
+  ├─ 识别实体（地区、销售额）
+  ├─ 使用 semantic_map_fields 验证字段（RAG + LLM）
+  ├─ 分解为子问题（如果需要）
+  └─ 返回 QuestionUnderstanding（包含 sub_questions）
   ↓
-主 Agent: task(planning-agent) → 生成查询计划
+主 Agent 收到理解结果（N 个 sub_questions）
   ↓
-主 Agent: vizql_query() → 执行查询
+主 Agent: write_todos 创建任务列表
+  - [ ] 为每个 sub_question 生成查询计划
+  - [ ] 执行查询
+  - [ ] 分析结果
+  - [ ] 评估是否需要重规划
+  - [ ] 生成报告
   ↓
-FilesystemMiddleware: 结果过大，自动保存到文件
+主 Agent: task(planning-agent)
+  ├─ Planning Agent 为每个 sub_question 生成 subtask
+  ├─ 使用 semantic_map_fields 映射字段（RAG + LLM）
+  ├─ 使用 parse_date 解析日期
+  ├─ 生成 Intent 模型
+  └─ 返回 QueryPlanningResult（包含 N 个 subtasks）
+  ↓
+主 Agent 执行查询
+  ├─ 如果 subtasks 独立 → 并行执行
+  ├─ 如果有依赖 → 按阶段执行
+  └─ FilesystemMiddleware 自动处理大型结果
   ↓
 主 Agent: task(insight-agent) → 分析结果
+  ↓
+主 Agent: task(replanner-agent) → 评估是否需要重规划
+  ├─ 如果 need_replan = true → 生成新查询计划 → 执行 → 分析
+  └─ 如果 need_replan = false → 继续
   ↓
 主 Agent: 生成最终报告
   ↓
@@ -95,20 +118,40 @@ FilesystemMiddleware: 结果过大，自动保存到文件
 
 ## 💡 核心优势
 
-### 1. 自动优化
-- ✅ 上下文超过 170k tokens 自动总结
+### 1. 核心组件 100% 复用 🛡️
+- ✅ **QueryBuilder** - 完全保留，封装为工具
+- ✅ **QueryExecutor** - 完全保留，封装为工具
+- ✅ **DataProcessor** - 完全保留，集成到查询工具
+- ✅ **MetadataManager** - 完全保留，封装为工具
+- ✅ **DateParser** - 完全保留，封装为工具
+- ✅ **所有 Pydantic 模型** - 完全保留
+- ⬆️ **FieldMapper** - 升级为语义映射（RAG + LLM）
+- 📝 **业务逻辑代码：0% 变化**
+- ⏱️ **封装工作量：仅 3-4 小时**
+- 💰 **节省：3000+ 行代码的重写工作**
+
+详见：**COMPONENT_REUSE.md** ⭐
+
+### 2. 自动优化
+- ✅ 上下文超过阈值自动总结（阈值根据模型配置，如 Claude: 170k, GPT-4o: 108k）
 - ✅ Anthropic 提示词缓存（节省 50-90% 成本）
 - ✅ 大型结果自动保存到文件系统
 - ✅ 独立任务自动并行执行
 
-### 2. 内置功能
-- ✅ 任务规划 (TodoListMiddleware)
+### 3. 内置功能
+- ✅ 高层任务规划 (TodoListMiddleware) - 工作流管理
 - ✅ 文件操作 (FilesystemMiddleware)
 - ✅ 子代理委托 (SubAgentMiddleware)
 - ✅ 错误修复 (PatchToolCallsMiddleware)
 - ✅ 人工审批 (HumanInTheLoopMiddleware)
 
-### 3. 开发效率
+### 4. 智能字段映射
+- ✅ RAG + LLM 语义理解（替代简单字符串匹配）
+- ✅ 向量检索快速找到候选字段
+- ✅ LLM 理解上下文选择最佳匹配
+- ✅ 处理同义词和多语言
+
+### 5. 开发效率
 - ✅ 标准化架构模式
 - ✅ 快速添加新功能
 - ✅ 更好的代码组织
@@ -159,8 +202,12 @@ result = agent.invoke(
 .kiro/specs/deepagents-refactor/
 ├── requirements.md              # 需求文档（12个需求）
 ├── design.md                    # 设计文档（详细架构）
-├── example_implementation.py    # 示例代码
-└── SUMMARY.md                   # 本文档
+├── SUMMARY.md                   # 本文档（项目总结）
+├── COMPARISON.md                # 架构对比分析
+├── DATA_MODEL_REUSE.md          # 数据模型复用策略
+├── CORRECTIONS.md               # 设计文档的重要更正
+├── SEMANTIC_FIELD_MAPPING.md    # 语义字段映射升级方案
+└── COMPONENT_REUSE.md           # ⭐ 核心组件 100% 复用策略（重要）
 ```
 
 ## ⚠️ 风险和缓解

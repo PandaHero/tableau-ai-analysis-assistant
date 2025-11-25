@@ -123,7 +123,7 @@ class DateParser:
         )
         
         # 生成缓存键
-        cache_key = self._generate_cache_key(time_range, reference_date)
+        cache_key = self._generate_cache_key(time_range, reference_date, max_date)
         
         # 检查缓存
         if cache_key in self._cache:
@@ -440,7 +440,8 @@ class DateParser:
     def _generate_cache_key(
         self,
         time_range: TimeRange,
-        reference_date: Optional[datetime]
+        reference_date: Optional[datetime],
+        max_date: Optional[str] = None
     ) -> str:
         """
         生成缓存键
@@ -448,12 +449,14 @@ class DateParser:
         Args:
             time_range: TimeRange 对象
             reference_date: 参考日期
+            max_date: 最大日期（可选）
         
         Returns:
             缓存键字符串
         """
         ref_str = reference_date.date().isoformat() if reference_date else "None"
-        return f"{time_range.model_dump_json()}|{ref_str}"
+        max_str = max_date if max_date else "None"
+        return f"{time_range.model_dump_json()}|{ref_str}|{max_str}"
     
     def get_performance_stats(self) -> dict:
         """

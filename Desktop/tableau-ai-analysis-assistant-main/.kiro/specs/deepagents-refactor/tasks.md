@@ -1,0 +1,835 @@
+# DeepAgents 重构实施任务列表
+
+**版本**: v1.0
+**最后更新**: 2025-01-15
+**预计工期**: 4-6周
+
+---
+
+## 重要说明
+
+### 核心原则
+1. **100% 复用现有组件**：所有核心业务组件（QueryBuilder、QueryExecutor、DataProcessor等）100%保留
+2. **保留现有 Prompt 系统**：使用 `tableau_assistant/prompts/` 的 4段式结构 + 自动 Schema 注入
+3. **保留现有数据模型**：使用 `tableau_assistant/src/models/` 的 Pydantic 模型
+4. **渐进式迁移**：先搭建框架，再逐步迁移功能
+
+### 技术要求
+1. **DeepAgents 框架**：使用 LangChain DeepAgents 作为主编排框架
+2. **中间件系统**：利用内置中间件 + 3个自定义中间件
+3. **子代理架构**：5个子代理（boost, understanding, planning, insight, replanner）
+4. **工具封装**：8个工具封装现有组件
+
+### 参考文档
+
+**核心设计**：
+- [设计文档](./design.md) - 技术架构、核心决策、数据流
+
+**详细设计**：
+- [子代理设计](./design-appendix/subagent-design.md)
+- [中间件设计](./design-appendix/middleware-design.md)
+- [工具设计](./design-appendix/tools-design.md)
+- [数据模型设计](./design-appendix/data-models.md)
+- [字段语义推断](./design-appendix/field-semantics.md) - 统一的字段语义推断系统
+- [Task Planner与RAG集成](./design-appendix/task-planner-rag-integration.md) - 基于现有实现的集成方案
+- [渐进式洞察系统](./design-appendix/progressive-insights.md) - Part 1-4，完整的渐进式分析设计
+- [缓存系统](./design-appendix/caching-system.md) - Part 1-2，四层缓存架构
+- [API设计](./design-appendix/api-design.md) - Part 1-3，REST API详细设计
+
+---
+
+## 阶段1：基础架构搭建 (P0)
+
+- [ ] 1. 项目结构重组
+  - [x] 1.1 创建 DeepAgents 目录结构
+
+
+
+    - 创建 `src/deepagents/` 目录
+    - 创建 `src/deepagents/subagents/` 目录
+    - 创建 `src/deepagents/middleware/` 目录
+    - 创建 `src/deepagents/tools/` 目录
+    - 创建 `src/progressive_insight/` 目录
+    - 创建 `src/semantic_mapping/` 目录
+    - _Requirements: 1.1, 1.2, 1.3_
+    - _预计时间: 0.5天_
+
+  - [x] 1.2 安装和配置 DeepAgents
+
+
+    - 安装 `langchain-deepagents` 包
+    - 配置 CompositeBackend（SQLite）
+    - 配置 PersistentStore
+    - 测试基础功能
+    - _Requirements: 1.1, 1.2_
+    - _预计时间: 0.5天_
+
+
+  - [x] 1.3 数据模型适配
+
+
+    - 创建 `src/models/deepagent_state.py`（DeepAgentState）
+    - 创建 `src/models/deepagent_context.py`（DeepAgentContext）
+    - 验证与现有模型的兼容性
+    - _Requirements: 1.3, 所有数据模型需求_
+    - _预计时间: 1天_
+
+---
+
+## 阶段2：工具层实现 (P0)
+
+
+- [ ] 2. 核心工具封装（5个）
+  - [x] 2.1 实现 get_metadata 工具
+
+
+
+    - 封装 MetadataManager 组件
+    - 定义工具 docstring
+    - 使用 Store 缓存元数据（namespace: "metadata"）
+    - 添加重试机制（@retry 装饰器）
+    - 添加单元测试
+    - _Requirements: 2.1, 2.2_
+    - _参考: design-appendix/deepagents-features.md#2-store-高级用法_
+    - _预计时间: 0.5天_
+
+  - [x] 2.2 实现 parse_date 工具
+
+
+
+
+    - 封装 DateParser 组件
+    - 定义工具 docstring
+    - 添加单元测试
+    - _Requirements: 2.3_
+    - _预计时间: 0.5天_
+
+  - [x] 2.3 实现 build_vizql_query 工具
+
+
+
+    - 封装 QueryBuilder 组件
+    - 定义工具 docstring
+    - 添加单元测试
+    - _Requirements: 2.4_
+    - _预计时间: 0.5天_
+
+
+  - [x] 2.4 实现 execute_vizql_query 工具
+
+
+
+    - 封装 QueryExecutor 组件
+    - 定义工具 docstring
+    - 添加重试机制（处理 TimeoutError、ConnectionError）
+    - 添加降级策略（超时时返回部分结果）
+    - 添加单元测试
+    - _Requirements: 2.5_
+    - _参考: design-appendix/deepagents-features.md#4-错误恢复机制_
+
+
+    - _预计时间: 1天_
+
+  - [ ] 2.5 实现 semantic_map_fields 工具（RAG+LLM）
+    - 实现 Vector Store 管理（FAISS）
+    - 实现 Field Indexer
+    - 实现 Semantic Mapper（RAG+LLM）
+    - 使用 Store 缓存映射结果（namespace: "semantic_mapping"）
+    - 封装为工具
+    - 添加单元测试
+    - _Requirements: 2.6, 8.1, 8.2_
+    - _参考: design-appendix/deepagents-features.md#2-store-高级用法_
+    - _预计时间: 2天_
+
+- [ ] 3. 辅助工具封装（3个）
+  - [ ] 3.1 实现 process_query_result 工具
+    - 封装 DataProcessor 组件
+    - 定义工具 docstring
+    - 添加单元测试
+    - _Requirements: 2.7_
+    - _预计时间: 0.5天_
+
+  - [ ] 3.2 实现 detect_statistics 工具
+    - 封装 StatisticsDetector 组件
+    - 定义工具 docstring
+    - 添加单元测试
+    - _Requirements: 2.8_
+    - _预计时间: 0.5天_
+
+  - [ ] 3.3 实现 save_large_result 工具
+    - 实现大结果保存逻辑
+    - 定义工具 docstring
+    - 添加单元测试
+    - _Requirements: 2.9_
+    - _预计时间: 0.5天_
+
+---
+
+## 阶段3：中间件实现 (P0)
+
+- [ ] 4. 自定义中间件开发（3个）
+  - [ ] 4.1 实现 TableauMetadataMiddleware
+    - 注入 get_metadata 工具
+    - 不设置系统提示词（使用现有 Prompt 类）
+    - 添加单元测试
+    - _Requirements: 3.1_
+    - _预计时间: 0.5天_
+
+  - [ ] 4.2 实现 VizQLQueryMiddleware
+    - 注入 execute_vizql_query 工具
+    - 不设置系统提示词（使用现有 Prompt 类）
+    - 添加单元测试
+    - _Requirements: 3.2_
+    - _预计时间: 0.5天_
+
+  - [ ] 4.3 实现 ApplicationLevelCacheMiddleware
+    - 实现 before_llm_call 钩子（检查缓存）
+    - 实现 after_llm_call 钩子（保存缓存）
+    - 实现缓存 key 生成逻辑
+    - 配置 TTL（默认 1小时）
+    - 添加单元测试
+    - _Requirements: 3.3, 9.2_
+    - _预计时间: 1天_
+
+---
+
+## 阶段4：子代理实现 (P0)
+
+- [ ] 5. 基础子代理实现（5个）
+  - [ ] 5.1 实现 boost-agent
+    - 配置 Agent（model, tools, max_tokens等）
+    - 使用现有的 QuestionBoostPrompt
+    - 使用 Store 检索历史问题（语义搜索）
+    - 输出 QuestionBoost 模型
+    - 添加错误处理和重试
+    - 添加单元测试
+    - _Requirements: 4.1_
+    - _参考: design-appendix/deepagents-features.md#2-store-高级用法_
+    - _预计时间: 1.5天_
+
+  - [ ] 5.2 实现 understanding-agent
+    - 配置 Agent（model, tools, max_tokens等）
+    - 使用现有的 UnderstandingPrompt
+    - 输出 QuestionUnderstanding 模型
+    - 添加问题拆分功能
+    - 添加单元测试
+    - _Requirements: 4.2_
+    - _预计时间: 1天_
+
+  - [ ] 5.3 实现 planning-agent
+    - 配置 Agent（model, tools, max_tokens等）
+    - 使用现有的 TaskPlannerPrompt
+    - 集成 semantic_map_fields 工具（RAG+LLM）
+    - 输出 QueryPlan 模型
+    - 添加单元测试
+    - _Requirements: 4.3, 8.1, 8.2_
+    - _预计时间: 1.5天_
+
+  - [ ] 5.4 实现 insight-agent
+    - 配置 Agent（model, tools, max_tokens等）
+    - 使用现有的 InsightPrompt
+    - 集成渐进式分析逻辑
+    - 使用 Store 存储异常知识库（namespace: "anomaly_knowledge"）
+    - 实现降级策略（渐进式→全量→基础）
+    - 输出 InsightCollection 模型
+    - 添加错误处理
+    - 添加单元测试
+    - _Requirements: 4.4, 7.1, 7.2, 7.3_
+    - _参考: design-appendix/deepagents-features.md#4-错误恢复机制_
+    - _预计时间: 2.5天_
+
+  - [ ] 5.5 实现 replanner-agent
+    - 配置 Agent（model, tools, max_tokens等）
+    - 使用现有的 ReplannerPrompt
+    - 输出 ReplanDecision 模型
+    - 添加单元测试
+    - _Requirements: 4.5, 6.1, 6.2_
+    - _预计时间: 1天_
+
+---
+
+## 阶段5：渐进式洞察系统 (P1)
+
+- [ ] 6. 渐进式分析核心组件
+  - [ ] 6.1 实现 Coordinator（决策器）
+    - 实现 decide_strategy 方法（直接分析 vs 渐进式分析）
+    - 实现数据规模检测（阈值：100行）
+    - 实现复杂度评估
+    - 实现Token预算估算
+    - 添加单元测试
+    - _Requirements: 7.1_
+    - _参考: design-appendix/progressive-insights.md#2.1_
+    - _预计时间: 0.5天_
+
+  - [ ] 6.2 实现 DataProfiler（数据画像生成器）
+    - 实现基本统计（行数、列数）
+    - 实现数值字段分布分析（min/max/mean/median/std）
+    - 实现异常值检测（Z-score方法，阈值3.0）
+    - 实现分类字段分布分析
+    - 实现数据质量评估（完整性、一致性、有效性）
+    - 实现分块策略推荐
+    - 添加单元测试
+    - _Requirements: 7.1_
+    - _参考: design-appendix/progressive-insights.md#2.2_
+    - _预计时间: 1.5天_
+
+  - [ ] 6.3 实现 SemanticChunker（智能分块器）
+    - 实现异常值优先分块策略（anomaly_first）
+    - 实现Top优先分块策略（top_first）
+    - 实现混合分块策略（mixed）
+    - 实现主要度量字段识别
+    - 实现DataChunk数据模型
+    - 添加单元测试
+    - _Requirements: 7.1_
+    - _参考: design-appendix/progressive-insights.md#2.3_
+    - _预计时间: 1.5天_
+
+  - [ ] 6.4 实现 PatternDetector（模式检测器）
+    - 实现趋势检测（线性回归）
+    - 实现周期性检测（自相关）
+    - 实现相关性检测（Pearson相关系数）
+    - 实现Pattern数据模型
+    - 添加单元测试
+    - _Requirements: 7.2_
+    - _参考: design-appendix/progressive-insights-part2.md#2.5_
+    - _预计时间: 1天_
+
+  - [ ] 6.5 实现 AnomalyDetector（异常检测器）
+    - 实现统计异常检测（Z-score > 3）
+    - 实现业务异常检测（负值、未来日期等）
+    - 实现Anomaly数据模型
+    - 添加单元测试
+    - _Requirements: 7.2_
+    - _参考: design-appendix/progressive-insights-part2.md#2.6_
+    - _预计时间: 1天_
+
+  - [ ] 6.6 实现 ChunkAnalyzer（块分析器）
+    - 集成PatternDetector和AnomalyDetector
+    - 实现LLM输入准备（数据摘要、模式摘要、异常摘要）
+    - 实现LLM洞察生成
+    - 实现ChunkInsight数据模型
+    - 添加单元测试
+    - _Requirements: 7.2_
+    - _参考: design-appendix/progressive-insights-part2.md#2.4_
+    - _预计时间: 1.5天_
+
+  - [ ] 6.7 实现 InsightAccumulator（洞察累积器）
+    - 实现洞察累积逻辑
+    - 实现早停条件检查（趋势稳定、洞察饱和、置信度达标）
+    - 实现趋势历史记录
+    - 实现洞察相似度计算
+    - 实现AccumulatedInsights数据模型
+    - 添加单元测试
+    - _Requirements: 7.2_
+    - _参考: design-appendix/progressive-insights-part3.md#2.7_
+    - _预计时间: 1.5天_
+
+  - [ ] 6.8 实现 QualityFilter（质量过滤器）
+    - 实现置信度过滤（阈值0.5）
+    - 实现重要性过滤（阈值0.3）
+    - 实现证据检查
+    - 实现描述模糊度检查
+    - 添加单元测试
+    - _Requirements: 7.2_
+    - _参考: design-appendix/progressive-insights-part3.md#2.8_
+    - _预计时间: 0.5天_
+
+  - [ ] 6.9 实现 DedupMerger（去重合并器）
+    - 实现洞察分组（按类型）
+    - 实现相似度计算（SequenceMatcher）
+    - 实现洞察合并（合并证据和数据点）
+    - 添加单元测试
+    - _Requirements: 7.2_
+    - _参考: design-appendix/progressive-insights-part3.md#2.9_
+    - _预计时间: 1天_
+
+  - [ ] 6.10 实现 InsightSynthesizer（洞察合成器）
+    - 集成QualityFilter和DedupMerger
+    - 实现优先级排序
+    - 实现关联分析
+    - 实现最终洞察构建
+    - 实现FinalInsight数据模型
+    - 添加单元测试
+    - _Requirements: 7.3_
+    - _参考: design-appendix/progressive-insights-part3.md#2.10_
+    - _预计时间: 1.5天_
+
+  - [ ] 6.11 实现 SummaryGenerator（摘要生成器）
+    - 实现LLM Prompt准备
+    - 实现执行摘要生成
+    - 实现ExecutiveSummary数据模型
+    - 添加单元测试
+    - _Requirements: 7.3_
+    - _参考: design-appendix/progressive-insights-part4.md#2.11_
+    - _预计时间: 0.5天_
+
+  - [ ] 6.12 实现 RecommendGenerator（建议生成器）
+    - 实现LLM Prompt准备
+    - 实现建议生成（数据质量、业务行动、进一步分析）
+    - 实现Recommendation数据模型
+    - 添加单元测试
+    - _Requirements: 7.3_
+    - _参考: design-appendix/progressive-insights-part4.md#2.12_
+    - _预计时间: 0.5天_
+
+  - [ ] 6.13 实现 ProgressiveInsightSystem（主系统）
+    - 集成所有组件
+    - 实现直接分析流程
+    - 实现渐进式分析流程
+    - 实现并行处理优化（可选）
+    - 实现缓存优化（可选）
+    - 添加性能监控
+    - 添加端到端测试
+    - _Requirements: 7.1, 7.2, 7.3_
+    - _参考: design-appendix/progressive-insights-part4.md#3_
+    - _预计时间: 2天_
+
+---
+
+## 阶段6：主 Agent 编排 (P0)
+
+- [ ] 7. 主 Agent 实现
+  - [ ] 7.1 创建 AgentFactory
+    - 实现 create_deep_agent 函数
+    - 配置所有中间件
+    - 配置所有子代理
+    - 配置所有工具
+    - 配置 Backend（CompositeBackend + PersistentStore）
+    - 配置 Context（DeepAgentContext）
+    - _Requirements: 1.1, 1.2_
+    - _参考: design-appendix/deepagents-features.md#3-context-传递机制_
+    - _预计时间: 1.5天_
+
+  - [ ] 7.2 实现主流程编排
+    - 实现用户输入处理
+    - 实现子代理调用流程（使用 Runtime 传递 Context）
+    - 实现查询执行流程
+    - 实现重规划循环（带错误恢复）
+    - 实现最终报告生成
+    - 添加性能监控（PerformanceTrackingCallback）
+    - _Requirements: 所有需求_
+    - _参考: design-appendix/deepagents-features.md#5-性能监控和追踪_
+    - _预计时间: 2.5天_
+
+  - [ ] 7.3 实现并行查询执行
+    - 分析查询依赖关系
+    - 实现并行执行策略
+    - 实现流水线执行策略
+    - _Requirements: 5.1, 5.2_
+    - _预计时间: 1天_
+
+---
+
+## 阶段7：缓存系统优化 (P1)
+
+- [ ] 8. 四层缓存架构
+  - [ ] 8.1 配置 L1 Prompt Caching（Anthropic）
+    - 配置 AnthropicPromptCachingMiddleware
+    - 优化Prompt结构（固定内容在前）
+    - 监控缓存使用情况（cache_read_input_tokens）
+    - 验证成本节省效果（50-90%）
+    - _Requirements: 9.1_
+    - _参考: design-appendix/caching-system.md#2_
+    - _预计时间: 0.5天_
+
+  - [ ] 8.2 实现 L2 Application Cache（SQLite）
+    - 实现ApplicationCache类
+    - 实现缓存Key生成（model + messages + temperature）
+    - 实现TTL检查（默认1小时）
+    - 实现CachedLLMWrapper
+    - 集成到ApplicationLevelCacheMiddleware
+    - 监控缓存命中率（目标40-60%）
+    - 添加单元测试
+    - _Requirements: 9.2_
+    - _参考: design-appendix/caching-system.md#3_
+    - _预计时间: 1.5天_
+
+  - [ ] 8.3 实现 L3 Query Result Cache（SQLite）
+    - 实现QueryResultCache类
+    - 实现查询缓存Key生成（datasource_luid + vizql_query）
+    - 实现TTL配置（会话期间有效）
+    - 实现CachedExecuteVizQLQuery工具
+    - 集成到execute_vizql_query工具
+    - 监控缓存命中率（目标20-40%）
+    - 添加单元测试
+    - _Requirements: 9.3_
+    - _参考: design-appendix/caching-system.md#4_
+    - _预计时间: 1.5天_
+
+  - [ ]* 8.4 实现 L4 Semantic Cache（FAISS，可选）
+    - 实现SemanticCache类
+    - 实现查询向量生成（Embedding模型）
+    - 实现向量相似度检索（FAISS）
+    - 配置相似度阈值（默认0.95）
+    - 实现缓存映射管理
+    - 监控缓存命中率（目标5-15%）
+    - 添加单元测试
+    - _Requirements: 9.4_
+    - _参考: design-appendix/caching-system-part2.md#5_
+    - _预计时间: 2天_
+
+  - [ ] 8.5 实现缓存管理功能
+    - 实现TTL缓存策略
+    - 实现LRU缓存策略
+    - 实现CacheInvalidator（主动失效）
+    - 实现CacheWarmer（缓存预热）
+    - 添加单元测试
+    - _Requirements: 9.1, 9.2, 9.3, 9.4_
+    - _参考: design-appendix/caching-system-part2.md#6_
+    - _预计时间: 1天_
+
+  - [ ] 8.6 实现缓存监控系统
+    - 实现CacheMetrics数据模型
+    - 实现CacheMonitor（指标收集）
+    - 实现CacheReporter（日志和报告）
+    - 集成到主系统
+    - 添加性能仪表板
+    - _Requirements: 13.2_
+    - _参考: design-appendix/caching-system-part2.md#7_
+    - _预计时间: 1天_
+
+  - [ ] 8.7 实现CachedDeepAgent（完整集成）
+    - 集成所有四层缓存
+    - 实现统一的缓存接口
+    - 实现缓存性能监控
+    - 添加端到端测试
+    - 验证整体缓存效果
+    - _Requirements: 9.1, 9.2, 9.3, 9.4_
+    - _参考: design-appendix/caching-system-part2.md#8_
+    - _预计时间: 1.5天_
+
+---
+
+## 阶段8：API 层实现 (P0)
+
+- [ ] 9. 数据模型定义
+  - [ ] 9.1 实现请求模型
+    - 实现ChatRequest模型（question, datasource_luid, boost_question, thread_id, model_config）
+    - 添加字段验证和示例
+    - 添加单元测试
+    - _Requirements: 10.1_
+    - _参考: design-appendix/api-design.md#2.1_
+    - _预计时间: 0.5天_
+
+  - [ ] 9.2 实现响应模型
+    - 实现Insight模型
+    - 实现Recommendation模型
+    - 实现PerformanceMetrics模型
+    - 实现ChatResponse模型
+    - 添加字段验证和示例
+    - 添加单元测试
+    - _Requirements: 10.1_
+    - _参考: design-appendix/api-design.md#2.2_
+    - _预计时间: 0.5天_
+
+  - [ ] 9.3 实现错误响应模型
+    - 实现ErrorResponse模型
+    - 定义HTTP状态码映射
+    - 添加单元测试
+    - _Requirements: 11.3_
+    - _参考: design-appendix/api-design-part3.md#4.1_
+    - _预计时间: 0.5天_
+
+- [ ] 10. FastAPI 端点实现
+  - [ ] 10.1 实现 POST /api/v1/chat（同步查询）
+    - 实现请求验证
+    - 实现数据源权限检查
+    - 实现AgentFactory调用
+    - 实现thread_id生成/使用
+    - 实现响应构建
+    - 添加错误处理（400/403/500）
+    - 添加单元测试
+    - _Requirements: 10.1_
+    - _参考: design-appendix/api-design-part2.md#3.1_
+    - _预计时间: 1.5天_
+
+  - [ ] 10.2 实现 POST /api/v1/chat/stream（流式查询）
+    - 实现SSE事件生成器
+    - 监听 `on_chat_model_stream` 事件（Token流）
+    - 监听 `on_chain_start/end` 事件（Agent进度）
+    - 监听 `on_tool_start/end` 事件（工具调用）
+    - 实现format_sse_event函数
+    - 配置StreamingResponse头部
+    - 添加错误处理
+    - 添加单元测试
+    - _Requirements: 10.2, 12.1, 12.2_
+    - _参考: design-appendix/api-design-part2.md#3.2_
+    - _预计时间: 2.5天_
+
+  - [ ] 10.3 实现 GET /api/v1/health（健康检查）
+    - 实现HealthResponse模型
+    - 检查数据库连接
+    - 检查LLM服务
+    - 检查Tableau服务
+    - 判断整体状态（healthy/degraded）
+    - 添加单元测试
+    - _Requirements: 10.3_
+    - _参考: design-appendix/api-design-part2.md#3.3_
+    - _预计时间: 0.5天_
+
+  - [ ] 10.4 实现 GET /api/v1/datasources（数据源列表）
+    - 实现DataSource模型
+    - 实现DataSourceListResponse模型
+    - 从Tableau获取数据源列表
+    - 实现分页（limit/offset）
+    - 添加权限过滤
+    - 添加单元测试
+    - _Requirements: 10.4_
+    - _参考: design-appendix/api-design-part2.md#3.4_
+    - _预计时间: 1天_
+
+  - [ ] 10.5 实现 GET /api/v1/datasources/{luid}/metadata（元数据）
+    - 实现FieldMetadata模型
+    - 实现DataSourceMetadata模型
+    - 实现权限检查
+    - 从Tableau获取元数据
+    - 添加单元测试
+    - _Requirements: 10.5_
+    - _参考: design-appendix/api-design-part2.md#3.5_
+    - _预计时间: 0.5天_
+
+  - [ ] 10.6 实现 GET /api/v1/threads/{thread_id}/history（会话历史）
+    - 实现Message模型
+    - 实现ThreadHistoryResponse模型
+    - 实现thread所有权验证
+    - 从Store获取历史消息
+    - 添加单元测试
+    - _Requirements: 10.6_
+    - _参考: design-appendix/api-design-part2.md#3.6_
+    - _预计时间: 0.5天_
+
+- [ ] 11. 错误处理和中间件
+  - [ ] 11.1 实现错误处理中间件
+    - 实现请求ID生成
+    - 实现ValueError处理（400）
+    - 实现PermissionError处理（403）
+    - 实现通用异常处理（500）
+    - 实现HTTPException处理器
+    - 添加错误日志
+    - 添加单元测试
+    - _Requirements: 11.3_
+    - _参考: design-appendix/api-design-part3.md#4.3_
+    - _预计时间: 1天_
+
+- [ ] 12. 认证和授权
+  - [ ] 12.1 实现JWT认证
+    - 实现User模型
+    - 实现create_access_token函数
+    - 实现get_current_user依赖
+    - 实现POST /api/v1/auth/login端点
+    - 配置JWT密钥和过期时间
+    - 添加单元测试
+    - _Requirements: 11.1_
+    - _参考: design-appendix/api-design-part3.md#5.2_
+    - _预计时间: 1.5天_
+
+  - [ ] 12.2 实现权限检查
+    - 实现require_role装饰器
+    - 实现has_datasource_access函数
+    - 实现is_thread_owner函数
+    - 添加单元测试
+    - _Requirements: 11.2_
+    - _参考: design-appendix/api-design-part3.md#5.3_
+    - _预计时间: 1天_
+
+- [ ] 13. 限流和配额
+  - [ ] 13.1 实现限流系统
+    - 集成slowapi库
+    - 配置限流规则（100/hour普通用户，1000/hour高级用户）
+    - 实现动态限流（根据用户角色）
+    - 实现RateLimitExceeded处理
+    - 添加单元测试
+    - _Requirements: 11.4_
+    - _参考: design-appendix/api-design-part3.md#6.1_
+    - _预计时间: 1天_
+
+  - [ ] 13.2 实现配额管理
+    - 实现QuotaManager类
+    - 实现check_quota方法
+    - 实现consume_quota方法
+    - 实现配额限制获取
+    - 集成到chat端点
+    - 添加单元测试
+    - _Requirements: 11.4_
+    - _参考: design-appendix/api-design-part3.md#6.2_
+    - _预计时间: 1天_
+
+- [ ] 14. API文档和客户端
+  - [ ] 14.1 配置OpenAPI文档
+    - 自定义OpenAPI schema
+    - 配置安全方案（BearerAuth）
+    - 添加API描述和示例
+    - 验证Swagger UI和ReDoc
+    - _Requirements: 10.7_
+    - _参考: design-appendix/api-design-part3.md#7.1_
+    - _预计时间: 0.5天_
+
+  - [ ]* 14.2 实现Python客户端SDK（可选）
+    - 实现DeepAgentClient类
+    - 实现chat方法（同步）
+    - 实现chat_stream方法（流式）
+    - 添加使用示例
+    - 添加单元测试
+    - _Requirements: 10.8_
+    - _参考: design-appendix/api-design-part3.md#8.1_
+    - _预计时间: 1.5天_
+
+---
+
+## 阶段9：集成测试和优化 (P0)
+
+- [ ] 10. 端到端测试
+  - [ ] 10.1 编写端到端测试用例
+    - 测试简单问题流程
+    - 测试复杂问题流程
+    - 测试多轮对话流程
+    - 测试重规划机制
+    - 测试流式输出（astream_events）
+    - _Requirements: 所有需求_
+    - _参考: design-appendix/deepagents-features.md#1-流式输出_
+    - _预计时间: 2.5天_
+
+  - [ ] 10.2 性能测试
+    - 测试分析时间
+    - 测试首次反馈时间
+    - 测试 Token 使用量
+    - 测试缓存命中率
+    - 使用 PerformanceTrackingCallback 收集指标
+    - 分析性能瓶颈
+    - _Requirements: 13.1, 13.2, 13.3_
+    - _参考: design-appendix/deepagents-features.md#5-性能监控和追踪_
+    - _预计时间: 1.5天_
+
+  - [ ] 10.3 错误恢复测试
+    - 测试 LLM 错误恢复（重试机制）
+    - 测试查询错误恢复（降级策略）
+    - 测试网络错误恢复（超时处理）
+    - 测试错误传播机制
+    - _Requirements: 11.3_
+    - _参考: design-appendix/deepagents-features.md#4-错误恢复机制_
+    - _预计时间: 1.5天_
+
+- [ ] 11. 性能优化
+  - [ ] 11.1 优化并行查询执行
+    - 分析瓶颈
+    - 优化执行策略
+    - 验证性能提升
+    - _Requirements: 13.1_
+    - _预计时间: 1天_
+
+  - [ ] 11.2 优化缓存策略
+    - 分析缓存命中率
+    - 调优 TTL
+    - 优化缓存 key 生成
+    - _Requirements: 13.2_
+    - _预计时间: 1天_
+
+  - [ ] 11.3 优化 Prompt 长度
+    - 分析 Token 使用
+    - 精简提示词
+    - 验证效果
+    - _Requirements: 13.3_
+    - _预计时间: 1天_
+
+---
+
+## 阶段10：文档和部署 (P1)
+
+- [ ] 12. 文档完善
+  - [ ] 12.1 完善 API 文档
+    - 编写 API 使用指南
+    - 生成 OpenAPI 文档
+    - 添加示例代码
+    - _预计时间: 1天_
+
+  - [ ] 12.2 编写部署指南
+    - 编写环境配置指南
+    - 编写部署步骤
+    - 编写故障排查指南
+    - _预计时间: 1天_
+
+  - [ ] 12.3 编写用户使用手册
+    - 编写功能介绍
+    - 编写使用示例
+    - 录制演示视频
+    - _预计时间: 1天_
+
+- [ ] 13. 部署准备
+  - [ ] 13.1 配置生产环境
+    - 配置环境变量
+    - 配置数据库
+    - 配置缓存
+    - _预计时间: 0.5天_
+
+  - [ ] 13.2 配置监控和日志
+    - 配置性能监控
+    - 配置错误日志
+    - 配置告警
+    - _预计时间: 1天_
+
+  - [ ] 13.3 准备回滚方案
+    - 备份现有系统
+    - 准备回滚脚本
+    - 测试回滚流程
+    - _预计时间: 0.5天_
+
+---
+
+## 任务优先级说明
+
+- **P0（必须完成）**：核心功能，必须在第一阶段完成
+- **P1（推荐完成）**：重要功能，优先完成
+- **P2（可选完成）**：增强功能，时间允许时完成
+- **标记 * 的任务**：可选任务，不影响核心功能
+
+---
+
+## 预计时间线
+
+| 阶段 | 任务 | 预计时间 | 变化 |
+|------|------|---------|------|
+| 阶段1 | 基础架构搭建 | 2天 | - |
+| 阶段2 | 工具层实现 | 5.5天 | +0.5天（增加重试和降级） |
+| 阶段3 | 中间件实现 | 2天 | - |
+| 阶段4 | 子代理实现 | 7天 | +0.5天（增加 Store 集成） |
+| 阶段5 | 渐进式洞察系统 | 14天 | +8天（详细设计补充） |
+| 阶段6 | 主 Agent 编排 | 5天 | +1天（增加监控和 Context） |
+| 阶段7 | 缓存系统优化 | 9天 | +6天（详细设计补充） |
+| 阶段8 | API 层实现 | 13天 | +8.5天（详细设计补充） |
+| 阶段9 | 集成测试和优化 | 7.5天 | +1.5天（增加特性测试） |
+| 阶段10 | 文档和部署 | 4天 | - |
+| **总计** | | **69天（约10周）** | **+26天** |
+
+**说明**：
+1. 增加的时间主要来自详细设计文档的补充：
+   - 渐进式洞察系统：从6天增加到14天（+8天）
+   - 缓存系统：从3天增加到9天（+6天）
+   - API层：从4.5天增加到13天（+8.5天）
+2. 这些增加的时间反映了更详细和完整的实现要求
+3. 总工期从7周增加到10周，更符合实际开发需求
+
+---
+
+## 风险和缓解措施
+
+### 风险1：DeepAgents 框架学习曲线
+- **缓解**：先完成简单的 Agent，逐步熟悉框架
+- **缓解**：参考官方文档和示例代码
+
+### 风险2：现有组件兼容性问题
+- **缓解**：100% 复用现有组件，只封装为工具
+- **缓解**：保持现有接口不变
+
+### 风险3：性能不达标
+- **缓解**：实施四层缓存架构
+- **缓解**：实施并行查询执行
+- **缓解**：实施渐进式分析
+
+### 风险4：测试覆盖不足
+- **缓解**：每个组件都添加单元测试
+- **缓解**：编写完整的端到端测试
+
+---
+
+**文档版本**: v1.0  
+**最后更新**: 2025-01-15

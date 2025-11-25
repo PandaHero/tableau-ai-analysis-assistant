@@ -47,6 +47,10 @@ aiohttp>=3.9.0
 # JWT Authentication
 PyJWT>=2.8.0
 
+# Vector Store & Embeddings (for semantic field mapping)
+faiss-cpu>=1.8.0  # FAISS向量数据库（CPU版本）
+sentence-transformers>=2.2.0  # 本地embedding模型（必须）
+
 # Testing
 pytest==8.3.4
 pytest-asyncio==0.24.0
