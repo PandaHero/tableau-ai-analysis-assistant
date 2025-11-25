@@ -108,3 +108,15 @@ Thumbs.db
 *.pyc
 *.pyo
 *.pyd
+
+# Exclude parent directory files
+../*
+!../.gitignore
+
+# Exclude specific directories
+deepagents-master/
+tableau-mcp-main/
+
+# Exclude Tableau temp files
+*.twbr
+desktop.ini
