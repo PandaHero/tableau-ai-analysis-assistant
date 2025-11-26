@@ -5,7 +5,7 @@ Field Indexer - 字段索引构建器
 """
 import logging
 from typing import List
-from langchain.schema import Document
+from langchain_core.documents import Document
 from tableau_assistant.src.models.metadata import Metadata, FieldMetadata
 from tableau_assistant.src.semantic_mapping.vector_store_manager import VectorStoreManager
 from tableau_assistant.src.semantic_mapping.embeddings_provider import EmbeddingsProvider

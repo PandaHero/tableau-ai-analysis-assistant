@@ -1,9 +1,9 @@
-"""
+﻿"""
 Percentage (占比) 处理器
 
 实现占比分析功能
 """
-import polars as pl
+import pandas as pd
 import logging
 from typing import List, Dict, Any
 
@@ -122,10 +122,10 @@ class PercentageProcessor(ProcessorBase):
     
     def _calculate_percentage(
         self,
-        df: pl.DataFrame,
+        df: pd.DataFrame,
         dimension_cols: list[str],
         measure_cols: list[str]
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         """
         计算占比
         

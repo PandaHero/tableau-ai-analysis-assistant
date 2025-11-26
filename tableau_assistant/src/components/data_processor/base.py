@@ -5,7 +5,7 @@
 """
 from abc import ABC, abstractmethod
 from typing import Dict, Any
-import polars as pl
+import pandas as pd
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,9 +21,9 @@ class ProcessorBase(ABC):
     @abstractmethod
     def process(
         self, 
-        source_data: Dict[str, pl.DataFrame], 
+        source_data: Dict[str, pd.DataFrame], 
         instruction: Any
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         """
         执行数据处理
         
@@ -32,7 +32,7 @@ class ProcessorBase(ABC):
             instruction: 处理指令（ProcessingInstruction实例）
             
         Returns:
-            处理后的数据（Polars DataFrame）
+            处理后的数据（Pandas DataFrame）
             
         Raises:
             ValidationError: 输入数据验证失败
@@ -55,7 +55,7 @@ class ProcessorBase(ABC):
     
     def _validate_source_data(
         self,
-        source_data: Dict[str, pl.DataFrame],
+        source_data: Dict[str, pd.DataFrame],
         required_tasks: list
     ) -> None:
         """
@@ -75,13 +75,13 @@ class ProcessorBase(ABC):
                 raise ValidationError(f"Missing source data for task {task_id}")
             
             df = source_data[task_id]
-            if df.is_empty():
+            if df.empty:
                 raise ValidationError(f"Empty data from task {task_id}")
     
     def _get_field_info_from_subtask(
         self,
         subtask: Any,  # QuerySubTask
-        df: pl.DataFrame
+        df: pd.DataFrame
     ) -> tuple[list[str], list[str]]:
         """
         从 QuerySubTask 的 fields 中获取维度和度量信息

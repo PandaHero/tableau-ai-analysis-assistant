@@ -5,7 +5,7 @@
 """
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Dict, Any, Optional
-import polars as pl
+import pandas as pd
 
 
 class QueryResult(BaseModel):
@@ -16,15 +16,15 @@ class QueryResult(BaseModel):
     """
     model_config = ConfigDict(
         extra="forbid",
-        arbitrary_types_allowed=True  # 允许 Polars DataFrame
+        arbitrary_types_allowed=True  # 允许 Pandas DataFrame
     )
     
     task_id: str = Field(
         description="任务ID（如 q1, q2）"
     )
     
-    data: pl.DataFrame = Field(
-        description="查询数据（Polars DataFrame）"
+    data: pd.DataFrame = Field(
+        description="查询数据（Pandas DataFrame）"
     )
     
     row_count: int = Field(
@@ -72,32 +72,23 @@ class QueryResult(BaseModel):
         Returns:
             QueryResult 实例
         """
-        # 将数据转换为 Polars DataFrame
+        # 将数据转换为 Pandas DataFrame
         data_list = executor_result.get("data", [])
         if data_list:
-            df = pl.DataFrame(data_list)
+            df = pd.DataFrame(data_list)
         else:
-            df = pl.DataFrame()
+            df = pd.DataFrame()
         
         return cls(
             task_id=task_id,
             data=df,
             row_count=executor_result.get("row_count", len(data_list)),
-            columns=executor_result.get("columns", list(df.columns) if not df.is_empty() else []),
+            columns=executor_result.get("columns", list(df.columns) if not df.empty else []),
             query_time_ms=executor_result.get("query_time_ms"),
             execution_time_ms=executor_result.get("execution_time_ms"),
             retry_count=executor_result.get("retry_count", 0),
             metadata={}
         )
-    
-    def to_pandas(self):
-        """
-        转换为 Pandas DataFrame（用于兼容性）
-        
-        Returns:
-            Pandas DataFrame
-        """
-        return self.data.to_pandas()
 
 
 class ProcessingResult(BaseModel):
@@ -108,15 +99,15 @@ class ProcessingResult(BaseModel):
     """
     model_config = ConfigDict(
         extra="forbid",
-        arbitrary_types_allowed=True  # 允许 Polars DataFrame
+        arbitrary_types_allowed=True  # 允许 Pandas DataFrame
     )
     
     task_id: str = Field(
         description="处理任务ID（如 q3, q4）"
     )
     
-    data: pl.DataFrame = Field(
-        description="处理后的数据（Polars DataFrame）"
+    data: pd.DataFrame = Field(
+        description="处理后的数据（Pandas DataFrame）"
     )
     
     row_count: int = Field(

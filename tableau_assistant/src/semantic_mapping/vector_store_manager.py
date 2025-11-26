@@ -7,7 +7,7 @@ import os
 import logging
 from typing import List, Tuple, Optional
 from pathlib import Path
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from langchain.embeddings.base import Embeddings
 

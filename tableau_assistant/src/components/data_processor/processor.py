@@ -4,7 +4,8 @@
 协调所有数据处理任务的执行
 """
 from typing import Dict, Any
-import polars as pl
+import pandas as pd
+import numpy as np
 import logging
 
 from tableau_assistant.src.components.data_processor.factory import ProcessorFactory
@@ -26,14 +27,14 @@ class DataProcessor:
     
     负责：
     1. 协调处理任务的执行
-    2. 使用 Polars 进行高效数据处理
+    2. 使用 Pandas 进行高效数据处理
     3. 输入输出验证
     4. 错误处理
     
     设计说明：
     - 输入：Dict[str, QueryResult] - 多个查询任务的结果
     - 输出：ProcessingResult - 单个处理任务的结果
-    - 内部全程使用 Polars，避免不必要的转换
+    - 内部全程使用 Pandas，避免不必要的转换
     
     数据流：
     QueryResult (q1) ─┐
@@ -86,7 +87,7 @@ class DataProcessor:
                     f"Invalid processing instruction for {instruction.processing_type}"
                 )
             
-            # 5. 准备源数据（Polars DataFrame）
+            # 5. 准备源数据（Pandas DataFrame）
             source_data = self._prepare_source_data(instruction.source_tasks, query_results)
             
             # 6. 执行处理
@@ -159,7 +160,7 @@ class DataProcessor:
                 raise DependencyError(f"Missing source data for task {task_id}")
             
             result = query_results[task_id]
-            if result.data.is_empty():
+            if result.data.empty:
                 raise ValidationError(f"Empty data from task {task_id}")
             
             logger.debug(f"Validated source data: {task_id}, shape: {result.data.shape}")
@@ -168,16 +169,16 @@ class DataProcessor:
         self,
         source_tasks: list[str],
         query_results: Dict[str, QueryResult]
-    ) -> Dict[str, pl.DataFrame]:
+    ) -> Dict[str, pd.DataFrame]:
         """
-        准备源数据（提取 Polars DataFrame）
+        准备源数据（提取 Pandas DataFrame）
         
         Args:
             source_tasks: 源任务ID列表
             query_results: 查询结果字典（QueryResult）
             
         Returns:
-            源数据字典（Polars DataFrame）
+            源数据字典（Pandas DataFrame）
         """
         source_data = {}
         
@@ -188,7 +189,7 @@ class DataProcessor:
         
         return source_data
     
-    def _validate_output(self, result: pl.DataFrame) -> None:
+    def _validate_output(self, result: pd.DataFrame) -> None:
         """
         验证输出数据
         
@@ -203,23 +204,21 @@ class DataProcessor:
             ValidationError: 输出验证失败
             CalculationError: 计算结果异常
         """
-        if result.is_empty():
+        if result.empty:
             raise ValidationError("Processing result is empty")
         
         # 检查数值列是否有异常值
         for col in result.columns:
-            dtype = result[col].dtype
-            
-            # 只检查数值类型列
-            if dtype in [pl.Float32, pl.Float64, pl.Int8, pl.Int16, pl.Int32, pl.Int64]:
+            # 使用 pandas API 检查数据类型
+            if pd.api.types.is_numeric_dtype(result[col]):
                 # 检查 NaN
-                null_count = result[col].null_count()
+                null_count = result[col].isnull().sum()
                 if null_count > 0:
                     logger.warning(f"Column {col} contains {null_count} null values")
                 
                 # 检查 Inf（只对浮点数）
-                if dtype in [pl.Float32, pl.Float64]:
-                    has_inf = result[col].is_infinite().any()
+                if pd.api.types.is_float_dtype(result[col]):
+                    has_inf = np.isinf(result[col]).any()
                     if has_inf:
                         raise CalculationError(f"Column {col} contains infinite values")
         

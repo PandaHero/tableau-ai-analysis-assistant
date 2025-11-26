@@ -3,7 +3,7 @@ YoY (Year-over-Year) 处理器
 
 实现同比分析功能
 """
-import polars as pl
+import pandas as pd
 import logging
 from typing import List, Dict, Any
 
@@ -236,7 +236,7 @@ class YoYProcessor(ProcessorBase):
         dimension_cols: list[str],
         measure_cols: list[str],
         time_labels: list[str]
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         """
         计算多个时间段的同比
         

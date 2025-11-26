@@ -6,7 +6,7 @@ Semantic Mapper - 语义映射器 (RAG+LLM)
 import json
 import logging
 from typing import Dict, List, Optional, Tuple
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain.chat_models.base import BaseChatModel
 from tableau_assistant.src.models.metadata import Metadata
 from tableau_assistant.src.semantic_mapping.field_indexer import FieldIndexer

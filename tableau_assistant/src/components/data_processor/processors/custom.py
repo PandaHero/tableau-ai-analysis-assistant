@@ -1,9 +1,9 @@
-"""
+﻿"""
 Custom (自定义) 处理器
 
 实现基于自定义公式的计算功能
 """
-import polars as pl
+import pandas as pd
 import logging
 from typing import List, Dict, Any
 import re
@@ -112,7 +112,7 @@ class CustomProcessor(ProcessorBase):
         source_results: List[QueryResult],
         formula: str,
         subtasks: Dict[str, QuerySubTask]
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         """
         执行自定义公式
         
@@ -145,7 +145,7 @@ class CustomProcessor(ProcessorBase):
         self,
         source_results: List[QueryResult],
         subtasks: Dict[str, QuerySubTask]
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         """
         合并多个源数据框
         
@@ -203,9 +203,9 @@ class CustomProcessor(ProcessorBase):
     
     def _apply_formula(
         self,
-        df: pl.DataFrame,
+        df: pd.DataFrame,
         formula: str
-    ) -> pl.DataFrame:
+    ) -> pd.DataFrame:
         """
         应用计算公式
         
@@ -220,6 +220,9 @@ class CustomProcessor(ProcessorBase):
             
         Returns:
             应用公式后的DataFrame
+            
+        Raises:
+            CalculationError: 公式应用失败
         """
         try:
             # 解析公式：检查是否有显式的输出列名
@@ -231,14 +234,16 @@ class CustomProcessor(ProcessorBase):
                 output_col = "result"
                 expression = formula.strip()
             
-            # 将公式中的列名替换为Polars表达式
+            # 将公式转换为 Pandas 可执行的表达式
             # 支持基本的算术运算：+, -, *, /, ()
-            polars_expr = self._convert_to_polars_expr(expression, df.columns)
+            pandas_expr = self._convert_to_pandas_expr(expression, list(df.columns))
             
-            # 应用公式
-            result_df = df.with_columns(
-                polars_expr.alias(output_col)
-            )
+            # 创建结果 DataFrame 的副本
+            result_df = df.copy()
+            
+            # 使用 Pandas 的 eval() 方法应用公式
+            # eval() 可以直接在 DataFrame 上下文中执行表达式
+            result_df[output_col] = result_df.eval(pandas_expr)
             
             logger.debug(f"Applied formula: {output_col} = {expression}")
             
@@ -248,41 +253,54 @@ class CustomProcessor(ProcessorBase):
             logger.error(f"Failed to apply formula '{formula}': {str(e)}")
             raise CalculationError(f"Failed to apply formula '{formula}': {str(e)}")
     
-    def _convert_to_polars_expr(
+    def _convert_to_pandas_expr(
         self,
         expression: str,
         available_columns: list[str]
-    ) -> pl.Expr:
+    ) -> str:
         """
-        将字符串表达式转换为Polars表达式
+        将字符串表达式转换为 Pandas 可执行的表达式
+        
+        Pandas 使用 DataFrame.eval() 或直接列访问来执行表达式。
+        这个方法将列名转换为 Pandas 可识别的格式。
         
         Args:
-            expression: 字符串表达式
+            expression: 字符串表达式（如 "Sales * 1.1" 或 "Profit / Sales"）
             available_columns: 可用的列名列表
             
         Returns:
-            Polars表达式
+            Pandas 可执行的表达式字符串
+            
+        Raises:
+            CalculationError: 表达式转换失败
         """
-        # 简单实现：将列名替换为pl.col()
-        # 注意：这是一个简化版本，实际生产环境需要更复杂的解析
-        
         # 按列名长度降序排序，避免短列名匹配到长列名的一部分
         sorted_columns = sorted(available_columns, key=len, reverse=True)
         
-        # 替换列名为pl.col()
+        # Pandas 的 eval() 方法可以直接使用列名
+        # 但需要确保列名中的特殊字符被正确处理
         expr_str = expression
-        for col in sorted_columns:
-            # 使用单词边界匹配，避免部分匹配
-            pattern = r'\b' + re.escape(col) + r'\b'
-            expr_str = re.sub(pattern, f'pl.col("{col}")', expr_str)
         
-        # 评估表达式
+        # 对于包含空格或特殊字符的列名，需要使用反引号
+        for col in sorted_columns:
+            # 检查列名是否包含空格或特殊字符
+            if ' ' in col or not col.replace('_', '').isalnum():
+                # 使用反引号包裹列名
+                pattern = r'\b' + re.escape(col) + r'\b'
+                expr_str = re.sub(pattern, f'`{col}`', expr_str)
+        
+        # 验证表达式的有效性
         try:
-            # 使用eval执行表达式（注意：生产环境需要更安全的方式）
-            polars_expr = eval(expr_str, {"pl": pl})
-            return polars_expr
+            # 创建一个测试 DataFrame 来验证表达式
+            test_df = pd.DataFrame({col: [1.0] for col in available_columns})
+            # 尝试执行表达式以验证其有效性
+            test_df.eval(expr_str, inplace=False)
+            return expr_str
         except Exception as e:
-            raise CalculationError(f"Failed to evaluate expression '{expr_str}': {str(e)}")
+            raise CalculationError(
+                f"Failed to validate expression '{expr_str}': {str(e)}. "
+                f"Original expression: '{expression}'"
+            )
 
 
 # ============= 导出 =============
