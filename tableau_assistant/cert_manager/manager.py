@@ -381,3 +381,262 @@ class CertificateManager:
     def __repr__(self) -> str:
         """字符串表示"""
         return f"CertificateManager(cert_dir='{self.cert_dir}', ssl_config={self.ssl_config})"
+
+
+    # ========== Enhanced Methods for Service Registry ==========
+    
+    def _init_service_registry(self):
+        """Initialize service registry (lazy initialization)"""
+        if not hasattr(self, '_service_registry'):
+            from .service_registry import ServiceRegistry
+            self._service_registry = ServiceRegistry(
+                cert_dir=str(self.cert_dir),
+                timeout=self.fetcher.timeout,
+                warning_days=self.validator.warning_days
+            )
+        return self._service_registry
+    
+    def _init_app_cert_provider(self):
+        """Initialize application certificate provider (lazy initialization)"""
+        if not hasattr(self, '_app_cert_provider'):
+            from .app_cert_provider import ApplicationCertificateProvider
+            from .models import ApplicationCertConfig
+            
+            # Create default config
+            config = ApplicationCertConfig(
+                source="self-signed",
+                cert_file="app_server.pem",
+                key_file="app_server_key.pem",
+                ca_bundle="app_ca.pem"
+            )
+            
+            self._app_cert_provider = ApplicationCertificateProvider(
+                cert_dir=str(self.cert_dir),
+                config=config,
+                warning_days=self.validator.warning_days
+            )
+        return self._app_cert_provider
+    
+    def register_service(
+        self,
+        service_id: str,
+        hostname: str,
+        port: int = 443,
+        ca_bundle: Optional[str] = None,
+        fetch_on_register: bool = True
+    ) -> None:
+        """
+        Register a third-party service
+        
+        Args:
+            service_id: Unique service identifier
+            hostname: Server hostname
+            port: Server port
+            ca_bundle: CA bundle path
+            fetch_on_register: Fetch certificate immediately
+        """
+        registry = self._init_service_registry()
+        registry.register_service(
+            service_id=service_id,
+            hostname=hostname,
+            port=port,
+            ca_bundle=ca_bundle,
+            fetch_on_register=fetch_on_register
+        )
+    
+    def get_service_ssl_config(
+        self,
+        service_id: str,
+        library: str = "requests"
+    ) -> Dict[str, Any]:
+        """
+        Get SSL config for a specific service
+        
+        Args:
+            service_id: Service identifier
+            library: HTTP library ("requests", "httpx", "aiohttp")
+            
+        Returns:
+            Library-specific SSL configuration
+        """
+        registry = self._init_service_registry()
+        ca_bundle = registry.get_service_ca_bundle(service_id)
+        
+        # Create SSL config with service-specific certificate
+        ssl_config = SSLConfig(
+            verify=self.ssl_config.verify_ssl,
+            ca_bundle=ca_bundle,
+            cert_dir=str(self.cert_dir)
+        )
+        
+        # Return library-specific configuration
+        if library == "requests":
+            return ssl_config.requests_kwargs()
+        elif library == "httpx":
+            return ssl_config.httpx_client_kwargs()
+        elif library == "aiohttp":
+            return ssl_config.aiohttp_kwargs()
+        else:
+            raise ValueError(f"Unsupported library: {library}")
+    
+    def get_application_ssl_config(
+        self,
+        component: str = "backend"
+    ) -> Dict[str, Any]:
+        """
+        Get SSL config for application components
+        
+        Args:
+            component: Component name ("backend", "frontend")
+            
+        Returns:
+            SSL configuration for the component
+        """
+        provider = self._init_app_cert_provider()
+        
+        if component == "backend":
+            cert_file, key_file = provider.get_server_certificate()
+            return {
+                "cert_file": cert_file,
+                "key_file": key_file,
+                "ca_bundle": provider.get_ca_bundle() if provider.config.ca_bundle else None
+            }
+        elif component == "frontend":
+            return {
+                "ca_bundle": provider.get_ca_bundle() if provider.config.ca_bundle else None
+            }
+        else:
+            raise ValueError(f"Unknown component: {component}")
+    
+    def migrate_to_company_certificates(
+        self,
+        cert_file: str,
+        key_file: str,
+        ca_bundle: Optional[str] = None
+    ) -> None:
+        """
+        Migrate from self-signed to company certificates
+        
+        Args:
+            cert_file: Company certificate file
+            key_file: Company private key file
+            ca_bundle: Company CA bundle
+        """
+        provider = self._init_app_cert_provider()
+        
+        old_source = provider.get_certificate_source()
+        logger.info(f"Migrating from {old_source} to company certificates")
+        
+        # Load company certificates
+        provider.load_company_certificate(cert_file, key_file, ca_bundle)
+        
+        # Update SSL config
+        self.update_ssl_config(ca_bundle=ca_bundle)
+        
+        logger.info("Successfully migrated to company certificates")
+    
+    def reload_certificates(self) -> None:
+        """Reload all certificates from disk"""
+        logger.info("Reloading all certificates")
+        
+        # Reset SSL config
+        from .config import reset_ssl_config
+        reset_ssl_config()
+        
+        # Reinitialize SSL config
+        self.ssl_config = get_ssl_config(
+            verify=self.ssl_config.verify_ssl,
+            ca_bundle=self.ssl_config.ca_bundle,
+            cert_dir=str(self.cert_dir),
+            force_new=True
+        )
+        
+        # Revalidate all service certificates
+        if hasattr(self, '_service_registry'):
+            for service_id in self._service_registry.list_services():
+                try:
+                    self._service_registry.validate_service(service_id)
+                except Exception as e:
+                    logger.error(f"Failed to validate {service_id}: {e}")
+        
+        logger.info("Certificate reload complete")
+
+
+    def register_preconfigured_services(self, services: list = None) -> Dict[str, Any]:
+        """
+        Register pre-configured services
+        
+        Args:
+            services: List of service IDs to register (None = all)
+            
+        Returns:
+            Dictionary with registration results
+        """
+        from .preconfig import register_preconfigured_services, PRECONFIGURED_SERVICES
+        
+        if services is None:
+            # Register all pre-configured services
+            return register_preconfigured_services(self)
+        else:
+            # Register only specified services
+            results = {}
+            for service_id in services:
+                if service_id not in PRECONFIGURED_SERVICES:
+                    results[service_id] = {
+                        "status": "failed",
+                        "error": f"Service '{service_id}' is not pre-configured"
+                    }
+                    continue
+                
+                config = PRECONFIGURED_SERVICES[service_id]
+                try:
+                    self.register_service(
+                        service_id=service_id,
+                        hostname=config["hostname"],
+                        port=config["port"],
+                        ca_bundle=config["ca_bundle"],
+                        fetch_on_register=config["auto_fetch"]
+                    )
+                    results[service_id] = {"status": "registered"}
+                except Exception as e:
+                    results[service_id] = {"status": "failed", "error": str(e)}
+            
+            return results
+    
+    def register_tableau_service(
+        self,
+        hostname: str = None,
+        port: int = 443,
+        ca_bundle: str = None,
+        fetch_on_register: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Register Tableau Server service with dynamic hostname support
+        
+        This is a convenience method for registering Tableau Server,
+        which supports dynamic hostname from environment variables.
+        
+        Args:
+            hostname: Tableau Server hostname (if None, reads from TABLEAU_DOMAIN env var)
+            port: Tableau Server port (default: 443)
+            ca_bundle: CA bundle filename (default: auto-generated from hostname)
+            fetch_on_register: Whether to fetch certificate immediately (default: False)
+            
+        Returns:
+            Registration result dictionary
+            
+        Example:
+            # Using environment variable
+            manager.register_tableau_service()
+            
+            # Using explicit hostname
+            manager.register_tableau_service(hostname='cpse.cpgroup.cn')
+        """
+        from .preconfig import register_tableau_service
+        return register_tableau_service(
+            self,
+            hostname=hostname,
+            port=port,
+            ca_bundle=ca_bundle,
+            fetch_on_register=fetch_on_register
+        )

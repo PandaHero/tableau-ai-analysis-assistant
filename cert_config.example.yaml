@@ -1,0 +1,79 @@
+# 证书管理器配置文件示例
+# 复制此文件为 cert_config.yaml 并根据你的环境修改
+
+# ============================================================
+# 全局设置
+# ============================================================
+cert_dir: "tableau_assistant/certs"  # 证书存储目录
+verify_ssl: true                      # 是否启用 SSL 验证（生产环境建议 true）
+warning_days: 30                      # 证书过期前多少天开始警告
+
+# ============================================================
+# 应用证书配置（用于你的后端服务器 HTTPS）
+# ============================================================
+application:
+  source: "self-signed"  # 证书来源: "self-signed" 或 "company"
+  
+  # 后端服务器证书
+  backend:
+    cert_file: "app_server.pem"      # 服务器证书文件名
+    key_file: "app_server_key.pem"   # 服务器私钥文件名
+  
+  ca_bundle: "app_ca.pem"            # CA 证书文件名
+  
+  # 公司证书配置（当 source: "company" 时使用）
+  company:
+    cert_file: "/path/to/company/server.crt"  # 公司颁发的服务器证书（绝对路径）
+    key_file: "/path/to/company/server.key"   # 公司颁发的私钥（绝对路径）
+    ca_bundle: "/path/to/company/ca.crt"      # 公司 CA 证书（绝对路径）
+
+# ============================================================
+# 第三方服务证书配置
+# ============================================================
+services:
+  # DeepSeek AI 服务
+  deepseek:
+    hostname: "api.deepseek.com"
+    port: 443
+    ca_bundle: "deepseek_full_chain.pem"
+    auto_fetch: true  # 启动时自动获取证书
+  
+  # 智谱 AI 服务
+  zhipu-ai:
+    hostname: "open.bigmodel.cn"
+    port: 443
+    ca_bundle: "zhipu_full_chain.pem"
+    auto_fetch: true
+  
+  # Tableau Server（使用环境变量）
+  tableau:
+    hostname: "${TABLEAU_DOMAIN}"  # 从环境变量读取，例如: cpse.cpgroup.cn
+    port: 443
+    ca_bundle: "tableau_cert.pem"
+    auto_fetch: false  # Tableau 证书通常手动管理
+  
+  # 自定义服务示例
+  # custom-api:
+  #   hostname: "api.example.com"
+  #   port: 8443
+  #   ca_bundle: "custom_api_cert.pem"
+  #   auto_fetch: true
+
+# ============================================================
+# 环境变量说明
+# ============================================================
+# 以下环境变量会覆盖配置文件中的设置（优先级最高）：
+#
+# CERT_DIR              - 证书目录
+# LLM_VERIFY_SSL        - SSL 验证开关 (true/false)
+# CERT_WARNING_DAYS     - 证书过期警告天数
+# APP_CERT_SOURCE       - 应用证书来源 (self-signed/company)
+# COMPANY_CERT_FILE     - 公司证书文件路径
+# COMPANY_KEY_FILE      - 公司私钥文件路径
+# COMPANY_CA_BUNDLE     - 公司 CA 证书路径
+# TABLEAU_DOMAIN        - Tableau Server 域名
+#
+# 示例 .env 文件：
+# TABLEAU_DOMAIN=cpse.cpgroup.cn:11080
+# LLM_VERIFY_SSL=true
+# APP_CERT_SOURCE=self-signed

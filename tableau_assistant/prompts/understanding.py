@@ -25,9 +25,7 @@ SQL Roles:
 Process: Extract → Classify → Check aggregation → Decide split"""
     
     def get_specific_domain_knowledge(self) -> str:
-        return """Metadata: {metadata}
-
-**Think step by step:**
+        return """**Think step by step:**
 
 Step 1: Identify all entities from question
 - Which entities are dimensions? (categorical/grouping fields)

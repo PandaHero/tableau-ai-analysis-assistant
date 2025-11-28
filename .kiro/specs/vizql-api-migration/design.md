@@ -2,55 +2,74 @@
 
 ## 概述
 
-本设计文档描述了将 Tableau Assistant 升级到新版 VizQL Data Service API 的技术方案。Tableau 系统本身的查询接口已升级（Tableau 2025.1+），新版 API 支持表计算等高级功能，使得我们可以在单个查询中解决大部分问题，而不再需要之前的问题分解策略。
+本设计文档描述了将 Tableau Assistant 升级到新版 VizQL Data Service API 并集成 DeepAgents 架构的技术方案。本次升级的核心目标是：
+
+1. **支持表计算**：添加 TableCalcField 支持，实现累计总和、移动平均、排名等高级分析
+2. **DeepAgents 集成**：使用 DeepAgents 框架和 6 个中间件增强系统能力
+3. **工具封装**：将现有组件封装为 LangChain 工具
+4. **类型安全**：使用 Pydantic v2 模型确保类型安全
 
 ### 升级背景
 
-- **Tableau 系统升级**: Tableau 2025.1+ 引入了新版 VizQL Data Service API
-- **现有实现**: 我们已经在使用 VizQL Service API，但是旧版本
-- **数据模型**: 我们已有基于 Pydantic v2 的数据模型（vizql_types.py）
-- **主要变化**: 新版 API 支持表计算，可以在单个查询中完成复杂分析
-
-### 升级目标
-
-1. **API 升级**：从旧版 VizQL API 升级到 Tableau 2025.1+ 的新版 API
-2. **功能增强**：支持表计算（TableCalcField），减少问题分解需求
-3. **SDK 集成**：使用官方 vizql-data-service-py Python SDK
-4. **证书管理**：集成证书管理工具，自动获取 Tableau Cloud 证书
-5. **性能优化**：利用官方 SDK 的连接池和异步支持
+- **当前状态**：使用旧版 VizQL API，不支持表计算
+- **目标状态**：升级到 Tableau 2025.1+ API，支持表计算和高级功能
+- **架构变化**：从传统架构迁移到 DeepAgents 架构
+- **技术选型**：使用现有的 requests 库 + Pydantic 模型（不使用官方 SDK）
 
 ### 升级策略
 
-采用**直接升级**策略，一次性切换到新版 API：
+采用**直接升级**策略，一次性完成迁移：
 
 ```
 ┌─────────────────────────────────────────────────┐
-│         Tableau Assistant 应用层                 │
-│  (QueryExecutor, MetadataManager, etc.)         │
+│         用户问题（自然语言）                      │
 └─────────────────────────────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│           VizQL Client 封装层                    │
-│  - 基于官方 Python SDK                           │
-│  - 证书管理集成                                  │
-│  - 统一错误处理                                  │
+│         DeepAgent（6 个中间件）                  │
+│  - AnthropicPromptCaching (Claude only)         │
+│  - Summarization                                │
+│  - Filesystem                                   │
+│  - ToolRetry                                    │
+│  - TodoList                                     │
+│  - HumanInTheLoop                               │
 └─────────────────────────────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│      vizql-data-service-py (官方 SDK)           │
-│  - Pydantic v2 模型                             │
-│  - 同步/异步支持                                 │
-│  - 连接池管理                                    │
+│         StateGraph 工作流（6 个节点）            │
+│  Boost → Understanding → Planning →             │
+│  Execute → Insight → Replanner                  │
 └─────────────────────────────────────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────────────┐
-│      Tableau 2025.1+ VizQL Data Service         │
-│  - 支持表计算                                    │
-│  - 高级过滤器                                    │
-│  - 参数传递                                      │
+│         8 个 LangChain 工具                      │
+│  - get_metadata                                 │
+│  - parse_date                                   │
+│  - build_vizql_query (支持表计算)               │
+│  - execute_vizql_query                          │
+│  - semantic_map_fields                          │
+│  - process_query_result                         │
+│  - detect_statistics                            │
+│  - get_dimension_hierarchy                      │
+└─────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────┐
+│         现有组件（增强）                          │
+│  - QueryBuilder (添加表计算支持)                │
+│  - QueryExecutor (添加 Pydantic 验证)           │
+│  - MetadataManager (识别表计算字段)             │
+└─────────────────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────┐
+│         VizQL Data Service API                  │
+│  - 使用 requests 库                             │
+│  - 复用现有认证（JWT/PAT）                      │
+│  - Pydantic 模型验证                            │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -58,593 +77,875 @@
 
 ### 系统架构图
 
-
-```mermaid
-graph TB
-    subgraph "应用层"
-        QE[QueryExecutor]
-        MM[MetadataManager]
-        QB[QueryBuilder]
-    end
-    
-    subgraph "适配器层"
-        API[VizQLAPIAdapter]
-        FF[FeatureFlags]
-        DM[DataModelConverter]
-    end
-    
-    subgraph "实现层 - 新版"
-        SDK[VizQLDataServiceClient]
-        PM[Pydantic Models]
-        AUTH[TableauServerClient]
-    end
-    
-    subgraph "实现层 - 旧版"
-        LEGACY[Legacy API Client]
-        DICT[Dict-based Models]
-    end
-    
-    QE --> API
-    MM --> API
-    QB --> API
-    
-    API --> FF
-    FF -->|use_new_api=True| SDK
-    FF -->|use_new_api=False| LEGACY
-    
-    SDK --> PM
-    SDK --> AUTH
-    API --> DM
-    DM --> PM
-    DM --> DICT
+```
+用户问题
+    ↓
+DeepAgent (6 个中间件)
+    ├── AnthropicPromptCaching (Claude only)
+    ├── Summarization
+    ├── Filesystem
+    ├── ToolRetry
+    ├── TodoList
+    └── HumanInTheLoop
+    ↓
+StateGraph 工作流
+    Boost → Understanding → Planning → Execute → Insight → Replanner
+                                ↑___________________________|
+    ↓
+8 个 LangChain 工具
+    ├── get_metadata
+    ├── parse_date
+    ├── build_vizql_query (支持表计算)
+    ├── execute_vizql_query
+    ├── semantic_map_fields
+    ├── process_query_result
+    ├── detect_statistics
+    └── get_dimension_hierarchy
+    ↓
+组件层
+    ├── MetadataManager
+    ├── QueryBuilder (添加表计算支持)
+    └── QueryExecutor (添加 Pydantic 验证)
+    ↓
+数据模型层
+    ├── Intent 模型 (+ TableCalcIntent)
+    └── VizQL 模型 (+ TableCalcField)
+    ↓
+API 层
+    ├── 认证 (JWT/PAT)
+    └── VizQL Data Service (requests + Pydantic)
 ```
 
-### 分层架构
+### 分层架构说明
 
-#### 1. 应用层 (Application Layer)
-- **QueryExecutor**: 查询执行器，负责执行 VizQL 查询
-- **MetadataManager**: 元数据管理器，负责获取和缓存数据源元数据
-- **QueryBuilder**: 查询构建器，负责将意图转换为 VizQL 查询，支持表计算
+#### 1. 用户层
+- 接收自然语言问题
+- 返回分析洞察
 
-#### 2. 客户端封装层 (Client Wrapper Layer)
-- **VizQLClient**: 封装官方 SDK，提供简化接口
-- **CertificateManager**: 证书管理器，自动获取和更新 Tableau Cloud 证书
-- **ErrorHandler**: 统一错误处理，包括重试逻辑
+#### 2. DeepAgent 层
+- 使用 `create_deep_agent()` 创建
+- 集成 6 个中间件
+- 管理工具调用和状态
 
-#### 3. SDK 层 (SDK Layer)
-- **vizql-data-service-py**: 官方 Python SDK
-- **Pydantic v2 模型**: 类型安全的数据模型
-- **TableauServerClient**: 身份验证和会话管理
+#### 3. 工作流层（StateGraph）
+- **Boost 节点**：问题增强（可选）
+- **Understanding 节点**：理解用户意图
+- **Planning 节点**：生成查询计划（Intent → VizQLQuery）
+- **Execute 节点**：执行查询
+- **Insight 节点**：生成洞察
+- **Replanner 节点**：重规划（可选）
 
-#### 4. API 层 (API Layer)
-- **Tableau 2025.1+ VizQL Data Service**: 新版 API，支持表计算等高级功能
+#### 4. 工具层
+8 个 LangChain 工具，封装现有组件
 
+#### 5. 组件层
+现有组件，增强以支持表计算
 
+#### 6. 数据模型层
+- Intent 模型：添加 TableCalcIntent
+- VizQL 模型：添加 TableCalcField
+
+#### 7. API 层
+- 使用 requests 库
+- 复用现有认证
+- Pydantic 模型验证
 
 ## 组件和接口
 
-### 1. VizQLClient (客户端封装)
+### 1. DeepAgent 创建器
 
-基于官方 Python SDK 的客户端封装。
+已实现于 `tableau_assistant/src/agents/deep_agent_factory.py`
 
 ```python
-from vizql_data_service_py import (
-    VizQLDataServiceClient,
-    QueryRequest,
-    ReadMetadataRequest,
-    Datasource,
-    Query,
-    query_datasource,
-    read_metadata
-)
-import tableauserverclient as TSC
-
-class VizQLClient:
+def create_tableau_deep_agent(
+    tools: List[BaseTool],
+    model_config: Optional[Dict[str, Any]] = None,
+    store: Optional[BaseStore] = None,
+    system_prompt: Optional[str] = None
+) -> CompiledStateGraph:
     """
-    VizQL Data Service 客户端封装
+    创建 Tableau Assistant 的 DeepAgent
     
-    封装官方 SDK，提供简化的接口
+    配置 6 个中间件：
+    1. AnthropicPromptCachingMiddleware (仅 Claude)
+    2. SummarizationMiddleware (10 轮触发)
+    3. FilesystemMiddleware (10MB 阈值)
+    4. ToolRetryMiddleware (3 次重试)
+    5. TodoListMiddleware (10 个任务)
+    6. HumanInTheLoopMiddleware (5 分钟超时)
+    """
+```
+
+### 2. 工具封装层
+
+将 8 个组件封装为 LangChain 工具：
+
+```python
+from langchain.tools import tool
+
+@tool
+def get_metadata(datasource_luid: str) -> Dict[str, Any]:
+    """
+    获取数据源元数据
+    
+    Args:
+        datasource_luid: 数据源 LUID
+    
+    Returns:
+        包含字段信息的元数据字典
+    """
+    # 调用 MetadataManager
+    pass
+
+@tool
+def build_vizql_query(intent: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    构建 VizQL 查询
+    
+    支持：
+    - DimensionIntent → BasicField
+    - MeasureIntent → FunctionField
+    - DateFieldIntent → FunctionField (with date function)
+    - TableCalcIntent → TableCalcField (新增)
+    
+    Args:
+        intent: Intent 对象字典
+    
+    Returns:
+        VizQLQuery 对象字典
+    """
+    # 调用 QueryBuilder
+    pass
+
+@tool
+def execute_vizql_query(
+    datasource_luid: str,
+    query: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    执行 VizQL 查询
+    
+    Args:
+        datasource_luid: 数据源 LUID
+        query: VizQLQuery 对象字典
+    
+    Returns:
+        查询结果
+    """
+    # 调用 QueryExecutor
+    pass
+```
+
+### 3. TableCalcIntent 模型
+
+新增于 `tableau_assistant/src/models/intent.py`
+
+```python
+class TableCalcIntent(BaseModel):
+    """
+    表计算意图
+    
+    用于表达表计算需求，如累计总和、移动平均、排名等
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    business_term: str = Field(
+        description="业务术语（如'销售额累计'、'产品排名'）"
+    )
+    
+    technical_field: str = Field(
+        description="技术字段名（从元数据映射）"
+    )
+    
+    table_calc_type: Literal[
+        "RUNNING_TOTAL",
+        "MOVING_CALCULATION", 
+        "RANK",
+        "PERCENTILE",
+        "PERCENT_OF_TOTAL",
+        "PERCENT_FROM",
+        "PERCENT_DIFFERENCE_FROM",
+        "DIFFERENCE_FROM",
+        "CUSTOM",
+        "NESTED"
+    ] = Field(
+        description="表计算类型"
+    )
+    
+    table_calc_config: Dict[str, Any] = Field(
+        description="""表计算配置
+        
+        RUNNING_TOTAL:
+            - aggregation: "SUM" | "AVG" | etc.
+            - dimensions: List[str]
+            - restartEvery: Optional[str]
+        
+        MOVING_CALCULATION:
+            - aggregation: "SUM" | "AVG" | etc.
+            - dimensions: List[str]
+            - previous: int
+            - next: int
+            - includeCurrent: bool
+        
+        RANK:
+            - dimensions: List[str]
+            - rankType: "COMPETITION" | "DENSE" | "UNIQUE"
+            - direction: "ASC" | "DESC"
+        """
+    )
+    
+    sort_direction: Optional[Literal["ASC", "DESC"]] = None
+    sort_priority: Optional[int] = None
+```
+
+### 4. TableCalcField 模型
+
+新增于 `tableau_assistant/src/models/vizql_types.py`
+
+```python
+class TableCalcSpecification(BaseModel):
+    """表计算规范基类"""
+    model_config = ConfigDict(extra="forbid")
+    
+    tableCalcType: Literal[
+        "RUNNING_TOTAL",
+        "MOVING_CALCULATION",
+        "RANK",
+        "PERCENTILE",
+        "PERCENT_OF_TOTAL",
+        "PERCENT_FROM",
+        "PERCENT_DIFFERENCE_FROM",
+        "DIFFERENCE_FROM",
+        "CUSTOM",
+        "NESTED"
+    ]
+    
+    dimensions: List[str] = Field(
+        description="计算维度（用于分组）"
+    )
+
+
+class RunningTotalTableCalcSpecification(TableCalcSpecification):
+    """累计总计规范"""
+    tableCalcType: Literal["RUNNING_TOTAL"] = "RUNNING_TOTAL"
+    
+    aggregation: FunctionEnum = Field(
+        description="聚合函数（SUM、AVG 等）"
+    )
+    
+    restartEvery: Optional[str] = Field(
+        None,
+        description="重新开始计算的维度"
+    )
+    
+    secondaryTableCalculation: Optional['TableCalcSpecification'] = None
+
+
+class MovingTableCalcSpecification(TableCalcSpecification):
+    """移动计算规范"""
+    tableCalcType: Literal["MOVING_CALCULATION"] = "MOVING_CALCULATION"
+    
+    aggregation: FunctionEnum
+    previous: int = Field(ge=0, description="向前取值数量")
+    next: int = Field(ge=0, description="向后取值数量")
+    includeCurrent: bool = True
+    fillInNull: Optional[bool] = None
+
+
+class RankTableCalcSpecification(TableCalcSpecification):
+    """排名计算规范"""
+    tableCalcType: Literal["RANK"] = "RANK"
+    
+    rankType: Literal["COMPETITION", "DENSE", "UNIQUE"] = "COMPETITION"
+    direction: Literal["ASC", "DESC"] = "ASC"
+
+
+class TableCalcField(FieldBase):
+    """
+    表计算字段
+    
+    用于：
+    - 累计总和：RUNNING_TOTAL
+    - 移动平均：MOVING_CALCULATION
+    - 排名：RANK
+    - 百分比：PERCENT_OF_TOTAL
+    
+    Examples:
+        # 累计总和
+        TableCalcField(
+            fieldCaption="Sales",
+            tableCalculation=RunningTotalTableCalcSpecification(
+                tableCalcType="RUNNING_TOTAL",
+                aggregation=FunctionEnum.SUM,
+                dimensions=["Category"]
+            )
+        )
+        
+        # 移动平均
+        TableCalcField(
+            fieldCaption="Sales",
+            tableCalculation=MovingTableCalcSpecification(
+                tableCalcType="MOVING_CALCULATION",
+                aggregation=FunctionEnum.AVG,
+                dimensions=["Order Date"],
+                previous=2,
+                next=0,
+                includeCurrent=True
+            )
+        )
+    """
+    function: Optional[FunctionEnum] = None
+    calculation: Optional[str] = None
+    tableCalculation: Union[
+        RunningTotalTableCalcSpecification,
+        MovingTableCalcSpecification,
+        RankTableCalcSpecification,
+        # ... 其他类型
+    ]
+    nestedTableCalculations: Optional[List[TableCalcSpecification]] = None
+
+
+# 更新 VizQLField 联合类型
+VizQLField = Annotated[
+    Union[BasicField, FunctionField, CalculationField, TableCalcField],
+    Field(discriminator=None)
+]
+```
+
+### 5. QueryBuilder 增强
+
+扩展 `tableau_assistant/src/components/query_builder/` 以支持表计算
+
+```python
+class QueryBuilder:
+    """查询构建器"""
+    
+    def build_field(self, intent: Union[
+        DimensionIntent,
+        MeasureIntent,
+        DateFieldIntent,
+        TableCalcIntent  # 新增
+    ]) -> VizQLField:
+        """
+        根据 Intent 构建字段
+        
+        新增支持：
+        - TableCalcIntent → TableCalcField
+        """
+        if isinstance(intent, TableCalcIntent):
+            return self.build_table_calc_field(intent)
+        # ... 现有逻辑
+    
+    def build_table_calc_field(
+        self,
+        intent: TableCalcIntent
+    ) -> TableCalcField:
+        """
+        构建表计算字段
+        
+        根据 table_calc_type 创建相应的 TableCalcSpecification
+        """
+        calc_type = intent.table_calc_type
+        config = intent.table_calc_config
+        
+        if calc_type == "RUNNING_TOTAL":
+            spec = RunningTotalTableCalcSpecification(
+                tableCalcType="RUNNING_TOTAL",
+                aggregation=config["aggregation"],
+                dimensions=config["dimensions"],
+                restartEvery=config.get("restartEvery")
+            )
+        elif calc_type == "MOVING_CALCULATION":
+            spec = MovingTableCalcSpecification(
+                tableCalcType="MOVING_CALCULATION",
+                aggregation=config["aggregation"],
+                dimensions=config["dimensions"],
+                previous=config["previous"],
+                next=config["next"],
+                includeCurrent=config.get("includeCurrent", True)
+            )
+        elif calc_type == "RANK":
+            spec = RankTableCalcSpecification(
+                tableCalcType="RANK",
+                dimensions=config["dimensions"],
+                rankType=config.get("rankType", "COMPETITION"),
+                direction=config.get("direction", "ASC")
+            )
+        # ... 其他类型
+        
+        return TableCalcField(
+            fieldCaption=intent.technical_field,
+            tableCalculation=spec,
+            sortDirection=intent.sort_direction,
+            sortPriority=intent.sort_priority
+        )
+```
+
+### 6. VizQL 客户端增强
+
+增强 `tableau_assistant/src/bi_platforms/tableau/vizql_data_service.py`
+
+```python
+def query_vds(
+    api_key: str,
+    datasource_luid: str,
+    url: str,
+    query: Union[Dict[str, Any], VizQLQuery],  # 支持 Pydantic 模型
+    site: str = None
+) -> Dict[str, Any]:
+    """
+    执行 VizQL 查询
+    
+    增强：
+    - 支持 Pydantic 模型输入
+    - 自动验证请求
+    - 统一错误处理
+    """
+    # 如果是 Pydantic 模型，序列化
+    if isinstance(query, VizQLQuery):
+        query_dict = query.model_dump(exclude_none=True)
+    else:
+        # 验证字典格式
+        query_dict = VizQLQuery(**query).model_dump(exclude_none=True)
+    
+    full_url = f"{url}/api/v1/vizql-data-service/query-datasource"
+    
+    payload = {
+        "datasource": {
+            "datasourceLuid": datasource_luid
+        },
+        "query": query_dict
+    }
+    
+    headers = {
+        'X-Tableau-Auth': api_key,
+        'Content-Type': 'application/json'
+    }
+    
+    if site:
+        headers['X-Tableau-Site'] = site
+    
+    response = requests.post(full_url, headers=headers, json=payload)
+    
+    if response.status_code == 200:
+        # 验证响应
+        return QueryOutput(**response.json()).model_dump()
+    else:
+        # 统一错误处理
+        raise RuntimeError(f"Query failed: {response.status_code} - {response.text}")
+```
+
+## 组件和接口
+
+### 日期管理器（DateManager）
+
+**职责**: 统一管理所有日期相关功能，包括日期计算、解析和格式检测。
+
+**架构设计**:
+
+```
+DateManager (统一入口)
+├── DateCalculator (日期计算)
+│   └── 相对日期计算 (LASTN, LAST, CURRENT, NEXT, NEXTN)
+├── DateParser (日期解析)
+│   └── TimeRange → 具体日期范围
+└── DateFormatDetector (日期格式检测) ★ 新增
+    └── STRING 字段日期格式检测和转换
+```
+
+**使用场景**:
+- MetadataManager 使用 DateManager 检测 STRING 字段的日期格式
+- QueryBuilder 使用 DateManager 解析日期范围和转换日期格式
+- DateFilterConverter 使用 DateManager 构建日期过滤器
+
+### 日期格式检测器（DateFormatDetector）
+
+**职责**: 自动检测数据源中字符串类型日期字段的格式，并提供格式转换功能。
+
+**接口设计**:
+
+```python
+class DateFormatType(Enum):
+    """日期格式类型枚举"""
+    ISO_DATE = "YYYY-MM-DD"           # 2024-01-15
+    US_DATE = "MM/DD/YYYY"            # 01/15/2024
+    EU_DATE = "DD/MM/YYYY"            # 15/01/2024
+    US_DATE_DASH = "MM-DD-YYYY"       # 01-15-2024
+    EU_DATE_DASH = "DD-MM-YYYY"       # 15-01-2024
+    YEAR_MONTH = "YYYY-MM"            # 2024-01
+    MONTH_YEAR = "MM/YYYY"            # 01/2024
+    QUARTER = "YYYY-QN"               # 2024-Q1
+    YEAR_ONLY = "YYYY"                # 2024
+    LONG_DATE = "Month DD, YYYY"      # January 15, 2024
+    SHORT_MONTH = "MMM DD, YYYY"      # Jan 15, 2024
+    TIMESTAMP = "YYYY-MM-DD HH:MM:SS" # 2024-01-15 10:30:00
+    EXCEL_DATE = "M/D/YYYY"           # 1/15/2024 (no leading zeros)
+    UNKNOWN = "UNKNOWN"
+
+
+class DateFormatDetector:
+    """日期格式检测器"""
+    
+    def detect_format(
+        self, 
+        sample_values: List[str], 
+        confidence_threshold: float = 0.7
+    ) -> DateFormatType:
+        """
+        检测日期格式
+        
+        Args:
+            sample_values: 样本日期值列表
+            confidence_threshold: 置信度阈值（默认 0.7）
+        
+        Returns:
+            检测到的日期格式类型
+        
+        算法:
+        1. 对每种格式模式进行正则匹配
+        2. 计算每种格式的匹配率（匹配数/总样本数）
+        3. 选择匹配率最高且超过阈值的格式
+        4. 对于美式/欧式格式歧义，通过分析日期范围区分
+        """
+        pass
+    
+    def convert_to_iso(
+        self, 
+        date_value: str, 
+        source_format: DateFormatType
+    ) -> Optional[str]:
+        """
+        转换日期为 ISO 格式（YYYY-MM-DD）
+        
+        Args:
+            date_value: 原始日期值
+            source_format: 源日期格式
+        
+        Returns:
+            ISO 格式的日期字符串，转换失败返回 None
+        """
+        pass
+    
+    def get_format_info(self, format_type: DateFormatType) -> Dict[str, str]:
+        """
+        获取格式信息
+        
+        Returns:
+            包含 name、pattern、example、description 的字典
+        """
+        pass
+```
+
+**美式/欧式格式区分策略**:
+
+```python
+def _disambiguate_us_eu_format(self, samples: List[str]) -> DateFormatType:
+    """
+    区分美式和欧式日期格式
+    
+    策略：
+    1. 查找明显的区分标志（如月份>12的情况）
+    2. 如果第一个数字>12，说明是欧式格式（DD/MM/YYYY）
+    3. 如果第二个数字>12，说明是美式格式（MM/DD/YYYY）
+    4. 如果都不明显，默认使用美式格式
+    """
+    us_indicators = 0
+    eu_indicators = 0
+    
+    for sample in samples:
+        match = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', sample)
+        if match:
+            first_num = int(match.group(1))
+            second_num = int(match.group(2))
+            
+            if first_num > 12:
+                eu_indicators += 1
+            elif second_num > 12:
+                us_indicators += 1
+    
+    return DateFormatType.EU_DATE if eu_indicators > us_indicators else DateFormatType.US_DATE
+```
+
+**DateManager 统一接口**:
+
+```python
+class DateManager:
+    """
+    日期管理器 - 统一管理所有日期相关功能
+    
+    职责：
+    1. 提供统一的日期功能入口
+    2. 管理 DateCalculator、DateParser、DateFormatDetector
+    3. 缓存日期格式检测结果
     """
     
     def __init__(
         self,
-        server_url: str,
-        auth: Union[TSC.PersonalAccessTokenAuth, TSC.JWTAuth],
-        site: str = "",
-        verify_ssl: Union[bool, str, ssl.SSLContext] = True
+        anchor_date: Optional[datetime] = None,
+        week_start_day: int = 0
     ):
-        self.server_url = server_url
-        self.auth = auth
-        self.site = site
-        
-        # 创建 Tableau Server 连接
-        self.server = TSC.Server(server_url)
-        
-        # 创建 VizQL Data Service 客户端
-        self.client = VizQLDataServiceClient(
-            server_url=server_url,
-            server=self.server,
-            tableau_auth=auth,
-            verify_ssl=verify_ssl
+        """初始化日期管理器"""
+        self.calculator = DateCalculator(anchor_date, week_start_day)
+        self.parser = DateParser(self.calculator)
+        self.format_detector = DateFormatDetector()
+        self.field_formats_cache: Dict[str, DateFormatType] = {}
+    
+    # ===== 日期计算功能 =====
+    def calculate_relative_date(
+        self,
+        relative_type: str,
+        period_type: str,
+        range_n: Optional[int] = None
+    ) -> Dict[str, str]:
+        """计算相对日期范围（委托给 DateCalculator）"""
+        return self.calculator.calculate_relative_date(
+            relative_type, period_type, range_n
         )
     
-    async def query_async(
+    # ===== 日期解析功能 =====
+    def parse_time_range(
         self,
-        datasource_luid: str,
-        query: Query
-    ) -> QueryOutput:
-        """异步查询数据源"""
-        request = QueryRequest(
-            datasource=Datasource(datasourceLuid=datasource_luid),
-            query=query
+        time_range: TimeRange,
+        reference_date: Optional[datetime] = None,
+        max_date: Optional[str] = None
+    ) -> Tuple[str, str]:
+        """解析 TimeRange 为具体日期范围（委托给 DateParser）"""
+        return self.parser.calculate_date_range(
+            time_range, reference_date, max_date
         )
-        
-        with self.server.auth.sign_in(self.auth):
-            result = await query_datasource.asyncio(
-                client=self.client,
-                body=request
-            )
-        
-        return result
     
-    def query_sync(
+    # ===== 日期格式检测功能 =====
+    def detect_field_date_format(
         self,
-        datasource_luid: str,
-        query: Query
-    ) -> QueryOutput:
-        """同步查询数据源"""
-        request = QueryRequest(
-            datasource=Datasource(datasourceLuid=datasource_luid),
-            query=query
+        sample_values: List[str],
+        confidence_threshold: float = 0.7
+    ) -> DateFormatType:
+        """检测字段的日期格式（委托给 DateFormatDetector）"""
+        return self.format_detector.detect_format(
+            sample_values, confidence_threshold
         )
-        
-        with self.server.auth.sign_in(self.auth):
-            result = query_datasource.sync(
-                client=self.client,
-                body=request
-            )
-        
-        return result
+    
+    def convert_date_to_iso(
+        self,
+        date_value: str,
+        source_format: DateFormatType
+    ) -> Optional[str]:
+        """转换日期为 ISO 格式（委托给 DateFormatDetector）"""
+        return self.format_detector.convert_to_iso(
+            date_value, source_format
+        )
+    
+    def get_format_info(self, format_type: DateFormatType) -> Dict[str, str]:
+        """获取格式信息（委托给 DateFormatDetector）"""
+        return self.format_detector.get_format_info(format_type)
+    
+    # ===== 缓存管理 =====
+    def cache_field_format(self, field_name: str, format_type: DateFormatType):
+        """缓存字段的日期格式"""
+        self.field_formats_cache[field_name] = format_type
+    
+    def get_cached_field_format(self, field_name: str) -> Optional[DateFormatType]:
+        """获取缓存的字段日期格式"""
+        return self.field_formats_cache.get(field_name)
 ```
 
-
-
-### 2. CertificateManager (证书管理器)
-
-集成证书管理工具，自动获取 Tableau Cloud 证书。
+**集成到 MetadataManager**:
 
 ```python
-import ssl
-from pathlib import Path
-from typing import Optional
-
-class CertificateManager:
-    """
-    证书管理器
+class MetadataManager:
+    def __init__(self, date_manager: DateManager):
+        """使用 DateManager 统一管理日期功能"""
+        self.date_manager = date_manager
     
-    自动获取和管理 Tableau Cloud 证书
-    """
-    
-    def __init__(self, cert_dir: Path = Path("tableau_assistant/certs")):
-        self.cert_dir = cert_dir
-        self.tableau_cloud_cert = cert_dir / "tableau_cloud_cert.pem"
-    
-    def get_ssl_context(self) -> ssl.SSLContext:
+    def _detect_date_field_formats(self) -> Dict[str, DateFormatType]:
         """
-        获取 SSL 上下文
+        检测数据源中日期字段的格式
         
         Returns:
-            配置好的 SSL 上下文
+            字段名到日期格式类型的映射
         """
-        # 创建默认 SSL 上下文
-        ssl_context = ssl.create_default_context()
+        field_formats = {}
         
-        # 如果证书文件存在，加载它
-        if self.tableau_cloud_cert.exists():
-            ssl_context.load_verify_locations(cafile=str(self.tableau_cloud_cert))
-        else:
-            # 如果证书不存在，尝试获取
-            self.fetch_tableau_cloud_cert()
-            if self.tableau_cloud_cert.exists():
-                ssl_context.load_verify_locations(cafile=str(self.tableau_cloud_cert))
+        for field in self.metadata.fields:
+            # DATE 类型字段使用 ISO 格式
+            if field.dataType == "DATE":
+                field_formats[field.name] = DateFormatType.ISO_DATE
+                self.date_manager.cache_field_format(field.name, DateFormatType.ISO_DATE)
+            
+            # STRING 类型字段检测日期格式
+            elif field.dataType == "STRING" and field.sample_values:
+                detected_format = self.date_manager.detect_field_date_format(
+                    field.sample_values,
+                    confidence_threshold=0.7
+                )
+                
+                if detected_format != DateFormatType.UNKNOWN:
+                    field_formats[field.name] = detected_format
+                    self.date_manager.cache_field_format(field.name, detected_format)
+                    logger.info(f"✓ STRING 字段 {field.name} 检测为日期格式: {detected_format.value}")
         
-        return ssl_context
+        return field_formats
     
-    def fetch_tableau_cloud_cert(self) -> bool:
-        """
-        从 Tableau Cloud 获取证书
-        
-        使用证书管理工具（cert_manager）获取证书
-        
-        Returns:
-            是否成功获取证书
-        """
-        try:
-            from tableau_assistant.cert_manager import fetcher
-            
-            # 获取 Tableau Cloud 证书
-            cert_content = fetcher.fetch_certificate(
-                host="online.tableau.com",
-                port=443
-            )
-            
-            # 保存证书
-            self.cert_dir.mkdir(parents=True, exist_ok=True)
-            self.tableau_cloud_cert.write_text(cert_content)
-            
-            return True
-        except Exception as e:
-            logger.error(f"获取 Tableau Cloud 证书失败: {e}")
-            return False
-    
-    def validate_certificate(self) -> bool:
-        """
-        验证证书是否有效
-        
-        Returns:
-            证书是否有效
-        """
-        if not self.tableau_cloud_cert.exists():
-            return False
-        
-        try:
-            from tableau_assistant.cert_manager import validator
-            
-            return validator.validate_certificate(
-                cert_path=str(self.tableau_cloud_cert)
-            )
-        except Exception as e:
-            logger.error(f"验证证书失败: {e}")
-            return False
+    def get_field_date_format(self, field_name: str) -> Optional[DateFormatType]:
+        """获取字段的日期格式（从 DateManager 缓存）"""
+        return self.date_manager.get_cached_field_format(field_name)
 ```
 
+**集成到 QueryBuilder**:
 
+```python
+class QueryBuilder:
+    def __init__(self, date_manager: DateManager):
+        """使用 DateManager 统一管理日期功能"""
+        self.date_manager = date_manager
+    
+    def _build_date_filter_for_string_field(
+        self,
+        field_name: str,
+        start_date: str,
+        end_date: str,
+        date_format: DateFormatType
+    ) -> VizQLFilter:
+        """
+        为 STRING 类型日期字段构建过滤器
+        
+        策略：
+        1. 创建 DATEPARSE 计算字段
+        2. 使用 QuantitativeDateFilter 过滤转换后的日期
+        """
+        # 获取格式信息
+        format_info = self.date_manager.get_format_info(date_format)
+        
+        # 创建 DATEPARSE 计算字段
+        dateparse_field = CalculationField(
+            fieldCaption=f"{field_name}_parsed",
+            calculation=f"DATEPARSE('{format_info['pattern']}', [{field_name}])"
+        )
+        
+        # 使用 QuantitativeDateFilter
+        return QuantitativeDateFilter(
+            field=dateparse_field,
+            filterType="QUANTITATIVE_DATE",
+            minDate=start_date,  # ISO 格式
+            maxDate=end_date     # ISO 格式
+        )
+```
 
 ## 数据模型
 
-### 1. 新版 Pydantic 模型 (基于 vizql-data-service-py)
+### Intent 模型层次结构
 
-新版 API 使用 Pydantic v2 模型，由 datamodel-codegen 从 OpenAPI 规范自动生成。
-
-#### 查询相关模型
-
-```python
-from pydantic import BaseModel, Field
-from typing import List, Optional, Union
-from enum import Enum
-
-# 字段基类
-class FieldBase(BaseModel):
-    fieldCaption: str
-    fieldAlias: Optional[str] = None
-    maxDecimalPlaces: Optional[int] = None
-    sortDirection: Optional[str] = None
-    sortPriority: Optional[int] = None
-
-# 维度字段
-class DimensionField(FieldBase):
-    pass
-
-# 度量字段
-class MeasureField(FieldBase):
-    function: str  # SUM, AVG, COUNT, etc.
-
-# 计算字段
-class CalculatedField(FieldBase):
-    calculation: str
-
-# 分箱字段
-class BinField(FieldBase):
-    binSize: float
-
-# 表计算字段
-class TableCalcField(FieldBase):
-    function: Optional[str] = None
-    calculation: Optional[str] = None
-    tableCalculation: 'TableCalcSpecification'
-    nestedTableCalculations: Optional[List['TableCalcSpecification']] = None
-
-# 字段联合类型
-Field = Union[DimensionField, MeasureField, CalculatedField, BinField, TableCalcField]
-
-# 查询对象
-class Query(BaseModel):
-    fields: List[Field]
-    filters: Optional[List['Filter']] = None
-    parameters: Optional[List['Parameter']] = None
-
-# 数据源对象
-class Datasource(BaseModel):
-    datasourceLuid: str
-    connections: Optional[List['Connection']] = None
-
-# 查询请求
-class QueryRequest(BaseModel):
-    datasource: Datasource
-    query: Query
-    options: Optional['QueryDatasourceOptions'] = None
+```
+Intent 模型（intent.py）
+├── DimensionIntent（维度意图）
+├── MeasureIntent（度量意图）
+├── DateFieldIntent（日期字段意图）
+├── TableCalcIntent（表计算意图）★ 新增
+├── DateFilterIntent（日期过滤意图）
+├── FilterIntent（非日期过滤意图）
+└── TopNIntent（TopN 意图）
 ```
 
-#### 过滤器模型
+### VizQL 模型层次结构
 
-```python
-# 过滤器基类
-class Filter(BaseModel):
-    field: 'FilterField'
-    filterType: str
-    context: bool = False
-
-# 过滤器字段
-class DimensionFilterField(BaseModel):
-    fieldCaption: str
-
-class MeasureFilterField(BaseModel):
-    fieldCaption: str
-    function: str
-
-class CalculatedFilterField(BaseModel):
-    calculation: str
-
-FilterField = Union[DimensionFilterField, MeasureFilterField, CalculatedFilterField]
-
-# 具体过滤器类型
-class QuantitativeDateFilter(Filter):
-    quantitativeFilterType: str  # RANGE, MIN, MAX, ONLY_NULL, ONLY_NON_NULL
-    minDate: Optional[str] = None
-    maxDate: Optional[str] = None
-    includeNulls: Optional[bool] = None
-
-class QuantitativeNumericalFilter(Filter):
-    quantitativeFilterType: str
-    min: Optional[float] = None
-    max: Optional[float] = None
-    includeNulls: Optional[bool] = None
-
-class SetFilter(Filter):
-    values: List[str]
-    exclude: bool = False
-
-class MatchFilter(Filter):
-    contains: Optional[str] = None
-    startsWith: Optional[str] = None
-    endsWith: Optional[str] = None
-    exclude: bool = False
-
-class RelativeDateFilter(Filter):
-    relativeDateType: str  # LAST, NEXT, CURRENT, etc.
-    rangeType: str  # YEAR, QUARTER, MONTH, WEEK, DAY
-    rangeN: Optional[int] = None
-
-class TopNFilter(Filter):
-    topType: str  # TOP, BOTTOM
-    n: int
-    by: 'MeasureFilterField'
+```
+VizQLField（vizql_types.py）
+├── BasicField（基础字段）
+├── FunctionField（函数字段）
+├── CalculationField（计算字段）
+└── TableCalcField（表计算字段）★ 新增
+    └── tableCalculation: TableCalcSpecification
+        ├── RunningTotalTableCalcSpecification
+        ├── MovingTableCalcSpecification
+        ├── RankTableCalcSpecification
+        ├── PercentileTableCalcSpecification
+        ├── PercentOfTotalTableCalcSpecification
+        ├── PercentFromTableCalcSpecification
+        ├── PercentDifferenceFromTableCalcSpecification
+        ├── DifferenceFromTableCalcSpecification
+        ├── CustomTableCalcSpecification
+        └── NestedTableCalcSpecification
 ```
 
+### 表计算类型映射
 
-
-#### 响应模型
-
-```python
-# 字段元数据
-class FieldMetadata(BaseModel):
-    fieldName: str
-    fieldCaption: str
-    dataType: str  # INTEGER, REAL, STRING, DATETIME, BOOLEAN, DATE, SPATIAL, UNKNOWN
-    defaultAggregation: Optional[str] = None
-    columnClass: str  # COLUMN, BIN, GROUP, CALCULATION, TABLE_CALCULATION
-    formula: Optional[str] = None
-    logicalTableId: Optional[str] = None
-
-# 元数据输出
-class MetadataOutput(BaseModel):
-    data: List[FieldMetadata]
-    extraData: Optional[Dict] = None
-
-# 查询输出
-class QueryOutput(BaseModel):
-    data: List[Dict]
-    extraData: Optional[Dict] = None
-
-# 错误响应
-class TableauError(BaseModel):
-    errorCode: Optional[str] = None
-    message: Optional[str] = None
-    messages: Optional[List] = None
-    datetime: Optional[str] = None
-    debug: Optional[Dict] = None
-    tab_error_code: Optional[str] = None
-```
-
-### 2. 现有数据模型 (vizql_types.py)
-
-我们已有基于 Pydantic v2 的数据模型，定义在 `tableau_assistant/src/models/vizql_types.py`。
-
-主要模型包括：
-
-- **字段类型**: BasicField, FunctionField, CalculationField
-- **过滤器类型**: SetFilter, TopNFilter, MatchFilter, QuantitativeNumericalFilter, QuantitativeDateFilter, RelativeDateFilter
-- **查询结构**: VizQLQuery, QueryRequest, QueryOutput
-- **元数据**: FieldMetadata, MetadataOutput
-
-**关键差异**：
-- 现有模型：BasicField, FunctionField, CalculationField
-- 新版 SDK：DimensionField, MeasureField, CalculatedField, BinField, **TableCalcField**
-
-**需要添加的模型**：
-- **TableCalcField**: 表计算字段（新功能）
-- **TableCalcSpecification**: 表计算规范
-- 各种表计算类型：CustomTableCalcSpecification, RunningTotalTableCalcSpecification, MovingTableCalcSpecification 等
-
-### 3. 内部数据模型 (Metadata)
-
-系统内部使用的元数据模型，需要与新版 API 的 FieldMetadata 对齐。
-
-```python
-from pydantic import BaseModel
-from typing import List, Optional, Dict
-
-class FieldMetadata(BaseModel):
-    """字段元数据（内部模型）"""
-    name: str  # 映射到 fieldName
-    fieldCaption: str
-    role: str  # dimension 或 measure
-    dataType: str
-    dataCategory: Optional[str] = None
-    aggregation: Optional[str] = None  # 映射到 defaultAggregation
-    formula: Optional[str] = None
-    description: Optional[str] = None
-    
-    # 维度层级相关
-    category: Optional[str] = None
-    category_detail: Optional[str] = None
-    level: Optional[int] = None
-    granularity: Optional[str] = None
-    parent_dimension: Optional[str] = None
-    child_dimension: Optional[str] = None
-    valid_max_date: Optional[str] = None
-
-class Metadata(BaseModel):
-    """数据源元数据（内部模型）"""
-    datasource_luid: str
-    datasource_name: str
-    datasource_description: Optional[str] = None
-    datasource_owner: Optional[str] = None
-    fields: List[FieldMetadata]
-    field_count: int
-    dimension_hierarchy: Optional[Dict] = None
-    raw_response: Optional[Dict] = None
-```
-
-
+| 用户关键词 | table_calc_type | TableCalcSpecification |
+|-----------|----------------|----------------------|
+| "累计"、"running total" | RUNNING_TOTAL | RunningTotalTableCalcSpecification |
+| "移动平均"、"moving average" | MOVING_CALCULATION | MovingTableCalcSpecification |
+| "排名"、"rank" | RANK | RankTableCalcSpecification |
+| "百分比"、"percent of total" | PERCENT_OF_TOTAL | PercentOfTotalTableCalcSpecification |
 
 ## 正确性属性
 
 *属性是系统在所有有效执行中应该保持为真的特征或行为——本质上是关于系统应该做什么的形式化陈述。属性作为人类可读规范和机器可验证正确性保证之间的桥梁。*
 
+
 基于需求分析，以下是系统必须满足的正确性属性：
 
-### 属性 1: 查询对象结构完整性
-*对于任何*有效的 Query 对象，序列化后再反序列化应该产生等价的对象，且必须包含 fields 数组
-**验证需求: 1.3**
+### 属性 1: TableCalcIntent 序列化往返一致性
+*对于任何*有效的 TableCalcIntent 对象，序列化后再反序列化应该产生等价的对象
+**验证需求: 7.2, 15.8**
 
-### 属性 2: 字段类型多态性
-*对于任何*五种字段类型（DimensionField、MeasureField、CalculatedField、BinField、TableCalcField）的实例，系统应该能够正确序列化、传输和反序列化
-**验证需求: 1.4**
+### 属性 2: TableCalcField 序列化往返一致性
+*对于任何*有效的 TableCalcField 对象，序列化后再反序列化应该产生等价的对象
+**验证需求: 7.1, 15.1**
 
-### 属性 3: 过滤器类型多态性
-*对于任何*六种过滤器类型（QUANTITATIVE_DATE、QUANTITATIVE_NUMERICAL、SET、MATCH、DATE、TOP）的实例，系统应该能够正确序列化、传输和反序列化
-**验证需求: 1.5**
+### 属性 3: TableCalcIntent 到 TableCalcField 转换正确性
+*对于任何*有效的 TableCalcIntent，QueryBuilder 生成的 TableCalcField 应该包含正确的 tableCalculation 规范
+**验证需求: 3.4, 3.5, 15.9**
 
-### 属性 4: 错误响应结构完整性
-*对于任何*TableauError 响应，解析后的对象应该包含 errorCode、message 和 debug 字段（如果原始响应中存在）
-**验证需求: 2.5**
+### 属性 4: 表计算类型完整性
+*对于任何*10 种表计算类型，系统应该能够正确创建相应的 TableCalcSpecification
+**验证需求: 15.3**
 
-### 属性 5: 维度字段构建正确性
-*对于任何*有效的维度字段输入，QueryBuilder 生成的 DimensionField 对象应该包含 fieldCaption 必需字段，以及所有提供的可选字段（fieldAlias、sortDirection、sortPriority）
-**验证需求: 3.1**
+### 属性 5: 工具封装业务逻辑保持
+*对于任何*组件输入，工具封装前后的输出应该保持一致
+**验证需求: 16.4, 16.5**
 
-### 属性 6: 度量字段构建正确性
-*对于任何*有效的度量字段输入，QueryBuilder 生成的 MeasureField 对象应该包含 fieldCaption 和 function 必需字段，以及所有提供的可选字段
-**验证需求: 3.2**
+### 属性 6: 中间件配置完整性
+*对于任何*模型配置，DeepAgent 应该包含所有必需的中间件（6 个），且不包含 SubAgentMiddleware
+**验证需求: 6.1, 6.2, 6.3**
 
-### 属性 7: 计算字段构建正确性
-*对于任何*有效的计算字段输入，QueryBuilder 生成的 CalculatedField 对象应该包含 fieldCaption 和 calculation 必需字段
-**验证需求: 3.3**
+### 属性 7: StateGraph 节点顺序保持
+*对于任何*工作流执行，节点执行顺序应该遵循 Boost → Understanding → Planning → Execute → Insight → Replanner
+**验证需求: 17.1, 17.2**
 
-### 属性 8: 过滤器构建正确性
-*对于任何*过滤器类型和有效输入，QueryBuilder 生成的过滤器对象应该包含 field 和 filterType 必需字段
-**验证需求: 3.4**
+### 属性 8: Boost 节点条件跳过
+*对于任何*boost_question=False 的情况，系统应该跳过 Boost 节点
+**验证需求: 17.4**
 
-### 属性 9: 查询构建完整性
-*对于任何*有效的查询输入，QueryBuilder 生成的 Query 对象应该包含 fields 数组，以及所有提供的可选 filters 和 parameters 数组
-**验证需求: 3.5**
+### 属性 9: 重规划循环路由
+*对于任何*should_replan=True 的情况，系统应该从 Replanner 路由回 Understanding 节点
+**验证需求: 17.5**
 
-### 属性 10: 查询请求结构完整性
-*对于任何*查询执行请求，请求体应该包含 datasourceLuid 和 query 对象
-**验证需求: 4.2**
+### 属性 10: VizQLQuery 结构完整性
+*对于任何*有效的 VizQLQuery 对象，必须包含至少一个字段，且所有字段都是有效的 VizQLField
+**验证需求: 3.7, 14.1**
 
-### 属性 11: 查询响应解析正确性
-*对于任何*有效的 QueryOutput 响应，解析后应该包含 data 数组，且如果原始响应包含 extraData，解析后也应该包含
-**验证需求: 4.3**
+### 属性 11: 表计算关键词识别正确性
+*对于任何*包含表计算关键词的用户问题，Planning Agent 应该生成相应的 TableCalcIntent
+**验证需求: 15.10, 15.11, 15.12, 15.13**
 
-### 属性 12: 错误响应解析正确性
-*对于任何*TableauError 响应，系统应该能够提取 errorCode、message 和 debug 信息
-**验证需求: 4.4**
+### 属性 12: Pydantic 模型验证正确性
+*对于任何*无效的字段或过滤器定义，Pydantic 验证应该抛出 ValidationError
+**验证需求: 19.5, 19.6**
 
-### 属性 13: 查询选项支持
-*对于任何*提供的 QueryDatasourceOptions（包括 disaggregate 和 returnFormat），这些选项应该被正确包含在请求中
-**验证需求: 4.5**
+### 属性 13: 日期格式检测一致性
+*对于任何*具有相同格式的日期样本集，多次检测应该返回相同的格式类型
+**验证需求: 24.2, 24.3**
 
-### 属性 14: 元数据请求结构完整性
-*对于任何*元数据请求，ReadMetadataRequest 应该包含 datasourceLuid 必需字段
-**验证需求: 5.2**
+### 属性 14: 日期格式转换往返一致性
+*对于任何*有效的 ISO 日期，转换为其他格式后再转换回 ISO 格式应该保持不变
+**验证需求: 24.5, 24.8**
 
-### 属性 15: 元数据响应解析正确性
-*对于任何*有效的 MetadataOutput 响应，解析后应该包含 FieldMetadata 对象数组
-**验证需求: 5.3**
+### 属性 15: 美式/欧式格式区分正确性
+*对于任何*包含明显区分标志（月份>12或日期>12）的样本集，格式检测应该正确区分美式和欧式格式
+**验证需求: 24.4**
 
-### 属性 16: 字段元数据提取完整性
-*对于任何*FieldMetadata 对象，系统应该能够提取 fieldName、fieldCaption、dataType、defaultAggregation、columnClass，以及可选的 formula
-**验证需求: 5.4**
-
-### 属性 17: 参数提取正确性
-*对于任何*包含 extraData.parameters 的元数据响应，系统应该能够正确提取参数信息
-**验证需求: 5.5**
-
-### 属性 18: 功能标志切换一致性
-*对于任何*功能标志设置，切换标志应该改变系统使用的 API 端点（旧版或新版）
-**验证需求: 6.1**
-
-### 属性 19: 旧版模式向后兼容性
-*对于任何*在旧版模式下的查询，系统应该使用旧版 API 端点并产生与之前相同格式的结果
-**验证需求: 6.2**
-
-### 属性 20: 新版模式正确性
-*对于任何*在新版模式下的查询，系统应该使用 VizQL Data Service 端点和 Pydantic 模型
-**验证需求: 6.3**
-
-### 属性 21: 模式切换输出一致性
-*对于任何*相同的查询输入，无论使用旧版还是新版模式，输出格式应该保持一致（数据结构相同）
-**验证需求: 6.4**
-
-### 属性 22: API 版本配置支持
-*对于任何*API 版本配置（legacy 或 vizql_v1），系统应该根据配置选择相应的实现
-**验证需求: 6.5**
-
-### 属性 23: 模型序列化往返一致性
-*对于任何*QueryOutput 或 MetadataOutput 对象，序列化为 JSON 后再反序列化应该产生等价的对象
-**验证需求: 7.4**
-
-### 属性 24: 错误模型序列化往返一致性
-*对于任何*TableauError 对象，序列化为 JSON 后再反序列化应该产生等价的对象
-**验证需求: 7.5**
-
-### 属性 25: API 错误解析正确性
-*对于任何*API 错误响应，系统应该能够解析 TableauError 并提取结构化错误信息
-**验证需求: 8.1**
-
-### 属性 26: 重试逻辑指数退避
-*对于任何*服务器错误（500），系统应该实现指数退避重试，每次重试的延迟应该递增
-**验证需求: 8.4**
-
-### 属性 27: 网络错误回退行为
-*对于任何*网络连接错误，系统应该检测错误并提供适当的回退行为（如返回缓存数据或错误信息）
-**验证需求: 8.5**
-
-### 属性 28: 元数据缓存 TTL 一致性
-*对于任何*元数据请求，在 TTL 时间内的重复请求应该返回缓存的结果，而不是发起新的 API 调用
-**验证需求: 11.1**
-
-### 属性 29: 查询结果缓存一致性
-*对于任何*相同的查询，在会话范围内的重复执行应该返回缓存的结果
-**验证需求: 11.2**
-
-### 属性 30: 速率限制重试逻辑
-*对于任何*速率限制错误（429），系统应该实现指数退避重试逻辑
-**验证需求: 11.5**
-
-
+### 属性 16: STRING 日期字段 DATEPARSE 生成正确性
+*对于任何*STRING 类型的日期字段，QueryBuilder 应该生成包含正确 DATEPARSE 公式的 CalculationField
+**验证需求: 24.6**
 
 ## 错误处理
 
@@ -666,8 +967,8 @@ class Metadata(BaseModel):
 
 3. **验证错误** (ValidationError)
    - 400 Bad Request
-   - 字段验证失败
-   - 数据类型不匹配
+   - Pydantic 验证失败
+   - 字段类型不匹配
    - 处理策略：不重试，返回字段级错误信息
 
 4. **服务器错误** (ServerError)
@@ -683,52 +984,43 @@ class Metadata(BaseModel):
 6. **数据错误** (DataError)
    - 数据源不存在
    - 字段不存在
+   - 表计算配置无效
    - 处理策略：不重试，返回明确错误信息
 
 ### 错误处理流程
 
-```mermaid
-graph TD
-    A[API 调用] --> B{成功?}
-    B -->|是| C[返回结果]
-    B -->|否| D[解析错误]
-    D --> E{错误类型}
-    
-    E -->|网络错误| F{重试次数 < 最大值?}
-    F -->|是| G[等待 + 重试]
-    F -->|否| H[返回错误 + 缓存数据]
-    G --> A
-    
-    E -->|认证错误| I[返回认证错误]
-    E -->|验证错误| J[返回验证错误]
-    
-    E -->|服务器错误| K{重试次数 < 最大值?}
-    K -->|是| L[指数退避 + 重试]
-    K -->|否| M[返回服务器错误]
-    L --> A
-    
-    E -->|速率限制| N{重试次数 < 最大值?}
-    N -->|是| O[遵守 Retry-After + 重试]
-    N -->|否| P[返回速率限制错误]
-    O --> A
-    
-    E -->|数据错误| Q[返回数据错误]
+```
+API 调用
+    ↓
+成功？
+    ├── 是 → Pydantic 验证响应
+    │         ├── 成功 → 返回结果
+    │         └── 失败 → ValidationError
+    │
+    └── 否 → 解析错误 → 错误类型？
+              ├── 网络错误 → 重试次数 < 3？
+              │              ├── 是 → 等待 + 重试 → API 调用
+              │              └── 否 → 返回错误 + 缓存数据
+              │
+              ├── 认证错误 → 返回认证错误
+              ├── 验证错误 → 返回验证错误
+              │
+              ├── 服务器错误 → 重试次数 < 3？
+              │                ├── 是 → 指数退避 + 重试 → API 调用
+              │                └── 否 → 返回服务器错误
+              │
+              ├── 速率限制 → 重试次数 < 3？
+              │              ├── 是 → 遵守 Retry-After + 重试 → API 调用
+              │              └── 否 → 返回速率限制错误
+              │
+              └── 数据错误 → 返回数据错误
 ```
 
-### 错误响应模型
+### 错误处理实现
 
 ```python
-class ErrorResponse(BaseModel):
-    """统一错误响应模型"""
-    error_type: str  # 错误类型
-    error_code: Optional[str] = None  # Tableau 错误代码
-    message: str  # 错误消息
-    details: Optional[Dict] = None  # 详细信息
-    timestamp: str  # 时间戳
-    retry_after: Optional[int] = None  # 重试延迟（秒）
-    
 class ErrorHandler:
-    """错误处理器"""
+    """统一错误处理器"""
     
     def __init__(self, max_retries: int = 3, base_delay: float = 1.0):
         self.max_retries = max_retries
@@ -747,47 +1039,26 @@ class ErrorHandler:
         """
         error_type = self._classify_error(error)
         
+        # 不可重试的错误
         if error_type in [ErrorType.AUTH, ErrorType.VALIDATION, ErrorType.DATA]:
-            # 不可重试的错误
             return False, None
         
+        # 达到最大重试次数
         if attempt >= self.max_retries:
-            # 达到最大重试次数
             return False, None
         
+        # 速率限制：遵守 Retry-After
         if error_type == ErrorType.RATE_LIMIT:
-            # 速率限制：遵守 Retry-After
             delay = self._get_retry_after(error)
             return True, delay
         
+        # 网络或服务器错误：指数退避
         if error_type in [ErrorType.NETWORK, ErrorType.SERVER]:
-            # 网络或服务器错误：指数退避
             delay = self.base_delay * (2 ** attempt)
             return True, delay
         
         return False, None
-    
-    def _classify_error(self, error: Exception) -> ErrorType:
-        """分类错误"""
-        if isinstance(error, httpx.ConnectError):
-            return ErrorType.NETWORK
-        elif isinstance(error, httpx.TimeoutException):
-            return ErrorType.NETWORK
-        elif hasattr(error, 'status_code'):
-            status = error.status_code
-            if status in [401, 403]:
-                return ErrorType.AUTH
-            elif status == 400:
-                return ErrorType.VALIDATION
-            elif status == 429:
-                return ErrorType.RATE_LIMIT
-            elif status >= 500:
-                return ErrorType.SERVER
-        
-        return ErrorType.UNKNOWN
 ```
-
-
 
 ## 测试策略
 
@@ -804,30 +1075,36 @@ class ErrorHandler:
 
 单元测试覆盖以下方面：
 
-1. **API 客户端测试**
-   - VizQLDataServiceClient 初始化
-   - 身份验证流程
-   - SSL 配置
+1. **TableCalcIntent 测试**
+   - 各种表计算类型的创建
+   - 序列化和反序列化
+   - 字段验证
 
-2. **数据模型测试**
-   - Pydantic 模型验证
-   - 字段类型转换
-   - 过滤器类型转换
+2. **TableCalcField 测试**
+   - TableCalcSpecification 创建
+   - 嵌套表计算
+   - 序列化和反序列化
 
-3. **适配器测试**
-   - 功能标志切换
-   - 新旧 API 路由
-   - 数据模型转换
+3. **QueryBuilder 测试**
+   - TableCalcIntent → TableCalcField 转换
+   - 各种表计算类型的构建
+   - 错误处理
 
-4. **错误处理测试**
-   - 各种错误类型的分类
-   - 重试逻辑
-   - 错误响应解析
+4. **工具封装测试**
+   - @tool 装饰器
+   - docstring 完整性
+   - 参数验证
 
-5. **集成点测试**
-   - QueryExecutor 与适配器集成
-   - MetadataManager 与适配器集成
-   - QueryBuilder 与新模型集成
+5. **中间件配置测试**
+   - Claude 模型启用 AnthropicPromptCaching
+   - 非 Claude 模型不启用
+   - 6 个必需中间件都被配置
+   - SubAgentMiddleware 被排除
+
+6. **StateGraph 测试**
+   - 节点执行顺序
+   - boost_question=False 时跳过 Boost
+   - should_replan=True 时路由回 Understanding
 
 ### 基于属性的测试
 
@@ -846,455 +1123,414 @@ import pytest
 #### 属性测试示例
 
 ```python
-# 属性 1: 查询对象序列化往返一致性
-@given(query=query_strategy())
+# 属性 1: TableCalcIntent 序列化往返一致性
+@given(table_calc_intent=table_calc_intent_strategy())
 @settings(max_examples=100)
-def test_query_serialization_roundtrip(query: Query):
+def test_table_calc_intent_serialization_roundtrip(table_calc_intent: TableCalcIntent):
     """
-    Feature: vizql-api-migration, Property 1: 查询对象结构完整性
+    Feature: vizql-api-migration, Property 1: TableCalcIntent 序列化往返一致性
     
-    对于任何有效的 Query 对象，序列化后再反序列化应该产生等价的对象
+    对于任何有效的 TableCalcIntent 对象，序列化后再反序列化应该产生等价的对象
     """
     # 序列化
-    json_str = query.model_dump_json()
+    json_str = table_calc_intent.model_dump_json()
     
     # 反序列化
-    restored = Query.model_validate_json(json_str)
+    restored = TableCalcIntent.model_validate_json(json_str)
     
     # 验证等价性
-    assert restored == query
-    assert len(restored.fields) == len(query.fields)
-    assert restored.fields == query.fields
+    assert restored == table_calc_intent
+    assert restored.table_calc_type == table_calc_intent.table_calc_type
+    assert restored.technical_field == table_calc_intent.technical_field
 
-# 属性 21: 模式切换输出一致性
+
+# 属性 3: TableCalcIntent 到 TableCalcField 转换正确性
+@given(table_calc_intent=table_calc_intent_strategy())
+@settings(max_examples=100)
+def test_table_calc_intent_to_field_conversion(table_calc_intent: TableCalcIntent):
+    """
+    Feature: vizql-api-migration, Property 3: TableCalcIntent 到 TableCalcField 转换正确性
+    
+    对于任何有效的 TableCalcIntent，QueryBuilder 生成的 TableCalcField 应该包含正确的 tableCalculation 规范
+    """
+    query_builder = QueryBuilder()
+    
+    # 转换
+    field = query_builder.build_table_calc_field(table_calc_intent)
+    
+    # 验证
+    assert isinstance(field, TableCalcField)
+    assert field.fieldCaption == table_calc_intent.technical_field
+    assert field.tableCalculation.tableCalcType == table_calc_intent.table_calc_type
+
+
+# 属性 11: 表计算关键词识别正确性
 @given(
-    query_input=query_input_strategy(),
-    datasource_luid=st.text(min_size=10, max_size=50)
+    question=st.text(min_size=10, max_size=100),
+    keyword=st.sampled_from(["累计", "running total", "排名", "rank", "移动平均", "moving average"])
 )
 @settings(max_examples=100)
-def test_api_mode_output_consistency(query_input, datasource_luid):
+def test_table_calc_keyword_recognition(question: str, keyword: str):
     """
-    Feature: vizql-api-migration, Property 21: 模式切换输出一致性
+    Feature: vizql-api-migration, Property 11: 表计算关键词识别正确性
     
-    对于任何相同的查询输入，无论使用旧版还是新版模式，
-    输出格式应该保持一致
+    对于任何包含表计算关键词的用户问题，Planning Agent 应该生成相应的 TableCalcIntent
     """
-    # 使用旧版模式
-    adapter_legacy = VizQLAPIAdapter(use_new_api=False)
-    result_legacy = adapter_legacy.query_datasource(query_input, datasource_luid)
+    # 构造包含关键词的问题
+    question_with_keyword = f"{question} {keyword}"
     
-    # 使用新版模式
-    adapter_new = VizQLAPIAdapter(use_new_api=True)
-    result_new = adapter_new.query_datasource(query_input, datasource_luid)
+    # Planning Agent 处理
+    planning_agent = PlanningAgent()
+    intents = planning_agent.generate_intents(question_with_keyword)
     
-    # 验证输出格式一致性
-    assert set(result_legacy.keys()) == set(result_new.keys())
-    assert "data" in result_legacy
-    assert "data" in result_new
-    assert isinstance(result_legacy["data"], list)
-    assert isinstance(result_new["data"], list)
-
-# 属性 26: 重试逻辑指数退避
-@given(
-    attempt=st.integers(min_value=0, max_value=5),
-    base_delay=st.floats(min_value=0.1, max_value=2.0)
-)
-@settings(max_examples=100)
-def test_exponential_backoff(attempt, base_delay):
-    """
-    Feature: vizql-api-migration, Property 26: 重试逻辑指数退避
-    
-    对于任何服务器错误，每次重试的延迟应该递增
-    """
-    error_handler = ErrorHandler(base_delay=base_delay)
-    
-    # 模拟服务器错误
-    error = ServerError(status_code=500)
-    
-    should_retry, delay = error_handler.handle_error(error, attempt)
-    
-    if attempt < error_handler.max_retries:
-        assert should_retry is True
-        expected_delay = base_delay * (2 ** attempt)
-        assert delay == pytest.approx(expected_delay, rel=0.01)
-    else:
-        assert should_retry is False
-
-# 属性 28: 元数据缓存 TTL 一致性
-@given(
-    datasource_luid=st.text(min_size=10, max_size=50),
-    ttl_seconds=st.integers(min_value=1, max_value=3600)
-)
-@settings(max_examples=100)
-def test_metadata_cache_ttl_consistency(datasource_luid, ttl_seconds):
-    """
-    Feature: vizql-api-migration, Property 28: 元数据缓存 TTL 一致性
-    
-    对于任何元数据请求，在 TTL 时间内的重复请求应该返回缓存的结果
-    """
-    cache = MetadataCache(ttl=ttl_seconds)
-    
-    # 第一次请求
-    metadata1 = cache.get_or_fetch(datasource_luid)
-    
-    # 第二次请求（在 TTL 内）
-    metadata2 = cache.get_or_fetch(datasource_luid)
-    
-    # 应该返回相同的对象（缓存命中）
-    assert metadata1 is metadata2
-    
-    # 等待 TTL 过期
-    time.sleep(ttl_seconds + 0.1)
-    
-    # 第三次请求（TTL 过期后）
-    metadata3 = cache.get_or_fetch(datasource_luid)
-    
-    # 应该返回新的对象（缓存未命中）
-    assert metadata1 is not metadata3
+    # 验证至少有一个 TableCalcIntent
+    table_calc_intents = [i for i in intents if isinstance(i, TableCalcIntent)]
+    assert len(table_calc_intents) > 0
 ```
 
 #### 测试数据生成策略
 
 ```python
 from hypothesis import strategies as st
-from vizql_data_service_py import *
 
-# 字段生成策略
+# TableCalcIntent 生成策略
 @st.composite
-def dimension_field_strategy(draw):
-    return DimensionField(
-        fieldCaption=draw(st.text(min_size=1, max_size=50)),
-        fieldAlias=draw(st.one_of(st.none(), st.text(min_size=1, max_size=50))),
-        sortDirection=draw(st.one_of(st.none(), st.sampled_from(["ASC", "DESC"]))),
-        sortPriority=draw(st.one_of(st.none(), st.integers(min_value=1, max_value=10)))
-    )
-
-@st.composite
-def measure_field_strategy(draw):
-    return MeasureField(
-        fieldCaption=draw(st.text(min_size=1, max_size=50)),
-        function=draw(st.sampled_from(["SUM", "AVG", "COUNT", "MIN", "MAX"])),
-        maxDecimalPlaces=draw(st.one_of(st.none(), st.integers(min_value=0, max_value=10)))
-    )
-
-@st.composite
-def field_strategy(draw):
-    return draw(st.one_of(
-        dimension_field_strategy(),
-        measure_field_strategy(),
-        calculated_field_strategy(),
-        bin_field_strategy()
-    ))
-
-# 查询生成策略
-@st.composite
-def query_strategy(draw):
-    fields = draw(st.lists(field_strategy(), min_size=1, max_size=10))
-    filters = draw(st.one_of(st.none(), st.lists(filter_strategy(), max_size=5)))
-    
-    return Query(
-        fields=fields,
-        filters=filters
-    )
-
-# 过滤器生成策略
-@st.composite
-def filter_strategy(draw):
-    filter_type = draw(st.sampled_from([
-        "QUANTITATIVE_DATE",
-        "QUANTITATIVE_NUMERICAL",
-        "SET",
-        "MATCH"
+def table_calc_intent_strategy(draw):
+    calc_type = draw(st.sampled_from([
+        "RUNNING_TOTAL",
+        "MOVING_CALCULATION",
+        "RANK",
+        "PERCENT_OF_TOTAL"
     ]))
     
-    if filter_type == "QUANTITATIVE_DATE":
-        return draw(quantitative_date_filter_strategy())
-    elif filter_type == "QUANTITATIVE_NUMERICAL":
-        return draw(quantitative_numerical_filter_strategy())
-    elif filter_type == "SET":
-        return draw(set_filter_strategy())
-    elif filter_type == "MATCH":
-        return draw(match_filter_strategy())
+    if calc_type == "RUNNING_TOTAL":
+        config = {
+            "aggregation": draw(st.sampled_from(["SUM", "AVG", "COUNT"])),
+            "dimensions": draw(st.lists(st.text(min_size=1, max_size=20), min_size=1, max_size=3))
+        }
+    elif calc_type == "MOVING_CALCULATION":
+        config = {
+            "aggregation": draw(st.sampled_from(["SUM", "AVG"])),
+            "dimensions": draw(st.lists(st.text(min_size=1, max_size=20), min_size=1, max_size=3)),
+            "previous": draw(st.integers(min_value=0, max_value=10)),
+            "next": draw(st.integers(min_value=0, max_value=10)),
+            "includeCurrent": draw(st.booleans())
+        }
+    elif calc_type == "RANK":
+        config = {
+            "dimensions": draw(st.lists(st.text(min_size=1, max_size=20), min_size=1, max_size=3)),
+            "rankType": draw(st.sampled_from(["COMPETITION", "DENSE", "UNIQUE"])),
+            "direction": draw(st.sampled_from(["ASC", "DESC"]))
+        }
+    else:  # PERCENT_OF_TOTAL
+        config = {
+            "dimensions": draw(st.lists(st.text(min_size=1, max_size=20), min_size=1, max_size=3))
+        }
+    
+    return TableCalcIntent(
+        business_term=draw(st.text(min_size=1, max_size=50)),
+        technical_field=draw(st.text(min_size=1, max_size=50)),
+        table_calc_type=calc_type,
+        table_calc_config=config
+    )
+
+
+# TableCalcField 生成策略
+@st.composite
+def table_calc_field_strategy(draw):
+    calc_type = draw(st.sampled_from([
+        "RUNNING_TOTAL",
+        "MOVING_CALCULATION",
+        "RANK"
+    ]))
+    
+    dimensions = draw(st.lists(st.text(min_size=1, max_size=20), min_size=1, max_size=3))
+    
+    if calc_type == "RUNNING_TOTAL":
+        spec = RunningTotalTableCalcSpecification(
+            tableCalcType="RUNNING_TOTAL",
+            aggregation=draw(st.sampled_from([FunctionEnum.SUM, FunctionEnum.AVG])),
+            dimensions=dimensions
+        )
+    elif calc_type == "MOVING_CALCULATION":
+        spec = MovingTableCalcSpecification(
+            tableCalcType="MOVING_CALCULATION",
+            aggregation=draw(st.sampled_from([FunctionEnum.SUM, FunctionEnum.AVG])),
+            dimensions=dimensions,
+            previous=draw(st.integers(min_value=0, max_value=10)),
+            next=draw(st.integers(min_value=0, max_value=10)),
+            includeCurrent=draw(st.booleans())
+        )
+    else:  # RANK
+        spec = RankTableCalcSpecification(
+            tableCalcType="RANK",
+            dimensions=dimensions,
+            rankType=draw(st.sampled_from(["COMPETITION", "DENSE", "UNIQUE"])),
+            direction=draw(st.sampled_from(["ASC", "DESC"]))
+        )
+    
+    return TableCalcField(
+        fieldCaption=draw(st.text(min_size=1, max_size=50)),
+        tableCalculation=spec
+    )
 ```
 
 ### 测试覆盖目标
 
 - **单元测试覆盖率**: ≥ 80%
-- **属性测试数量**: 每个正确性属性至少一个测试
+- **属性测试数量**: 每个正确性属性至少一个测试（12 个属性）
 - **集成测试**: 覆盖所有主要用户流程
-- **边缘情况测试**: 覆盖所有已知的边缘情况
+- **表计算测试**: 覆盖所有 10 种表计算类型
 
+## 实施路径
 
+### 阶段 1: 数据模型扩展（1-2 天）
 
-## 升级路径
+**目标**: 添加表计算相关的数据模型
 
-### 阶段 1: 准备阶段
+**任务**:
+1. 在 `vizql_types.py` 中添加 TableCalcSpecification 及其子类
+2. 添加 TableCalcField 类
+3. 更新 VizQLField 联合类型
+4. 在 `intent.py` 中添加 TableCalcIntent 类
+5. 编写单元测试验证模型
 
-**目标**: 安装依赖，设置基础设施
-
-1. 安装 vizql-data-service-py 包
-   ```bash
-   pip install vizql-data-service-py
-   ```
-
-2. 安装 tableauserverclient 包（如果尚未安装）
-   ```bash
-   pip install tableauserverclient
-   ```
-
-3. 配置环境变量
-   ```bash
-   export TABLEAU_SERVER_URL=https://your-pod.online.tableau.com
-   export TABLEAU_TOKEN_NAME=your-token-name
-   export TABLEAU_TOKEN_VALUE=your-token-value
-   export TABLEAU_SITE=your-site
-   ```
-
-4. 配置证书管理
-   ```python
-   # 使用证书管理工具获取 Tableau Cloud 证书
-   from tableau_assistant.cert_manager import CertificateManager
-   
-   cert_manager = CertificateManager()
-   ssl_context = cert_manager.get_ssl_context()
-   ```
-
-### 阶段 2: 扩展数据模型
-
-**目标**: 添加表计算支持到现有 Pydantic 模型
-
-1. 在 vizql_types.py 中添加 TableCalcField 类
-2. 添加 TableCalcSpecification 基类
-3. 添加各种表计算类型：
-   - CustomTableCalcSpecification
-   - RunningTotalTableCalcSpecification
-   - MovingTableCalcSpecification
-   - RankTableCalcSpecification
-   - PercentileTableCalcSpecification
-   等
-
-4. 更新 VizQLField 联合类型，包含 TableCalcField
-
-**验证**: 
+**验证**:
 - Pydantic 模型验证通过
 - 序列化/反序列化测试通过
+- 所有 10 种表计算类型都能正确创建
 
-### 阶段 3: 实现客户端封装
+### 阶段 2: QueryBuilder 扩展（1-2 天）
 
-**目标**: 创建 VizQLClient 封装官方 SDK
+**目标**: 扩展 QueryBuilder 以支持表计算
 
-1. 实现 CertificateManager 类
-2. 实现 VizQLClient 类，封装官方 SDK
-3. 实现 ErrorHandler 类，统一错误处理
-4. 添加连接池和异步支持
-
-**验证**: 
-- 单元测试通过
-- 能够成功连接 Tableau Cloud
-- 证书验证正常工作
-
-### 阶段 4: 更新 QueryExecutor
-
-**目标**: 使用新版 SDK 执行查询
-
-1. 修改 QueryExecutor 构造函数，使用 VizQLClient
-2. 更新 execute_query 方法，调用 SDK 的 query_datasource
-3. 更新错误处理逻辑
-4. 保持现有接口不变（内部实现升级）
+**任务**:
+1. 添加 `build_table_calc_field()` 方法
+2. 更新 `build_field()` 方法以处理 TableCalcIntent
+3. 实现各种表计算类型的构建逻辑
+4. 编写单元测试
 
 **验证**:
+- TableCalcIntent → TableCalcField 转换正确
+- 所有表计算类型都能正确构建
 - 单元测试通过
-- 查询执行成功
+
+### 阶段 3: VizQL 客户端增强（1 天）
+
+**目标**: 增强 VizQL 客户端以支持 Pydantic 模型
+
+**任务**:
+1. 更新 `query_vds()` 函数以接受 Pydantic 模型
+2. 添加请求验证
+3. 添加响应验证
+4. 添加统一错误处理
+5. 编写单元测试
+
+**验证**:
+- Pydantic 模型输入正常工作
+- 请求和响应验证正确
 - 错误处理正确
 
-### 阶段 5: 更新 MetadataManager
+### 阶段 4: Planning Agent 扩展（2-3 天）
 
-**目标**: 使用新版 SDK 获取元数据
+**目标**: 扩展 Planning Agent 以识别表计算需求
 
-1. 修改 MetadataManager，使用 VizQLClient
-2. 更新 get_metadata_async 方法，调用 SDK 的 read_metadata
-3. 确保元数据格式与现有 Metadata 模型兼容
-4. 保持缓存机制不变
-
-**验证**:
-- 单元测试通过
-- 元数据获取成功
-- 缓存正常工作
-
-### 阶段 6: 更新 QueryBuilder
-
-**目标**: 支持表计算字段构建
-
-1. 添加 build_table_calc_field 方法
-2. 更新 build_query 方法，支持表计算
-3. 添加表计算相关的辅助方法
-4. 更新文档和示例
+**任务**:
+1. 添加表计算关键词识别逻辑
+2. 实现 TableCalcIntent 生成
+3. 更新系统提示词
+4. 编写单元测试
 
 **验证**:
+- 关键词识别正确
+- TableCalcIntent 生成正确
 - 单元测试通过
-- 能够构建包含表计算的查询
-- 查询执行成功
 
-### 阶段 7: 全面测试
+### 阶段 5: 工具封装（1-2 天）
 
-**目标**: 确保所有功能正常
+**目标**: 将组件封装为 LangChain 工具
 
+**任务**:
+1. 创建 8 个工具函数
+2. 添加 @tool 装饰器
+3. 编写完整的 docstring
+4. 编写单元测试
+
+**验证**:
+- 所有工具都有完整的 docstring
+- 工具调用正常工作
+- 业务逻辑保持不变
+
+### 阶段 6: StateGraph 适配（1 天）
+
+**目标**: 修改 StateGraph 以使用 DeepAgent
+
+**任务**:
+1. 更新 `create_vizql_workflow()` 函数
+2. 使用 `create_tableau_deep_agent()` 创建 Agent
+3. 传递 8 个工具
+4. 保持现有节点逻辑
+5. 编写单元测试
+
+**验证**:
+- StateGraph 正常工作
+- 节点执行顺序正确
+- 工具调用正常
+
+### 阶段 7: 集成测试（2-3 天）
+
+**目标**: 运行所有测试，确保系统正常工作
+
+**任务**:
 1. 运行所有单元测试
 2. 运行所有属性测试（Hypothesis）
 3. 运行集成测试
-4. 性能测试
-5. 错误处理测试
-6. 表计算功能测试
+4. 测试表计算功能
+5. 修复发现的问题
 
 **验证**:
 - 所有测试通过
-- 性能满足要求
 - 表计算功能正常
+- 性能满足要求
 
-### 阶段 8: 部署和监控
+### 阶段 8: 文档和部署（1 天）
 
-**目标**: 部署到生产环境并监控
+**目标**: 更新文档，准备部署
 
-1. 部署到生产环境
-2. 监控关键指标：
-   - API 调用成功率
-   - 响应时间
-   - 错误率
-   - 缓存命中率
-3. 收集用户反馈
-4. 优化性能
+**任务**:
+1. 更新 API 文档
+2. 更新架构文档
+3. 编写迁移指南
+4. 准备发布说明
 
 **验证**:
-- 系统稳定运行
-- 所有功能正常
-- 性能满足要求
+- 文档完整
+- 迁移指南清晰
+- 准备发布
 
-## 监控指标
+## 编码规范和最佳实践
 
-在升级后，持续监控以下指标：
+### Pydantic 数据模型编写规范
 
-1. **成功率**: API 调用成功率应 ≥ 99%
-2. **响应时间**: P95 响应时间应保持在合理范围
-3. **错误率**: 错误率应 ≤ 1%
-4. **缓存命中率**: 应保持在 80% 以上
-5. **表计算使用率**: 监控表计算功能的使用情况
+**必须遵守的规则**（参考 `docs/PROMPT_AND_MODEL_GUIDE.md`）：
 
-## 性能优化
-
-### 连接池
-
-使用 httpx 的连接池功能：
-
+#### 1. 模型配置
 ```python
-import httpx
-
-# 创建连接池
-limits = httpx.Limits(
-    max_keepalive_connections=20,
-    max_connections=100,
-    keepalive_expiry=30.0
-)
-
-client = httpx.Client(limits=limits)
+class YourModel(BaseModel):
+    """模型文档字符串 - 说明模型用途"""
+    model_config = ConfigDict(extra="forbid")  # 必须包含！
 ```
 
-### 异步支持
-
-使用异步方法提高并发性能：
-
+#### 2. 字段定义格式
 ```python
-# 并发执行多个查询
-results = await asyncio.gather(
-    client.query_async(datasource_luid, query1),
-    client.query_async(datasource_luid, query2),
-    client.query_async(datasource_luid, query3)
+field_name: FieldType = Field(
+    description="""Brief one-line description.
+
+Usage:
+- When to include this field
+- When to set it to null/empty
+
+Values: What values are valid
+- Value 1: explanation
+- Value 2: explanation"""
 )
 ```
 
-### 缓存策略
+#### 3. 字段类型规范
+- 基础类型：`str`, `int`, `float`, `bool`
+- 可选类型：`Optional[str]` + `default=None`
+- 列表类型：`List[str]` + `default_factory=list`（不要用 `default=[]`）
+- 枚举类型：`Literal["a", "b"]` 或自定义 Enum
+- 嵌套模型：其他 Pydantic 模型
 
-- **元数据缓存**: TTL = 1 小时
-- **查询结果缓存**: TTL = 会话范围（可配置）
-- **缓存键**: 基于 datasource_luid + query hash
-
-### 批量操作
-
-支持批量查询以减少网络往返：
-
+#### 4. 字段约束
 ```python
-# 批量执行查询
-results = await client.batch_query_async(
-    datasource_luid,
-    [query1, query2, query3]
-)
+# 数值范围
+confidence: float = Field(ge=0, le=1, description="...")
+
+# 列表最小长度
+items: List[str] = Field(min_length=1, description="...")
+
+# 字符串模式
+task_id: str = Field(pattern=r"^q\d+$", description="...")
 ```
 
-## 安全考虑
+### Prompt 模板编写规范
 
-### SSL/TLS 配置
+**必须遵守的规则**（参考 `docs/PROMPT_AND_MODEL_GUIDE.md`）：
 
-1. **生产环境**: 必须启用 SSL 验证
-   ```python
-   client = VizQLDataServiceClient(
-       server_url=server_url,
-       server=server,
-       tableau_auth=auth,
-       verify_ssl=True  # 使用系统默认 CA 证书
-   )
-   ```
+#### 1. 语言规则
+- ✅ **全英文编写** - LLM 对英文理解更准确
+- ❌ **禁止中英文混杂** - 避免编码问题和不一致
 
-2. **自定义证书**: 使用自定义 CA 证书
-   ```python
-   client = VizQLDataServiceClient(
-       server_url=server_url,
-       server=server,
-       tableau_auth=auth,
-       verify_ssl="/path/to/ca-bundle.pem"
-   )
-   ```
+#### 2. 4段式结构
+```python
+class YourPrompt(VizQLPrompt):
+    def get_role(self) -> str:
+        """定义 LLM 的角色和专长（2-3句话）"""
+        
+    def get_task(self) -> str:
+        """定义任务和处理流程（使用箭头 →）"""
+        
+    def get_specific_domain_knowledge(self) -> str:
+        """提供领域知识和思考步骤（Think step by step）"""
+        
+    def get_constraints(self) -> str:
+        """定义约束条件（使用 DO/ENSURE，避免 DON'T）"""
+```
 
-3. **开发环境**: 可以禁用验证（仅用于开发）
-   ```python
-   client = VizQLDataServiceClient(
-       server_url=server_url,
-       server=server,
-       tableau_auth=auth,
-       verify_ssl=False  # 仅用于开发/测试
-   )
-   ```
+#### 3. Constraints 编写规范
+```python
+# ✅ 正确：使用正面指令
+"""DO:
+- Select matched_field from provided candidates only
+- Match field role (dimension vs measure)
+- Provide confidence score between 0 and 1
 
-### 凭据管理
+ENSURE:
+- Every mapping references an actual candidate field
+- Confidence reflects true certainty level"""
 
-1. **不要硬编码凭据**: 使用环境变量或密钥管理服务
-2. **Token 轮换**: 定期轮换 PAT
-3. **最小权限原则**: 只授予必要的权限
+# ❌ 错误：使用负面约束
+"""MUST NOT: invent fields, ignore role mismatch"""
+```
 
-### 日志安全
+#### 4. Temperature 配置规范
+根据任务类型使用不同的 temperature（参考 `src/config/model_config.py`）：
 
-1. **不记录敏感信息**: Token、密码等
-2. **脱敏处理**: 对敏感字段进行脱敏
-   ```python
-   logger.info(f"Using token: {token[:4]}****{token[-4:]}")
-   ```
+| 任务类型 | Temperature | 原因 |
+|---------|-------------|------|
+| Field Mapping | 0.0 | 确定性任务，单一正确答案 |
+| Understanding | 0.1 | 需要一致性，允许少量变化 |
+| Task Planner | 0.1 | 需要一致的规划 |
+| Insight | 0.7 | 需要创意和多样化 |
+| Boost | 0.2 | 平衡理解和扩展 |
+| Replanner | 0.2 | 平衡分析和方案 |
 
-## 文档和培训
+#### 5. 示例处理规范
+- ✅ **在 Pydantic 模型中定义示例**（使用 `json_schema_extra`）
+- ✅ **从元数据动态生成示例**
+- ✅ **利用 RAG 候选作为 Few-shot**
+- ❌ **不要在 Prompt 模板中硬编码示例**
 
-### 开发者文档
+### 关键原则
 
-1. **API 迁移指南**: 详细的迁移步骤和示例
-2. **API 对比表**: 新旧 API 的功能对比
-3. **代码示例**: 常见用例的代码示例
-4. **故障排查指南**: 常见问题和解决方案
+1. **一致性** - 与项目其他模块保持一致
+2. **清晰性** - 描述清晰，易于理解
+3. **完整性** - 包含所有必要信息
+4. **简洁性** - 避免冗余和过度设计
+5. **可维护性** - 易于修改和扩展
 
-### 用户文档
+## 总结
 
-1. **功能变更说明**: 对用户可见的功能变更
-2. **性能改进**: 新 API 带来的性能提升
-3. **已知限制**: 新 API 的限制和注意事项
+本设计文档描述了 VizQL API 迁移和 DeepAgents 集成的完整技术方案。主要特点：
 
-### 培训计划
+1. **表计算支持**：添加 TableCalcField 和 TableCalcIntent，支持 10 种表计算类型
+2. **DeepAgents 架构**：使用 6 个中间件增强系统能力
+3. **工具封装**：将 8 个组件封装为 LangChain 工具
+4. **类型安全**：使用 Pydantic v2 模型确保类型安全
+5. **直接升级**：一次性完成迁移，无需功能标志
+6. **复用现有实现**：使用 requests 库和现有认证
+7. **遵守编码规范**：严格遵守 Pydantic 和 Prompt 编写规范
 
-1. **技术分享会**: 介绍新 API 的特性和优势
-2. **代码审查**: 审查迁移后的代码
-3. **问答环节**: 解答开发者的疑问
-
+预计实施时间：10-15 天

@@ -568,6 +568,144 @@ Usage:
     )
 
 
+class TableCalcIntent(BaseModel):
+    """
+    Table Calculation Intent - For advanced analytics calculations
+    
+    Use for table calculations that operate on query results (e.g., running totals, 
+    moving averages, rankings, percentages).
+    
+    Usage scenarios:
+    - Running totals: "cumulative sales", "running total"
+    - Moving averages: "3-month moving average", "rolling average"
+    - Rankings: "rank by sales", "top products by rank"
+    - Percentages: "percent of total", "percentage difference"
+    
+    CRITICAL: Table calculations are applied AFTER the query executes, operating on 
+    the result set rather than the raw data.
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    business_term: str = Field(
+        description="""Business term from user question.
+
+Usage:
+- Store original business term mentioned by user
+- Used for display and context
+
+Values: Business term string (e.g., 'cumulative sales', 'sales rank')"""
+    )
+    
+    technical_field: str = Field(
+        description="""Technical field name from metadata.
+
+Usage:
+- Must be exact field name from metadata.fields
+- The field to apply table calculation on
+
+Values: Technical field name string"""
+    )
+    
+    table_calc_type: Literal[
+        "RUNNING_TOTAL",
+        "MOVING_CALCULATION",
+        "RANK",
+        "PERCENTILE",
+        "PERCENT_OF_TOTAL",
+        "PERCENT_FROM",
+        "PERCENT_DIFFERENCE_FROM",
+        "DIFFERENCE_FROM",
+        "CUSTOM",
+        "NESTED"
+    ] = Field(
+        description="""Type of table calculation.
+
+Usage:
+- Identify from user question keywords
+- Determines which TableCalcSpecification to create
+
+Values: Table calculation type
+- RUNNING_TOTAL: Cumulative sum/average
+- MOVING_CALCULATION: Moving average/sum
+- RANK: Ranking within partitions
+- PERCENTILE: Percentile calculation
+- PERCENT_OF_TOTAL: Percentage of total
+- PERCENT_FROM: Percentage from reference
+- PERCENT_DIFFERENCE_FROM: Percentage difference
+- DIFFERENCE_FROM: Absolute difference
+- CUSTOM: Custom calculation
+- NESTED: Nested calculations
+
+Keyword mapping:
+- "累计", "running total", "cumulative" → RUNNING_TOTAL
+- "移动平均", "moving average", "rolling" → MOVING_CALCULATION
+- "排名", "rank", "ranking" → RANK
+- "百分比", "percent of total", "percentage" → PERCENT_OF_TOTAL"""
+    )
+    
+    table_calc_config: dict = Field(
+        description="""Configuration for table calculation.
+
+Usage:
+- Provide type-specific configuration
+- Structure depends on table_calc_type
+
+Values: Configuration dictionary
+
+RUNNING_TOTAL config:
+{
+    "aggregation": "SUM" | "AVG" | "MIN" | "MAX",
+    "dimensions": ["field1", "field2"],  # Partitioning/addressing fields
+    "restartEvery": "field" (optional)   # Field to restart calculation
+}
+
+MOVING_CALCULATION config:
+{
+    "aggregation": "SUM" | "AVG" | "MIN" | "MAX",
+    "dimensions": ["field1"],
+    "previous": 2,           # Number of previous values
+    "next": 0,               # Number of next values
+    "includeCurrent": true   # Include current value
+}
+
+RANK config:
+{
+    "dimensions": ["field1"],
+    "rankType": "COMPETITION" | "DENSE" | "UNIQUE",
+    "direction": "ASC" | "DESC"
+}
+
+PERCENT_OF_TOTAL config:
+{
+    "dimensions": ["field1"]
+}"""
+    )
+    
+    sort_direction: Optional[Literal["ASC", "DESC"]] = Field(
+        None,
+        description="""Sort direction for this field.
+
+Usage:
+- Include if field needs sorting
+- null if no sorting required
+
+Values: "ASC", "DESC", or null"""
+    )
+    
+    sort_priority: Optional[int] = Field(
+        None,
+        ge=0,
+        description="""Sort priority for multi-field sorting.
+
+Usage:
+- Include if multiple fields need sorting
+- Lower number = higher priority (0 is highest)
+- null if no sorting or single field sort
+
+Values: Non-negative integer or null"""
+    )
+
+
 # ============= 导出 =============
 
 __all__ = [
@@ -577,4 +715,5 @@ __all__ = [
     "DateFilterIntent",
     "FilterIntent",
     "TopNIntent",
+    "TableCalcIntent",
 ]

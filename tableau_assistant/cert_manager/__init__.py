@@ -29,6 +29,15 @@ from .manager import CertificateManager
 from .config import SSLConfig, get_ssl_config
 from .validator import CertificateValidator
 from .fetcher import CertificateFetcher
+from .models import ServiceConfig, ApplicationCertConfig, CertificateMetadata
+from .service_registry import ServiceRegistry
+from .app_cert_provider import ApplicationCertificateProvider
+from .preconfig import (
+    PRECONFIGURED_SERVICES,
+    register_preconfigured_services,
+    get_service_info,
+    list_preconfigured_services
+)
 
 __version__ = "1.0.0"
 __all__ = [
@@ -37,4 +46,13 @@ __all__ = [
     "get_ssl_config",
     "CertificateValidator",
     "CertificateFetcher",
+    "ServiceConfig",
+    "ApplicationCertConfig",
+    "CertificateMetadata",
+    "ServiceRegistry",
+    "ApplicationCertificateProvider",
+    "PRECONFIGURED_SERVICES",
+    "register_preconfigured_services",
+    "get_service_info",
+    "list_preconfigured_services",
 ]

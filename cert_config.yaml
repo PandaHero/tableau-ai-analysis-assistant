@@ -1,0 +1,38 @@
+# 证书管理器配置文件
+# 当前环境：Tableau Assistant 生产配置
+
+# 全局设置
+cert_dir: "tableau_assistant/certs"
+verify_ssl: true
+warning_days: 30
+
+# 应用证书配置
+application:
+  source: "self-signed"
+  backend:
+    cert_file: "app_server.pem"
+    key_file: "app_server_key.pem"
+  ca_bundle: "app_ca.pem"
+
+# 第三方服务配置
+services:
+  # DeepSeek AI
+  deepseek:
+    hostname: "api.deepseek.com"
+    port: 443
+    ca_bundle: "deepseek_full_chain.pem"
+    auto_fetch: true
+  
+  # 智谱 AI
+  zhipu-ai:
+    hostname: "open.bigmodel.cn"
+    port: 443
+    ca_bundle: "zhipu_full_chain.pem"
+    auto_fetch: true
+  
+  # Tableau Server（从环境变量读取）
+  tableau:
+    hostname: "${TABLEAU_DOMAIN}"
+    port: 443
+    ca_bundle: "tableau_cpse_cpgroup_cn_cert.pem"
+    auto_fetch: false

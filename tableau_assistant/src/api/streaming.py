@@ -5,16 +5,20 @@
 """
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from typing import Dict, Any
+from typing import Dict, Any, Callable, Optional
 import json
 
-from tableau_assistant.tests.test_workflow import create_test_workflow
-from tableau_assistant.src.workflows.streaming import stream_workflow_events
+# 延迟导入测试模块，避免启动时依赖
+try:
+    from tableau_assistant.tests.test_workflow import create_test_workflow
+    _workflow_factory = create_test_workflow
+except ImportError:
+    # 如果测试模块不可用，使用 None
+    _workflow_factory = None
+
+from tableau_assistant.src.agents.workflows.streaming import stream_workflow_events
 
 router = APIRouter(prefix="/api/stream", tags=["streaming"])
-
-# 用于测试的工作流创建函数（可以被测试覆盖）
-_workflow_factory = create_test_workflow
 
 
 @router.post("/chat")

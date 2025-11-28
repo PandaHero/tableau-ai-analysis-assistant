@@ -15,10 +15,11 @@ import asyncio
 import json
 
 # 设置输出编码为 UTF-8
-if sys.platform == 'win32':
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+# 注意：在pytest环境下不要重新包装stdout/stderr，会导致pytest捕获机制失败
+# if sys.platform == 'win32':
+#     import io
+#     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+#     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent.parent

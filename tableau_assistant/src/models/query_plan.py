@@ -17,6 +17,7 @@ from tableau_assistant.src.models.intent import (
     DateFilterIntent,
     FilterIntent,
     TopNIntent,
+    TableCalcIntent,
 )
 
 
@@ -195,6 +196,18 @@ Usage:
 - null if no TopN requirement
 
 Values: TopNIntent object or null"""
+    )
+    
+    table_calc_intents: List[TableCalcIntent] = Field(
+        default_factory=list,
+        description="""List of table calculation intents.
+
+Usage:
+- Include one TableCalcIntent for each table calculation in sub-question
+- Map business terms to technical fields
+- Identify table calculation type and configuration
+
+Values: List of TableCalcIntent objects"""
     )
 
 

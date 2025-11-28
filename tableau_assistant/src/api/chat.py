@@ -21,7 +21,7 @@ from tableau_assistant.src.models.api import (
     StreamEvent
 )
 from tableau_assistant.src.models.state import VizQLInput
-from tableau_assistant.src.workflows.vizql_workflow import (
+from tableau_assistant.src.agents.workflows.vizql_workflow import (
     create_vizql_workflow,
     run_vizql_workflow_stream
 )
@@ -58,7 +58,7 @@ async def chat_query(request: VizQLQueryRequest) -> VizQLQueryResponse:
         HTTPException: 如果查询失败
     """
     try:
-        from tableau_assistant.src.workflows.vizql_workflow import run_vizql_workflow_sync, request_to_input
+        from tableau_assistant.src.agents.workflows.vizql_workflow import run_vizql_workflow_sync, request_to_input
         
         # 将API请求转换为工作流输入（已验证，无需重复验证）
         workflow_input = request_to_input(request)
@@ -128,7 +128,7 @@ async def generate_sse_events(
     Yields:
         SSE格式的事件字符串
     """
-    from tableau_assistant.src.workflows.streaming import stream_workflow_events
+    from tableau_assistant.src.agents.workflows.streaming import stream_workflow_events
     
     try:
         # 使用 StreamingEventHandler 处理事件
@@ -169,7 +169,7 @@ async def chat_query_stream(request: VizQLQueryRequest):
         SSE流式响应
     """
     try:
-        from tableau_assistant.src.workflows.vizql_workflow import request_to_input
+        from tableau_assistant.src.agents.workflows.vizql_workflow import request_to_input
         
         # 将API请求转换为工作流输入
         workflow_input = request_to_input(request)
@@ -293,7 +293,7 @@ async def init_metadata_hierarchy(request: MetadataInitRequest) -> MetadataInitR
     """
     try:
         # TODO: 实现后台任务
-        # from tableau_assistant.src.components.metadata_manager import ensure_dimension_hierarchy
+        # from tableau_assistant.src.capabilities.metadata.manager import ensure_dimension_hierarchy
         # background_tasks.add_task(
         #     ensure_dimension_hierarchy,
         #     datasource_luid=request.datasource_luid,

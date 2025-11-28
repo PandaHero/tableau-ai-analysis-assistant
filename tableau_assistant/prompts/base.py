@@ -165,6 +165,8 @@ You must output ONLY valid JSON that strictly follows this schema:
             {"role": "system", "content": system_content},
             {"role": "user", "content": user_content}
         ]
+    
+
 
 
 class StructuredPrompt(BasePrompt):

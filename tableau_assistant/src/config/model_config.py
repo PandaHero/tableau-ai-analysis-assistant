@@ -57,6 +57,14 @@ class ModelConfig:
         "max_output_tokens": 1024
     }
     
+    # Deterministic Large configuration (for complex planning tasks)
+    DETERMINISTIC_LARGE = {
+        "temperature": 0.0,
+        "top_p": 0.9,
+        "top_k": 20,
+        "max_output_tokens": 3000  # Larger output for complex query plans
+    }
+    
     # Consistent configuration (for tasks needing consistency but some flexibility)
     CONSISTENT = {
         "temperature": 0.1,
@@ -110,7 +118,7 @@ class ModelConfig:
             # - temperature=0.0 for greedy decoding
             # - Used for tasks with single correct answer
             AgentType.FIELD_MAPPING: cls.DETERMINISTIC,
-            AgentType.TASK_PLANNER: cls.DETERMINISTIC,  # Changed from CONSISTENT to DETERMINISTIC
+            AgentType.TASK_PLANNER: cls.DETERMINISTIC_LARGE,  # Needs larger output for complex plans
             
             # Consistent agents (need consistency but some interpretation)
             # - temperature=0.1 for stable but flexible interpretation
