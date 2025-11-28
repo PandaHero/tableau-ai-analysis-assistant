@@ -18,10 +18,14 @@ _ctx_cached_at: float = 0.0
 
 def _get_tableau_context_from_env() -> Dict[str, Any]:
     """
-    仅使用 JWT Connected App 从环境变量获取 Tableau token（无 PAT、无预置 API_KEY 分支）。
-    - 必需：TABLEAU_DOMAIN, TABLEAU_JWT_CLIENT_ID, TABLEAU_JWT_SECRET_ID, TABLEAU_JWT_SECRET, TABLEAU_USER
-    - 可选：TABLEAU_SITE, TABLEAU_API_VERSION(默认 3.18)
-    - Token 10 分钟缓存
+    从环境变量获取 Tableau token，支持 JWT 和 PAT 两种认证方式。
+    优先使用 JWT，如果 JWT 配置不完整则尝试 PAT。
+    
+    JWT 必需：TABLEAU_DOMAIN, TABLEAU_JWT_CLIENT_ID, TABLEAU_JWT_SECRET_ID, TABLEAU_JWT_SECRET, TABLEAU_USER
+    PAT 必需：TABLEAU_DOMAIN, TABLEAU_PAT_NAME, TABLEAU_PAT_SECRET
+    可选：TABLEAU_SITE, TABLEAU_API_VERSION(默认 3.18)
+    
+    Token 10 分钟缓存
     返回: {"domain": str, "site": str, "api_key": Optional[str]}
     """
     # 读取并规范化环境变量
@@ -33,18 +37,19 @@ def _get_tableau_context_from_env() -> Dict[str, Any]:
     if domain.endswith("/"):
         domain = domain.rstrip("/")
     site = (os.environ.get("TABLEAU_SITE") or "").strip()
+    tableau_api_version = (os.environ.get("TABLEAU_API_VERSION") or "3.18").strip()
+    
+    # JWT 配置
     jwt_client_id = (os.environ.get("TABLEAU_JWT_CLIENT_ID") or "").strip()
     jwt_secret_id = (os.environ.get("TABLEAU_JWT_SECRET_ID") or "").strip()
     jwt_secret = (os.environ.get("TABLEAU_JWT_SECRET") or "").strip()
-    tableau_api_version = (os.environ.get("TABLEAU_API_VERSION") or "3.18").strip()
     tableau_user = (os.environ.get("TABLEAU_USER") or "").strip()
+    
+    # PAT 配置
+    pat_name = (os.environ.get("TABLEAU_PAT_NAME") or "").strip()
+    pat_secret = (os.environ.get("TABLEAU_PAT_SECRET") or "").strip()
 
-    # 校验 JWT 所需变量齐全，否则不返回 token（交由上层提示）
-    required = [domain, jwt_client_id, jwt_secret_id, jwt_secret, tableau_user]
-    if not all(required):
-        return {"domain": domain, "site": site, "api_key": None}
-
-    # JWT 模式缓存
+    # 检查缓存
     global _ctx_cache, _ctx_cached_at
     now = time.time()
     if (
@@ -55,27 +60,52 @@ def _get_tableau_context_from_env() -> Dict[str, Any]:
     ):
         return {"domain": _ctx_cache["domain"], "site": _ctx_cache["site"], "api_key": _ctx_cache["api_key"]}
 
-    # 获取 JWT token
-    try:
-        access_scopes = ["tableau:content:read"]
-        session = jwt_connected_app(
-            tableau_domain=domain,
-            tableau_site=site,
-            tableau_api=tableau_api_version or "3.18",
-            tableau_user=tableau_user,
-            jwt_client_id=jwt_client_id,
-            jwt_secret_id=jwt_secret_id,
-            jwt_secret=jwt_secret,
-            scopes=access_scopes,
-        )
-        api_key = (session.get("credentials") or {}).get("token")
-        _ctx_cache = {"domain": domain, "site": site, "api_key": api_key or None}
-        _ctx_cached_at = now
-    except Exception:
-        _ctx_cache = {"domain": domain, "site": site, "api_key": None}
-        _ctx_cached_at = now
+    # 尝试 JWT 认证
+    jwt_required = [domain, jwt_client_id, jwt_secret_id, jwt_secret, tableau_user]
+    if all(jwt_required):
+        try:
+            access_scopes = ["tableau:content:read"]
+            session = jwt_connected_app(
+                tableau_domain=domain,
+                tableau_site=site,
+                tableau_api=tableau_api_version,
+                tableau_user=tableau_user,
+                jwt_client_id=jwt_client_id,
+                jwt_secret_id=jwt_secret_id,
+                jwt_secret=jwt_secret,
+                scopes=access_scopes,
+            )
+            api_key = (session.get("credentials") or {}).get("token")
+            if api_key:
+                _ctx_cache = {"domain": domain, "site": site, "api_key": api_key}
+                _ctx_cached_at = now
+                return {"domain": domain, "site": site, "api_key": api_key}
+        except Exception:
+            pass  # JWT 失败，尝试 PAT
 
-    return {"domain": _ctx_cache["domain"], "site": _ctx_cache["site"], "api_key": _ctx_cache["api_key"]}
+    # 尝试 PAT 认证
+    pat_required = [domain, pat_name, pat_secret]
+    if all(pat_required):
+        try:
+            session = pat_authentication(
+                tableau_domain=domain,
+                tableau_site=site,
+                tableau_api=tableau_api_version,
+                pat_name=pat_name,
+                pat_secret=pat_secret,
+            )
+            api_key = (session.get("credentials") or {}).get("token")
+            if api_key:
+                _ctx_cache = {"domain": domain, "site": site, "api_key": api_key}
+                _ctx_cached_at = now
+                return {"domain": domain, "site": site, "api_key": api_key}
+        except Exception:
+            pass  # PAT 也失败
+
+    # 两种认证都失败
+    _ctx_cache = {"domain": domain, "site": site, "api_key": None}
+    _ctx_cached_at = now
+    return {"domain": domain, "site": site, "api_key": None}
 
 
 def jwt_connected_app(
@@ -153,6 +183,110 @@ def jwt_connected_app(
         error_message = (
             f"Failed to authenticate to the Tableau site. "
             f"Status code: {response.status_code}. Response: {response.text}"
+        )
+        raise RuntimeError(error_message)
+
+
+def pat_authentication(
+        tableau_domain: str,
+        tableau_site: str,
+        tableau_api: str,
+        pat_name: str,
+        pat_secret: str,
+) -> Dict[str, Any]:
+    """
+    Authenticates a user to Tableau using Personal Access Token (PAT) authentication.
+
+    Args:
+        tableau_domain (str): The domain of the Tableau Server or Tableau Online instance.
+        tableau_site (str): The content URL of the specific Tableau site to authenticate against.
+        tableau_api (str): The version of the Tableau API to use for authentication.
+        pat_name (str): The name of the Personal Access Token.
+        pat_secret (str): The secret value of the Personal Access Token.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the response from the Tableau authentication endpoint,
+        typically including an API key or session and user information.
+    """
+    # authentication endpoint + request headers & payload
+    endpoint = f"{tableau_domain}/api/{tableau_api}/auth/signin"
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+
+    payload = {
+        "credentials": {
+            "personalAccessTokenName": pat_name,
+            "personalAccessTokenSecret": pat_secret,
+            "site": {
+                "contentUrl": tableau_site,
+            }
+        }
+    }
+
+    response = requests.post(endpoint, headers=headers, json=payload)
+
+    # Check if the request was successful (status code 200)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        error_message = (
+            f"Failed to authenticate to the Tableau site using PAT. "
+            f"Status code: {response.status_code}. Response: {response.text}"
+        )
+        raise RuntimeError(error_message)
+
+
+async def pat_authentication_async(
+        tableau_domain: str,
+        tableau_site: str,
+        tableau_api: str,
+        pat_name: str,
+        pat_secret: str,
+) -> Dict[str, Any]:
+    """
+    Authenticates a user to Tableau using Personal Access Token (PAT) authentication (async version).
+
+    Args:
+        tableau_domain (str): The domain of the Tableau Server or Tableau Online instance.
+        tableau_site (str): The content URL of the specific Tableau site to authenticate against.
+        tableau_api (str): The version of the Tableau API to use for authentication.
+        pat_name (str): The name of the Personal Access Token.
+        pat_secret (str): The secret value of the Personal Access Token.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the response from the Tableau authentication endpoint,
+        typically including an API key or session and user information.
+    """
+    # authentication endpoint + request headers & payload
+    endpoint = f"{tableau_domain}/api/{tableau_api}/auth/signin"
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+
+    payload = {
+        "credentials": {
+            "personalAccessTokenName": pat_name,
+            "personalAccessTokenSecret": pat_secret,
+            "site": {
+                "contentUrl": tableau_site,
+            }
+        }
+    }
+
+    response = await http_post(endpoint=endpoint, headers=headers, payload=payload)
+    
+    # Check if the request was successful (status code 200)
+    if response['status'] == 200:
+        return response['data']
+    else:
+        error_message = (
+            f"Failed to authenticate to the Tableau site using PAT. "
+            f"Status code: {response['status']}. Response: {response['data']}"
         )
         raise RuntimeError(error_message)
 
