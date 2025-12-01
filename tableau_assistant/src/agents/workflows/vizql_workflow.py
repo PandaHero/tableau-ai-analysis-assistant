@@ -7,28 +7,31 @@ VizQL主工作流
 - output_schema: 输出验证
 - Store: 持久化存储（SQLite）
 - astream_events: 流式输出
+- DeepAgent: 集成工具调用
 """
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 
 from tableau_assistant.src.models.context import VizQLContext
 from tableau_assistant.src.models.state import VizQLState, VizQLInput, VizQLOutput
 from tableau_assistant.src.capabilities.storage.persistent_store import PersistentStore
 
 
-def create_vizql_workflow(store: Optional[PersistentStore] = None, db_path: str = "data/langgraph_store.db"):
+def create_vizql_workflow(
+    store: Optional[PersistentStore] = None,
+    db_path: str = "data/langgraph_store.db"
+):
     """
     创建VizQL主工作流
     
-    工作流程：
-    1. (可选) 问题Boost Agent - 优化问题
-    2. 问题理解Agent - 理解用户意图
-    3. 查询规划Agent - 生成查询计划
-    4. 任务调度器 - 并行执行查询
-    5. 洞察Agent - 分析结果
-    6. 重规划Agent - 决定是否重规划
-    7. 总结Agent - 生成最终报告
+    工作流程（6个节点）：
+    1. (可选) Boost Agent - 优化问题
+    2. Understanding Agent - 理解用户意图
+    3. Planning Agent - 生成查询计划
+    4. Execute Node - 执行查询（纯执行，非Agent）
+    5. Insight Agent - 分析结果
+    6. Replanner Agent - 决定是否重规划
     
     Args:
         store: 可选的Store实例，如果不提供则创建新的PersistentStore
@@ -40,6 +43,10 @@ def create_vizql_workflow(store: Optional[PersistentStore] = None, db_path: str 
     from tableau_assistant.src.agents.nodes.question_boost import question_boost_agent_node
     from tableau_assistant.src.agents.nodes.understanding import understanding_agent_node
     from tableau_assistant.src.agents.nodes.task_planner import query_planner_agent_node
+    from tableau_assistant.src.agents.nodes.insight import insight_agent_node
+    from tableau_assistant.src.agents.nodes.replanner import replanner_agent_node
+    # Execute 是纯执行节点，不是 Agent，从 capabilities 导入
+    from tableau_assistant.src.capabilities.query.executor.execute_node import execute_query_node
     from tableau_assistant.src.capabilities.metadata.manager import MetadataManager
     
     # ========== 1. 创建Store（持久化存储） ==========
@@ -49,70 +56,45 @@ def create_vizql_workflow(store: Optional[PersistentStore] = None, db_path: str 
     
     # ========== 2. 创建StateGraph ==========
     graph = StateGraph(
-        state_schema=VizQLState,  # 状态schema
-        context_schema=VizQLContext,  # 上下文schema（不可变）
-        input_schema=VizQLInput,  # 输入schema（自动验证）
-        output_schema=VizQLOutput  # 输出schema（自动验证）
+        state_schema=VizQLState,
+        context_schema=VizQLContext,
+        input_schema=VizQLInput,
+        output_schema=VizQLOutput
     )
     
-    # ========== 3. 添加节点 ==========
+    # ========== 3. 定义节点包装器 ==========
     
-    # 3.1 问题Boost节点（可选）
-    def boost_node(state: VizQLState, config=None) -> Dict[str, Any]:
-        """问题Boost节点包装器"""
+    def _create_runtime(config: Optional[Dict] = None):
+        """创建 Runtime 实例"""
         from langgraph.runtime import Runtime
         if config is None:
             config = {}
-        
-        # 从config中提取VizQLContext需要的参数
         configurable = config.get("configurable", {})
         context = VizQLContext.from_config(
             datasource_luid=configurable.get("datasource_luid", ""),
             user_id=configurable.get("user_id", "default_user"),
             session_id=configurable.get("session_id", "default_session")
         )
-        runtime = Runtime[VizQLContext](store=store, context=context)
-        
-        # 获取元数据（启用增强以获取 valid_max_date）
+        return Runtime[VizQLContext](store=store, context=context)
+    
+    # 3.1 Boost 节点 (async)
+    async def boost_node(state: VizQLState, config=None) -> Dict[str, Any]:
+        """问题Boost节点"""
+        runtime = _create_runtime(config)
         metadata_manager = MetadataManager(runtime)
         metadata = metadata_manager.get_metadata(use_cache=True, enhance=True)
-        
-        return question_boost_agent_node(state, runtime, metadata)
+        return await question_boost_agent_node(state, runtime, metadata)
     
-    # 3.2 问题理解节点
-    def understanding_node(state: VizQLState, config=None) -> Dict[str, Any]:
-        """问题理解节点包装器"""
-        from langgraph.runtime import Runtime
-        if config is None:
-            config = {}
-        
-        # 从config中提取VizQLContext需要的参数
-        configurable = config.get("configurable", {})
-        context = VizQLContext.from_config(
-            datasource_luid=configurable.get("datasource_luid", ""),
-            user_id=configurable.get("user_id", "default_user"),
-            session_id=configurable.get("session_id", "default_session")
-        )
-        runtime = Runtime[VizQLContext](store=store, context=context)
-        return understanding_agent_node(state, runtime)
+    # 3.2 Understanding 节点 (async)
+    async def understanding_node(state: VizQLState, config=None) -> Dict[str, Any]:
+        """问题理解节点"""
+        runtime = _create_runtime(config)
+        return await understanding_agent_node(state, runtime)
     
-    # 3.3 查询规划节点
-    def planning_node(state: VizQLState, config=None) -> Dict[str, Any]:
-        """查询规划节点包装器"""
-        from langgraph.runtime import Runtime
-        if config is None:
-            config = {}
-        
-        # 从config中提取VizQLContext需要的参数
-        configurable = config.get("configurable", {})
-        context = VizQLContext.from_config(
-            datasource_luid=configurable.get("datasource_luid", ""),
-            user_id=configurable.get("user_id", "default_user"),
-            session_id=configurable.get("session_id", "default_session")
-        )
-        runtime = Runtime[VizQLContext](store=store, context=context)
-        
-        # 获取元数据和维度层级（启用增强以获取 valid_max_date）
+    # 3.3 Planning 节点 (async)
+    async def planning_node(state: VizQLState, config=None) -> Dict[str, Any]:
+        """查询规划节点"""
+        runtime = _create_runtime(config)
         metadata_manager = MetadataManager(runtime)
         metadata = metadata_manager.get_metadata(use_cache=True, enhance=True)
         
@@ -120,42 +102,75 @@ def create_vizql_workflow(store: Optional[PersistentStore] = None, db_path: str 
         store_manager = StoreManager(runtime.store)
         dimension_hierarchy = store_manager.get_dimension_hierarchy(runtime.context.datasource_luid)
         
-        # 如果没有维度层级，使用LLM解析
         if not dimension_hierarchy:
             from tableau_assistant.src.agents.nodes.dimension_hierarchy import dimension_hierarchy_agent
             hierarchy_state = {"metadata": metadata}
-            # 移除await，直接同步调用（如果需要异步，整个函数需要改为async def）
-            hierarchy_result = dimension_hierarchy_agent.execute(hierarchy_state, runtime)
+            hierarchy_result = await dimension_hierarchy_agent.execute(hierarchy_state, runtime)
             dimension_hierarchy = hierarchy_result.get("dimension_hierarchy", {})
         
-        # 更新state
         state_with_metadata = {**state, "metadata": metadata, "dimension_hierarchy": dimension_hierarchy}
-        return query_planner_agent_node(state_with_metadata, runtime)
+        return await query_planner_agent_node(state_with_metadata, runtime)
     
-    # 添加节点到图
+    # 3.4 Execute 节点（纯执行，非Agent，同步）
+    def execute_node(state: VizQLState, config=None) -> Dict[str, Any]:
+        """查询执行节点（确定性执行，不使用LLM）"""
+        return execute_query_node(state, config)
+    
+    # 3.5 Insight 节点 (async)
+    async def insight_node(state: VizQLState, config=None) -> Dict[str, Any]:
+        """洞察分析节点"""
+        runtime = _create_runtime(config)
+        return await insight_agent_node(state, runtime)
+    
+    # 3.6 Replanner 节点 (async)
+    async def replanner_node(state: VizQLState, config=None) -> Dict[str, Any]:
+        """重规划决策节点"""
+        runtime = _create_runtime(config)
+        result = await replanner_agent_node(state, runtime)
+        
+        # 计算 completeness_score
+        replan_decision = result.get("replan_decision", {})
+        completeness_score = _calculate_completeness_score(state, replan_decision)
+        result["completeness_score"] = completeness_score
+        
+        return result
+    
+    # ========== 4. 添加节点到图 ==========
     graph.add_node("boost", boost_node)
     graph.add_node("understanding", understanding_node)
     graph.add_node("planning", planning_node)
+    graph.add_node("execute", execute_node)
+    graph.add_node("insight", insight_node)
+    graph.add_node("replanner", replanner_node)
     
-    # ========== 4. 添加边 ==========
+    # ========== 5. 定义路由函数 ==========
     
-    # 路由函数：决定是否执行Boost
     def should_boost(state: VizQLState) -> str:
         """决定是否执行问题Boost"""
         boost_question = state.get("boost_question", False)
-        if boost_question:
-            return "boost"
-        else:
-            return "understanding"
+        return "boost" if boost_question else "understanding"
     
-    # 添加条件边
+    def should_replan(state: VizQLState) -> str:
+        """决定是否重规划"""
+        replan_decision = state.get("replan_decision", {})
+        should_replan_flag = replan_decision.get("should_replan", False)
+        completeness_score = state.get("completeness_score", 1.0)
+        
+        # 智能终止策略：score >= 0.9 时终止
+        if completeness_score >= 0.9:
+            return "end"
+        
+        if should_replan_flag:
+            return "planning"  # 重规划时跳过 Understanding，直接到 Planning
+        return "end"
+    
+    # ========== 6. 添加边 ==========
+    
+    # START -> Boost 或 Understanding
     graph.add_conditional_edges(
         START,
         should_boost,
-        {
-            "boost": "boost",
-            "understanding": "understanding"
-        }
+        {"boost": "boost", "understanding": "understanding"}
     )
     
     # Boost -> Understanding
@@ -164,98 +179,100 @@ def create_vizql_workflow(store: Optional[PersistentStore] = None, db_path: str 
     # Understanding -> Planning
     graph.add_edge("understanding", "planning")
     
-    # Planning -> END (暂时，后续添加执行节点)
-    graph.add_edge("planning", END)
+    # Planning -> Execute
+    graph.add_edge("planning", "execute")
     
-    # ========== 5. 编译 ==========
+    # Execute -> Insight
+    graph.add_edge("execute", "insight")
+    
+    # Insight -> Replanner
+    graph.add_edge("insight", "replanner")
+    
+    # Replanner -> Planning（重规划）或 END
+    graph.add_conditional_edges(
+        "replanner",
+        should_replan,
+        {"planning": "planning", "end": END}
+    )
+    
+    # ========== 7. 编译 ==========
     app = graph.compile(
-        checkpointer=InMemorySaver(),  # 对话历史
-        store=store  # 持久化存储
+        checkpointer=InMemorySaver(),
+        store=store
     )
     
     return app
 
 
-def validate_input(input_data: Dict[str, Any]) -> VizQLInput:
+def _calculate_completeness_score(state: VizQLState, replan_decision: Dict[str, Any]) -> float:
     """
-    验证输入数据并转换为VizQLInput格式
+    计算完成度分数
     
-    注意：
-        - 如果从API调用，数据已经通过VizQLQueryRequest验证
-        - 如果直接调用工作流，这里提供基本验证
-        - 主要用于类型转换和防御性编程
-    
-    Args:
-        input_data: 原始输入数据
+    评估维度：
+    1. 问题覆盖度 - 用户问题是否被充分回答
+    2. 数据完整性 - 查询结果是否完整
+    3. 洞察深度 - 洞察是否有价值
+    4. 异常处理 - 是否有未处理的错误
     
     Returns:
-        验证后的VizQLInput
-    
-    Raises:
-        ValueError: 如果输入格式不正确
+        0.0-1.0 之间的分数
     """
-    # 验证必需字段
+    # 从 replan_decision 获取 LLM 评估的分数
+    llm_score = replan_decision.get("completeness_score", 0.5)
+    
+    # 数据完整性检查
+    subtask_results = state.get("subtask_results", [])
+    errors = state.get("errors", [])
+    
+    data_score = 1.0
+    if not subtask_results:
+        data_score = 0.0
+    elif errors:
+        # 有错误时降低分数
+        error_ratio = len(errors) / max(len(subtask_results), 1)
+        data_score = max(0.0, 1.0 - error_ratio)
+    
+    # 洞察深度检查
+    insights = state.get("insights", [])
+    insight_score = min(1.0, len(insights) / 3)  # 至少3个洞察得满分
+    
+    # 综合评分（加权平均）
+    final_score = (
+        llm_score * 0.5 +      # LLM 评估权重 50%
+        data_score * 0.3 +     # 数据完整性权重 30%
+        insight_score * 0.2    # 洞察深度权重 20%
+    )
+    
+    return min(1.0, max(0.0, final_score))
+
+
+def validate_input(input_data: Dict[str, Any]) -> VizQLInput:
+    """验证输入数据并转换为VizQLInput格式"""
     if "question" not in input_data:
         raise ValueError("question字段是必需的")
     
     question = input_data["question"]
-    if not isinstance(question, str):
-        raise ValueError("question必须是字符串")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("question必须是非空字符串")
     
-    if not question.strip():
-        raise ValueError("question不能为空")
-    
-    # 验证可选字段
     boost_question = input_data.get("boost_question", False)
     if not isinstance(boost_question, bool):
         raise ValueError("boost_question必须是布尔值")
     
-    # 构造验证后的输入
-    validated: VizQLInput = {
-        "question": question,
-        "boost_question": boost_question
-    }
-    
-    return validated
+    return {"question": question, "boost_question": boost_question}
 
 
 def request_to_input(request) -> VizQLInput:
-    """
-    将API请求转换为工作流输入
-    
-    这是推荐的方式：API层使用Pydantic验证，然后转换为工作流输入
-    
-    Args:
-        request: VizQLQueryRequest实例（已验证）
-    
-    Returns:
-        VizQLInput
-    """
+    """将API请求转换为工作流输入"""
     from tableau_assistant.src.models.api import VizQLQueryRequest
     
-    # 如果是Pydantic模型，直接提取字段
     if isinstance(request, VizQLQueryRequest):
-        return {
-            "question": request.question,
-            "boost_question": request.boost_question
-        }
-    
-    # 如果是字典，使用validate_input验证
+        return {"question": request.question, "boost_question": request.boost_question}
     return validate_input(request)
 
 
 def format_output(state: VizQLState) -> VizQLOutput:
-    """
-    格式化输出数据
-    
-    将State转换为符合output_schema的格式
-    
-    Args:
-        state: 工作流状态
-    
-    Returns:
-        格式化后的VizQLOutput
-    """
+    """格式化输出数据"""
     final_report = state.get("final_report", {})
     
     return VizQLOutput(
@@ -266,6 +283,7 @@ def format_output(state: VizQLState) -> VizQLOutput:
         recommendations=final_report.get("recommendations", []),
         visualizations=state.get("visualizations", [])
     )
+
 
 
 async def run_vizql_workflow_stream(
@@ -281,35 +299,21 @@ async def run_vizql_workflow_stream(
     
     使用astream_events实现Token级流式输出
     
-    为什么是异步的？
-    - astream_events 是异步生成器（AsyncIterator）
-    - 它需要等待 LLM 的每个 token 到达，这是 I/O 密集型操作
-    - 使用异步可以在等待时不阻塞其他操作，提高并发效率
-    - 前端可以通过 SSE 实时接收 token，提供更好的用户体验
-    
-    推荐使用方式：
-        1. API层使用VizQLQueryRequest验证请求
-        2. 使用request_to_input()转换为VizQLInput
-        3. 调用此函数执行工作流
-        4. 使用StreamingEventHandler处理事件并转换为前端格式
-    
     Args:
         input_data: 工作流输入（已验证）
         datasource_luid: 数据源LUID
         user_id: 用户ID
         session_id: 会话ID
         store: 可选的Store实例
-        db_path: 数据库文件路径（仅在store=None时使用）
+        db_path: 数据库文件路径
     
     Yields:
-        LangGraph原始事件（需要使用StreamingEventHandler转换）
+        LangGraph原始事件
     """
     from tableau_assistant.src.config.settings import settings
     
-    # 创建工作流
     app = create_vizql_workflow(store=store, db_path=db_path)
     
-    # 准备config（传递context）
     config = {
         "configurable": {
             "thread_id": session_id,
@@ -323,8 +327,6 @@ async def run_vizql_workflow_stream(
         }
     }
     
-    # 流式执行 - 使用 astream_events 捕获所有事件
-    # 包括：on_chat_model_stream (token流), on_chain_start/end (agent进度), 等
     async for event in app.astream_events(input_data, config=config, version="v2"):
         yield event
 
@@ -340,28 +342,21 @@ def run_vizql_workflow_sync(
     """
     运行VizQL工作流（同步执行）
     
-    推荐使用方式：
-        1. API层使用VizQLQueryRequest验证请求
-        2. 使用request_to_input()转换为VizQLInput
-        3. 调用此函数执行工作流
-    
     Args:
         input_data: 工作流输入（已验证）
         datasource_luid: 数据源LUID
         user_id: 用户ID
         session_id: 会话ID
         store: 可选的Store实例
-        db_path: 数据库文件路径（仅在store=None时使用）
+        db_path: 数据库文件路径
     
     Returns:
-        VizQLOutput（自动验证）
+        VizQLOutput
     """
     from tableau_assistant.src.config.settings import settings
     
-    # 创建工作流
     app = create_vizql_workflow(store=store, db_path=db_path)
     
-    # 准备config（传递context）
     config = {
         "configurable": {
             "thread_id": session_id,
@@ -375,18 +370,11 @@ def run_vizql_workflow_sync(
         }
     }
     
-    # 同步执行
     result = app.invoke(input_data, config=config)
-    
-    # 格式化输出（自动验证）
     return format_output(result)
 
 
-# 示例用法
 if __name__ == "__main__":
-    import asyncio
-    
-    # 测试输入验证
     print("=" * 60)
     print("测试输入验证")
     print("=" * 60)
@@ -402,24 +390,8 @@ if __name__ == "__main__":
     except ValueError as e:
         print(f"✗ 输入验证失败: {e}")
     
-    # 测试无效输入
     try:
-        invalid_input = validate_input({
-            "boost_question": False
-            # 缺少question字段
-        })
+        validate_input({"boost_question": False})
         print("✗ 应该抛出验证错误")
     except ValueError as e:
         print(f"✓ 正确捕获验证错误: {e}")
-    
-    # 测试同步执行（TODO: 需要实现完整工作流）
-    # print("\n" + "=" * 60)
-    # print("测试同步执行")
-    # print("=" * 60)
-    # result = run_vizql_workflow_sync(
-    #     question="2016年各地区的销售额",
-    #     datasource_luid="abc123",
-    #     user_id="user_456",
-    #     session_id="session_789"
-    # )
-    # print(f"执行摘要: {result['executive_summary']}")

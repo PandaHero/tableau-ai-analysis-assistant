@@ -68,7 +68,7 @@ class ProcessorBase(ABC):
         Raises:
             ValidationError: 数据验证失败
         """
-        from tableau_assistant.src.capabilities.data_processing.processor.exceptions import ValidationError
+        from tableau_assistant.src.capabilities.data_processing.exceptions import ValidationError
         
         for task_id in required_tasks:
             if task_id not in source_data:

@@ -6,7 +6,7 @@
 from typing import Dict, Type
 import logging
 
-from tableau_assistant.src.capabilities.data_processing.processor.base import ProcessorBase
+from tableau_assistant.src.capabilities.data_processing.base import ProcessorBase
 
 logger = logging.getLogger(__name__)
 

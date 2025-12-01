@@ -3,8 +3,11 @@ VizQL运行时上下文定义
 
 使用LangGraph 1.0的context_schema特性
 """
+import logging
 from dataclasses import dataclass
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -140,7 +143,7 @@ def set_tableau_config(store_manager, tableau_token: str, tableau_site: str, tab
         )
         return True
     except Exception as e:
-        print(f"[Context] 保存Tableau配置失败: {e}")
+        logger.error(f"保存Tableau配置失败: {e}")
         return False
 
 

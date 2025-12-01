@@ -123,6 +123,7 @@ def create_initial_state(question: str, boost_question: bool = False) -> VizQLSt
         boosted_question=None,
         
         # Agent outputs (initially None or empty list)
+        boost=None,  # Question boost result
         understanding=None,
         query_plan=None,
         subtask_results=[],

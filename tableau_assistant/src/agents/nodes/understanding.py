@@ -36,7 +36,7 @@ class UnderstandingAgent(BaseVizQLAgent):
     """
     
     def __init__(self):
-        """Initialize with Understanding Prompt"""
+        """Initialize with Understanding Prompt (output model from prompt.get_output_model())"""
         super().__init__(UNDERSTANDING_PROMPT)
     
     def _prepare_input_data(

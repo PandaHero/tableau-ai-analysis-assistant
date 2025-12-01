@@ -45,7 +45,14 @@ def table_calc_config_strategy(draw, calc_type):
         if draw(st.booleans()):
             config["aggregation"] = draw(st.sampled_from(["SUM", "AVG", "MIN", "MAX"]))
         if draw(st.booleans()):
-            config["restartEvery"] = draw(st.text(min_size=1, max_size=30))
+            # restartEvery must be non-empty after stripping whitespace
+            config["restartEvery"] = draw(st.text(
+                min_size=1, max_size=30,
+                alphabet=st.characters(
+                    whitelist_categories=('Lu', 'Ll', 'Nd'),
+                    whitelist_characters='_-'
+                )
+            ).filter(lambda x: len(x.strip()) > 0).map(lambda x: x.strip()))
     
     elif calc_type == "MOVING_CALCULATION":
         if draw(st.booleans()):
@@ -70,7 +77,14 @@ def table_calc_config_strategy(draw, calc_type):
             config["relativeTo"] = draw(st.sampled_from(["PREVIOUS", "NEXT", "FIRST", "LAST"]))
     
     elif calc_type == "NESTED":
-        config["fieldCaption"] = draw(st.text(min_size=1, max_size=50))
+        # fieldCaption must be non-empty after stripping whitespace
+        config["fieldCaption"] = draw(st.text(
+            min_size=1, max_size=50,
+            alphabet=st.characters(
+                whitelist_categories=('Lu', 'Ll', 'Nd'),
+                whitelist_characters='_-'
+            )
+        ).filter(lambda x: len(x.strip()) > 0).map(lambda x: x.strip()))
     
     return config
 

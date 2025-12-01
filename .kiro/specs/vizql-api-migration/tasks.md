@@ -193,6 +193,8 @@ Values: Float between 0 and 1
 
 
 
+
+
   - 扩展 QueryBuilder 以支持表计算
   - _需求: 3.4, 3.5, 15.9_
 
@@ -263,7 +265,8 @@ Values: Float between 0 and 1
   - _需求: 3.4, 3.5_
 
 
-- [ ] 2.8 编写属性测试：TableCalcIntent 到 TableCalcField 转换正确性
+- [x] 2.8 编写属性测试：TableCalcIntent 到 TableCalcField 转换正确性
+
   - **属性 3: TableCalcIntent 到 TableCalcField 转换正确性**
   - 使用 Hypothesis 生成随机 TableCalcIntent
   - 验证 QueryBuilder 生成的 TableCalcField 正确
@@ -271,7 +274,9 @@ Values: Float between 0 and 1
 
 
 
-- [ ] 2.9 编写属性测试：表计算类型完整性
+
+- [x] 2.9 编写属性测试：表计算类型完整性
+
   - **属性 4: 表计算类型完整性**
   - 测试所有 10 种表计算类型
   - 验证每种类型都能正确创建 TableCalcSpecification
@@ -329,26 +334,37 @@ Values: Float between 0 and 1
   - 测试错误处理（无法检测格式）
   - _需求: 24.2, 24.3, 24.4, 24.7_
 
-- [ ]* 2.15 编写属性测试：日期格式检测一致性
+- [x] 2.15 编写属性测试：日期格式检测一致性
+
+
+
   - **属性 13: 日期格式检测一致性**
   - 生成随机日期样本集
   - 验证多次检测返回相同格式
   - 运行 100 次迭代
 
-- [ ]* 2.16 编写属性测试：日期格式转换往返一致性
+
+- [ ] 2.16 编写属性测试：日期格式转换往返一致性
+
   - **属性 14: 日期格式转换往返一致性**
   - 生成随机 ISO 日期
   - 转换为其他格式后再转换回 ISO
   - 验证保持不变
   - 运行 100 次迭代
 
-- [ ]* 2.17 编写属性测试：美式/欧式格式区分正确性
+
+- [ ] 2.17 编写属性测试：美式/欧式格式区分正确性
+
   - **属性 15: 美式/欧式格式区分正确性**
   - 生成包含明显区分标志的样本集
   - 验证格式检测正确区分
+
   - 运行 100 次迭代
 
-- [ ]* 2.18 编写属性测试：STRING 日期字段 DATEPARSE 生成正确性
+- [x] 2.18 编写属性测试：STRING 日期字段 DATEPARSE 生成正确性
+
+
+
   - **属性 16: STRING 日期字段 DATEPARSE 生成正确性**
   - 生成随机 STRING 类型日期字段
   - 验证 QueryBuilder 生成正确的 DATEPARSE 公式

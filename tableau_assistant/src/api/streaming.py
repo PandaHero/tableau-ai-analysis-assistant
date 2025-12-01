@@ -9,12 +9,16 @@ from typing import Dict, Any, Callable, Optional
 import json
 
 # 延迟导入测试模块，避免启动时依赖
+from typing import Callable, Optional as OptionalType
+
+_workflow_factory: OptionalType[Callable] = None
+
 try:
     from tableau_assistant.tests.test_workflow import create_test_workflow
     _workflow_factory = create_test_workflow
 except ImportError:
-    # 如果测试模块不可用，使用 None
-    _workflow_factory = None
+    # 如果测试模块不可用，保持 None
+    pass
 
 from tableau_assistant.src.agents.workflows.streaming import stream_workflow_events
 
@@ -63,6 +67,8 @@ async def stream_chat(request: Request):
         return {"error": "user_id is required"}
     
     # 创建工作流
+    if _workflow_factory is None:
+        return {"error": "Workflow factory not available. Test module not installed."}
     app = _workflow_factory()
     
     # 准备输入

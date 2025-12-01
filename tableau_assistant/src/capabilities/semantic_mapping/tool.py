@@ -40,25 +40,7 @@ async def _map_field_with_retry(
     threshold: float,
     use_llm: bool
 ) -> Dict[str, Any]:
-    """
-    带重试机制的字段映射函数
-    
-    Args:
-        semantic_mapper: SemanticMapper 实例
-        business_term: 业务术语
-        question_context: 问题上下文
-        top_k: 检索的候选数量
-        threshold: 相似度阈值
-        use_llm: 是否使用 LLM 判断
-    
-    Returns:
-        映射结果字典
-    
-    Raises:
-        ConnectionError: 网络连接错误
-        TimeoutError: 请求超时
-        RuntimeError: 其他运行时错误
-    """
+    """带重试机制的字段映射函数"""
     try:
         result = semantic_mapper.map_field(
             business_term=business_term,
@@ -68,7 +50,6 @@ async def _map_field_with_retry(
             use_llm=use_llm
         )
         return result
-    
     except Exception as e:
         logger.error(f"字段映射失败: {e}")
         raise
@@ -90,33 +71,18 @@ async def semantic_map_fields(
     Stage 1 - RAG Vector Retrieval:
     - Uses FAISS vector database for semantic similarity search
     - Retrieves top-K candidate fields based on embedding similarity
-    - Fast and efficient for initial candidate selection
     
     Stage 2 - LLM Semantic Judgment:
     - Understands business context and question semantics
     - Considers field descriptions, roles, and data types
-    - Generates reasoning for the selected mapping
-    - Handles synonyms and multi-language terms
-    
-    The tool provides high accuracy by combining RAG's recall with LLM's precision.
-    Mapping results are cached in Store (namespace: "semantic_mapping") for performance.
     
     Args:
-        business_term: Business term to map (e.g., "销售额", "Sales Amount").
-                      This is the term used in the user's question.
-        question_context: Full question context (optional but recommended).
-                         Helps LLM understand the semantic intent.
-                         Example: "2024年各地区的销售额"
-        top_k: Number of candidate fields to retrieve (default: 5).
-              Higher values increase recall but may reduce precision.
-        threshold: Similarity threshold for filtering candidates (0-1, default: 0.3).
-                  Lower values are more permissive.
-                  Note: FAISS uses L2 distance, which is converted to similarity.
-        use_llm: Whether to use LLM for semantic judgment (default: True).
-                If False, returns the highest-scoring candidate from RAG.
-                Set to False for faster but less accurate mapping.
-        use_cache: Whether to use cached mapping results (default: True).
-                  Cached results are stored for 1 hour.
+        business_term: Business term to map (e.g., "销售额", "Sales Amount")
+        question_context: Full question context (optional but recommended)
+        top_k: Number of candidate fields to retrieve (default: 5)
+        threshold: Similarity threshold for filtering candidates (0-1, default: 0.3)
+        use_llm: Whether to use LLM for semantic judgment (default: True)
+        use_cache: Whether to use cached mapping results (default: True)
     
     Returns:
         Dictionary containing:
@@ -124,46 +90,6 @@ async def semantic_map_fields(
         - confidence: Confidence score (0-1)
         - reasoning: Explanation of why this field was selected
         - alternatives: List of alternative field matches with scores
-    
-    Examples:
-        # Basic mapping with LLM judgment
-        result = await semantic_map_fields(
-            business_term="销售额",
-            question_context="2024年各地区的销售额"
-        )
-        # {
-        #   "matched_field": "Sales Amount",
-        #   "confidence": 0.95,
-        #   "reasoning": "根据上下文，用户询问的是销售金额",
-        #   "alternatives": [
-        #     {"field": "Revenue", "score": 0.88, "role": "measure", "data_type": "real"},
-        #     {"field": "Total Sales", "score": 0.82, "role": "measure", "data_type": "real"}
-        #   ]
-        # }
-        
-        # Fast mapping without LLM (RAG only)
-        result = await semantic_map_fields(
-            business_term="地区",
-            use_llm=False
-        )
-        # {
-        #   "matched_field": "Region",
-        #   "confidence": 0.92,
-        #   "reasoning": "向量检索最高分: 0.156",
-        #   "alternatives": [...]
-        # }
-        
-        # Force refresh (bypass cache)
-        result = await semantic_map_fields(
-            business_term="销售额",
-            use_cache=False
-        )
-    
-    Note:
-        - Mapping results are cached for 1 hour in Store
-        - Vector index is built on first use and cached
-        - Automatically retries up to 3 times on network errors
-        - Falls back to RAG-only if LLM judgment fails
     """
     from langgraph.runtime import get_runtime
     from tableau_assistant.src.capabilities.semantic_mapping.semantic_mapper import SemanticMapper
@@ -171,14 +97,11 @@ async def semantic_map_fields(
     from tableau_assistant.src.bi_platforms.tableau.models import select_model
     from tableau_assistant.src.models.metadata import Metadata
     
-    # 获取当前 runtime
     runtime = get_runtime()
     store = runtime.store
     
-    # 生成缓存 key
     cache_key = f"mapping_{business_term}_{question_context or 'no_context'}"
     
-    # 检查缓存
     if use_cache:
         try:
             cached_result = await store.get(("semantic_mapping", cache_key))
@@ -189,32 +112,23 @@ async def semantic_map_fields(
             logger.warning(f"读取缓存失败: {e}")
     
     try:
-        # 获取元数据（从 Store 或 MetadataManager）
         metadata_dict = await store.get(("metadata", "current"))
         if not metadata_dict:
-            # 如果 Store 中没有，从 MetadataManager 获取
             from tableau_assistant.src.capabilities.metadata.manager import MetadataManager
             metadata_manager = MetadataManager(runtime)
             metadata_dict = await metadata_manager.get_metadata_async(use_cache=True, enhance=False)
             metadata_dict = metadata_dict.model_dump()
         
-        # 创建 Metadata 对象
         metadata = Metadata(**metadata_dict)
-        
-        # 创建 Embeddings Provider
         embeddings_provider = EmbeddingsProvider(provider="openai")
-        
-        # 创建 LLM
         llm = select_model(provider="openai", model_name="gpt-4o-mini")
         
-        # 创建 Semantic Mapper
         semantic_mapper = SemanticMapper(
             metadata=metadata,
             llm=llm,
             embeddings_provider=embeddings_provider
         )
         
-        # 执行映射（带重试）
         result = await _map_field_with_retry(
             semantic_mapper=semantic_mapper,
             business_term=business_term,
@@ -224,28 +138,17 @@ async def semantic_map_fields(
             use_llm=use_llm
         )
         
-        # 保存到缓存（TTL: 1小时）
         if use_cache and result.get("matched_field"):
             try:
-                await store.put(
-                    namespace=("semantic_mapping", cache_key),
-                    value=result
-                )
-                logger.debug(f"映射结果已缓存: '{business_term}'")
+                await store.put(namespace=("semantic_mapping", cache_key), value=result)
             except Exception as e:
                 logger.warning(f"保存缓存失败: {e}")
         
-        logger.info(
-            f"✅ 字段映射成功: '{business_term}' -> '{result.get('matched_field')}' "
-            f"(置信度: {result.get('confidence', 0):.2f})"
-        )
-        
+        logger.info(f"✅ 字段映射成功: '{business_term}' -> '{result.get('matched_field')}'")
         return result
     
     except Exception as e:
-        logger.error(f"❌ 字段映射失败（重试3次后）: {e}")
-        
-        # 返回失败结果
+        logger.error(f"❌ 字段映射失败: {e}")
         return {
             "matched_field": None,
             "confidence": 0.0,
@@ -254,5 +157,4 @@ async def semantic_map_fields(
         }
 
 
-# 导出
 __all__ = ["semantic_map_fields"]

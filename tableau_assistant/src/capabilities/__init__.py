@@ -1,1 +1,41 @@
-"""业务能力模块"""
+"""
+Tableau Assistant 能力层
+
+提供各种业务能力的实现，包括：
+
+子包：
+- metadata: 元数据管理（获取、缓存、增强）
+- query: 查询能力（构建、执行、结果处理）
+- date_processing: 日期处理（解析、计算、格式检测）
+- data_processing: 数据处理（同比、环比、统计）
+- semantic_mapping: 语义映射（RAG+LLM 字段映射）
+- storage: 持久化存储（SQLite 缓存）
+
+使用示例：
+    # 元数据管理
+    from tableau_assistant.src.capabilities.metadata import MetadataManager
+    
+    # 查询执行
+    from tableau_assistant.src.capabilities.query import QueryExecutor, QueryBuilder
+    
+    # 日期处理
+    from tableau_assistant.src.capabilities.date_processing import DateManager
+    
+    # 数据处理
+    from tableau_assistant.src.capabilities.data_processing import DataProcessor
+    
+    # 语义映射
+    from tableau_assistant.src.capabilities.semantic_mapping import SemanticMapper
+    
+    # 存储
+    from tableau_assistant.src.capabilities.storage import StoreManager
+"""
+
+__all__ = [
+    "metadata",
+    "query",
+    "date_processing",
+    "data_processing",
+    "semantic_mapping",
+    "storage",
+]

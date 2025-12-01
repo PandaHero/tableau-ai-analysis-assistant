@@ -76,9 +76,9 @@ from .vizql_types import (
     QueryRequest,
     QueryOutput,
     
-    # Metadata
-    FieldMetadata,
-    MetadataOutput,
+    # VizQL API Metadata (for API responses)
+    VizQLFieldMetadata,
+    VizQLMetadataOutput,
     
     # Helper functions
     create_basic_field,
@@ -105,6 +105,15 @@ from .question import (
     create_time_range_absolute,
     create_time_range_relative,
     create_time_range_current,
+)
+
+# ========== Boost Models ==========
+from .boost import QuestionBoost
+
+# ========== Internal Metadata Models ==========
+from .metadata import (
+    FieldMetadata,  # Internal field metadata model
+    Metadata,       # Internal datasource metadata model
 )
 
 # ========== Result Models ==========
@@ -186,8 +195,8 @@ __all__ = [
     "QueryOptions",
     "QueryRequest",
     "QueryOutput",
-    "FieldMetadata",
-    "MetadataOutput",
+    "VizQLFieldMetadata",
+    "VizQLMetadataOutput",
     "create_basic_field",
     "create_function_field",
     "create_set_filter",
@@ -197,14 +206,21 @@ __all__ = [
     "QuestionType",
     "Complexity",
     "TimeRangeType",
+    "RelativeType",
+    "PeriodType",
     "TimeRange",
+    "DateRequirements",
     "QuestionUnderstanding",
-    "QuestionBoost",
-    "QuestionClassification",
-    "QuestionValidation",
     "create_time_range_absolute",
     "create_time_range_relative",
-    "create_time_range_unspecified",
+    "create_time_range_current",
+    
+    # Boost
+    "QuestionBoost",
+    
+    # Internal Metadata
+    "FieldMetadata",
+    "Metadata",
     
     # Result
     "InsightType",

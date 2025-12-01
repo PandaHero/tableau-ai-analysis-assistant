@@ -8,8 +8,8 @@ import pandas as pd
 import numpy as np
 import logging
 
-from tableau_assistant.src.capabilities.data_processing.processor.factory import ProcessorFactory
-from tableau_assistant.src.capabilities.data_processing.processor.exceptions import (
+from tableau_assistant.src.capabilities.data_processing.factory import ProcessorFactory
+from tableau_assistant.src.capabilities.data_processing.exceptions import (
     ProcessingError,
     ValidationError,
     CalculationError,

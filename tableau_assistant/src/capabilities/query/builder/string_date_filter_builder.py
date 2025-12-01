@@ -127,8 +127,28 @@ class StringDateFilterBuilder:
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
         days_count = (end_dt - start_dt).days + 1
         
-        # 对于完整日期格式（DAY粒度），如果范围超过100天，优先使用 DATEPARSE
-        if field_granularity == TimeGranularity.DAY and days_count > 100:
+        # 优化：对于 DAY 粒度字段 + 季度/月份/年问题，优先使用 DATEPARSE
+        # 因为季度通常有 90 天，月份有 28-31 天，枚举效率低
+        if field_granularity == TimeGranularity.DAY and \
+           question_granularity in [TimeGranularity.QUARTER, TimeGranularity.MONTH, TimeGranularity.YEAR]:
+            dateparse_format = self._get_dateparse_format(field_format)
+            logger.info(
+                f"✓ 使用DATEPARSE+QuantitativeDateFilter (优化): "
+                f"问题粒度={question_granularity.value}, {days_count}天，格式={dateparse_format}"
+            )
+            return QuantitativeDateFilter(
+                field=FilterField(
+                    calculation=f'DATEPARSE("{dateparse_format}", [{field_name}])'
+                ),
+                filterType="QUANTITATIVE_DATE",
+                quantitativeFilterType="RANGE",
+                minDate=start_date,
+                maxDate=end_date
+            )
+        
+        # 对于完整日期格式（DAY粒度），如果范围超过30天，优先使用 DATEPARSE
+        # 30天阈值：周查询(7天)使用SetFilter，更大范围使用DATEPARSE
+        if field_granularity == TimeGranularity.DAY and days_count > 30:
             # 使用 DATEPARSE + QuantitativeDateFilter
             dateparse_format = self._get_dateparse_format(field_format)
             logger.info(
@@ -190,7 +210,7 @@ class StringDateFilterBuilder:
         
         else:
             # 不支持前缀匹配的格式
-            if days_count > 100:
+            if days_count > 30:
                 # 使用 DATEPARSE + QuantitativeDateFilter
                 dateparse_format = self._get_dateparse_format(field_format)
                 logger.info(

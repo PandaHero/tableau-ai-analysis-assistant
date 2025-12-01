@@ -4,15 +4,19 @@ Store管理器
 使用LangGraph 1.0的Store功能管理缓存和持久化数据
 替代部分Redis缓存功能
 """
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
-from langgraph.store.memory import InMemoryStore
-from langgraph.store.base import Item
+import logging
 import time
 import json
 import os
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
+
+from langgraph.store.memory import InMemoryStore
+from langgraph.store.base import Item
 
 if TYPE_CHECKING:
     from tableau_assistant.src.models.metadata import Metadata
+
+logger = logging.getLogger(__name__)
 
 
 class StoreManager:
@@ -90,9 +94,9 @@ class StoreManager:
                 if datasource_updated_at:
                     cached_version = metadata_dict.get("_datasource_updated_at")
                     if cached_version and cached_version != datasource_updated_at:
-                        print(f"[StoreManager] 数据源已更新，缓存失效: {datasource_luid}")
-                        print(f"  缓存版本: {cached_version}")
-                        print(f"  当前版本: {datasource_updated_at}")
+                        logger.info(f"数据源已更新，缓存失效: {datasource_luid}")
+                        logger.debug(f"  缓存版本: {cached_version}")
+                        logger.debug(f"  当前版本: {datasource_updated_at}")
                         return None
                 
                 # 反序列化为Metadata对象
@@ -105,7 +109,7 @@ class StoreManager:
             
             return None
         except Exception as e:
-            print(f"[StoreManager] 获取元数据失败: {e}")
+            logger.error(f"获取元数据失败: {e}")
             return None
     
     def put_metadata(
@@ -152,7 +156,7 @@ class StoreManager:
             )
             return True
         except Exception as e:
-            print(f"[StoreManager] 保存元数据失败: {e}")
+            logger.error(f"保存元数据失败: {e}")
             return False
     
     # ========== 维度层级缓存 ==========
@@ -181,7 +185,7 @@ class StoreManager:
             
             return None
         except Exception as e:
-            print(f"[StoreManager] 获取维度层级失败: {e}")
+            logger.error(f"获取维度层级失败: {e}")
             return None
     
     def put_dimension_hierarchy(
@@ -213,7 +217,7 @@ class StoreManager:
             )
             return True
         except Exception as e:
-            print(f"[StoreManager] 保存维度层级失败: {e}")
+            logger.error(f"保存维度层级失败: {e}")
             return False
     
     # ========== 用户偏好 ==========
@@ -235,7 +239,7 @@ class StoreManager:
             )
             return item.value if item else None
         except Exception as e:
-            print(f"[StoreManager] 获取用户偏好失败: {e}")
+            logger.error(f"获取用户偏好失败: {e}")
             return None
     
     def put_user_preferences(
@@ -261,7 +265,7 @@ class StoreManager:
             )
             return True
         except Exception as e:
-            print(f"[StoreManager] 保存用户偏好失败: {e}")
+            logger.error(f"保存用户偏好失败: {e}")
             return False
     
     def update_user_preferences(
@@ -289,7 +293,7 @@ class StoreManager:
             # 保存
             return self.put_user_preferences(user_id, updated)
         except Exception as e:
-            print(f"[StoreManager] 更新用户偏好失败: {e}")
+            logger.error(f"更新用户偏好失败: {e}")
             return False
     
     # ========== 问题历史 ==========
@@ -329,7 +333,7 @@ class StoreManager:
             )
             return True
         except Exception as e:
-            print(f"[StoreManager] 添加问题历史失败: {e}")
+            logger.error(f"添加问题历史失败: {e}")
             return False
     
     def search_question_history(
@@ -359,7 +363,7 @@ class StoreManager:
             # 转换为字典列表
             return [item.value for item in results]
         except Exception as e:
-            print(f"[StoreManager] 搜索问题历史失败: {e}")
+            logger.error(f"搜索问题历史失败: {e}")
             return []
     
     def get_recent_questions(
@@ -396,7 +400,7 @@ class StoreManager:
             # 返回前N个
             return [item.value for item in sorted_items[:limit]]
         except Exception as e:
-            print(f"[StoreManager] 获取最近问题失败: {e}")
+            logger.error(f"获取最近问题失败: {e}")
             return []
     
     # ========== 异常知识库 ==========
@@ -421,7 +425,7 @@ class StoreManager:
             )
             return item.value if item else None
         except Exception as e:
-            print(f"[StoreManager] 获取异常解释失败: {e}")
+            logger.error(f"获取异常解释失败: {e}")
             return None
     
     def put_anomaly_explanation(
@@ -453,7 +457,7 @@ class StoreManager:
             )
             return True
         except Exception as e:
-            print(f"[StoreManager] 保存异常解释失败: {e}")
+            logger.error(f"保存异常解释失败: {e}")
             return False
     
     def search_anomaly_knowledge(
@@ -480,7 +484,7 @@ class StoreManager:
             
             return [item.value for item in results]
         except Exception as e:
-            print(f"[StoreManager] 搜索异常知识库失败: {e}")
+            logger.error(f"搜索异常知识库失败: {e}")
             return []
     
     # ========== 工具方法 ==========
@@ -528,10 +532,10 @@ class StoreManager:
                 key=datasource_luid
             )
             
-            print(f"[StoreManager] 已清除数据源缓存: {datasource_luid}")
+            logger.info(f"已清除数据源缓存: {datasource_luid}")
             return True
         except Exception as e:
-            print(f"[StoreManager] 清除缓存失败: {e}")
+            logger.error(f"清除缓存失败: {e}")
             return False
     
     def clear_dimension_hierarchy_cache(self, datasource_luid: str) -> bool:
@@ -551,10 +555,10 @@ class StoreManager:
                 key=datasource_luid
             )
             
-            print(f"[StoreManager] 已清除维度层级缓存: {datasource_luid}")
+            logger.info(f"已清除维度层级缓存: {datasource_luid}")
             return True
         except Exception as e:
-            print(f"[StoreManager] 清除维度层级缓存失败: {e}")
+            logger.error(f"清除维度层级缓存失败: {e}")
             return False
     
     def clear_namespace(self, namespace: tuple) -> bool:
@@ -572,10 +576,10 @@ class StoreManager:
         """
         try:
             # InMemoryStore不支持list和delete
-            print(f"[StoreManager] 警告: InMemoryStore不支持clear_namespace")
+            logger.warning("InMemoryStore不支持clear_namespace")
             return False
         except Exception as e:
-            print(f"[StoreManager] 清空命名空间失败: {e}")
+            logger.error(f"清空命名空间失败: {e}")
             return False
     
     def get_stats(self) -> Dict[str, Any]:
@@ -596,7 +600,7 @@ class StoreManager:
             }
             return stats
         except Exception as e:
-            print(f"[StoreManager] 获取统计信息失败: {e}")
+            logger.error(f"获取统计信息失败: {e}")
             return {}
 
 

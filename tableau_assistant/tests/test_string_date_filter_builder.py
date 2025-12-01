@@ -132,7 +132,7 @@ class TestStringDateFilterBuilder:
     def test_iso_date_format_month_question(self):
         """
         场景：字段="2024-01-15"（YYYY-MM-DD），问题="2024年1月的销售额"
-        预期：使用 MatchFilter，startsWith="2024-01-"
+        预期：使用 QuantitativeDateFilter（优化：月份查询使用 DATEPARSE）
         """
         filter_obj = self.builder.build_filter(
             field_name="Date",
@@ -143,8 +143,11 @@ class TestStringDateFilterBuilder:
             end_date="2024-01-31"
         )
         
-        assert isinstance(filter_obj, MatchFilter)
-        assert filter_obj.startsWith == "2024-01-"
+        # 优化后：月份查询使用 DATEPARSE + QuantitativeDateFilter
+        assert isinstance(filter_obj, QuantitativeDateFilter)
+        assert filter_obj.minDate == "2024-01-01"
+        assert filter_obj.maxDate == "2024-01-31"
+        assert "DATEPARSE" in filter_obj.field.calculation
     
     def test_iso_date_format_week_question(self):
         """
@@ -206,7 +209,7 @@ class TestStringDateFilterBuilder:
     def test_us_date_format_month_question(self):
         """
         场景：字段="01/15/2024"（MM/DD/YYYY），问题="2024年1月的销售额"
-        预期：使用 SetFilter，枚举31天（不支持前缀匹配）
+        预期：使用 QuantitativeDateFilter（优化：月份查询使用 DATEPARSE）
         """
         filter_obj = self.builder.build_filter(
             field_name="Date",
@@ -217,12 +220,79 @@ class TestStringDateFilterBuilder:
             end_date="2024-01-31"
         )
         
-        assert isinstance(filter_obj, SetFilter)
-        assert len(filter_obj.values) == 31
-        assert filter_obj.values[0] == "01/01/2024"
-        assert filter_obj.values[-1] == "01/31/2024"
+        # 优化后：月份查询使用 DATEPARSE + QuantitativeDateFilter
+        assert isinstance(filter_obj, QuantitativeDateFilter)
+        assert filter_obj.minDate == "2024-01-01"
+        assert filter_obj.maxDate == "2024-01-31"
+        assert "DATEPARSE" in filter_obj.field.calculation
+        assert "MM/dd/yyyy" in filter_obj.field.calculation
     
-    # ========== 场景5：字段粒度 < 问题粒度（无法实现）==========
+    # ========== 场景5：季度查询优化 ==========
+    
+    def test_iso_date_format_quarter_question(self):
+        """
+        场景：字段="2024-01-15"（YYYY-MM-DD），问题="2024年Q1的销售额"
+        预期：使用 QuantitativeDateFilter（优化：季度查询使用 DATEPARSE）
+        """
+        filter_obj = self.builder.build_filter(
+            field_name="Date",
+            field_format=DateFormatType.ISO_DATE,
+            field_granularity=TimeGranularity.DAY,
+            question_granularity=TimeGranularity.QUARTER,
+            start_date="2024-01-01",
+            end_date="2024-03-31"
+        )
+        
+        # 优化后：季度查询使用 DATEPARSE + QuantitativeDateFilter
+        assert isinstance(filter_obj, QuantitativeDateFilter)
+        assert filter_obj.minDate == "2024-01-01"
+        assert filter_obj.maxDate == "2024-03-31"
+        assert "DATEPARSE" in filter_obj.field.calculation
+        assert "yyyy-MM-dd" in filter_obj.field.calculation
+    
+    def test_us_date_format_quarter_question(self):
+        """
+        场景：字段="01/15/2024"（MM/DD/YYYY），问题="2024年Q1的销售额"
+        预期：使用 QuantitativeDateFilter（优化：季度查询使用 DATEPARSE）
+        """
+        filter_obj = self.builder.build_filter(
+            field_name="Date",
+            field_format=DateFormatType.US_DATE,
+            field_granularity=TimeGranularity.DAY,
+            question_granularity=TimeGranularity.QUARTER,
+            start_date="2024-01-01",
+            end_date="2024-03-31"
+        )
+        
+        # 优化后：季度查询使用 DATEPARSE + QuantitativeDateFilter
+        assert isinstance(filter_obj, QuantitativeDateFilter)
+        assert filter_obj.minDate == "2024-01-01"
+        assert filter_obj.maxDate == "2024-03-31"
+        assert "DATEPARSE" in filter_obj.field.calculation
+        assert "MM/dd/yyyy" in filter_obj.field.calculation
+    
+    def test_eu_date_format_quarter_question(self):
+        """
+        场景：字段="15/01/2024"（DD/MM/YYYY），问题="2024年Q1的销售额"
+        预期：使用 QuantitativeDateFilter（优化：季度查询使用 DATEPARSE）
+        """
+        filter_obj = self.builder.build_filter(
+            field_name="Date",
+            field_format=DateFormatType.EU_DATE,
+            field_granularity=TimeGranularity.DAY,
+            question_granularity=TimeGranularity.QUARTER,
+            start_date="2024-01-01",
+            end_date="2024-03-31"
+        )
+        
+        # 优化后：季度查询使用 DATEPARSE + QuantitativeDateFilter
+        assert isinstance(filter_obj, QuantitativeDateFilter)
+        assert filter_obj.minDate == "2024-01-01"
+        assert filter_obj.maxDate == "2024-03-31"
+        assert "DATEPARSE" in filter_obj.field.calculation
+        assert "dd/MM/yyyy" in filter_obj.field.calculation
+    
+    # ========== 场景6：字段粒度 < 问题粒度（无法实现）==========
     
     def test_field_coarser_than_question(self):
         """

@@ -1305,10 +1305,17 @@ class QueryOutput(BaseModel):
     data: List[dict]
 
 
-# ============= Metadata Types =============
+# ============= VizQL API Metadata Types =============
+# Note: These are for VizQL Data Service API responses
+# For internal metadata model, use tableau_assistant.src.models.metadata.FieldMetadata
 
-class FieldMetadata(BaseModel):
-    """Field metadata"""
+class VizQLFieldMetadata(BaseModel):
+    """
+    VizQL API Field Metadata
+    
+    This is the field metadata returned by VizQL Data Service API.
+    Different from internal FieldMetadata model in metadata.py.
+    """
     model_config = ConfigDict(extra="allow")
     
     fieldName: str
@@ -1320,11 +1327,11 @@ class FieldMetadata(BaseModel):
     description: Optional[str] = None
 
 
-class MetadataOutput(BaseModel):
-    """Metadata output"""
+class VizQLMetadataOutput(BaseModel):
+    """VizQL API Metadata output"""
     model_config = ConfigDict(extra="allow")
     
-    data: List[FieldMetadata]
+    data: List[VizQLFieldMetadata]
 
 
 # ============= Helper Functions =============

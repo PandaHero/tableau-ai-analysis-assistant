@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 from langchain_core.tools import tool
 
-from tableau_assistant.src.capabilities.data_processing.date_parser import DateParser
+from tableau_assistant.src.capabilities.date_processing.parser import DateParser
 from tableau_assistant.src.models.question import TimeRange
 
 

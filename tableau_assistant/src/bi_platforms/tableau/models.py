@@ -13,6 +13,14 @@ except ImportError:
     # 兼容旧版本
     from tableau_assistant.src.utils.ssl_config import get_httpx_client_kwargs
 
+# 尝试导入 Anthropic 模型（可选依赖）
+ANTHROPIC_AVAILABLE = False
+try:
+    from langchain_anthropic import ChatAnthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ChatAnthropic = None
+
 
 def select_model(provider: str, model_name: str, temperature: float = 0.2) -> BaseChatModel:
     """
@@ -22,9 +30,12 @@ def select_model(provider: str, model_name: str, temperature: float = 0.2) -> Ba
     - local: 公司内部自建LLM（使用OpenAI兼容API）
     - openai: OpenAI官方API或OpenAI兼容的公共API（如DeepSeek）
     - azure: Azure OpenAI服务
+    - claude: Anthropic Claude 模型（自动启用 Prompt 缓存）
+    - deepseek: DeepSeek API（使用 OpenAI 兼容接口）
+    - qwen: 通义千问（使用 OpenAI 兼容接口）
     
     Args:
-        provider: Model provider - "local", "openai", "azure"
+        provider: Model provider - "local", "openai", "azure", "claude", "deepseek", "qwen"
         model_name: Name of the model to use (required, no defaults)
         temperature: Temperature setting for the model
         
@@ -119,9 +130,78 @@ def select_model(provider: str, model_name: str, temperature: float = 0.2) -> Ba
             temperature=temperature
         )
     
+    elif provider == "claude":
+        # Anthropic Claude 模型（自动启用 Prompt 缓存）
+        if not ANTHROPIC_AVAILABLE:
+            raise ImportError(
+                "langchain-anthropic is required for Claude models. "
+                "Install with: pip install langchain-anthropic"
+            )
+        
+        anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY must be set for Claude provider")
+        
+        # Claude 模型自动启用 Prompt 缓存
+        return ChatAnthropic(
+            model=model_name,
+            temperature=temperature,
+            anthropic_api_key=anthropic_api_key,
+            # 启用 beta 头以支持 Prompt 缓存
+            model_kwargs={
+                "extra_headers": {
+                    "anthropic-beta": "prompt-caching-2024-07-31"
+                }
+            }
+        )
+    
+    elif provider == "deepseek":
+        # DeepSeek API（使用 OpenAI 兼容接口）
+        deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY") or llm_api_key
+        deepseek_base_url = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+        
+        if not deepseek_api_key:
+            raise ValueError(
+                "DEEPSEEK_API_KEY or LLM_API_KEY must be set for DeepSeek provider"
+            )
+        
+        return ChatOpenAI(
+            base_url=deepseek_base_url,
+            api_key=deepseek_api_key,
+            model_name=model_name,
+            temperature=temperature,
+            http_client=http_client,
+            http_async_client=http_async_client
+        )
+    
+    elif provider == "qwen":
+        # 通义千问（使用 OpenAI 兼容接口）
+        qwen_api_key = os.environ.get("QWEN_API_KEY") or llm_api_key
+        qwen_base_url = os.environ.get("QWEN_API_BASE") or llm_api_base
+        
+        if not qwen_api_key:
+            raise ValueError(
+                "QWEN_API_KEY or LLM_API_KEY must be set for Qwen provider"
+            )
+        
+        if not qwen_base_url:
+            raise ValueError(
+                "QWEN_API_BASE or LLM_API_BASE must be set for Qwen provider"
+            )
+        
+        return ChatOpenAI(
+            base_url=qwen_base_url,
+            api_key=qwen_api_key,
+            model_name=model_name,
+            temperature=temperature,
+            http_client=http_client,
+            http_async_client=http_async_client
+        )
+    
     else:
         raise ValueError(
-            f"Unknown provider: {provider}. Supported providers: local, openai, azure"
+            f"Unknown provider: {provider}. "
+            f"Supported providers: local, openai, azure, claude, deepseek, qwen"
         )
 
 

@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     
     # Store配置（LangGraph持久化存储）
     store_max_search_limit: int = int(os.getenv("STORE_MAX_SEARCH_LIMIT", "4000"))
+    store_db_path: str = os.getenv("STORE_DB_PATH", "data/langgraph_store.db")
+    store_metadata_ttl: int = int(os.getenv("STORE_METADATA_TTL", "3600"))  # 元数据缓存 TTL（秒）
 
     # 任务调度配置
     parallel_upper_limit: int = int(os.getenv("Parallel_Upper_Limit", "3"))

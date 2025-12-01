@@ -661,7 +661,7 @@ def _fetch_dimension_samples(
         return {}
     
     try:
-        from tableau_assistant.src.bi_platforms.tableau.vizql_data_service import query_vds
+        from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient, VizQLClientConfig
         
         # 使用TopN Filter限制返回行数
         # 使用度量字段排序,howMany=1只返回1条数据
@@ -681,12 +681,13 @@ def _fetch_dimension_samples(
         }
         
         # 查询数据
-        result = query_vds(
-            api_key=api_key,
-            datasource_luid=datasource_luid,
-            url=domain,
-            query=query
-        )
+        config = VizQLClientConfig(base_url=domain.rstrip("/"))
+        with VizQLClient(config=config) as client:
+            result = client.query_datasource(
+                datasource_luid=datasource_luid,
+                query=query,
+                api_key=api_key
+            )
         
         # 提取每个维度的样例值
         data = result.get("data", [])
