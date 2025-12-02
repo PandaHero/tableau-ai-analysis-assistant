@@ -28,6 +28,7 @@ class StoreManager:
     支持的命名空间：
     - ("metadata",) - 元数据缓存（默认1小时，可通过METADATA_CACHE_TTL配置）
     - ("dimension_hierarchy",) - 维度层级缓存（默认24小时，可通过DIMENSION_HIERARCHY_CACHE_TTL配置）
+    - ("data_model",) - 数据模型缓存（默认24小时，可通过DATA_MODEL_CACHE_TTL配置）
     - ("user_preferences",) - 用户偏好（永久）
     - ("question_history", user_id) - 问题历史（永久）
     - ("anomaly_knowledge",) - 异常知识库（永久）
@@ -36,6 +37,7 @@ class StoreManager:
     # 缓存过期时间（秒）- 从环境变量读取，提供默认值
     METADATA_TTL = int(os.getenv('METADATA_CACHE_TTL', '3600'))  # 默认1小时
     DIMENSION_HIERARCHY_TTL = int(os.getenv('DIMENSION_HIERARCHY_CACHE_TTL', '86400'))  # 默认24小时
+    DATA_MODEL_TTL = int(os.getenv('DATA_MODEL_CACHE_TTL', '86400'))  # 默认24小时
     
     # Store查询限制（基于LLM上下文长度）
     # 假设每个item平均1KB，40K上下文可以容纳约40个items
@@ -218,6 +220,133 @@ class StoreManager:
             return True
         except Exception as e:
             logger.error(f"保存维度层级失败: {e}")
+            return False
+    
+    # ========== 数据模型缓存 ==========
+    
+    def get_data_model(self, datasource_luid: str) -> Optional[Any]:
+        """
+        获取数据模型缓存
+        
+        Args:
+            datasource_luid: 数据源LUID
+        
+        Returns:
+            DataModel对象，如果不存在或已过期返回None
+        """
+        try:
+            from tableau_assistant.src.models.data_model import DataModel, LogicalTable, LogicalTableRelationship
+            
+            item = self.store.get(
+                namespace=("data_model",),
+                key=datasource_luid
+            )
+            
+            if item and self._is_valid(item, self.DATA_MODEL_TTL):
+                data = item.value
+                
+                # 反序列化为DataModel对象
+                logical_tables = [
+                    LogicalTable(
+                        logicalTableId=t.get("logicalTableId", ""),
+                        caption=t.get("caption", "")
+                    )
+                    for t in data.get("logicalTables", [])
+                ]
+                relationships = [
+                    LogicalTableRelationship(
+                        fromLogicalTableId=r.get("fromLogicalTableId", ""),
+                        toLogicalTableId=r.get("toLogicalTableId", "")
+                    )
+                    for r in data.get("logicalTableRelationships", [])
+                ]
+                
+                return DataModel(
+                    logicalTables=logical_tables,
+                    logicalTableRelationships=relationships
+                )
+            
+            return None
+        except Exception as e:
+            logger.error(f"获取数据模型失败: {e}")
+            return None
+    
+    def put_data_model(
+        self,
+        datasource_luid: str,
+        data_model: Any
+    ) -> bool:
+        """
+        保存数据模型到缓存
+        
+        Args:
+            datasource_luid: 数据源LUID
+            data_model: DataModel对象
+        
+        Returns:
+            是否保存成功
+        """
+        try:
+            from tableau_assistant.src.models.data_model import DataModel
+            
+            # 序列化为字典
+            if isinstance(data_model, DataModel):
+                data = {
+                    "logicalTables": [
+                        {
+                            "logicalTableId": t.logicalTableId,
+                            "caption": t.caption
+                        }
+                        for t in data_model.logicalTables
+                    ],
+                    "logicalTableRelationships": [
+                        {
+                            "fromLogicalTableId": r.fromLogicalTableId,
+                            "toLogicalTableId": r.toLogicalTableId
+                        }
+                        for r in data_model.logicalTableRelationships
+                    ],
+                    "_cached_at": time.time()
+                }
+            else:
+                # 向后兼容：如果传入的是字典，直接使用
+                data = {
+                    **data_model,
+                    "_cached_at": time.time()
+                }
+            
+            self.store.put(
+                namespace=("data_model",),
+                key=datasource_luid,
+                value=data
+            )
+            
+            logger.info(f"数据模型已缓存（24小时）: {datasource_luid}")
+            return True
+        except Exception as e:
+            logger.error(f"保存数据模型失败: {e}")
+            return False
+    
+    def clear_data_model_cache(self, datasource_luid: str) -> bool:
+        """
+        清除指定数据源的数据模型缓存
+        
+        Args:
+            datasource_luid: 数据源LUID
+        
+        Returns:
+            是否清除成功
+        """
+        try:
+            self.store.delete(
+                namespace=("data_model",),
+                key=datasource_luid
+            )
+            
+            logger.info(f"已清除数据模型缓存: {datasource_luid}")
+            return True
+        except Exception as e:
+            logger.error(f"清除数据模型缓存失败: {e}")
             return False
     
     # ========== 用户偏好 ==========

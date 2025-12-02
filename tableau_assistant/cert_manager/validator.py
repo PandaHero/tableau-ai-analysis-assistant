@@ -158,8 +158,9 @@ class CertificateValidator:
             not_before_str = not_before_bytes.decode('ascii')
             not_before = datetime.strptime(not_before_str, '%Y%m%d%H%M%SZ')
             
-            # 计算剩余天数
-            now = datetime.utcnow()
+            # 计算剩余天数（使用 timezone-aware UTC）
+            from datetime import timezone
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             days_remaining = (not_after - now).days
             
             return {

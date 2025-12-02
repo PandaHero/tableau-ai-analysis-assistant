@@ -6,7 +6,7 @@ Manages certificates for the application's own HTTPS servers.
 from typing import Tuple, Optional
 from pathlib import Path
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .models import ApplicationCertConfig
 from .validator import CertificateValidator
@@ -166,9 +166,9 @@ class ApplicationCertificateProvider:
         ).serial_number(
             x509.random_serial_number()
         ).not_valid_before(
-            datetime.utcnow()
+            datetime.now(timezone.utc)
         ).not_valid_after(
-            datetime.utcnow() + timedelta(days=days)
+            datetime.now(timezone.utc) + timedelta(days=days)
         ).add_extension(
             x509.SubjectAlternativeName([
                 x509.DNSName(cn),

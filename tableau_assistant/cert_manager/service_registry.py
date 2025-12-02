@@ -6,7 +6,7 @@ Manages certificates for multiple third-party API services.
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .models import ServiceConfig
 from .fetcher import CertificateFetcher
@@ -160,7 +160,7 @@ class ServiceRegistry:
                 logger.info(f"Existing certificate for {service_id} is valid")
                 
                 # Update service config
-                config.last_validated = datetime.utcnow()
+                config.last_validated = datetime.now(timezone.utc)
                 config.validation_status = "valid"
                 
                 return {
@@ -197,8 +197,8 @@ class ServiceRegistry:
             
             # Update service config
             config.ca_bundle = str(cert_path)
-            config.last_fetched = datetime.utcnow()
-            config.last_validated = datetime.utcnow()
+            config.last_fetched = datetime.now(timezone.utc)
+            config.last_validated = datetime.now(timezone.utc)
             config.validation_status = "valid"
             
             logger.info(f"Successfully fetched and validated certificate for {service_id}")
@@ -254,7 +254,7 @@ class ServiceRegistry:
         validation_result = self.validator.validate_certificate_file(str(cert_path))
         
         # Update service config
-        config.last_validated = datetime.utcnow()
+        config.last_validated = datetime.now(timezone.utc)
         config.validation_status = "valid" if validation_result["valid"] else "invalid"
         
         # Add service_id to result

@@ -218,12 +218,47 @@ class VizQLClient:
             site: Tableau site (optional)
         
         Returns:
-            Metadata dict
+            Metadata dict with 'data' (field list) and 'extraData' (parameters)
         
         Raises:
             VizQLError: On API failure
         """
         url = f"{self.config.base_url}/api/v1/vizql-data-service/read-metadata"
+        
+        headers = {
+            "X-Tableau-Auth": api_key,
+            "Content-Type": "application/json"
+        }
+        if site:
+            headers["X-Tableau-Site"] = site
+        
+        payload = {
+            "datasource": {"datasourceLuid": datasource_luid}
+        }
+        
+        return self._execute_request(url, headers, payload)
+    
+    def get_datasource_model(
+        self,
+        datasource_luid: str,
+        api_key: str,
+        site: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get datasource data model (logical tables and relationships).
+        
+        Args:
+            datasource_luid: Datasource LUID
+            api_key: Tableau auth token
+            site: Tableau site (optional)
+        
+        Returns:
+            Data model dict with 'logicalTables' and 'logicalTableRelationships'
+        
+        Raises:
+            VizQLError: On API failure
+        """
+        url = f"{self.config.base_url}/api/v1/vizql-data-service/get-datasource-model"
         
         headers = {
             "X-Tableau-Auth": api_key,

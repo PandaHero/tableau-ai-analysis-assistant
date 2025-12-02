@@ -116,6 +116,13 @@ from .metadata import (
     Metadata,       # Internal datasource metadata model
 )
 
+# ========== Data Model ==========
+from .data_model import (
+    LogicalTable,
+    LogicalTableRelationship,
+    DataModel,
+)
+
 # ========== Result Models ==========
 from .result import (
     # Enums
@@ -221,6 +228,11 @@ __all__ = [
     # Internal Metadata
     "FieldMetadata",
     "Metadata",
+    
+    # Data Model
+    "LogicalTable",
+    "LogicalTableRelationship",
+    "DataModel",
     
     # Result
     "InsightType",

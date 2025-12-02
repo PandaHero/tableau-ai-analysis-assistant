@@ -140,7 +140,8 @@ async def semantic_map_fields(
         
         if use_cache and result.get("matched_field"):
             try:
-                await store.put(namespace=("semantic_mapping", cache_key), value=result)
+                await store.put(namespace=("semantic_mapping", cache_key), 
+                    value={**result, "_cached_at": time.time()},ttl=3600)  # 1小时
             except Exception as e:
                 logger.warning(f"保存缓存失败: {e}")
         

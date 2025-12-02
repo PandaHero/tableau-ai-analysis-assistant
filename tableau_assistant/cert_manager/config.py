@@ -181,9 +181,17 @@ class SSLConfig:
         获取httpx.Client的初始化参数
         
         Returns:
-            包含verify参数的字典
+            包含verify参数的字典（使用 ssl.SSLContext 避免弃用警告）
         """
-        return {"verify": self.get_verify_param()}
+        if not self.verify_ssl:
+            return {"verify": False}
+        
+        if self.ca_bundle:
+            # 使用 ssl.create_default_context 避免 httpx 弃用警告
+            ssl_context = ssl.create_default_context(cafile=self.ca_bundle)
+            return {"verify": ssl_context}
+        
+        return {"verify": True}
     
     def requests_kwargs(self) -> Dict[str, Any]:
         """

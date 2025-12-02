@@ -16,6 +16,7 @@ from langgraph.runtime import Runtime
 from tableau_assistant.src.models.context import VizQLContext
 from tableau_assistant.src.capabilities.storage.store_manager import StoreManager
 from tableau_assistant.src.models.metadata import Metadata, FieldMetadata
+from tableau_assistant.src.models.data_model import DataModel, LogicalTable, LogicalTableRelationship
 
 if TYPE_CHECKING:
     from tableau_assistant.src.capabilities.date_processing.manager import DateManager
@@ -87,6 +88,33 @@ async def get_datasource_metadata(
         dimensions = [f["name"] for f in standardized_fields if f["role"].upper() == "DIMENSION"]
         measures = [f["name"] for f in standardized_fields if f["role"].upper() == "MEASURE"]
         
+        # 解析数据模型（如果存在）
+        data_model_dict = metadata.get("data_model")
+        data_model = None
+        if data_model_dict:
+            try:
+                logical_tables = [
+                    LogicalTable(
+                        logicalTableId=t.get("logicalTableId", ""),
+                        caption=t.get("caption", "")
+                    )
+                    for t in data_model_dict.get("logicalTables", [])
+                ]
+                relationships = [
+                    LogicalTableRelationship(
+                        fromLogicalTableId=r.get("fromLogicalTable", {}).get("logicalTableId", ""),
+                        toLogicalTableId=r.get("toLogicalTable", {}).get("logicalTableId", "")
+                    )
+                    for r in data_model_dict.get("logicalTableRelationships", [])
+                ]
+                data_model = DataModel(
+                    logicalTables=logical_tables,
+                    logicalTableRelationships=relationships
+                )
+                logger.info(f"解析数据模型: {len(logical_tables)} 个逻辑表, {len(relationships)} 个关系")
+            except Exception as e:
+                logger.warning(f"解析数据模型失败: {e}")
+        
         return {
             "datasource_luid": datasource_luid,
             "datasource_name": metadata.get("datasource_name", "Unknown"),
@@ -97,6 +125,7 @@ async def get_datasource_metadata(
             "field_names": [f["name"] for f in standardized_fields],
             "dimensions": dimensions,
             "measures": measures,
+            "data_model": data_model,  # 数据模型
             "raw_response": metadata.get("raw_graphql_response")  # 保留原始响应用于调试
         }
     
@@ -158,6 +187,7 @@ class MetadataManager:
             fields=field_metadata_list,
             field_count=len(field_metadata_list),
             dimension_hierarchy=raw_metadata.get("dimension_hierarchy"),
+            data_model=raw_metadata.get("data_model"),  # 数据模型
             raw_response=raw_metadata.get("raw_response")
         )
         
@@ -573,6 +603,163 @@ class MetadataManager:
         # 清除元数据缓存
         logger.info(f"清除缓存: {datasource_luid}")
         return True
+    
+    async def get_data_model_async(
+        self,
+        datasource_luid: Optional[str] = None,
+        use_cache: bool = True
+    ) -> Optional[DataModel]:
+        """
+        获取数据源数据模型（异步版本）
+        
+        数据模型包含逻辑表和表之间的关系，来自 VizQL /get-datasource-model API。
+        
+        缓存策略：
+        - 使用 SQLite 缓存数据模型
+        - 默认 24 小时 TTL
+        - 支持强制刷新
+        
+        Args:
+            datasource_luid: 数据源 LUID（可选，默认从 context 获取）
+            use_cache: 是否使用缓存（默认 True）
+        
+        Returns:
+            DataModel 对象，如果获取失败返回 None
+        """
+        # 获取 datasource_luid
+        if datasource_luid is None:
+            datasource_luid = self.runtime.context.datasource_luid
+        
+        # 1. 尝试从缓存获取
+        if use_cache:
+            cached_model = self.store_manager.get_data_model(datasource_luid)
+            if cached_model:
+                logger.info(f"从缓存获取数据模型: {datasource_luid}")
+                return cached_model
+        
+        # 2. 从 VizQL API 获取数据模型
+        logger.info(f"从 VizQL API 获取数据模型: {datasource_luid}")
+        try:
+            from tableau_assistant.src.bi_platforms.tableau.metadata_service import TableauMetadataService
+            from tableau_assistant.src.models.context import get_tableau_config
+            
+            # 获取 Tableau 配置
+            tableau_config = get_tableau_config(self.store_manager)
+            
+            # 创建元数据服务
+            service = TableauMetadataService(
+                domain=tableau_config["tableau_domain"],
+                site=tableau_config["tableau_site"]
+            )
+            
+            # 获取数据模型
+            data_model = service.get_data_model(
+                datasource_luid=datasource_luid,
+                api_key=tableau_config["tableau_token"]
+            )
+            
+            if data_model:
+                # 3. 保存到缓存
+                self.store_manager.put_data_model(datasource_luid, data_model)
+                
+                logger.info(
+                    f"数据模型已获取并缓存: {datasource_luid}, "
+                    f"逻辑表数: {len(data_model.logicalTables)}, "
+                    f"关系数: {len(data_model.logicalTableRelationships)}"
+                )
+            
+            return data_model
+            
+        except Exception as e:
+            logger.warning(f"获取数据模型失败，启用优雅降级: {e}")
+            logger.info(
+                f"优雅降级: 数据模型 API 不可用，将继续使用字段元数据。"
+                f"功能影响: 无法获取逻辑表名称和表关系信息。"
+            )
+            # 优雅降级：返回 None，允许继续使用字段元数据
+            # 调用方应检查返回值并相应处理
+            return None
+    
+    async def get_metadata_with_data_model_async(
+        self,
+        use_cache: bool = True,
+        enhance: bool = True
+    ) -> Metadata:
+        """
+        获取元数据并尝试关联数据模型（异步版本）
+        
+        这是一个便捷方法，会：
+        1. 获取元数据
+        2. 尝试获取数据模型
+        3. 如果数据模型可用，将 logicalTableCaption 映射到字段
+        4. 如果数据模型不可用，优雅降级继续使用字段元数据
+        
+        Args:
+            use_cache: 是否使用缓存
+            enhance: 是否增强元数据
+        
+        Returns:
+            Metadata 对象（可能包含或不包含数据模型信息）
+        """
+        # 1. 获取元数据
+        metadata = await self.get_metadata_async(use_cache=use_cache, enhance=enhance)
+        
+        # 2. 尝试获取数据模型
+        data_model = await self.get_data_model_async(use_cache=use_cache)
+        
+        if data_model:
+            # 3. 将数据模型关联到元数据
+            metadata.data_model = data_model
+            
+            # 4. 映射 logicalTableCaption 到字段
+            for field in metadata.fields:
+                if field.logicalTableId:
+                    table_caption = data_model.get_table_caption(field.logicalTableId)
+                    if table_caption:
+                        field.logicalTableCaption = table_caption
+            
+            logger.info(
+                f"数据模型已关联到元数据: "
+                f"{len(data_model.logicalTables)} 个逻辑表, "
+                f"{len(data_model.logicalTableRelationships)} 个关系"
+            )
+        else:
+            # 5. 优雅降级：记录日志但继续
+            logger.info(
+                f"数据模型不可用，继续使用字段元数据。"
+                f"字段的 logicalTableCaption 将为空。"
+            )
+        
+        return metadata
+    
+    def get_data_model(
+        self,
+        datasource_luid: Optional[str] = None,
+        use_cache: bool = True
+    ) -> Optional[DataModel]:
+        """
+        获取数据源数据模型（同步版本）
+        
+        Args:
+            datasource_luid: 数据源 LUID（可选，默认从 context 获取）
+            use_cache: 是否使用缓存（默认 True）
+        
+        Returns:
+            DataModel 对象，如果获取失败返回 None
+        """
+        import asyncio
+        
+        try:
+            loop = asyncio.get_running_loop()
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    asyncio.run,
+                    self.get_data_model_async(datasource_luid, use_cache)
+                )
+                return future.result()
+        except RuntimeError:
+            return asyncio.run(self.get_data_model_async(datasource_luid, use_cache))
 
 
 # ============= 导出 =============

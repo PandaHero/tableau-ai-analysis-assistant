@@ -8,7 +8,10 @@
 - Metadata: 数据源的完整元数据
 """
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Any, Literal, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tableau_assistant.src.models.data_model import DataModel
 
 
 class FieldMetadata(BaseModel):
@@ -16,19 +19,33 @@ class FieldMetadata(BaseModel):
     字段元数据模型
     
     描述单个字段的详细信息，包括基本属性、统计信息、维度层级推断结果等。
+    
+    支持两种数据来源：
+    1. GraphQL API（原有）：使用 name, role, dataType, aggregation 等字段
+    2. VizQL API（新增）：使用 fieldName, fieldCaption, columnClass, logicalTableId 等字段
+    
+    后向兼容性：
+    - name 字段保持必填，用于标识字段
+    - 新增字段均为可选，不影响现有代码
     """
     
-    # 基本信息
-    name: str = Field(..., description="字段名称")
+    # 基本信息（GraphQL API 兼容）
+    name: str = Field(..., description="字段名称（GraphQL: name, VizQL: fieldName）")
     fieldCaption: str = Field(..., description="字段显示名称")
     role: Literal["dimension", "measure"] = Field(..., description="字段角色")
     dataType: str = Field(..., description="数据类型：DATE/DATETIME/STRING/INTEGER/REAL等")
     
-    # 可选信息
+    # 可选信息（GraphQL API 兼容）
     dataCategory: Optional[str] = Field(None, description="数据类别")
-    aggregation: Optional[str] = Field(None, description="聚合方式")
+    aggregation: Optional[str] = Field(None, description="聚合方式（GraphQL: aggregation, VizQL: defaultAggregation）")
     formula: Optional[str] = Field(None, description="计算公式")
     description: Optional[str] = Field(None, description="字段描述")
+    
+    # VizQL API 新增字段
+    fieldName: Optional[str] = Field(None, description="底层数据库列名（VizQL API）")
+    columnClass: Optional[str] = Field(None, description="字段类型：COLUMN/BIN/GROUP/CALCULATION/TABLE_CALCULATION（VizQL API）")
+    logicalTableId: Optional[str] = Field(None, description="所属逻辑表ID（VizQL API）")
+    logicalTableCaption: Optional[str] = Field(None, description="所属逻辑表名称（从数据模型映射）")
     
     # 统计信息
     sample_values: Optional[List[str]] = Field(None, description="样本值")
@@ -49,6 +66,52 @@ class FieldMetadata(BaseModel):
         frozen=False,  # 允许修改（用于添加维度层级推断结果和valid_max_date）
         extra="allow"  # 允许额外字段
     )
+    
+    @classmethod
+    def from_vizql(
+        cls,
+        field_name: str,
+        field_caption: str,
+        data_type: str,
+        role: Literal["dimension", "measure"],
+        default_aggregation: Optional[str] = None,
+        column_class: Optional[str] = None,
+        formula: Optional[str] = None,
+        logical_table_id: Optional[str] = None,
+        logical_table_caption: Optional[str] = None,
+        **kwargs
+    ) -> "FieldMetadata":
+        """
+        从 VizQL API 响应创建 FieldMetadata。
+        
+        Args:
+            field_name: 底层数据库列名
+            field_caption: 字段显示名称
+            data_type: 数据类型
+            role: 字段角色（从 defaultAggregation 推断）
+            default_aggregation: 默认聚合方式
+            column_class: 字段类型
+            formula: 计算公式
+            logical_table_id: 逻辑表ID
+            logical_table_caption: 逻辑表名称
+            **kwargs: 其他可选字段
+        
+        Returns:
+            FieldMetadata 实例
+        """
+        return cls(
+            name=field_name,
+            fieldCaption=field_caption,
+            dataType=data_type,
+            role=role,
+            aggregation=default_aggregation,
+            fieldName=field_name,
+            columnClass=column_class,
+            formula=formula,
+            logicalTableId=logical_table_id,
+            logicalTableCaption=logical_table_caption,
+            **kwargs
+        )
 
 
 
@@ -72,6 +135,9 @@ class Metadata(BaseModel):
     
     # 维度层级（可选）
     dimension_hierarchy: Optional[Dict[str, Any]] = Field(None, description="维度层级推断结果")
+    
+    # 数据模型（可选）- 包含逻辑表和关系
+    data_model: Optional[Any] = Field(None, description="数据模型（逻辑表和关系）")
     
     # 原始响应（调试用）
     raw_response: Optional[Dict[str, Any]] = Field(None, description="原始GraphQL响应")
