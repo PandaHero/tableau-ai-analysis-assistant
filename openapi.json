@@ -3,7 +3,278 @@
   "info": {
     "title": "VizQL Data Service",
     "description": "An API to query Tableau published data sources",
-    "version": "1.0"
+    "version": "1.0",
+    "x-llm-guide": {
+      "description": "Complete guide for LLM to generate correct VizQL Data Service API queries. This document provides field type selection rules, calculation syntax, and complete examples.",
+      
+      "field_type_decision_guide": {
+        "description": "IMPORTANT: Use this decision tree to select the correct field type",
+        "rules": [
+          {
+            "condition": "Simple grouping/categorization (no aggregation needed)",
+            "use": "DimensionField",
+            "example": {"fieldCaption": "Category"}
+          },
+          {
+            "condition": "Simple aggregation (SUM, AVG, COUNT, MIN, MAX, MEDIAN, STDEV, VAR)",
+            "use": "MeasureField with function property",
+            "example": {"fieldCaption": "Sales", "function": "SUM"}
+          },
+          {
+            "condition": "COUNTD (distinct count) or LOD expressions (FIXED, INCLUDE, EXCLUDE)",
+            "use": "CalculatedField with calculation property",
+            "example": {"fieldCaption": "unique_customers", "calculation": "COUNTD([Customer ID])"}
+          },
+          {
+            "condition": "Table calculations (WINDOW_*, RUNNING_*, RANK*, LOOKUP, INDEX, FIRST, LAST, SIZE, TOTAL)",
+            "use": "TableCalcField with tableCalculation object, set tableCalcType to CUSTOM",
+            "example": {
+              "fieldCaption": "running_total",
+              "calculation": "RUNNING_SUM(SUM([Sales]))",
+              "tableCalculation": {
+                "tableCalcType": "CUSTOM",
+                "dimensions": [{"fieldCaption": "Date"}]
+              }
+            }
+          }
+        ]
+      },
+      
+      "aggregation_functions": {
+        "description": "Basic aggregation functions - Use MeasureField with function property",
+        "supported_functions": ["SUM", "AVG", "COUNT", "MIN", "MAX", "MEDIAN", "STDEV", "VAR"],
+        "note": "COUNTD is NOT supported in MeasureField, use CalculatedField instead",
+        "examples": [
+          {"fieldCaption": "Sales", "function": "SUM"},
+          {"fieldCaption": "Profit", "function": "AVG"},
+          {"fieldCaption": "Order ID", "function": "COUNT"}
+        ]
+      },
+      
+      "lod_expressions": {
+        "description": "Level of Detail expressions - Use CalculatedField with calculation property",
+        "types": {
+          "FIXED": {
+            "syntax": "{FIXED [dim1], [dim2] : AGG([measure])}",
+            "description": "Compute at specified dimension level, ignoring view dimensions",
+            "examples": [
+              "{FIXED : COUNTD([Customer])} // Global distinct count",
+              "{FIXED [Category] : SUM([Sales])} // Sum per category regardless of view"
+            ]
+          },
+          "INCLUDE": {
+            "syntax": "{INCLUDE [dim] : AGG([measure])}",
+            "description": "Add extra dimensions to view level calculation (finer granularity)",
+            "example": "{INCLUDE [Product] : COUNTD([Customer])}"
+          },
+          "EXCLUDE": {
+            "syntax": "{EXCLUDE [dim] : AGG([measure])}",
+            "description": "Remove dimensions from view level calculation (coarser granularity)",
+            "example": "{EXCLUDE [Region] : AVG([Profit])}"
+          }
+        }
+      },
+      
+      "table_calculations": {
+        "description": "Table calculations - Use TableCalcField with tableCalculation object. MUST set tableCalcType to CUSTOM for window functions.",
+        "required_structure": {
+          "fieldCaption": "string - name for the calculated field",
+          "calculation": "string - the table calculation formula",
+          "tableCalculation": {
+            "tableCalcType": "CUSTOM",
+            "dimensions": [{"fieldCaption": "dimension_to_compute_along"}]
+          }
+        },
+        "position_functions": {
+          "FIRST()": "Returns rows from current to first row (<=0). First row=0, second=-1",
+          "LAST()": "Returns rows from current to last row (>=0). Last row=0, second-to-last=1",
+          "INDEX()": "Returns current row index starting from 1",
+          "SIZE()": "Returns total rows in partition (same for all rows)"
+        },
+        "lookup_functions": {
+          "LOOKUP(expr, offset)": "Returns value at offset rows. -1=previous, 1=next. Returns NULL if out of range",
+          "PREVIOUS_VALUE(expr)": "Returns previous row's calculation result. First row returns expr value"
+        },
+        "running_functions": {
+          "RUNNING_SUM(expr)": "Cumulative sum from first row to current",
+          "RUNNING_AVG(expr)": "Cumulative average from first row to current",
+          "RUNNING_MIN(expr)": "Cumulative minimum from first row to current",
+          "RUNNING_MAX(expr)": "Cumulative maximum from first row to current",
+          "RUNNING_COUNT(expr)": "Cumulative count from first row to current"
+        },
+        "window_functions": {
+          "description": "Window functions compute over a range of rows. start/end: negative=backward, positive=forward, 0=current, omit=entire partition",
+          "WINDOW_SUM(expr, [start, end])": "Sum within window",
+          "WINDOW_AVG(expr, [start, end])": "Average within window",
+          "WINDOW_MIN(expr, [start, end])": "Minimum within window",
+          "WINDOW_MAX(expr, [start, end])": "Maximum within window",
+          "WINDOW_COUNT(expr, [start, end])": "Count within window",
+          "WINDOW_MEDIAN(expr, [start, end])": "Median within window",
+          "WINDOW_STDEV(expr, [start, end])": "Sample standard deviation within window",
+          "WINDOW_PERCENTILE(expr, percentile, [start, end])": "Percentile within window (0-1)"
+        },
+        "rank_functions": {
+          "RANK(expr, ['asc'|'desc'])": "Competition rank. Ties get same rank, next skips. [100,80,80,60]->[1,2,2,4]",
+          "RANK_DENSE(expr, ['asc'|'desc'])": "Dense rank. Ties get same rank, next doesn't skip. [100,80,80,60]->[1,2,2,3]",
+          "RANK_MODIFIED(expr, ['asc'|'desc'])": "Modified competition. Ties get highest rank. [100,80,80,60]->[1,3,3,4]",
+          "RANK_UNIQUE(expr, ['asc'|'desc'])": "Unique rank. Even ties get different ranks. [100,80,80,60]->[1,2,3,4]",
+          "RANK_PERCENTILE(expr, ['asc'|'desc'])": "Percentile rank (0-1)"
+        },
+        "total_function": {
+          "TOTAL(expr)": "Returns partition total (same for all rows). Equivalent to WINDOW_SUM(expr)"
+        }
+      },
+      
+      "complete_query_examples": {
+        "description": "Complete API request examples for common use cases",
+        "simple_aggregation": {
+          "description": "Sum sales by category",
+          "request": {
+            "datasource": {"datasourceName": "Sample - Superstore"},
+            "query": {
+              "fields": [
+                {"fieldCaption": "Category"},
+                {"fieldCaption": "Sales", "function": "SUM"}
+              ]
+            }
+          }
+        },
+        "distinct_count": {
+          "description": "Count unique customers (COUNTD requires CalculatedField)",
+          "request": {
+            "datasource": {"datasourceName": "Sample - Superstore"},
+            "query": {
+              "fields": [
+                {"fieldCaption": "Category"},
+                {"fieldCaption": "unique_customers", "calculation": "COUNTD([Customer ID])"}
+              ]
+            }
+          }
+        },
+        "lod_fixed": {
+          "description": "Calculate category total regardless of other dimensions",
+          "request": {
+            "datasource": {"datasourceName": "Sample - Superstore"},
+            "query": {
+              "fields": [
+                {"fieldCaption": "Category"},
+                {"fieldCaption": "Sub-Category"},
+                {"fieldCaption": "Sales", "function": "SUM"},
+                {"fieldCaption": "category_total", "calculation": "{FIXED [Category] : SUM([Sales])}"}
+              ]
+            }
+          }
+        },
+        "running_total": {
+          "description": "Cumulative sales over time",
+          "request": {
+            "datasource": {"datasourceName": "Sample - Superstore"},
+            "query": {
+              "fields": [
+                {"fieldCaption": "Order Date"},
+                {"fieldCaption": "Sales", "function": "SUM"},
+                {
+                  "fieldCaption": "cumulative_sales",
+                  "calculation": "RUNNING_SUM(SUM([Sales]))",
+                  "tableCalculation": {
+                    "tableCalcType": "CUSTOM",
+                    "dimensions": [{"fieldCaption": "Order Date"}]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "moving_average": {
+          "description": "3-period moving average",
+          "request": {
+            "datasource": {"datasourceName": "Sample - Superstore"},
+            "query": {
+              "fields": [
+                {"fieldCaption": "Order Date"},
+                {"fieldCaption": "Sales", "function": "SUM"},
+                {
+                  "fieldCaption": "moving_avg_3",
+                  "calculation": "WINDOW_AVG(SUM([Sales]), -2, 0)",
+                  "tableCalculation": {
+                    "tableCalcType": "CUSTOM",
+                    "dimensions": [{"fieldCaption": "Order Date"}]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "percent_of_total": {
+          "description": "Each row as percentage of total",
+          "request": {
+            "datasource": {"datasourceName": "Sample - Superstore"},
+            "query": {
+              "fields": [
+                {"fieldCaption": "Category"},
+                {"fieldCaption": "Sales", "function": "SUM"},
+                {
+                  "fieldCaption": "pct_of_total",
+                  "calculation": "SUM([Sales]) / TOTAL(SUM([Sales]))",
+                  "tableCalculation": {
+                    "tableCalcType": "CUSTOM",
+                    "dimensions": [{"fieldCaption": "Category"}]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "rank_products": {
+          "description": "Rank products by sales",
+          "request": {
+            "datasource": {"datasourceName": "Sample - Superstore"},
+            "query": {
+              "fields": [
+                {"fieldCaption": "Product Name"},
+                {"fieldCaption": "Sales", "function": "SUM"},
+                {
+                  "fieldCaption": "sales_rank",
+                  "calculation": "RANK(SUM([Sales]), 'desc')",
+                  "tableCalculation": {
+                    "tableCalcType": "CUSTOM",
+                    "dimensions": [{"fieldCaption": "Product Name"}]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "year_over_year_growth": {
+          "description": "Compare to previous period (assuming monthly data)",
+          "request": {
+            "datasource": {"datasourceName": "Sample - Superstore"},
+            "query": {
+              "fields": [
+                {"fieldCaption": "Order Date"},
+                {"fieldCaption": "Sales", "function": "SUM"},
+                {
+                  "fieldCaption": "prev_period_sales",
+                  "calculation": "LOOKUP(SUM([Sales]), -1)",
+                  "tableCalculation": {
+                    "tableCalcType": "CUSTOM",
+                    "dimensions": [{"fieldCaption": "Order Date"}]
+                  }
+                },
+                {
+                  "fieldCaption": "growth_rate",
+                  "calculation": "(SUM([Sales]) - LOOKUP(SUM([Sales]), -1)) / ABS(LOOKUP(SUM([Sales]), -1))",
+                  "tableCalculation": {
+                    "tableCalcType": "CUSTOM",
+                    "dimensions": [{"fieldCaption": "Order Date"}]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
   },
   "servers": [
     {
@@ -285,7 +556,7 @@
         "properties": {
           "calculation": {
             "type": "string",
-            "description": "A Tableau calculation that will be returned as a Field in the query."
+            "description": "A Tableau calculation expression. Supports aggregation functions (SUM, AVG, COUNT, COUNTD, MIN, MAX, MEDIAN, STDEV, VAR) and LOD expressions (FIXED, INCLUDE, EXCLUDE). Examples: 'SUM([Sales])', '{FIXED [Category] : SUM([Sales])}', '{INCLUDE [Product] : COUNTD([Customer])}', '{EXCLUDE [Region] : AVG([Profit])}'."
           },
           "fieldCaption": {},
           "fieldAlias": {},
@@ -324,6 +595,7 @@
           }
         ],
         "type": "object",
+        "description": "A field with table calculation. Use tableCalcType 'CUSTOM' with calculation string for window functions like WINDOW_SUM, WINDOW_AVG, RANK, INDEX, LOOKUP, FIRST, LAST, SIZE, RUNNING_SUM. Example: {fieldCaption: 'window_sum', calculation: 'WINDOW_SUM(SUM([Sales]))', tableCalculation: {tableCalcType: 'CUSTOM', dimensions: [{fieldCaption: 'Category'}]}}",
         "required": [
           "tableCalculation"
         ],
@@ -333,7 +605,8 @@
             "$ref": "#/components/schemas/Function"
           },
           "calculation": {
-            "type": "string"
+            "type": "string",
+            "description": "For CUSTOM tableCalcType, use Tableau window functions: WINDOW_SUM(expr), WINDOW_AVG(expr, start, end), RANK(expr), INDEX(), LOOKUP(expr, offset), FIRST(), LAST(), SIZE(), RUNNING_SUM(expr), RUNNING_AVG(expr)."
           },
           "tableCalculation": {
             "$ref": "#/components/schemas/TableCalcSpecification"
@@ -354,6 +627,7 @@
       },
       "TableCalcSpecification": {
         "type": "object",
+        "description": "Table calculation specification. Use CUSTOM type for window functions (WINDOW_SUM, RANK, INDEX, etc.) with calculation string. Use predefined types (RUNNING_TOTAL, PERCENT_OF_TOTAL, etc.) for built-in calculations.",
         "required": [
           "tableCalcType",
           "dimensions"
@@ -361,6 +635,7 @@
         "properties": {
           "tableCalcType": {
             "type": "string",
+            "description": "CUSTOM: Use with calculation string for window functions. RUNNING_TOTAL: Running sum/avg/min/max. PERCENT_OF_TOTAL: Percentage of total. DIFFERENCE_FROM/PERCENT_DIFFERENCE_FROM: Compare to previous/next/first/last. RANK: Ranking. PERCENTILE: Percentile ranking. MOVING_CALCULATION: Moving average/sum.",
             "enum": [
               "CUSTOM",
               "NESTED",
@@ -1417,6 +1692,516 @@
         "properties": {
           "logicalTableId": {
             "type": "string"
+          }
+        }
+      },
+      "TableCalculationFunctionReference": {
+        "type": "object",
+        "description": "Complete Tableau table calculation function reference. All functions must be used in TableCalcField with tableCalcType set to CUSTOM.",
+        "properties": {
+          "position_functions": {
+            "$ref": "#/components/schemas/PositionFunctions"
+          },
+          "lookup_functions": {
+            "$ref": "#/components/schemas/LookupFunctions"
+          },
+          "running_functions": {
+            "$ref": "#/components/schemas/RunningFunctions"
+          },
+          "window_functions": {
+            "$ref": "#/components/schemas/WindowFunctions"
+          },
+          "rank_functions": {
+            "$ref": "#/components/schemas/RankFunctions"
+          },
+          "total_function": {
+            "$ref": "#/components/schemas/TotalFunction"
+          }
+        }
+      },
+      "PositionFunctions": {
+        "type": "object",
+        "description": "Position functions - Return row position information within partition, no parameters required",
+        "properties": {
+          "FIRST": {
+            "type": "object",
+            "description": "Returns rows from current to first row in partition. First row=0, second=-1, always<=0",
+            "properties": {
+              "syntax": { "type": "string", "const": "FIRST()" },
+              "parameters": { "type": "array", "maxItems": 0 },
+              "returns": { "type": "string", "const": "integer" },
+              "example": { "type": "string", "example": "IF FIRST() = 0 THEN 'First' ELSE 'Other' END" }
+            }
+          },
+          "LAST": {
+            "type": "object",
+            "description": "Returns rows from current to last row in partition. Last row=0, second-to-last=1, always>=0",
+            "properties": {
+              "syntax": { "type": "string", "const": "LAST()" },
+              "parameters": { "type": "array", "maxItems": 0 },
+              "returns": { "type": "string", "const": "integer" },
+              "example": { "type": "string", "example": "IF LAST() = 0 THEN 'Last' ELSE 'Other' END" }
+            }
+          },
+          "INDEX": {
+            "type": "object",
+            "description": "Returns current row index in partition, starting from 1. First row=1, second=2",
+            "properties": {
+              "syntax": { "type": "string", "const": "INDEX()" },
+              "parameters": { "type": "array", "maxItems": 0 },
+              "returns": { "type": "string", "const": "integer" },
+              "example": { "type": "string", "example": "IF INDEX() <= 10 THEN 'Top 10' ELSE 'Other' END" }
+            }
+          },
+          "SIZE": {
+            "type": "object",
+            "description": "Returns total rows in partition, same value for all rows",
+            "properties": {
+              "syntax": { "type": "string", "const": "SIZE()" },
+              "parameters": { "type": "array", "maxItems": 0 },
+              "returns": { "type": "string", "const": "integer" },
+              "example": { "type": "string", "example": "INDEX() & ' / ' & SIZE()" }
+            }
+          }
+        }
+      },
+      "LookupFunctions": {
+        "type": "object",
+        "description": "Lookup functions - Get values from other rows",
+        "properties": {
+          "LOOKUP": {
+            "type": "object",
+            "description": "Returns expression value at specified row offset from current row. Returns NULL if target row does not exist",
+            "properties": {
+              "syntax": { "type": "string", "const": "LOOKUP(expression, offset)" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression to lookup, e.g. SUM([Sales])" },
+                  { "name": "offset", "type": "integer", "required": true, "description": "Relative offset: -1=previous row, 1=next row, 0=current row" }
+                ]
+              },
+              "returns": { "type": "string", "const": "Same type as expression" },
+              "null_handling": { "type": "string", "const": "Returns NULL if target row does not exist" },
+              "examples": {
+                "type": "array",
+                "items": [
+                  { "code": "LOOKUP(SUM([Sales]), -1)", "description": "Get previous row sales" },
+                  { "code": "LOOKUP(SUM([Sales]), 1)", "description": "Get next row sales" },
+                  { "code": "LOOKUP(SUM([Sales]), FIRST())", "description": "Get first row sales" },
+                  { "code": "SUM([Sales]) - LOOKUP(SUM([Sales]), -1)", "description": "Period-over-period difference" }
+                ]
+              }
+            }
+          },
+          "PREVIOUS_VALUE": {
+            "type": "object",
+            "description": "Returns previous row calculation result for recursive calculations. First row returns parameter value",
+            "properties": {
+              "syntax": { "type": "string", "const": "PREVIOUS_VALUE(expression)" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression", "type": "any", "required": true, "description": "Initial value for first row, subsequent rows use previous row calculation result" }
+                ]
+              },
+              "returns": { "type": "string", "const": "Same type as expression" },
+              "examples": {
+                "type": "array",
+                "items": [
+                  { "code": "PREVIOUS_VALUE(0) + SUM([Sales])", "description": "Recursive cumulative sum" },
+                  { "code": "PREVIOUS_VALUE(1) * (1 + [Growth Rate])", "description": "Compound growth calculation" }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "RunningFunctions": {
+        "type": "object",
+        "description": "Running functions - Cumulative calculations from first row to current row",
+        "properties": {
+          "RUNNING_SUM": {
+            "type": "object",
+            "description": "Returns cumulative sum from first row to current row",
+            "properties": {
+              "syntax": { "type": "string", "const": "RUNNING_SUM(expression)" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression for cumulative sum" }
+                ]
+              },
+              "returns": { "type": "string", "const": "number" },
+              "example": { "type": "string", "example": "RUNNING_SUM(SUM([Sales]))" },
+              "sample_output": { "input": [100, 200, 150], "output": [100, 300, 450] }
+            }
+          },
+          "RUNNING_AVG": {
+            "type": "object",
+            "description": "Returns cumulative average from first row to current row",
+            "properties": {
+              "syntax": { "type": "string", "const": "RUNNING_AVG(expression)" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression", "type": "aggregate", "required": true }
+                ]
+              },
+              "returns": { "type": "string", "const": "number" },
+              "example": { "type": "string", "example": "RUNNING_AVG(SUM([Sales]))" },
+              "sample_output": { "input": [100, 200, 150], "output": [100, 150, 150] }
+            }
+          },
+          "RUNNING_MIN": {
+            "type": "object",
+            "description": "Returns cumulative minimum from first row to current row",
+            "properties": {
+              "syntax": { "type": "string", "const": "RUNNING_MIN(expression)" },
+              "returns": { "type": "string", "const": "number" },
+              "example": { "type": "string", "example": "RUNNING_MIN(SUM([Sales]))" }
+            }
+          },
+          "RUNNING_MAX": {
+            "type": "object",
+            "description": "Returns cumulative maximum from first row to current row",
+            "properties": {
+              "syntax": { "type": "string", "const": "RUNNING_MAX(expression)" },
+              "returns": { "type": "string", "const": "number" },
+              "example": { "type": "string", "example": "RUNNING_MAX(SUM([Sales]))" }
+            }
+          },
+          "RUNNING_COUNT": {
+            "type": "object",
+            "description": "Returns cumulative count from first row to current row (non-null values)",
+            "properties": {
+              "syntax": { "type": "string", "const": "RUNNING_COUNT(expression)" },
+              "returns": { "type": "string", "const": "integer" },
+              "example": { "type": "string", "example": "RUNNING_COUNT(SUM([Sales]))" }
+            }
+          }
+        }
+      },
+      "WindowFunctions": {
+        "type": "object",
+        "description": "Window functions - Aggregate calculations within specified row range. start/end: negative=backward, positive=forward, 0=current, omit=entire partition",
+        "properties": {
+          "WINDOW_SUM": {
+            "type": "object",
+            "description": "Returns sum of expression values within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_SUM(expression, [start, end])" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression to sum" },
+                  { "name": "start", "type": "integer", "required": false, "default": "FIRST()", "description": "Window start offset" },
+                  { "name": "end", "type": "integer", "required": false, "default": "LAST()", "description": "Window end offset" }
+                ]
+              },
+              "returns": { "type": "string", "const": "number" },
+              "examples": {
+                "type": "array",
+                "items": [
+                  { "code": "WINDOW_SUM(SUM([Sales]))", "description": "Sum of entire partition" },
+                  { "code": "WINDOW_SUM(SUM([Sales]), -2, 0)", "description": "3-period moving sum (previous 2 rows + current)" },
+                  { "code": "WINDOW_SUM(SUM([Sales]), 0, 2)", "description": "Sum from current row to next 2 rows" }
+                ]
+              },
+              "edge_cases": { "type": "string", "const": "Window automatically truncates to partition boundary when exceeding" }
+            }
+          },
+          "WINDOW_AVG": {
+            "type": "object",
+            "description": "Returns average of expression values within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_AVG(expression, [start, end])" },
+              "returns": { "type": "string", "const": "number" },
+              "example": { "type": "string", "example": "WINDOW_AVG(SUM([Sales]), -2, 0) // 3-period moving average" }
+            }
+          },
+          "WINDOW_MIN": {
+            "type": "object",
+            "description": "Returns minimum of expression values within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_MIN(expression, [start, end])" },
+              "returns": { "type": "string", "const": "number" }
+            }
+          },
+          "WINDOW_MAX": {
+            "type": "object",
+            "description": "Returns maximum of expression values within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_MAX(expression, [start, end])" },
+              "returns": { "type": "string", "const": "number" }
+            }
+          },
+          "WINDOW_COUNT": {
+            "type": "object",
+            "description": "Returns count of non-null values within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_COUNT(expression, [start, end])" },
+              "returns": { "type": "string", "const": "integer" }
+            }
+          },
+          "WINDOW_MEDIAN": {
+            "type": "object",
+            "description": "Returns median of expression values within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_MEDIAN(expression, [start, end])" },
+              "returns": { "type": "string", "const": "number" }
+            }
+          },
+          "WINDOW_STDEV": {
+            "type": "object",
+            "description": "Returns sample standard deviation within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_STDEV(expression, [start, end])" },
+              "returns": { "type": "string", "const": "number" }
+            }
+          },
+          "WINDOW_STDEVP": {
+            "type": "object",
+            "description": "Returns population standard deviation within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_STDEVP(expression, [start, end])" },
+              "returns": { "type": "string", "const": "number" }
+            }
+          },
+          "WINDOW_VAR": {
+            "type": "object",
+            "description": "Returns sample variance within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_VAR(expression, [start, end])" },
+              "returns": { "type": "string", "const": "number" }
+            }
+          },
+          "WINDOW_VARP": {
+            "type": "object",
+            "description": "Returns population variance within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_VARP(expression, [start, end])" },
+              "returns": { "type": "string", "const": "number" }
+            }
+          },
+          "WINDOW_PERCENTILE": {
+            "type": "object",
+            "description": "Returns specified percentile within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_PERCENTILE(expression, percentile, [start, end])" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression", "type": "aggregate", "required": true },
+                  { "name": "percentile", "type": "number", "required": true, "description": "Percentile value 0-1, e.g. 0.5 for median" },
+                  { "name": "start", "type": "integer", "required": false },
+                  { "name": "end", "type": "integer", "required": false }
+                ]
+              },
+              "returns": { "type": "string", "const": "number" },
+              "example": { "type": "string", "example": "WINDOW_PERCENTILE(SUM([Sales]), 0.75) // 75th percentile" }
+            }
+          },
+          "WINDOW_COVAR": {
+            "type": "object",
+            "description": "Returns sample covariance of two expressions within window",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_COVAR(expression1, expression2, [start, end])" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression1", "type": "aggregate", "required": true },
+                  { "name": "expression2", "type": "aggregate", "required": true },
+                  { "name": "start", "type": "integer", "required": false },
+                  { "name": "end", "type": "integer", "required": false }
+                ]
+              },
+              "returns": { "type": "string", "const": "number" }
+            }
+          },
+          "WINDOW_CORR": {
+            "type": "object",
+            "description": "Returns Pearson correlation coefficient of two expressions within window (-1 to 1)",
+            "properties": {
+              "syntax": { "type": "string", "const": "WINDOW_CORR(expression1, expression2, [start, end])" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression1", "type": "aggregate", "required": true },
+                  { "name": "expression2", "type": "aggregate", "required": true },
+                  { "name": "start", "type": "integer", "required": false },
+                  { "name": "end", "type": "integer", "required": false }
+                ]
+              },
+              "returns": { "type": "string", "const": "number (-1 to 1)" },
+              "interpretation": { "1": "Perfect positive correlation", "0": "No correlation", "-1": "Perfect negative correlation" }
+            }
+          }
+        }
+      },
+      "RankFunctions": {
+        "type": "object",
+        "description": "Rank functions - Rank values within partition",
+        "properties": {
+          "RANK": {
+            "type": "object",
+            "description": "Competition rank - Ties get same rank, next rank skips。如 [100,80,80,60] -> [1,2,2,4]",
+            "properties": {
+              "syntax": { "type": "string", "const": "RANK(expression, ['asc'|'desc'])" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression for ranking" },
+                  { "name": "order", "type": "string", "required": false, "default": "desc", "enum": ["asc", "desc"] }
+                ]
+              },
+              "returns": { "type": "string", "const": "integer" },
+              "example": { "type": "string", "example": "RANK(SUM([Sales]), 'desc')" }
+            }
+          },
+          "RANK_DENSE": {
+            "type": "object",
+            "description": "Dense rank - Ties get same rank, next rank does not skip。如 [100,80,80,60] -> [1,2,2,3]",
+            "properties": {
+              "syntax": { "type": "string", "const": "RANK_DENSE(expression, ['asc'|'desc'])" },
+              "returns": { "type": "string", "const": "integer" },
+              "example": { "type": "string", "example": "RANK_DENSE(SUM([Sales]), 'desc')" }
+            }
+          },
+          "RANK_MODIFIED": {
+            "type": "object",
+            "description": "Modified competition rank - Ties get highest rank。如 [100,80,80,60] -> [1,3,3,4]",
+            "properties": {
+              "syntax": { "type": "string", "const": "RANK_MODIFIED(expression, ['asc'|'desc'])" },
+              "returns": { "type": "string", "const": "integer" }
+            }
+          },
+          "RANK_UNIQUE": {
+            "type": "object",
+            "description": "Unique rank - Different ranks even for ties。如 [100,80,80,60] -> [1,2,3,4]",
+            "properties": {
+              "syntax": { "type": "string", "const": "RANK_UNIQUE(expression, ['asc'|'desc'])" },
+              "returns": { "type": "string", "const": "integer" }
+            }
+          },
+          "RANK_PERCENTILE": {
+            "type": "object",
+            "description": "Percentile rank - Returns 0-1 value indicating relative position in partition",
+            "properties": {
+              "syntax": { "type": "string", "const": "RANK_PERCENTILE(expression, ['asc'|'desc'])" },
+              "returns": { "type": "string", "const": "number (0-1)" }
+            }
+          }
+        }
+      },
+      "TotalFunction": {
+        "type": "object",
+        "description": "Total function",
+        "properties": {
+          "TOTAL": {
+            "type": "object",
+            "description": "Returns total of expression for entire partition, same value for all rows. Equivalent to WINDOW_SUM(expression)",
+            "properties": {
+              "syntax": { "type": "string", "const": "TOTAL(expression)" },
+              "parameters": {
+                "type": "array",
+                "items": [
+                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression for total" }
+                ]
+              },
+              "returns": { "type": "string", "const": "number" },
+              "examples": {
+                "type": "array",
+                "items": [
+                  { "code": "SUM([Sales]) / TOTAL(SUM([Sales]))", "description": "Calculate each row as percentage of total" },
+                  { "code": "SUM([Sales]) - TOTAL(SUM([Sales])) / SIZE()", "description": "Difference from average" }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "TableCalculationUsageExamples": {
+        "type": "object",
+        "description": "Table calculation usage examples - Shows how to use table calculation functions in API requests",
+        "properties": {
+          "custom_window_sum": {
+            "description": "CUSTOM type - Window sum",
+            "value": {
+              "fieldCaption": "window_sum",
+              "calculation": "WINDOW_SUM(SUM([Sales]))",
+              "tableCalculation": {
+                "tableCalcType": "CUSTOM",
+                "dimensions": [{"fieldCaption": "Category"}]
+              }
+            }
+          },
+          "custom_moving_avg": {
+            "description": "CUSTOM 类型 - 3-period moving average",
+            "value": {
+              "fieldCaption": "moving_avg_3",
+              "calculation": "WINDOW_AVG(SUM([Sales]), -2, 0)",
+              "tableCalculation": {
+                "tableCalcType": "CUSTOM",
+                "dimensions": [{"fieldCaption": "Date"}]
+              }
+            }
+          },
+          "custom_rank": {
+            "description": "CUSTOM type - Ranking",
+            "value": {
+              "fieldCaption": "sales_rank",
+              "calculation": "RANK(SUM([Sales]), 'desc')",
+              "tableCalculation": {
+                "tableCalcType": "CUSTOM",
+                "dimensions": [{"fieldCaption": "Product"}]
+              }
+            }
+          },
+          "custom_yoy_growth": {
+            "description": "CUSTOM type - Year-over-year growth rate",
+            "value": {
+              "fieldCaption": "yoy_growth",
+              "calculation": "(SUM([Sales]) - LOOKUP(SUM([Sales]), -12)) / ABS(LOOKUP(SUM([Sales]), -12))",
+              "tableCalculation": {
+                "tableCalcType": "CUSTOM",
+                "dimensions": [{"fieldCaption": "Month"}]
+              }
+            }
+          },
+          "custom_percent_of_total": {
+            "description": "CUSTOM type - Percentage calculation",
+            "value": {
+              "fieldCaption": "pct_of_total",
+              "calculation": "SUM([Sales]) / TOTAL(SUM([Sales]))",
+              "tableCalculation": {
+                "tableCalcType": "CUSTOM",
+                "dimensions": [{"fieldCaption": "Category"}]
+              }
+            }
+          },
+          "running_total_predefined": {
+            "description": "RUNNING_TOTAL predefined type",
+            "value": {
+              "fieldCaption": "cumulative_sales",
+              "calculation": "SUM([Sales])",
+              "tableCalculation": {
+                "tableCalcType": "RUNNING_TOTAL",
+                "dimensions": [{"fieldCaption": "Date"}],
+                "aggregation": "SUM"
+              }
+            }
+          },
+          "percent_of_total_predefined": {
+            "description": "PERCENT_OF_TOTAL predefined type",
+            "value": {
+              "fieldCaption": "pct_of_total",
+              "calculation": "SUM([Sales])",
+              "tableCalculation": {
+                "tableCalcType": "PERCENT_OF_TOTAL",
+                "dimensions": [{"fieldCaption": "Category"}]
+              }
+            }
           }
         }
       }

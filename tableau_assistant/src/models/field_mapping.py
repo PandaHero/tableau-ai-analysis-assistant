@@ -288,10 +288,122 @@ Values: Float between 0 and 1
         return cls(**data)
 
 
-# ============= 导出 =============
+class SingleFieldMappingResult(BaseModel):
+    """Single field mapping result for LLM output.
+    
+    EXAMPLE:
+    
+    Input term: "销售额"
+    Output: {
+        "business_term": "销售额",
+        "matched_field": "[Sales].[Sales Amount]",
+        "confidence": 0.95,
+        "reasoning": "Exact semantic match for sales amount",
+        "alternatives": []
+    }
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    business_term: str = Field(
+        description="""Business term being mapped.
+
+WHAT: The original business term from user query
+WHEN: Always required
+HOW: Copy from input"""
+    )
+    
+    matched_field: Optional[str] = Field(
+        None,
+        description="""Matched technical field name.
+
+WHAT: The technical field that best matches the business term
+WHEN: Include if match found, null if no suitable match
+HOW: Select from provided candidates only
+
+VALUES: Field name string or null"""
+    )
+    
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="""Mapping confidence score.
+
+WHAT: How confident in this mapping
+WHEN: Always required
+HOW: Float 0.0-1.0
+
+VALUES:
+- 0.9-1.0: Perfect match
+- 0.7-0.9: Good match
+- 0.5-0.7: Acceptable match
+- 0.0-0.5: Poor match"""
+    )
+    
+    reasoning: str = Field(
+        description="""Reasoning for the mapping.
+
+WHAT: Why this field was selected
+WHEN: Always required
+HOW: 1-2 sentences explaining the match"""
+    )
+    
+    alternatives: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="""Alternative matches.
+
+WHAT: Other possible field matches
+WHEN: Include when confidence < 0.9
+HOW: List of {field, confidence, reasoning}"""
+    )
+
+
+class BatchFieldMappingResult(BaseModel):
+    """Batch field mapping result for multiple business terms.
+    
+    EXAMPLES:
+    
+    Input: ["省份", "销售额"]
+    Output: {
+        "mappings": [
+            {
+                "business_term": "省份",
+                "matched_field": "[Geography].[Province]",
+                "confidence": 0.95,
+                "reasoning": "Exact match for province dimension",
+                "alternatives": []
+            },
+            {
+                "business_term": "销售额",
+                "matched_field": "[Sales].[Sales Amount]",
+                "confidence": 0.92,
+                "reasoning": "Strong semantic match for sales measure",
+                "alternatives": []
+            }
+        ]
+    }
+    
+    ANTI-PATTERNS:
+    - Inventing fields not in candidates
+    - Mapping dimension term to measure field
+    - High confidence without clear semantic match
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    mappings: List[SingleFieldMappingResult] = Field(
+        description="""List of field mappings.
+
+WHAT: Mapping result for each business term
+WHEN: Always required
+HOW: One entry per input business term"""
+    )
+
+
+# ============= Exports =============
 
 __all__ = [
     "FieldMapping",
     "FieldMappingResult",
     "MappingHistory",
+    "SingleFieldMappingResult",
+    "BatchFieldMappingResult",
 ]

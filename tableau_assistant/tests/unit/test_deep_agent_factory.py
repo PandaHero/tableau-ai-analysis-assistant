@@ -334,7 +334,7 @@ class TestModelSelection:
     
     def test_select_model_local(self):
         """测试本地模型选择"""
-        from tableau_assistant.src.bi_platforms.tableau.models import select_model
+        from tableau_assistant.src.model_manager import select_model
         
         # 设置环境变量
         os.environ["LLM_API_BASE"] = "http://localhost:8000/v1"
@@ -354,7 +354,7 @@ class TestModelSelection:
     
     def test_select_model_deepseek(self):
         """测试 DeepSeek 模型选择"""
-        from tableau_assistant.src.bi_platforms.tableau.models import select_model
+        from tableau_assistant.src.model_manager import select_model
         
         os.environ["DEEPSEEK_API_KEY"] = "test-deepseek-key"
         
@@ -371,7 +371,7 @@ class TestModelSelection:
     
     def test_select_model_qwen(self):
         """测试 Qwen 模型选择"""
-        from tableau_assistant.src.bi_platforms.tableau.models import select_model
+        from tableau_assistant.src.model_manager import select_model
         
         os.environ["QWEN_API_KEY"] = "test-qwen-key"
         os.environ["QWEN_API_BASE"] = "http://localhost:8000/v1"
@@ -390,7 +390,7 @@ class TestModelSelection:
     
     def test_select_model_raises_for_missing_config(self):
         """测试缺少配置时抛出异常"""
-        from tableau_assistant.src.bi_platforms.tableau.models import select_model
+        from tableau_assistant.src.model_manager import select_model
         
         # 清除环境变量
         original_key = os.environ.pop("DEEPSEEK_API_KEY", None)
@@ -410,7 +410,7 @@ class TestModelSelection:
     
     def test_select_model_raises_for_unknown_provider(self):
         """测试未知提供商抛出异常"""
-        from tableau_assistant.src.bi_platforms.tableau.models import select_model
+        from tableau_assistant.src.model_manager import select_model
         
         with pytest.raises(ValueError) as exc_info:
             select_model(

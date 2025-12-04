@@ -8,7 +8,7 @@ Tableau Assistant 能力层
 - query: 查询能力（构建、执行、结果处理）
 - date_processing: 日期处理（解析、计算、格式检测）
 - data_processing: 数据处理（同比、环比、统计）
-- semantic_mapping: 语义映射（RAG+LLM 字段映射）
+- rag: RAG 增强检索（向量检索、语义映射、重排序）
 - storage: 持久化存储（SQLite 缓存）
 
 使用示例：
@@ -24,8 +24,13 @@ Tableau Assistant 能力层
     # 数据处理
     from tableau_assistant.src.capabilities.data_processing import DataProcessor
     
-    # 语义映射
-    from tableau_assistant.src.capabilities.semantic_mapping import SemanticMapper
+    # RAG 增强检索
+    from tableau_assistant.src.capabilities.rag import (
+        SemanticMapper,
+        FieldIndexer,
+        EmbeddingProvider,
+        KnowledgeAssembler,
+    )
     
     # 存储
     from tableau_assistant.src.capabilities.storage import StoreManager
@@ -36,6 +41,6 @@ __all__ = [
     "query",
     "date_processing",
     "data_processing",
-    "semantic_mapping",
+    "rag",
     "storage",
 ]

@@ -56,6 +56,50 @@ from tableau_assistant.src.capabilities.rag.semantic_mapper import (
     FieldMappingResult,
     MappingSource,
 )
+from tableau_assistant.src.capabilities.rag.retriever import (
+    BaseRetriever,
+    EmbeddingRetriever,
+    KeywordRetriever,
+    HybridRetriever,
+    RetrievalPipeline,
+    RetrieverFactory,
+    RetrievalConfig,
+    MetadataFilter,
+    Tokenizer,
+)
+from tableau_assistant.src.capabilities.rag.reranker import (
+    BaseReranker,
+    DefaultReranker,
+    RRFReranker,
+    LLMReranker,
+    RerankerFactory,
+)
+from tableau_assistant.src.capabilities.rag.assembler import (
+    ChunkStrategy,
+    AssemblerConfig,
+    KnowledgeAssembler,
+)
+from tableau_assistant.src.capabilities.rag.cache import (
+    MappingCache,
+    CacheManager,
+)
+from tableau_assistant.src.capabilities.rag.dimension_pattern import (
+    DimensionPattern,
+    PatternSearchResult,
+    DimensionPatternStore,
+    DimensionHierarchyRAG,
+)
+from tableau_assistant.src.capabilities.rag.observability import (
+    RAGStage,
+    RetrievalLogEntry,
+    RerankLogEntry,
+    ErrorLogEntry,
+    RAGMetrics,
+    RAGObserver,
+    get_observer,
+    set_verbose,
+    observe_retrieval,
+)
 
 __all__ = [
     # 数据模型
@@ -80,4 +124,42 @@ __all__ = [
     "MappingConfig",
     "FieldMappingResult",
     "MappingSource",
+    # 检索器
+    "BaseRetriever",
+    "EmbeddingRetriever",
+    "KeywordRetriever",
+    "HybridRetriever",
+    "RetrievalPipeline",
+    "RetrieverFactory",
+    "RetrievalConfig",
+    "MetadataFilter",
+    "Tokenizer",
+    # 重排序器
+    "BaseReranker",
+    "DefaultReranker",
+    "RRFReranker",
+    "LLMReranker",
+    "RerankerFactory",
+    # 知识组装器
+    "ChunkStrategy",
+    "AssemblerConfig",
+    "KnowledgeAssembler",
+    # 缓存管理器
+    "MappingCache",
+    "CacheManager",
+    # 维度层级 RAG
+    "DimensionPattern",
+    "PatternSearchResult",
+    "DimensionPatternStore",
+    "DimensionHierarchyRAG",
+    # 可观测性
+    "RAGStage",
+    "RetrievalLogEntry",
+    "RerankLogEntry",
+    "ErrorLogEntry",
+    "RAGMetrics",
+    "RAGObserver",
+    "get_observer",
+    "set_verbose",
+    "observe_retrieval",
 ]

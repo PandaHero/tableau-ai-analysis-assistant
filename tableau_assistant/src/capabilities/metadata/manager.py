@@ -304,11 +304,7 @@ class MetadataManager:
                 # 需要推断维度层级（会同时查询 valid_max_date）
                 logger.info(f"新元数据需要推断维度层级: {needs_inference}")
                 await self._enhance_metadata(metadata)
-            else:
-                # 维度层级缓存存在，但需要更新日期最大值
-                # 因为数据可能在一天中刷新多次，需要获取最新的日期范围
-                logger.info(f"维度层级缓存存在，更新日期字段最大值")
-                await self._update_date_field_max_values(metadata)
+            # 维度层级缓存存在，无需额外操作
         
         return metadata
     
@@ -383,8 +379,6 @@ class MetadataManager:
             }
             
             # 调用Agent（传递runtime）
-            # 注意：dimension_hierarchy_agent 内部会调用 _update_date_field_max_values
-            # 该函数会更新缓存中的 metadata（添加 valid_max_date）
             result = await dimension_hierarchy_agent.execute(
                 state=state,
                 runtime=self.runtime
@@ -400,17 +394,7 @@ class MetadataManager:
             # 4. 添加到元数据
             metadata.dimension_hierarchy = hierarchy
             
-            # 5. 从缓存重新读取 metadata，因为 _update_date_field_max_values 已经更新了字段的 valid_max_date
-            updated_metadata = self.store_manager.get_metadata(datasource_luid)
-            if updated_metadata:
-                # 将更新后的字段复制到当前 metadata 对象
-                for i, field in enumerate(metadata.fields):
-                    updated_field = updated_metadata.get_field(field.name)
-                    if updated_field and updated_field.valid_max_date:
-                        metadata.fields[i].valid_max_date = updated_field.valid_max_date
-                        logger.info(f"✓ 字段 {field.name} 的 valid_max_date 已更新: {updated_field.valid_max_date}")
-            
-            # 6. 将维度层级推断结果添加到对应的FieldMetadata对象
+            # 5. 将维度层级推断结果添加到对应的FieldMetadata对象
             for field_name, attrs in hierarchy.items():
                 field = metadata.get_field(field_name)
                 if field:
@@ -424,88 +408,6 @@ class MetadataManager:
         except Exception as e:
             logger.error(f"维度层级推断失败: {e}")
             # 不抛出异常，允许继续使用未增强的元数据
-    
-    async def _update_date_field_max_values(self, metadata: Metadata) -> None:
-        """
-        更新日期字段的最大值（不依赖维度层级推断）
-        
-        当元数据缓存过期但维度层级缓存未过期时调用。
-        确保获取最新的日期数据，因为数据可能在一天中刷新多次。
-        
-        缓存策略：
-        - 维度层级：24小时（字段层级关系不常变）
-        - valid_max_date：1小时（随元数据缓存，数据可能频繁刷新）
-        
-        Args:
-            metadata: Metadata模型对象（会被修改）
-        """
-        import asyncio
-        from tableau_assistant.src.bi_platforms.tableau.metadata import fetch_valid_max_date_async
-        from tableau_assistant.src.models.context import get_tableau_config
-        
-        datasource_luid = self.runtime.context.datasource_luid
-        
-        # 1. 从维度层级缓存中识别日期字段
-        hierarchy = self.store_manager.get_dimension_hierarchy(datasource_luid)
-        if not hierarchy:
-            logger.info("维度层级缓存不存在，跳过日期字段更新")
-            return
-        
-        # 识别日期字段（category包含"时间"、"日期"、"temporal"等关键词）
-        date_fields = []
-        for field_name, attrs in hierarchy.items():
-            category = attrs.get("category", "").lower()
-            if any(keyword in category for keyword in ["时间", "日期", "time", "date", "temporal"]):
-                date_fields.append(field_name)
-        
-        if not date_fields:
-            logger.info("未识别到日期字段，跳过日期值更新")
-            return
-        
-        logger.info(f"识别到 {len(date_fields)} 个日期字段: {date_fields}")
-        
-        # 2. 获取第一个度量字段（用于筛选有效数据）
-        measures = metadata.get_measures()
-        if not measures:
-            logger.warning("未找到度量字段，无法查询有效最大日期")
-            return
-        
-        measure_field = measures[0].fieldCaption
-        logger.info(f"使用度量字段: {measure_field}")
-        
-        # 3. 获取 Tableau 配置
-        tableau_config = get_tableau_config(self.store_manager)
-        tableau_token = tableau_config["tableau_token"]
-        tableau_site = tableau_config["tableau_site"]
-        tableau_domain = tableau_config["tableau_domain"]
-        
-        # 4. 异步查询每个日期字段的有效最大值
-        tasks = []
-        for date_field in date_fields:
-            task = fetch_valid_max_date_async(
-                api_key=tableau_token,
-                domain=tableau_domain,
-                datasource_luid=datasource_luid,
-                date_field_name=date_field,
-                measure_field_name=measure_field,
-                site=tableau_site
-            )
-            tasks.append((date_field, task))
-        
-        # 5. 并发执行所有查询
-        results = await asyncio.gather(*[task for _, task in tasks], return_exceptions=True)
-        
-        # 6. 更新元数据
-        for (date_field, _), valid_max_date in zip(tasks, results):
-            if isinstance(valid_max_date, Exception):
-                logger.warning(f"查询日期字段 {date_field} 失败: {valid_max_date}")
-                continue
-            
-            if valid_max_date:
-                field_obj = metadata.get_field(date_field)
-                if field_obj:
-                    field_obj.valid_max_date = valid_max_date
-                    logger.info(f"✓ 更新日期字段 {date_field} 的最大值: {valid_max_date}")
     
     async def _detect_date_field_formats(self, metadata: Metadata) -> None:
         """

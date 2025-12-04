@@ -9,7 +9,6 @@
 """
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Literal, Dict, Any, Union, Annotated
-from tableau_assistant.src.models.question import ProcessingType
 from tableau_assistant.src.models.intent import (
     DimensionIntent,
     MeasureIntent,
@@ -35,14 +34,16 @@ class ProcessingInstruction(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     
-    processing_type: ProcessingType = Field(
+    processing_type: Literal["direct", "aggregation", "calculation"] = Field(
         description="""Type of data processing operation.
 
 Usage:
 - Specify the calculation type for DataProcessor
-- Use value from sub-question's processing_type
 
-Values: Enum value from ProcessingType"""
+Values:
+- direct: Direct query execution
+- aggregation: Aggregation processing
+- calculation: Calculation processing"""
     )
     
     source_tasks: List[str] = Field(
@@ -62,7 +63,7 @@ Values: List of task ID strings (e.g., ['q1', 'q2'])""",
         description="""Custom calculation formula.
 
 Usage:
-- Include only when processing_type is 'custom'
+- Include only when processing_type is 'calculation'
 - null for other processing types
 
 Values: Formula description string or null"""

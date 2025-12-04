@@ -33,7 +33,7 @@ def _is_claude_model(model_name: str) -> bool:
 
 def _get_model(provider: str, model_name: str, temperature: float = 0.0):
     """Get LLM model instance."""
-    from tableau_assistant.src.bi_platforms.tableau.models import select_model
+    from tableau_assistant.src.model_manager import select_model
     return select_model(provider=provider, model_name=model_name, temperature=temperature)
 
 

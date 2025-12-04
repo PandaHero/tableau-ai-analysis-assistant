@@ -86,38 +86,46 @@ class UnderstandingAgent(BaseVizQLAgent):
             "max_date": max_date
         }
     
-    def _fix_dimension_aggregations(self, result: QuestionUnderstanding) -> QuestionUnderstanding:
+    def _validate_entities(self, result: QuestionUnderstanding) -> QuestionUnderstanding:
         """
-        Auto-fix common dimension_aggregations errors (defensive programming)
+        Validate and log entity classification results (defensive programming)
         
-        Rule: If all dimensions have aggregations, likely incorrect.
-        Most queries have grouping dimensions without aggregations.
+        Checks for common issues:
+        - All dimensions having aggregations (likely incorrect)
+        - Missing aggregation for aggregate role
         
         Args:
             result: QuestionUnderstanding model instance
         
         Returns:
-            Fixed QuestionUnderstanding model instance
+            Validated QuestionUnderstanding model instance
         """
         import logging
+        from tableau_assistant.src.models.question import EntityRole, EntityType
         logger = logging.getLogger(__name__)
         
-        for sq in result.sub_questions:
-            # Only process QuerySubQuestion with dimension fields
-            if not hasattr(sq, 'mentioned_dimensions') or not hasattr(sq, 'dimension_aggregations'):
-                continue
-            
-            dims = sq.mentioned_dimensions
-            aggs = sq.dimension_aggregations or {}
-            
-            # Detect error: All dimensions have aggregations → Likely incorrect
-            if dims and len(aggs) == len(dims) and len(dims) > 1:
+        if not result.entities:
+            return result
+        
+        # Count entities by role
+        group_by_count = sum(1 for e in result.entities if e.role == EntityRole.GROUP_BY)
+        aggregate_count = sum(1 for e in result.entities if e.role == EntityRole.AGGREGATE)
+        
+        # Log warning if no group_by dimensions but multiple aggregates
+        if group_by_count == 0 and aggregate_count > 1:
+            logger.warning(
+                f"No GROUP BY dimensions found with {aggregate_count} aggregates. "
+                f"This may be incorrect for multi-dimensional analysis."
+            )
+        
+        # Validate each entity
+        for entity in result.entities:
+            # Check aggregate role has aggregation
+            if entity.role == EntityRole.AGGREGATE and not entity.aggregation:
                 logger.warning(
-                    f"Auto-fix: All {len(dims)} dimensions have aggregations, clearing dimension_aggregations. "
-                    f"Dimensions: {dims}, Aggregations: {aggs}. "
-                    f"This is likely incorrect - most queries have grouping dimensions without aggregations."
+                    f"Entity '{entity.name}' has role=aggregate but no aggregation function. "
+                    f"This violates the model constraint."
                 )
-                sq.dimension_aggregations = {}
         
         return result
     
@@ -136,8 +144,8 @@ class UnderstandingAgent(BaseVizQLAgent):
         Returns:
             Dict with understanding result for state update
         """
-        # Apply defensive fix for dimension_aggregations
-        result = self._fix_dimension_aggregations(result)
+        # Validate entity classification
+        result = self._validate_entities(result)
         
         return {
             "understanding": result,

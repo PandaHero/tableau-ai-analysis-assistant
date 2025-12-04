@@ -176,7 +176,7 @@ class BaseVizQLAgent:
             Parsed and validated output model instance
         """
         # Get LLM using select_model (supports frontend model selection)
-        from tableau_assistant.src.bi_platforms.tableau.models import select_model
+        from tableau_assistant.src.model_manager import select_model
         from tableau_assistant.src.config.settings import settings
         from tableau_assistant.src.capabilities.storage.llm_cache import LLMCache
         from tableau_assistant.src.monitoring.callbacks import SQLiteTrackingCallback

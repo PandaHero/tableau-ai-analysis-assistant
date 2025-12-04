@@ -20,7 +20,7 @@ Design principles:
 """
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, Union, List, Literal
-from tableau_assistant.src.models.question import TimeRange, DateRequirements
+from tableau_assistant.src.models.question import TimeRange
 
 
 # ============= 字段 Intent 模型 =============
@@ -348,15 +348,20 @@ Usage:
 Values: TimeRange object from sub-question"""
     )
     
-    date_requirements: Optional[DateRequirements] = Field(
+    comparison_type: Optional[Literal["yoy", "mom", "qoq", "wow", "dod"]] = Field(
         None,
-        description="""Special date requirements.
+        description="""Type of date comparison for time-over-time analysis.
 
 Usage:
-- Copy directly from sub-question's date_requirements (DO NOT modify)
-- null if sub-question has no special date requirements
+- Include for time comparison questions (同比/环比)
+- null for regular date filtering
 
-Values: DateRequirements object from sub-question or null"""
+Values:
+- yoy: Year-over-year (同比)
+- mom: Month-over-month (环比)
+- qoq: Quarter-over-quarter
+- wow: Week-over-week
+- dod: Day-over-day"""
     )
 
 

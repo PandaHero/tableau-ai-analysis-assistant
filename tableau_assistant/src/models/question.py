@@ -1,78 +1,73 @@
 """
-Question-related Data Models
+Question-related Data Models (Optimized)
+
+Design Principles Applied:
+1. Orthogonal Decomposition: Each entity is an independent decision unit
+2. Semantic Consistency: Field names match Prompt terminology
+3. Minimal Description Length: No redundant fields
+4. Information Bottleneck: Only task-relevant information
 
 Contains:
-1. QuestionUnderstanding - Question understanding result
-2. TimeRange - Time range specification
-3. DateRequirements - Date requirements
-4. Related enum types
+1. QueryEntity - Single entity with its role (atomic unit)
+2. TimeRange - Time range specification (kept for compatibility)
+3. QuestionUnderstanding - Question understanding result
 """
-from pydantic import BaseModel, Field, ConfigDict
-from typing import Literal, Optional, List, Union, Annotated
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+from typing import Optional, List
 from enum import Enum
 
 
 # ============= Enum Types =============
 
+class EntityRole(str, Enum):
+    """Entity's role in SQL query - determines SQL operation"""
+    GROUP_BY = "group_by"      # Dimension for GROUP BY clause
+    AGGREGATE = "aggregate"    # Field being aggregated (COUNT/SUM/AVG)
+    FILTER = "filter"          # Field for WHERE clause filtering
+
+
+class AggregationType(str, Enum):
+    """SQL aggregation function type"""
+    SUM = "SUM"
+    AVG = "AVG"
+    COUNT = "COUNT"
+    COUNTD = "COUNTD"
+    MAX = "MAX"
+    MIN = "MIN"
+
+
+class EntityType(str, Enum):
+    """Entity's data type - only two fundamental types.
+    
+    Note: Date is a special dimension with date_function, not a separate type.
+    This follows the principle: date is categorical (grouping) with temporal semantics.
+    """
+    DIMENSION = "dimension"    # Categorical field (including date fields)
+    MEASURE = "measure"        # Numeric field
+
+
+class DateFunction(str, Enum):
+    """Date function for time-based grouping"""
+    YEAR = "YEAR"
+    QUARTER = "QUARTER"
+    MONTH = "MONTH"
+    WEEK = "WEEK"
+    DAY = "DAY"
+
+
 class QuestionType(str, Enum):
-    """Question type"""
+    """Question type classification"""
     COMPARISON = "对比"
     TREND = "趋势"
     RANKING = "排名"
     DIAGNOSIS = "诊断"
-    MULTI_DIM = "多维分解"
+    BREAKDOWN = "多维分解"
     PROPORTION = "占比"
     YOY_MOM = "同环比"
-    MOM = "环比"  # 环比分析
-
-
-class SubQuestionExecutionType(str, Enum):
-    """
-    Sub-question execution type
-    
-    Describes how sub-questions are executed:
-    - query: Generate VizQL query and execute data retrieval
-    - post_processing: Calculation/analysis tasks after data retrieval
-    """
-    QUERY = "query"
-    POST_PROCESSING = "post_processing"
-
-
-class ProcessingType(str, Enum):
-    """
-    Data processing type (for post_processing type sub-questions)
-    
-    - yoy: Year-over-year analysis
-    - mom: Month-over-month analysis
-    - growth_rate: Growth rate calculation
-    - percentage: Percentage calculation
-    - custom: Custom calculation
-    """
-    YOY = "yoy"
-    MOM = "mom"
-    GROWTH_RATE = "growth_rate"
-    PERCENTAGE = "percentage"
-    CUSTOM = "custom"
-
-
-class SubQuestionRelationType(str, Enum):
-    """
-    Relationship type between sub-questions
-    
-    Describes semantic relationships between multiple sub-questions:
-    - comparison: Comparison relationship, for time/dimension comparisons
-    - breakdown: Breakdown relationship, whole-to-part relationship
-    - drill_down: Drill-down relationship, from coarse to fine granularity
-    - independent: Independent relationship, no correlation between sub-questions
-    """
-    COMPARISON = "comparison"
-    BREAKDOWN = "breakdown"
-    DRILL_DOWN = "drill_down"
-    INDEPENDENT = "independent"
 
 
 class Complexity(str, Enum):
-    """Question complexity"""
+    """Question complexity level"""
     SIMPLE = "Simple"
     MEDIUM = "Medium"
     COMPLEX = "Complex"
@@ -80,24 +75,21 @@ class Complexity(str, Enum):
 
 class TimeRangeType(str, Enum):
     """Time range type"""
-    ABSOLUTE = "absolute"    # Absolute time, e.g., "2016"
-    RELATIVE = "relative"    # Relative time, e.g., "last 3 months"
-    CURRENT = "current"      # Current time, e.g., "this month"
-    COMPARISON = "comparison" # Time comparison, e.g., "2016 vs 2015", "YoY", "MoM"
+    ABSOLUTE = "absolute"
+    RELATIVE = "relative"
+    COMPARISON = "comparison"
 
 
 class RelativeType(str, Enum):
-    """Relative time type"""
-    CURRENT = "CURRENT"  # Current period to date
-    LAST = "LAST"        # Complete previous period
-    NEXT = "NEXT"        # Complete next period
-    TODATE = "TODATE"    # From period start to today
-    LASTN = "LASTN"      # Rolling N periods from today
-    NEXTN = "NEXTN"      # Rolling N periods into future
+    """Relative time calculation type"""
+    CURRENT = "CURRENT"
+    LAST = "LAST"
+    LASTN = "LASTN"
+    TODATE = "TODATE"
 
 
 class PeriodType(str, Enum):
-    """Period type"""
+    """Time period unit"""
     DAYS = "DAYS"
     WEEKS = "WEEKS"
     MONTHS = "MONTHS"
@@ -105,628 +97,617 @@ class PeriodType(str, Enum):
     YEARS = "YEARS"
 
 
-class DateFunction(str, Enum):
-    """Date function for time-based grouping"""
-    YEAR = "YEAR"        # Extract year from date
-    QUARTER = "QUARTER"  # Extract quarter from date
-    MONTH = "MONTH"      # Extract month from date
-    WEEK = "WEEK"        # Extract week from date
-    DAY = "DAY"          # Extract day from date
 
 
-# ============= Data Models =============
 
-class TimeRange(BaseModel):
-    """Time range"""
+# ============= Atomic Data Models =============
+
+class QueryEntity(BaseModel):
+    """Single entity extracted from question - ATOMIC DECISION UNIT.
+    
+    Each entity is independently classified with:
+    - name: business term from question
+    - type: dimension/measure (date is a dimension with date_function)
+    - role: how it's used in SQL (group_by/aggregate/filter)
+    - aggregation: SQL function if role=aggregate
+    - date_function: time granularity for date dimensions with role=group_by
+    
+    EXAMPLES:
+    
+    "各省份销售额":
+    - {name: "省份", type: "dimension", role: "group_by"}
+    - {name: "销售额", type: "measure", role: "aggregate", aggregation: "SUM"}
+    
+    "多少产品":
+    - {name: "产品", type: "dimension", role: "aggregate", aggregation: "COUNTD"}
+    
+    "按月趋势":
+    - {name: "日期", type: "dimension", role: "group_by", date_function: "MONTH"}
+    
+    ANTI-PATTERNS:
+    ❌ role=group_by with aggregation set (group_by fields don't aggregate)
+    ❌ role=aggregate without aggregation (must specify function)
+    ❌ type=measure with aggregation=COUNTD (COUNTD is for dimensions)
+    ❌ date_function with type=measure (date fields must be dimensions)
+    """
     model_config = ConfigDict(extra="forbid")
     
-    type: Optional[TimeRangeType] = Field(
+    name: str = Field(
+        ...,
+        description="""Business term extracted from question.
+
+WHAT: The entity name as mentioned in the question
+HOW: Use exact business term, not technical field name
+
+EXAMPLES:
+- "各省份销售额" → "省份", "销售额"
+- "多少产品" → "产品"
+- "按月趋势" → "日期" """
+    )
+    
+    type: EntityType = Field(
+        ...,
+        description="""Entity's data type.
+
+WHAT: Whether this is a categorical or numeric field
+HOW: Classify based on the nature of the entity
+
+VALUES:
+- dimension: Categorical field (省份, 产品, 品类, 日期)
+- measure: Numeric field (销售额, 利润, 数量)
+
+NOTE: Date fields are dimensions with date_function set for time grouping."""
+    )
+    
+    role: EntityRole = Field(
+        ...,
+        description="""Entity's role in SQL query.
+
+WHAT: How this entity will be used in the SQL query
+HOW: Determine based on question context and modifiers
+
+VALUES:
+- group_by: For GROUP BY clause ("各X", "按X", "每个X")
+- aggregate: Being aggregated ("总X", "平均X", "多少X")
+- filter: For WHERE clause ("某个X", "X=Y")
+
+DECISION RULES:
+- "各/按/每个" + entity → role=group_by
+- "多少/几个" + entity → role=aggregate (with COUNTD)
+- "总/平均/最高" + entity → role=aggregate
+- Specific value mentioned → role=filter"""
+    )
+    
+    aggregation: Optional[AggregationType] = Field(
         None,
+        description="""SQL aggregation function.
+
+WHAT: The aggregation function to apply
+WHEN: Required when role=aggregate, null otherwise
+HOW: Choose based on question modifiers
+
+VALUES:
+- SUM: "总", "合计" (default for measures)
+- AVG: "平均", "均值"
+- COUNT: "次数"
+- COUNTD: "多少", "几个" (for dimensions)
+- MAX: "最高", "最大", "最新"
+- MIN: "最低", "最小", "最早"
+
+DEPENDENCY: Must be set when role=aggregate"""
+    )
+    
+    date_function: Optional[DateFunction] = Field(
+        None,
+        description="""Time granularity for date grouping.
+
+WHAT: How to extract time component for GROUP BY
+WHEN: Only for date dimensions with role=group_by
+HOW: Choose based on time granularity mentioned
+
+VALUES:
+- YEAR: "按年", "各年度"
+- QUARTER: "按季度", "各季度"
+- MONTH: "按月", "各月"
+- WEEK: "按周"
+- DAY: "按天", "每日"
+
+INDICATOR: Presence of date_function marks this dimension as a date field.
+DEPENDENCY: Only valid when role=group_by"""
+    )
+    
+    @model_validator(mode='after')
+    def validate_entity(self) -> 'QueryEntity':
+        """Validate entity consistency."""
+        # Aggregation required for aggregate role
+        if self.role == EntityRole.AGGREGATE and not self.aggregation:
+            raise ValueError("aggregation is required when role=aggregate")
+        
+        # No aggregation for group_by role
+        if self.role == EntityRole.GROUP_BY and self.aggregation:
+            raise ValueError("aggregation should be null when role=group_by")
+        
+        # COUNTD only for dimensions
+        if self.aggregation == AggregationType.COUNTD and self.type == EntityType.MEASURE:
+            raise ValueError("COUNTD is for dimensions, not measures")
+        
+        # date_function only for dimensions with group_by role
+        if self.date_function:
+            if self.type != EntityType.DIMENSION:
+                raise ValueError("date_function only valid for type=dimension (date fields are dimensions)")
+            if self.role != EntityRole.GROUP_BY:
+                raise ValueError("date_function only valid for role=group_by")
+        
+        return self
+
+
+class TimeRange(BaseModel):
+    """Time range specification for date filtering.
+    
+    EXAMPLES:
+    
+    "2024年销售额":
+    {type: "absolute", value: "2024", filter_field: "日期"}
+    
+    "最近3个月趋势":
+    {type: "relative", relative_type: "CURRENT", period_type: "MONTHS", 
+     range_n: 3, filter_field: "日期"}
+    
+    "同比增长":
+    {type: "comparison", filter_field: "日期"}
+    
+    ANTI-PATTERNS:
+    ❌ type=relative without period_type
+    ❌ range_n without relative_type=CURRENT or LASTN
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    type: TimeRangeType = Field(
+        ...,
         description="""Time range type.
 
-Usage:
-- Specify how time range is defined"""
+VALUES:
+- absolute: Specific period ("2024年", "Q1", "3月")
+- relative: Relative to now ("最近3个月", "本月", "上个月")
+- comparison: Time comparison ("同比", "环比")"""
     )
+    
+    filter_field: Optional[str] = Field(
+        None,
+        description="""Date field for WHERE clause filtering.
+
+WHAT: The date field to apply time filter on
+HOW: Use business term (e.g., "日期", "订单日期")
+
+EXAMPLES:
+- "2024年销售额" → "日期"
+- "最近3个月订单" → "订单日期" """
+    )
+    
     value: Optional[str] = Field(
         None,
-        description="""Absolute time value in ISO format.
+        description="""Absolute time value (ISO format).
 
-Usage:
-- Include for absolute time ranges (type='absolute')
-- null for relative/current/comparison time ranges
+WHEN: Only when type=absolute
+HOW: Fill missing year/month from max_date
 
-Values: 
-- Year: 'YYYY' (e.g., '2016')
-- Year-Quarter: 'YYYY-QN' (e.g., '2016-Q1', '2016-Q2')
-- Year-Month: 'YYYY-MM' (e.g., '2016-03', '2016-12')
-- Full date: 'YYYY-MM-DD' (e.g., '2016-03-15')"""
+VALUES: 'YYYY', 'YYYY-QN', 'YYYY-MM', 'YYYY-MM-DD'
+
+EXAMPLES:
+- "2024年" → "2024"
+- "Q1" → "2024-Q1" (year from max_date)
+- "3月15日" → "2024-03-15" """
     )
+    
     relative_type: Optional[RelativeType] = Field(
         None,
-        description="""Relative time type.
+        description="""Relative time calculation method.
 
-Usage:
-- Include for relative time ranges
-- null for absolute time ranges
+WHEN: Only when type=relative
 
-Values:
-- CURRENT: Current period to date
-- LAST: Complete previous period
-- NEXT: Complete next period
-- TODATE: From period start to today
-- LASTN: Rolling N periods from today (requires range_n)
-- NEXTN: Rolling N periods into future (requires range_n)"""
+VALUES:
+- CURRENT: "本月", "今年", "最近N个月"
+- LAST: "上个月", "去年"
+- LASTN: "最近N个月" (with range_n)
+- TODATE: "年初至今", "月初至今" """
     )
+    
     period_type: Optional[PeriodType] = Field(
         None,
-        description="""Period type for relative time.
+        description="""Time period unit.
 
-Usage:
-- Include for relative time ranges
-- Specify time granularity"""
+WHEN: Required when type=relative
+
+VALUES: DAYS, WEEKS, MONTHS, QUARTERS, YEARS"""
     )
+    
     range_n: Optional[int] = Field(
         None,
         ge=1,
-        description="""Count for relative time ranges.
+        description="""Number of periods for "最近N个..." patterns.
 
-Usage:
-- Required for LASTN/NEXTN relative types
-- Represents the number of periods
-- null for other relative types
+WHEN: Only when relative_type=CURRENT or LASTN and N is specified
 
-Values: Positive integer (1, 2, 3, ...)"""
+EXAMPLES:
+- "最近3个月" → 3
+- "本月" → null"""
     )
+    
     start_date: Optional[str] = Field(
         None,
-        description="""Start date for date range (absolute type only).
+        description="""Start date for explicit range (YYYY-MM-DD).
 
-Usage:
-- Include for date ranges (type='absolute')
-- Use with end_date to specify a date range
-- null for single date values or relative time ranges
-
-Format: 'YYYY-MM-DD'
-Example: '2024-01-01' for "January to March 2024" → start_date='2024-01-01', end_date='2024-03-31'"""
+WHEN: For "X到Y" patterns"""
     )
+    
     end_date: Optional[str] = Field(
         None,
-        description="""End date for date range (absolute type only).
+        description="""End date for explicit range (YYYY-MM-DD).
 
-Usage:
-- Include for date ranges (type='absolute')
-- Use with start_date to specify a date range
-- null for single date values or relative time ranges
-
-Format: 'YYYY-MM-DD'
-Example: '2024-03-31' for "January to March 2024" → start_date='2024-01-01', end_date='2024-03-31'"""
+WHEN: For "X到Y" patterns"""
     )
 
 
-class WeekStartDay(str, Enum):
-    """Week start day enum"""
-    MONDAY = "MONDAY"      # Monday
-    SUNDAY = "SUNDAY"      # Sunday
+# ============= Reasoning Models (Structured CoT) =============
 
-
-class WeekStartDayInfo(BaseModel):
-    """
-    Week start day information
+class ReasoningStep(BaseModel):
+    """Single reasoning step in structured Chain-of-Thought.
     
-    Specifies which day a week starts from.
-    """
-    model_config = ConfigDict(extra="forbid")
+    Each step represents one stage of the reasoning process:
+    1. intent - Understand what user wants
+    2. entities - Extract business terms
+    3. roles - Classify each entity's SQL role
+    4. time - Identify time scope
+    5. validation - Check consistency
     
-    day: WeekStartDay = Field(
-        description="""Week start day.
-
-Usage:
-- Specify which day the week starts from"""
-    )
-    keywords: List[str] = Field(
-        default_factory=list,
-        description="""Identified keywords from user question.
-
-Usage:
-- Store keywords that indicate week start day
-- Used for validation and debugging
-
-Values: List of keyword strings (e.g., 'start from Monday', 'from Sunday')"""
-    )
-
-
-class HolidayInfo(BaseModel):
-    """Holiday information"""
-    model_config = ConfigDict(extra="forbid")
-    
-    holiday_name: str = Field(
-        description="""Holiday name.
-
-Usage:
-- Store recognized holiday name from user question
-
-Values: Holiday name string (e.g., 'Spring Festival', 'National Day', 'Labor Day')"""
-    )
-    keywords: List[str] = Field(
-        default_factory=list,
-        description="""Identified keywords from user question.
-
-Usage:
-- Store keywords that indicate this holiday
-- Used for validation and debugging
-
-Values: List of keyword strings"""
-    )
-
-
-class LunarInfo(BaseModel):
-    """Lunar calendar information"""
-    model_config = ConfigDict(extra="forbid")
-    
-    lunar_reference: str = Field(
-        description="""Lunar calendar reference.
-
-Usage:
-- Store lunar calendar reference from user question
-
-Values: Lunar reference string (e.g., 'first month', 'fifteenth day')"""
-    )
-    keywords: List[str] = Field(
-        default_factory=list,
-        description="""Identified keywords from user question.
-
-Usage:
-- Store keywords that indicate lunar calendar
-- Used for validation and debugging
-
-Values: List of keyword strings (e.g., 'lunar', 'lunar calendar')"""
-    )
-
-
-class DateRequirements(BaseModel):
-    """
-    Date requirements
-    
-    Captures special date requirements in questions, such as holidays, lunar calendar, week start day, etc.
+    This provides:
+    - Traceability: Can see why each decision was made
+    - Accuracy: Forces systematic thinking
+    - Debuggability: Easy to identify where reasoning went wrong
     """
     model_config = ConfigDict(extra="forbid")
     
-    week_start_day: Optional[WeekStartDayInfo] = Field(
-        None,
-        description="""Week start day information.
-
-Usage:
-- Include only when explicitly mentioned in question
-- null if not mentioned
-
-Values: WeekStartDayInfo object or null"""
+    step_name: str = Field(
+        ...,
+        description="""Name of reasoning step.
+        
+VALUES: intent, entities, roles, time, validation"""
     )
     
-    holidays: Optional[List[HolidayInfo]] = Field(
-        None,
-        description="""Holiday information list.
+    analysis: str = Field(
+        ...,
+        description="""Analysis process for this step.
+        
+WHAT: The thinking process, observations, considerations
+HOW: Write in natural language, be specific
 
-Usage:
-- Include when holidays are mentioned in question
-- null if no holidays mentioned
-
-Values: List of HolidayInfo objects or null"""
+EXAMPLES:
+- intent: "用户想要按省份分组查看销售额的汇总数据"
+- entities: "识别到两个业务术语：'省份'（分类字段）和'销售额'（数值字段）"
+- roles: "'各省份'表示按省份分组，'销售额'需要聚合求和" """
     )
     
-    lunar: Optional[LunarInfo] = Field(
-        None,
-        description="""Lunar calendar information.
+    conclusion: str = Field(
+        ...,
+        description="""Conclusion of this step.
+        
+WHAT: The decision or result from this step
+HOW: Be concise and specific
 
-Usage:
-- Include only when lunar calendar is mentioned in question
-- null if not mentioned
-
-Values: LunarInfo object or null"""
-    )
-
-
-class SubQuestionBase(BaseModel):
-    """Sub-question base class"""
-    model_config = ConfigDict(extra="forbid")
-    
-    text: str = Field(
-        description="""Sub-question text.
-
-Usage:
-- Store decomposed sub-question text
-- Use business terms, not technical names
-
-Values: Sub-question text string"""
-    )
-    
-    completed_text: Optional[str] = Field(
-        None,
-        description="""Explicit sub-question text with context.
-
-Usage:
-- Include when implicit context needs to be made explicit
-- null if text is already complete
-
-Values: Completed text string (e.g., 'sales' → 'this year sales') or null"""
+EXAMPLES:
+- intent: "多维分解查询"
+- entities: "省份(dimension), 销售额(measure)"
+- roles: "省份→group_by, 销售额→aggregate(SUM)" """
     )
 
 
-class QuerySubQuestion(SubQuestionBase):
-    """
-    Query type sub-question
-    
-    Requires executing VizQL query to retrieve data.
-    Contains field identification, date information, and other query-related information.
-    """
-    execution_type: Literal["query"] = "query"
-    
-    depends_on_indices: List[int] = Field(
-        default_factory=list,
-        description="""List of dependent sub-question indices.
-
-Usage:
-- Include indices of sub-questions this query depends on
-- Empty list if no dependencies
-
-Values: List of integers (0-based indices)"""
-    )
-    
-    # ===== Field Recognition (dimensions, measures, dates separated) =====
-    
-    mentioned_dimensions: List[str] = Field(
-        default_factory=list,
-        description="""List of ALL dimension entities identified from query (business terms).
-
-Usage:
-- Include ALL dimensions (both grouping and counted)
-
-Values: Business term strings (e.g., 'region', 'product', 'store')"""
-    )
-    
-    dimension_aggregations: Optional[dict[str, str]] = Field(
-        None,
-        description="""Maps dimension names to aggregation functions.
-
-Usage:
-- Include dimension → Dimension has SQL aggregation
-- Exclude dimension → Dimension is for GROUP BY
-- null or {} → All dimensions are for GROUP BY
-
-Values: 'COUNTD', 'MAX', 'MIN'
-
-Examples:
-- "How many Y per X?" → {"Y": "COUNTD"}
-- "Latest Z by X" → {"Z": "MAX"}
-- "Earliest Z by X" → {"Z": "MIN"}"""
-    )
-    
-    mentioned_measures: List[str] = Field(
-        default_factory=list,
-        description="""List of ALL measure entities identified from query (business terms).
-
-Usage:
-- Include ALL numeric measures
-- Exclude 'count of X' patterns (those are dimensions)
-
-Values: Business term strings (e.g., 'sales', 'profit', 'revenue')"""
-    )
-    
-    measure_aggregations: Optional[dict[str, str]] = Field(
-        None,
-        description="""Maps measure names to aggregation functions.
-
-Usage:
-- Include ALL measures with aggregation function
-
-Values: 'SUM' (default), 'AVG', 'MIN', 'MAX', 'COUNT'"""
-    )
-    
-    mentioned_date_fields: List[str] = Field(
-        default_factory=list,
-        description="""Date fields used for time-based grouping (GROUP BY time periods).
-
-Usage:
-- Include date fields that partition data into time periods
-- Used with date_field_functions to specify granularity
-
-Values: Business term strings"""
-    )
-    
-    date_field_functions: Optional[dict[str, DateFunction]] = Field(
-        None,
-        description="""Maps date field names to time granularity functions for GROUP BY.
-
-Usage:
-- Include date field → Apply time granularity function for grouping
-- Exclude date field → Use raw date value
-- null or {} → No date functions applied
-
-Values: DateFunction enum (YEAR, QUARTER, MONTH, WEEK, DAY)"""
-    )
-    
-    # ===== Date Filtering Information =====
-    
-    filter_date_field: Optional[str] = Field(
-        None,
-        description="""Date field used for time range filtering (WHERE clause with time range).
-
-Usage:
-- Include if query filters data by time range
-- Used with time_range to specify the range
-
-Values: Business term string or null"""
-    )
-    
-    time_range: Optional[TimeRange] = Field(
-        None,
-        description="""Time range specification for date filtering.
-
-Usage:
-- Include if query specifies time range
-
-Values: TimeRange object (absolute, relative, current, or comparison)"""
-    )
-    
-    date_requirements: Optional[DateRequirements] = Field(
-        None,
-        description="""Special date requirements.
-
-Usage:
-- Include if query mentions special date requirements
-
-Values: DateRequirements object (week_start_day, holidays, lunar)"""
-    )
-    
-    needs_exploration: bool = Field(
-        default=False,
-        description="""Indicates if exploratory analysis is needed.
-
-Usage:
-- Set to true for 'why' questions or open-ended exploratory queries
-- Set to false for direct data queries
-
-Values: true (exploratory), false (direct query)"""
-    )
-
-
-class ProcessingSubQuestion(SubQuestionBase):
-    """
-    Processing type sub-question
-    
-    Performs calculations and processing on query results (e.g., year-over-year, month-over-month, growth rate, etc.).
-    """
-    execution_type: Literal["post_processing"] = "post_processing"
-    
-    processing_type: ProcessingType = Field(
-        description="""Type of data processing operation.
-
-Usage:
-- Specify the calculation type to perform on query results"""
-    )
-    
-    depends_on_indices: List[int] = Field(
-        min_length=1,
-        description="""List of dependent sub-question indices.
-
-Usage:
-- MUST include at least one query task index
-- Processing tasks depend on query results
-
-Values: List of integers (0-based indices, minimum 1 element)"""
-    )
-
-
-# Use discriminated union
-SubQuestion = Annotated[
-    Union[QuerySubQuestion, ProcessingSubQuestion],
-    Field(discriminator='execution_type')
-]
-
-
-class SubQuestionRelationship(BaseModel):
-    """
-    Sub-question relationship
-    
-    Describes relationships between multiple sub-questions in sub_questions, used to guide subsequent query planning and insight analysis
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    relation_type: SubQuestionRelationType = Field(
-        description="""Relationship type between sub-questions.
-
-Usage:
-- Classify how sub-questions relate to each other"""
-    )
-    
-    question_indices: List[int] = Field(
-        min_length=1,
-        description="""Related sub-question indices.
-
-Usage:
-- Include indices of related sub-questions
-- Minimum 1 element required
-
-Values: List of integers (0-based indices corresponding to sub_questions list)"""
-    )
-    
-    description: str = Field(
-        description="""Relationship description.
-
-Usage:
-- Explain how these sub-questions are related
-- Provide context for downstream processing
-
-Values: Description string"""
-    )
-    
-    comparison_dimension: Optional[str] = Field(
-        None,
-        description="""Comparison dimension.
-
-Usage:
-- Include only when relation_type is 'comparison'
-- null for other relation types
-
-Values: 'time' (time comparison), 'dimension' (dimension comparison), or null"""
-    )
-
+# ============= Main Model =============
 
 class QuestionUnderstanding(BaseModel):
-    """
-    Question understanding result
+    """Question understanding result - orthogonal entity-based structure with structured reasoning.
     
-    Output by question understanding agent, contains all key information about the question
+    Design Principles:
+    1. Each entity is an independent decision unit (QueryEntity)
+    2. Structured CoT provides traceability and accuracy
+    3. No cross-field dependencies for entity classification
     
-    Important field descriptions:
-    - original_question: User's original question
-    - sub_questions: List of sub-questions split based on VizQL capabilities
-      - If no splitting needed, list contains only 1 element (original question)
-      - If splitting needed, list contains multiple sub-questions
-      - Each sub-question contains independent field identification and date information
+    EXAMPLES:
     
-    Design philosophy:
-    - Field identification and date information belong to sub-questions, not top level
-    - Understanding Agent focuses on intent understanding, does not identify sorting, TopN, filtering requirements
-    - Remove redundant fields, simplify output structure
+    Input: "各省份的销售额"
+    Output: {
+        "question": "各省份的销售额",
+        "is_valid": true,
+        "reasoning": [
+            {"step_name": "intent", "analysis": "用户想按省份分组查看销售额", "conclusion": "多维分解查询"},
+            {"step_name": "entities", "analysis": "识别到'省份'和'销售额'", "conclusion": "2个实体"},
+            {"step_name": "roles", "analysis": "'各省份'表示分组，'销售额'需要聚合", "conclusion": "省份→group_by, 销售额→aggregate(SUM)"}
+        ],
+        "entities": [
+            {"name": "省份", "type": "dimension", "role": "group_by"},
+            {"name": "销售额", "type": "measure", "role": "aggregate", "aggregation": "SUM"}
+        ],
+        "time_range": null,
+        "question_types": ["多维分解"],
+        "complexity": "Simple"
+    }
+    
+    Input: "2024年各省份销售额按月趋势"
+    Output: {
+        "question": "2024年各省份销售额按月趋势",
+        "is_valid": true,
+        "reasoning": [...],
+        "entities": [
+            {"name": "省份", "type": "dimension", "role": "group_by"},
+            {"name": "销售额", "type": "measure", "role": "aggregate", "aggregation": "SUM"},
+            {"name": "日期", "type": "dimension", "role": "group_by", "date_function": "MONTH"}
+        ],
+        "time_range": {"type": "absolute", "value": "2024", "filter_field": "日期"},
+        "question_types": ["趋势", "多维分解"],
+        "complexity": "Medium"
+    }
+    
+    ANTI-PATTERNS:
+    ❌ Using technical field names like "[Sales].[Amount]"
+    ❌ Missing entity in "count of X per Y" - both X and Y should be entities
+    ❌ Duplicate entity names in entities list
+    ❌ is_valid=false without invalid_reason
+    ❌ Empty reasoning for valid questions
     """
     model_config = ConfigDict(extra="forbid")
     
-    original_question: str = Field(
+    # ===== Core Fields =====
+    
+    question: str = Field(
         ...,
-        description="""User's original question.
-
-Usage:
-- Store the exact question text from user
-
-Values: Question text string"""
+        description="""Original question text (verbatim copy)."""
     )
     
-    sub_questions: List[SubQuestion] = Field(
-        ...,
-        min_length=1,
-        description="""List of decomposed sub-questions.
-
-Usage:
-- Include 1 element if no decomposition needed
-- Include multiple elements if decomposition required
-- Each sub-question contains field recognition and date information
-
-Values: List of SubQuestion objects (minimum 1 element)"""
-    )
-    
-    is_valid_question: bool = Field(
+    is_valid: bool = Field(
         ...,
         description="""Whether this is a valid data analysis question.
 
-Usage:
-- Set to true for valid questions
-- Set to false for invalid questions
+VALUES:
+- true: Valid data analysis question
+- false: Invalid (greeting, off-topic, unclear)
 
-Values: true (valid), false (invalid)"""
+EXAMPLES:
+- "各省份销售额" → true
+- "你好" → false
+- "今天天气" → false"""
     )
     
     invalid_reason: Optional[str] = Field(
         None,
-        description="""Reason for invalidity.
+        description="""Reason for invalid question (Chinese).
 
-Usage:
-- Include only when is_valid_question=false
-- null when is_valid_question=true
+WHEN: Required when is_valid=false
 
-Values: Reason string or null"""
+EXAMPLES:
+- "你好" → "这是问候语，不是数据分析问题"
+- "天气" → "天气查询不在数据分析范围内" """
     )
     
-    question_type: List[QuestionType] = Field(
+    # ===== Structured Reasoning (CoT) =====
+    
+    reasoning: List[ReasoningStep] = Field(
+        default_factory=list,
+        description="""Structured reasoning steps (Chain-of-Thought).
+
+WHAT: Step-by-step reasoning process for question understanding
+WHEN: For valid questions, provide reasoning steps
+HOW: Follow the 5-step process: intent → entities → roles → time → validation
+
+STEPS:
+1. intent: What does the user want? (query type)
+2. entities: What business terms are mentioned?
+3. roles: How is each entity used in SQL?
+4. time: Is there a time scope?
+5. validation: Are the results consistent?
+
+BENEFITS:
+- Traceability: Can see why each decision was made
+- Accuracy: Forces systematic thinking
+- Debuggability: Easy to identify reasoning errors"""
+    )
+    
+    # ===== Entity Recognition (Orthogonal) =====
+    
+    entities: List[QueryEntity] = Field(
+        default_factory=list,
+        description="""All entities extracted from question.
+
+WHAT: List of QueryEntity objects, each independently classified
+WHEN: For valid questions
+HOW: Extract all business terms, classify each independently
+
+Each entity has: name, type, role, aggregation?, date_function?
+
+EXAMPLES:
+- "各省份销售额" → 2 entities (省份, 销售额)
+- "多少产品" → 1 entity (产品 with COUNTD)
+- "按月趋势" → 1 entity (日期 with MONTH function)"""
+    )
+    
+    # ===== Time Range =====
+    
+    time_range: Optional[TimeRange] = Field(
+        None,
+        description="""Time range for filtering.
+
+WHEN: When question specifies a time period
+HOW: Create TimeRange object
+
+EXAMPLES:
+- "2024年销售额" → TimeRange(type=absolute, value="2024")
+- "最近3个月" → TimeRange(type=relative, ...)
+- "各省份销售额" → null (no time filter)"""
+    )
+    
+    # ===== Classification =====
+    
+    question_types: List[QuestionType] = Field(
         default_factory=list,
         description="""Question type classification.
 
-Usage:
-- Include ALL applicable question types
-- Can have multiple types for complex questions
+VALUES:
+- 对比: "A vs B", "对比"
+- 趋势: "趋势", "变化", "走势"
+- 排名: "排名", "前N", "Top"
+- 多维分解: "各X", "按X分析"
+- 占比: "占比", "比例"
+- 同环比: "同比", "环比"
 
-Values: List of QuestionType enum values
-
-Examples:
-- "Sales by province" → ["多维分解"]
-- "Top 5 provinces by sales" → ["排名"]
-- "This year vs last year sales" → ["对比", "趋势"]"""
+EXAMPLES:
+- "各省份销售额" → ["多维分解"]
+- "销售额趋势" → ["趋势"]
+- "各省份销售额同比" → ["多维分解", "同环比"]"""
     )
     
     complexity: Complexity = Field(
         ...,
-        description="""Question complexity level.
+        description="""Query complexity level.
 
-Usage:
-- Classify based on query complexity
-
-Values: 'Simple', 'Medium', 'Complex'
-
-Examples:
-- "Total sales" → Simple
-- "Sales by province and channel" → Medium
-- "YoY growth rate by province with filters" → Complex"""
+VALUES:
+- Simple: Single entity or basic query
+- Medium: Multiple entities or time analysis
+- Complex: Calculations or advanced analytics"""
     )
+    
+    needs_exploration: bool = Field(
+        default=False,
+        description="""Whether exploratory analysis is needed.
 
+WHEN: true for "why", "reason" type questions
+
+EXAMPLES:
+- "为什么销售下降" → true
+- "各省份销售额" → false"""
+    )
+    
+    @model_validator(mode='after')
+    def validate_consistency(self) -> 'QuestionUnderstanding':
+        """Validate model consistency."""
+        # Invalid reason required when invalid
+        if not self.is_valid and not self.invalid_reason:
+            raise ValueError("invalid_reason required when is_valid=false")
+        
+        # Check for duplicate entity names
+        names = [e.name for e in self.entities]
+        if len(names) != len(set(names)):
+            raise ValueError("Duplicate entity names in entities list")
+        
+        return self
 
 # ============= Helper Functions =============
 
-def create_time_range_absolute(value: str) -> TimeRange:
-    """Create absolute time range"""
+def create_entity(
+    name: str,
+    entity_type: EntityType,
+    role: EntityRole,
+    aggregation: Optional[AggregationType] = None,
+    date_function: Optional[DateFunction] = None
+) -> QueryEntity:
+    """Create a QueryEntity with validation."""
+    return QueryEntity(
+        name=name,
+        type=entity_type,
+        role=role,
+        aggregation=aggregation,
+        date_function=date_function
+    )
+
+
+def create_time_range_absolute(value: str, filter_field: str = "日期") -> TimeRange:
+    """Create absolute time range."""
     return TimeRange(
         type=TimeRangeType.ABSOLUTE,
-        value=value
+        value=value,
+        filter_field=filter_field
     )
 
 
 def create_time_range_relative(
     relative_type: RelativeType,
     period_type: PeriodType,
+    filter_field: str = "日期",
     range_n: Optional[int] = None
 ) -> TimeRange:
-    """Create relative time range"""
+    """Create relative time range."""
     return TimeRange(
         type=TimeRangeType.RELATIVE,
         relative_type=relative_type,
         period_type=period_type,
+        filter_field=filter_field,
         range_n=range_n
     )
 
 
-def create_time_range_current() -> TimeRange:
-    """Create current time range"""
-    return TimeRange(type=TimeRangeType.CURRENT)
+# ============= Legacy Compatibility Layer =============
+# These models are deprecated but kept for backward compatibility with task_planner
+# TODO: Remove after task_planner is refactored to use entity-based model
+
+class SubQuestionExecutionType(str, Enum):
+    """DEPRECATED: Sub-question execution type (legacy compatibility)"""
+    QUERY = "query"
+    CALCULATION = "calculation"
+    POST_PROCESSING = "post_processing"
+
+
+class SubQuestion(BaseModel):
+    """DEPRECATED: Sub-question for task decomposition (legacy compatibility).
+    
+    Note: This is a legacy model for compatibility with task_planner.
+    New code should use QuestionUnderstanding with entities.
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    text: str = Field(..., description="Sub-question text")
+    completed_text: str = Field(default="", description="Completed sub-question text")
+    execution_type: SubQuestionExecutionType = Field(
+        default=SubQuestionExecutionType.QUERY,
+        description="Execution type"
+    )
+    mentioned_dimensions: List[str] = Field(default_factory=list)
+    mentioned_measures: List[str] = Field(default_factory=list)
+    mentioned_date_fields: List[str] = Field(default_factory=list)
+    dimension_aggregations: Optional[dict] = Field(default=None)
+    measure_aggregations: Optional[dict] = Field(default=None)
+    date_field_functions: Optional[dict] = Field(default=None)
+    time_range: Optional[TimeRange] = Field(default=None)
+    filter_date_field: Optional[str] = Field(default=None)
+    depends_on_indices: List[int] = Field(default_factory=list)
+    processing_type: Optional[str] = Field(default=None)
+
+
+# Alias for backward compatibility
+QuerySubQuestion = SubQuestion
 
 
 # ============= Exports =============
 
 __all__ = [
-    # 枚举
+    # Enums
+    "EntityRole",
+    "AggregationType", 
+    "EntityType",
+    "DateFunction",
     "QuestionType",
     "Complexity",
     "TimeRangeType",
     "RelativeType",
     "PeriodType",
-    "DateFunction",
-    "SubQuestionExecutionType",
-    "ProcessingType",
-    "SubQuestionRelationType",
-    "WeekStartDay",
+    "SubQuestionExecutionType",  # Legacy
     
-    # 模型
+    # Models
+    "QueryEntity",
     "TimeRange",
-    "WeekStartDayInfo",
-    "HolidayInfo",
-    "LunarInfo",
-    "DateRequirements",
-    "SubQuestionBase",
-    "QuerySubQuestion",
-    "ProcessingSubQuestion",
-    "SubQuestion",
-    "SubQuestionRelationship",
+    "ReasoningStep",
     "QuestionUnderstanding",
+    "SubQuestion",  # Legacy
+    "QuerySubQuestion",  # Legacy alias
     
-    # 辅助函数
+    # Helpers
+    "create_entity",
     "create_time_range_absolute",
     "create_time_range_relative",
-    "create_time_range_current",
 ]

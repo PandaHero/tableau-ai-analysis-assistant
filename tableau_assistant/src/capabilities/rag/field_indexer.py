@@ -303,6 +303,8 @@ class FieldIndexer:
         """
         构建 FAISS 索引
         
+        使用内积（Inner Product）索引配合归一化向量实现余弦相似度。
+        
         Args:
             vectors: 向量列表
         """
@@ -315,11 +317,16 @@ class FieldIndexer:
             vector_array = np.array(vectors, dtype=np.float32)
             dimension = vector_array.shape[1]
             
-            # 创建 FAISS 索引（使用 L2 距离）
-            self._faiss_index = faiss.IndexFlatL2(dimension)
+            # 归一化向量（用于余弦相似度）
+            norms = np.linalg.norm(vector_array, axis=1, keepdims=True)
+            norms[norms == 0] = 1  # 避免除零
+            vector_array = vector_array / norms
+            
+            # 创建 FAISS 索引（使用内积，配合归一化向量等价于余弦相似度）
+            self._faiss_index = faiss.IndexFlatIP(dimension)
             self._faiss_index.add(vector_array)
             
-            logger.debug(f"FAISS 索引已构建: {len(vectors)} 个向量, 维度 {dimension}")
+            logger.debug(f"FAISS 索引已构建（余弦相似度）: {len(vectors)} 个向量, 维度 {dimension}")
             
         except Exception as e:
             logger.error(f"构建 FAISS 索引失败: {e}")
@@ -329,26 +336,31 @@ class FieldIndexer:
         """
         使用 FAISS 进行向量搜索
         
+        使用内积索引，查询向量需要归一化以获得余弦相似度。
+        
         Args:
             query_vector: 查询向量
             top_k: 返回结果数量
         
         Returns:
-            (field_name, similarity) 列表
+            (field_name, similarity) 列表，相似度范围 [0, 1]
         """
         try:
-            # 转换查询向量
+            # 转换并归一化查询向量
             query_array = np.array([query_vector], dtype=np.float32)
+            norm = np.linalg.norm(query_array)
+            if norm > 0:
+                query_array = query_array / norm
             
-            # FAISS 搜索（返回距离，需要转换为相似度）
-            distances, indices = self._faiss_index.search(query_array, min(top_k, len(self._field_names)))
+            # FAISS 搜索（内积分数，归一化后等于余弦相似度）
+            scores_array, indices = self._faiss_index.search(query_array, min(top_k, len(self._field_names)))
             
             scores = []
-            for distance, idx in zip(distances[0], indices[0]):
+            for score, idx in zip(scores_array[0], indices[0]):
                 if idx >= 0 and idx < len(self._field_names):  # 有效索引
                     field_name = self._field_names[idx]
-                    # 将 L2 距离转换为相似度（0-1）
-                    similarity = 1.0 / (1.0 + distance)
+                    # 内积分数范围 [-1, 1]，转换为 [0, 1]
+                    similarity = (score + 1.0) / 2.0
                     scores.append((field_name, similarity))
             
             return scores
@@ -408,6 +420,90 @@ class FieldIndexer:
         else:
             # 回退到简单搜索
             scores = self._simple_search(query_vector)
+        
+        # 应用过滤器
+        filtered_scores = []
+        for field_name, similarity in scores:
+            chunk = self._chunks[field_name]
+            
+            if category_filter and chunk.category != category_filter:
+                continue
+            if role_filter and chunk.role != role_filter:
+                continue
+            
+            filtered_scores.append((field_name, similarity))
+        
+        # 返回 top-k
+        top_scores = filtered_scores[:top_k]
+        
+        results = []
+        for rank, (field_name, score) in enumerate(top_scores, 1):
+            results.append(RetrievalResult(
+                field_chunk=self._chunks[field_name],
+                score=max(0.0, min(1.0, score)),  # 确保分数在 0-1 之间
+                source=RetrievalSource.EMBEDDING,
+                rank=rank
+            ))
+        
+        return results
+    
+    async def asearch(
+        self,
+        query: str,
+        top_k: int = 5,
+        category_filter: Optional[str] = None,
+        role_filter: Optional[str] = None
+    ) -> List[RetrievalResult]:
+        """
+        异步搜索相似字段
+        
+        使用异步 embedding 进行向量化，提供更好的并发性能。
+        
+        Args:
+            query: 查询文本
+            top_k: 返回结果数量
+            category_filter: 按类别过滤
+            role_filter: 按角色过滤（dimension/measure）
+        
+        Returns:
+            检索结果列表
+        
+        **Validates: Requirements 7.4**
+        """
+        import asyncio
+        
+        if not self._chunks:
+            logger.warning("索引为空，请先调用 index_fields()")
+            return []
+        
+        # 异步向量化查询
+        if hasattr(self.embedding_provider, 'aembed_query'):
+            query_vector = await self.embedding_provider.aembed_query(query)
+        else:
+            # 回退到同步方法
+            loop = asyncio.get_event_loop()
+            query_vector = await loop.run_in_executor(
+                None,
+                self.embedding_provider.embed_query,
+                query
+            )
+        
+        # 使用 FAISS 搜索（如果可用）- 这部分是 CPU 密集型，在线程池中执行
+        loop = asyncio.get_event_loop()
+        if self._faiss_index is not None and FAISS_AVAILABLE:
+            scores = await loop.run_in_executor(
+                None,
+                self._faiss_search,
+                query_vector,
+                top_k * 2  # 获取更多结果用于过滤
+            )
+        else:
+            # 回退到简单搜索
+            scores = await loop.run_in_executor(
+                None,
+                self._simple_search,
+                query_vector
+            )
         
         # 应用过滤器
         filtered_scores = []

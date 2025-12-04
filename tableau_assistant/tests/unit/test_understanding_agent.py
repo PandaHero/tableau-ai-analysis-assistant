@@ -19,7 +19,7 @@ from tableau_assistant.src.models.question import (
     QuerySubQuestion,
     SubQuestionExecutionType
 )
-from tableau_assistant.src.config.model_config import AgentType
+from tableau_assistant.src.model_manager import AgentType
 
 
 class TestUnderstandingAgent:

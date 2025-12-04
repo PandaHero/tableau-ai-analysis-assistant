@@ -90,21 +90,29 @@ from .vizql_types import (
 # ========== Question Models ==========
 from .question import (
     # Enums
+    EntityRole,
+    AggregationType,
+    EntityType,
+    DateFunction,
     QuestionType,
     Complexity,
     TimeRangeType,
     RelativeType,
     PeriodType,
+    SubQuestionExecutionType,  # Legacy compatibility
     
     # Models
+    QueryEntity,
     TimeRange,
-    DateRequirements,
+    ReasoningStep,
     QuestionUnderstanding,
+    SubQuestion,  # Legacy compatibility
+    QuerySubQuestion,  # Legacy compatibility alias
     
     # Helper functions
+    create_entity,
     create_time_range_absolute,
     create_time_range_relative,
-    create_time_range_current,
 )
 
 # ========== Boost Models ==========
@@ -210,17 +218,25 @@ __all__ = [
     "create_relative_date_filter",
     
     # Question
+    "EntityRole",
+    "AggregationType",
+    "EntityType",
+    "DateFunction",
     "QuestionType",
     "Complexity",
     "TimeRangeType",
     "RelativeType",
     "PeriodType",
+    "SubQuestionExecutionType",  # Legacy
+    "QueryEntity",
     "TimeRange",
-    "DateRequirements",
+    "ReasoningStep",
     "QuestionUnderstanding",
+    "SubQuestion",  # Legacy
+    "QuerySubQuestion",  # Legacy
+    "create_entity",
     "create_time_range_absolute",
     "create_time_range_relative",
-    "create_time_range_current",
     
     # Boost
     "QuestionBoost",

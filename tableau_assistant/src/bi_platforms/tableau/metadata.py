@@ -1,184 +1,41 @@
+"""
+Tableau 元数据服务
+
+提供数据源元数据获取功能：
+- 字段信息（名称、类型、角色）
+- 数据模型（逻辑表、关系）
+- 维度样例值和唯一值数量
+
+统一使用 VizQLClient 进行 API 调用
+"""
 import json
-import re
 import requests
 import asyncio
+import aiohttp
 from typing import Any, Dict, List, Optional
-from tableau_assistant.src.bi_platforms.tableau.utils import http_post
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 使用新的证书管理包
+from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient, VizQLClientConfig
+
+# SSL 配置
 try:
     from tableau_assistant.cert_manager import get_ssl_config
-    def get_aiohttp_ssl():
+    def _get_aiohttp_ssl():
         return get_ssl_config().get_aiohttp_ssl_param()
 except ImportError:
-    # 兼容旧版本
-    from tableau_assistant.src.utils.ssl_config import get_aiohttp_ssl
+    def _get_aiohttp_ssl():
+        return False
 
 
-def _simplify_fields(raw_fields: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def get_data_dictionary(
+    api_key: str,
+    domain: str,
+    datasource_luid: str,
+    site: Optional[str] = None,
+    include_samples: bool = True
+) -> Dict[str, Any]:
     """
-    精简字段元数据，仅保留必要信息。
-    
-    规则：
-    1. 去除隐藏字段（isHidden=True）
-    2. 验证计算字段引用的字段是否存在，删除无效的计算字段
-    3. 仅保留必要键：name, role, dataType, dataCategory, aggregation
-    4. 如果有计算字段的formula为对单一原始字段的直接引用（如"[shop_id]"），
-       则删除该原始字段，仅保留计算字段
-    
-    Args:
-        raw_fields: 原始字段列表
-        
-    Returns:
-        精简后的字段列表
-    """
-    # 1. 过滤隐藏字段
-    visible_fields = [f for f in raw_fields if not f.get('isHidden')]
-    
-    # 2. 构建所有字段名称集合（用于验证引用）
-    all_field_names = {f.get('name', '') for f in visible_fields if f.get('name')}
-    
-    # 3. 验证计算字段并找出单一字段引用
-    calculated_field_refs = {}  # {原始字段名: 计算字段}
-    valid_calculated_fields = set()  # 有效的计算字段名称
-    
-    for field in visible_fields:
-        if field.get('__typename') == 'CalculatedField':
-            formula = field.get('formula', '')
-            field_name = field.get('name', '')
-            
-            # 提取公式中所有的字段引用 [field_name]
-            referenced_fields = re.findall(r'\[([^\]]+)\]', formula)
-            
-            # 检查所有引用的字段是否存在
-            all_refs_exist = all(ref in all_field_names for ref in referenced_fields)
-            
-            if all_refs_exist:
-                # 计算字段有效
-                valid_calculated_fields.add(field_name)
-                
-                # 检查是否为单一字段引用
-                if re.match(r'^\[([^\]]+)\]$', formula.strip()):
-                    ref_field_name = referenced_fields[0]
-                    calculated_field_refs[ref_field_name] = field
-            # 如果引用的字段不存在，该计算字段将被过滤掉（不加入valid_calculated_fields）
-    
-    # 4. 过滤字段：去除被引用的原始字段和无效的计算字段
-    filtered_fields = []
-    for field in visible_fields:
-        field_name = field.get('name', '')
-        field_type = field.get('__typename', '')
-        
-        # 如果是计算字段，检查是否有效
-        if field_type == 'CalculatedField':
-            if field_name in valid_calculated_fields:
-                filtered_fields.append(field)
-            # 无效的计算字段被跳过
-            continue
-        
-        # 如果是被计算字段引用的原始字段，跳过它
-        if field_name in calculated_field_refs:
-            continue
-        
-        # 其他字段保留
-        filtered_fields.append(field)
-    
-    # 5. 精简字段，仅保留必要键
-    simplified_fields = []
-    essential_keys = {'name', 'role', 'dataType', 'dataCategory', 'aggregation'}
-    
-    for field in filtered_fields:
-        simplified = {}
-        for key in essential_keys:
-            if key in field:
-                simplified[key] = field[key]
-        
-        # 如果是计算字段，保留formula以便理解
-        if field.get('__typename') == 'CalculatedField' and 'formula' in field:
-            simplified['formula'] = field['formula']
-        
-        # 确保至少有name字段
-        if 'name' in simplified:
-            simplified_fields.append(simplified)
-    
-    return simplified_fields
-
-
-def get_datasource_query(luid):
-    query = f"""
-    query datasourceFieldInfo {{
-        publishedDatasources(filter: {{ luid: "{luid}" }}) {{
-          name
-          description
-          owner {{
-            name
-          }}
-          fields {{
-            name
-            isHidden
-            description
-            descriptionInherited {{
-              attribute
-              value
-            }}
-            fullyQualifiedName
-            __typename
-            ... on AnalyticsField {{
-              __typename
-            }}
-            ... on ColumnField {{
-              dataCategory
-              role
-              dataType
-              defaultFormat
-              semanticRole
-              aggregation
-              aggregationParam
-            }}
-            ... on CalculatedField {{
-              dataCategory
-              role
-              dataType
-              defaultFormat
-              semanticRole
-              aggregation
-              aggregationParam
-              formula
-              isAutoGenerated
-              hasUserReference
-            }}
-            ... on BinField {{
-              dataCategory
-              role
-              dataType
-              formula
-              binSize
-            }}
-            ... on GroupField {{
-              dataCategory
-              role
-              dataType
-              hasOther
-            }}
-            ... on CombinedSetField {{
-              delimiter
-              combinationType
-            }}
-          }}
-        }}
-      }}
-    """
-
-    return query
-
-
-async def get_data_dictionary_async(api_key: str, domain: str, datasource_luid: str, site: Optional[str] = None, include_samples: bool = True) -> Dict[str, Any]:
-    """
-    异步获取数据源元数据（使用 VizQL + GraphQL 统一服务）。
-    
-    通过 TableauMetadataService 获取字段数据，包含：
-    - VizQL API 提供的 logicalTableId
-    - GraphQL API 提供的准确 role
+    获取数据源元数据
     
     Args:
         api_key: Tableau 认证 token
@@ -188,54 +45,45 @@ async def get_data_dictionary_async(api_key: str, domain: str, datasource_luid: 
         include_samples: 是否包含维度样例数据
     
     Returns:
-        元数据字典
+        元数据字典，包含 fields, field_count, data_model 等
     """
-    # 规范化域名
     domain = (domain or "").rstrip("/")
     
-    # 使用 TableauMetadataService 获取字段（VizQL + GraphQL 合并）
-    # 注意：这里延迟导入避免循环引用，因为 TableauMetadataService 在文件后面定义
-    service = None
-    try:
-        # 创建服务实例
-        from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient, VizQLClientConfig
-        
-        vizql_config = VizQLClientConfig(base_url=domain, timeout=30, max_retries=3)
-        vizql_client = VizQLClient(config=vizql_config)
-        
-        # 从 VizQL API 获取字段（包含 logicalTableId）
+    config = VizQLClientConfig(base_url=domain, timeout=30, max_retries=3)
+    
+    with VizQLClient(config=config) as client:
+        # 获取字段元数据
         vizql_fields = []
         try:
-            response = vizql_client.read_metadata(datasource_luid=datasource_luid, api_key=api_key, site=site)
+            response = client.read_metadata(datasource_luid=datasource_luid, api_key=api_key, site=site)
             vizql_fields = response.get("data", [])
         except Exception as e:
-            print(f"Warning: VizQL API failed: {e}")
+            print(f"Warning: VizQL read_metadata failed: {e}")
         
-        # 从 VizQL API 获取数据模型（逻辑表和关系）
+        # 获取数据模型
         data_model_dict = None
         try:
-            model_response = vizql_client.get_datasource_model(datasource_luid=datasource_luid, api_key=api_key, site=site)
+            model_response = client.get_datasource_model(datasource_luid=datasource_luid, api_key=api_key, site=site)
             data_model_dict = {
                 "logicalTables": model_response.get("logicalTables", []),
                 "logicalTableRelationships": model_response.get("logicalTableRelationships", [])
             }
         except Exception as e:
-            print(f"Warning: Failed to get data model: {e}")
+            print(f"Warning: get_datasource_model failed: {e}")
         
-        # 从 GraphQL API 获取 role（轻量级查询）
-        role_map = await _fetch_graphql_roles_async(domain, datasource_luid, api_key, site)
+        # 获取 GraphQL roles
+        role_map = _fetch_graphql_roles(domain, datasource_luid, api_key, site)
         
-        # 合并数据，构建字段列表
+        # 构建字段列表
         simplified_fields = []
         for vf in vizql_fields:
             field_name = vf.get("fieldCaption") or vf.get("fieldName", "")
             
-            # 获取 role（优先 GraphQL，后备推断）
             role = role_map.get(field_name) or role_map.get(vf.get("fieldName"))
             if not role:
-                role = _infer_role_from_aggregation(vf.get("defaultAggregation"), vf.get("dataType"))
+                role = _infer_role(vf.get("defaultAggregation"), vf.get("dataType"))
             
-            field_dict = {
+            simplified_fields.append({
                 "name": field_name,
                 "fieldCaption": vf.get("fieldCaption", ""),
                 "fieldName": vf.get("fieldName"),
@@ -243,76 +91,230 @@ async def get_data_dictionary_async(api_key: str, domain: str, datasource_luid: 
                 "dataType": vf.get("dataType", "UNKNOWN"),
                 "dataCategory": vf.get("dataCategory"),
                 "aggregation": vf.get("defaultAggregation"),
-                "logicalTableId": vf.get("logicalTableId"),  # VizQL 特有
+                "logicalTableId": vf.get("logicalTableId"),
                 "columnClass": vf.get("columnClass"),
                 "formula": vf.get("formula"),
-            }
-            simplified_fields.append(field_dict)
+            })
         
-        # 批量获取维度样例数据（如果启用）
+        # 获取维度样例数据
         if include_samples:
             dimension_names = [f['name'] for f in simplified_fields if f.get('role', '').upper() == 'DIMENSION']
-            measure_field = None
-            for f in simplified_fields:
-                if f.get('role', '').upper() == 'MEASURE':
-                    measure_field = f['name']
-                    break
+            measure_field = next((f['name'] for f in simplified_fields if f.get('role', '').upper() == 'MEASURE'), None)
             
             if dimension_names and measure_field:
-                batch_size = 1
-                batches = [dimension_names[i:i + batch_size] for i in range(0, len(dimension_names), batch_size)]
+                samples_dict = _fetch_dimension_samples(
+                    client=client,
+                    datasource_luid=datasource_luid,
+                    dimension_names=dimension_names,
+                    measure_field=measure_field,
+                    api_key=api_key,
+                    site=site
+                )
                 
-                async def fetch_batch_async(batch):
-                    try:
-                        result = await _fetch_dimension_samples_async(
-                            api_key=api_key,
-                            domain=domain,
-                            datasource_luid=datasource_luid,
-                            dimension_names=batch,
-                            measure_field=measure_field,
-                            sample_size=1,
-                            site=site
-                        )
-                        return result
-                    except Exception as e:
-                        print(f"Warning: Failed to fetch samples for batch {batch[:2]}: {e}")
-                        return {}
-                
-                results = await asyncio.gather(*[fetch_batch_async(batch) for batch in batches])
-                
-                samples_dict = {}
-                for result in results:
-                    samples_dict.update(result)
-                
-                # 写入样例数据
                 for field in simplified_fields:
                     if field.get('role', '').upper() == 'DIMENSION':
                         field_name = field['name']
                         if field_name in samples_dict:
                             dim_data = samples_dict[field_name]
-                            if isinstance(dim_data, dict):
-                                if dim_data.get('sample_values'):
-                                    field['sample_values'] = dim_data['sample_values']
-                                if 'unique_count' in dim_data:
-                                    field['unique_count'] = dim_data['unique_count']
-                            elif dim_data:
-                                field['sample_values'] = dim_data
+                            if dim_data.get('sample_values'):
+                                field['sample_values'] = dim_data['sample_values']
+                            if dim_data.get('unique_count'):
+                                field['unique_count'] = dim_data['unique_count']
         
         return {
             'datasource_luid': datasource_luid,
             'fields': simplified_fields,
             'field_count': len(simplified_fields),
             'field_names': [f['name'] for f in simplified_fields],
-            'data_model': data_model_dict,  # 数据模型（逻辑表和关系）
+            'data_model': data_model_dict,
         }
+
+
+async def get_data_dictionary_async(
+    api_key: str,
+    domain: str,
+    datasource_luid: str,
+    site: Optional[str] = None,
+    include_samples: bool = True
+) -> Dict[str, Any]:
+    """
+    异步获取数据源元数据
     
-    finally:
-        if vizql_client:
-            vizql_client.close()
+    使用 aiohttp 实现真正的异步并发，所有维度样例请求同时发起
+    """
+    domain = (domain or "").rstrip("/")
+    
+    config = VizQLClientConfig(base_url=domain, timeout=30, max_retries=3)
+    
+    with VizQLClient(config=config) as client:
+        # 同步获取基础元数据（这些请求较少，不需要并发）
+        vizql_fields = []
+        try:
+            response = client.read_metadata(datasource_luid=datasource_luid, api_key=api_key, site=site)
+            vizql_fields = response.get("data", [])
+        except Exception as e:
+            print(f"Warning: VizQL read_metadata failed: {e}")
+        
+        data_model_dict = None
+        try:
+            model_response = client.get_datasource_model(datasource_luid=datasource_luid, api_key=api_key, site=site)
+            data_model_dict = {
+                "logicalTables": model_response.get("logicalTables", []),
+                "logicalTableRelationships": model_response.get("logicalTableRelationships", [])
+            }
+        except Exception as e:
+            print(f"Warning: get_datasource_model failed: {e}")
+        
+        role_map = _fetch_graphql_roles(domain, datasource_luid, api_key, site)
+        
+        # 构建字段列表
+        simplified_fields = []
+        for vf in vizql_fields:
+            field_name = vf.get("fieldCaption") or vf.get("fieldName", "")
+            role = role_map.get(field_name) or role_map.get(vf.get("fieldName"))
+            if not role:
+                role = _infer_role(vf.get("defaultAggregation"), vf.get("dataType"))
+            
+            simplified_fields.append({
+                "name": field_name,
+                "fieldCaption": vf.get("fieldCaption", ""),
+                "fieldName": vf.get("fieldName"),
+                "role": role.upper() if role else "DIMENSION",
+                "dataType": vf.get("dataType", "UNKNOWN"),
+                "dataCategory": vf.get("dataCategory"),
+                "aggregation": vf.get("defaultAggregation"),
+                "logicalTableId": vf.get("logicalTableId"),
+                "columnClass": vf.get("columnClass"),
+                "formula": vf.get("formula"),
+            })
+        
+        # 异步并发获取维度样例数据
+        if include_samples:
+            dimension_names = [f['name'] for f in simplified_fields if f.get('role', '').upper() == 'DIMENSION']
+            measure_field = next((f['name'] for f in simplified_fields if f.get('role', '').upper() == 'MEASURE'), None)
+            
+            if dimension_names and measure_field:
+                samples_dict = await _fetch_dimension_samples_async(
+                    client=client,
+                    datasource_luid=datasource_luid,
+                    dimension_names=dimension_names,
+                    measure_field=measure_field,
+                    api_key=api_key,
+                    site=site
+                )
+                
+                for field in simplified_fields:
+                    if field.get('role', '').upper() == 'DIMENSION':
+                        field_name = field['name']
+                        if field_name in samples_dict:
+                            dim_data = samples_dict[field_name]
+                            if dim_data.get('sample_values'):
+                                field['sample_values'] = dim_data['sample_values']
+                            if dim_data.get('unique_count'):
+                                field['unique_count'] = dim_data['unique_count']
+        
+        return {
+            'datasource_luid': datasource_luid,
+            'fields': simplified_fields,
+            'field_count': len(simplified_fields),
+            'field_names': [f['name'] for f in simplified_fields],
+            'data_model': data_model_dict,
+        }
 
 
-async def _fetch_graphql_roles_async(domain: str, datasource_luid: str, api_key: str, site: Optional[str] = None) -> Dict[str, str]:
-    """异步从 GraphQL API 获取字段 role"""
+async def _fetch_dimension_samples_async(
+    client: VizQLClient,
+    datasource_luid: str,
+    dimension_names: List[str],
+    measure_field: str,
+    api_key: str,
+    site: Optional[str] = None,
+    sample_size: int = 5,
+    max_concurrent: int = 10
+) -> Dict[str, Dict[str, Any]]:
+    """
+    异步并发获取所有维度的样例数据
+    
+    使用 VizQLClient 的异步方法，通过共享 aiohttp session 实现真正的并发
+    使用 Semaphore 限制并发数，避免触发速率限制
+    """
+    if not dimension_names:
+        return {}
+    
+    # 使用信号量限制并发数
+    semaphore = asyncio.Semaphore(max_concurrent)
+    
+    async def fetch_one(session: aiohttp.ClientSession, dim: str) -> tuple:
+        """获取单个维度的样例"""
+        async with semaphore:  # 限制并发数
+            query = {
+                "fields": [
+                    {"fieldCaption": dim},
+                    {"fieldCaption": f"countd_{dim}", "calculation": f"{{FIXED : COUNTD([{dim}])}}"}
+                ],
+                "filters": [{
+                    "filterType": "TOP",
+                    "field": {"fieldCaption": dim},
+                    "fieldToMeasure": {"fieldCaption": measure_field, "function": "SUM"},
+                    "howMany": sample_size,
+                    "direction": "TOP"
+                }]
+            }
+            
+            result = {"sample_values": [], "unique_count": 0}
+            try:
+                # 使用 VizQLClient 的异步方法
+                data = await client.query_datasource_async(
+                    datasource_luid=datasource_luid,
+                    query=query,
+                    api_key=api_key,
+                    site=site,
+                    session=session
+                )
+                
+                for row in data.get("data", []):
+                    if isinstance(row, dict):
+                        value = row.get(dim)
+                        if value is not None:
+                            value_str = str(value).strip()
+                            if value_str and value_str not in result["sample_values"]:
+                                result["sample_values"].append(value_str)
+                        if result["unique_count"] == 0:
+                            countd = row.get(f"countd_{dim}")
+                            if countd is not None:
+                                try:
+                                    result["unique_count"] = int(countd)
+                                except (ValueError, TypeError):
+                                    pass
+            except Exception as e:
+                print(f"    [ERROR] 获取 {dim} 样例失败: {e}")
+            
+            return (dim, result)
+    
+    # 使用单个 session 并发所有请求
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        tasks = [fetch_one(session, dim) for dim in dimension_names]
+        results_list = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # 处理结果
+    results = {}
+    for item in results_list:
+        if isinstance(item, Exception):
+            continue
+        dim, result = item
+        results[dim] = result
+    
+    return results
+
+
+def _fetch_graphql_roles(
+    domain: str,
+    datasource_luid: str,
+    api_key: str,
+    site: Optional[str] = None
+) -> Dict[str, str]:
+    """从 GraphQL API 获取字段 role"""
     query = f'''
     query fieldRoles {{
       publishedDatasources(filter: {{luid: "{datasource_luid}"}}) {{
@@ -329,7 +331,6 @@ async def _fetch_graphql_roles_async(domain: str, datasource_luid: str, api_key:
     
     try:
         full_url = f"{domain}/api/metadata/graphql"
-        payload = {"query": query, "variables": {}}
         headers = {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
@@ -338,1140 +339,241 @@ async def _fetch_graphql_roles_async(domain: str, datasource_luid: str, api_key:
         if site:
             headers['X-Tableau-Site'] = site
         
-        response = await http_post(endpoint=full_url, headers=headers, payload=payload)
+        response = requests.post(full_url, headers=headers, json={"query": query, "variables": {}})
         
-        if response['status'] == 200:
-            data = response['data']
-            if 'errors' in data:
-                return {}
-            
-            ds_list = data.get('data', {}).get('publishedDatasources', [])
-            if not ds_list:
-                return {}
-            
-            role_map = {}
-            for field in ds_list[0].get('fields', []):
-                name = field.get('name', '')
-                role = field.get('role', 'dimension')
-                if name:
-                    role_map[name] = role.lower() if role else 'dimension'
-            
-            return role_map
+        if response.status_code == 200:
+            data = response.json()
+            if 'errors' not in data:
+                ds_list = data.get('data', {}).get('publishedDatasources', [])
+                if ds_list:
+                    return {
+                        f.get('name', ''): (f.get('role', 'dimension') or 'dimension').lower()
+                        for f in ds_list[0].get('fields', [])
+                        if f.get('name')
+                    }
     except Exception as e:
-        print(f"Warning: Failed to fetch GraphQL roles: {e}")
+        print(f"Warning: GraphQL roles fetch failed: {e}")
     
     return {}
 
 
-def _infer_role_from_aggregation(default_aggregation: Optional[str], data_type: Optional[str] = None) -> str:
-    """推断字段 role（后备逻辑）"""
+def _infer_role(default_aggregation: Optional[str], data_type: Optional[str] = None) -> str:
+    """推断字段 role"""
     if not default_aggregation or not default_aggregation.strip():
         return "dimension"
     
-    agg_upper = default_aggregation.upper().strip()
-    dtype_upper = (data_type or "").upper()
+    agg = default_aggregation.upper().strip()
+    dtype = (data_type or "").upper()
     
-    if dtype_upper in {"REAL", "INTEGER"} and agg_upper in {"SUM", "AVG", "MIN", "MAX", "MEDIAN"}:
+    if dtype in {"REAL", "INTEGER"} and agg in {"SUM", "AVG", "MIN", "MAX", "MEDIAN"}:
         return "measure"
-    if dtype_upper == "STRING" and agg_upper in {"COUNT", "COUNTD"}:
+    if dtype in {"DATE", "DATETIME", "STRING"}:
         return "dimension"
-    if dtype_upper in {"DATE", "DATETIME"}:
-        return "dimension"
-    if dtype_upper in {"REAL", "INTEGER"}:
+    if dtype in {"REAL", "INTEGER"}:
         return "measure"
     
     return "dimension"
 
 
-async def _fetch_dimension_samples_async(
-    api_key: str,
-    domain: str,
+def _fetch_dimension_samples(
+    client: VizQLClient,
     datasource_luid: str,
     dimension_names: List[str],
     measure_field: str,
-    sample_size: int = 1,
-    site: Optional[str] = None
+    api_key: str,
+    site: Optional[str] = None,
+    sample_size: int = 5,
+    max_workers: int = 5
 ) -> Dict[str, Dict[str, Any]]:
     """
-    异步批量获取一批维度的样例数据和唯一值数量
+    获取维度的样例数据和唯一值数量
     
-    使用VizQL Data Service API + TopN Filter查询一批维度（3-5个），限制只返回N条数据
-    同时使用COUNTD聚合获取唯一值数量
-    配合asyncio.gather实现真正的异步并发
-    
-    Args:
-        api_key: Tableau认证token
-        domain: Tableau域名
-        datasource_luid: 数据源LUID
-        dimension_names: 维度字段名称列表（建议3-5个）
-        measure_field: 用于TopN排序的度量字段
-        sample_size: 每个维度的样例数量（默认1条）
-        site: Tableau站点
-    
-    Returns:
-        字典，key是维度名称，value是包含sample_values和unique_count的字典
-        例如: {"维度1": {"sample_values": ["值1"], "unique_count": 100}}
+    使用并发请求，每个维度单独查询，确保每个维度只返回 sample_size 行数据
     """
     if not dimension_names:
         return {}
     
-    try:
-        import aiohttp
+    results = {}
+    
+    def fetch_one(dim: str) -> tuple:
+        """获取单个维度的样例"""
+        result = _fetch_single_dimension_samples(
+            client=client,
+            datasource_luid=datasource_luid,
+            dimension_name=dim,
+            measure_field=measure_field,
+            api_key=api_key,
+            site=site,
+            sample_size=sample_size
+        )
+        return (dim, result)
+    
+    # 使用线程池并发执行
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fetch_one, dim): dim for dim in dimension_names}
         
-        # 策略：为每个维度字段单独查询
-        # 1. 对每个维度：使用MAX聚合函数获取最大值，并筛选度量不为空
-        # 2. 一次性查询所有维度的COUNTD
-        
-        # 为每个维度创建单独的样例查询
-        # 第一阶段：获取所有维度的MAX值（不加筛选器）
-        # 用于维度层级LLM推断
-        sample_queries = []
-        for dim in dimension_names:
-            query = {
-                "fields": [
-                    {
-                        "fieldCaption": dim,
-                        "function": "MAX"  # 使用MAX聚合获取维度最大值
-                    }
-                ]
-                # 不添加筛选器，获取纯粹的最大值
-            }
-            sample_queries.append((dim, query))
-        
-        # 查询COUNTD（唯一值数量）
-        query_countd = {
-            "fields": [
-                {
-                    "fieldCaption": dim,
-                    "function": "COUNTD"  # 使用COUNTD聚合函数
-                } for dim in dimension_names
-            ]
-        }
-        
-        print(f"    异步查询维度样例和COUNTD: {dimension_names}")
-        print(f"    为每个维度单独查询样例值（共{len(sample_queries)}个查询）")
-        print(f"    COUNTD查询: {query_countd}")
-        
-        # 构建请求
-        full_url = f"{domain}/api/v1/vizql-data-service/query-datasource"
-        headers = {
-            'X-Tableau-Auth': api_key,
-            'Content-Type': 'application/json'
-        }
-        if site:
-            headers['X-Tableau-Site'] = site
-        
-        # 异步HTTP请求 - 并发执行所有查询
-        # 使用统一的SSL配置
-        ssl_param = get_aiohttp_ssl()
-        async with aiohttp.ClientSession() as session:
-            # 为每个维度创建查询任务
-            async def fetch_dimension_samples(dim_name, query):
-                payload = {
-                    "datasource": {"datasourceLuid": datasource_luid},
-                    "query": query
-                }
-                async with session.post(full_url, json=payload, headers=headers, ssl=ssl_param) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return (dim_name, result)
-                    else:
-                        error_text = await response.text()
-                        print(f"    警告: 维度 {dim_name} 样例查询失败: {response.status}")
-                        return (dim_name, {"data": []})
-            
-            # COUNTD查询
-            async def fetch_countd():
-                payload = {
-                    "datasource": {"datasourceLuid": datasource_luid},
-                    "query": query_countd
-                }
-                async with session.post(full_url, json=payload, headers=headers, ssl=ssl_param) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        error_text = await response.text()
-                        raise RuntimeError(f"VDS countd query failed: {response.status}, {error_text}")
-            
-            # 并发执行所有查询
-            sample_tasks = [fetch_dimension_samples(dim, query) for dim, query in sample_queries]
-            all_results = await asyncio.gather(*sample_tasks, fetch_countd())
-            
-            # 分离样例结果和COUNTD结果
-            sample_results = all_results[:-1]  # 前N个是样例查询结果
-            result_countd = all_results[-1]    # 最后一个是COUNTD结果
-        
-        print(f"    样例查询完成: {len(sample_results)}个维度")
-        print(f"    COUNTD查询结果: {type(result_countd)}")
-        
-        # 初始化结果
-        dimension_results = {dim: {"sample_values": [], "unique_count": 0} for dim in dimension_names}
-        
-        # 处理每个维度的样例值（每个维度返回MAX聚合值）
-        print(f"    开始处理样例数据（MAX聚合值）")
-        for dim_name, result in sample_results:
-            data = result.get("data", [])
-            print(f"    维度 {dim_name} 返回 {len(data)} 条数据")
-            
-            if data and len(data) > 0:
-                row = data[0]  # MAX聚合只返回一行
-                
-                # 提取MAX值
-                max_value = None
-                if isinstance(row, dict):
-                    # 尝试不同的键名
-                    max_value = row.get(f"MAX({dim_name})") or row.get(dim_name)
-                elif isinstance(row, list) and len(row) > 0:
-                    max_value = row[0]
-                
-                if max_value is not None:
-                    value_str = str(max_value).strip()
-                    if value_str:
-                        dimension_results[dim_name]["sample_values"].append(value_str)
-                        print(f"    维度 {dim_name} MAX值: {value_str}")
-        
-        # 提取COUNTD值
-        data_countd = result_countd.get("data", [])
-        print(f"    COUNTD数据行数: {len(data_countd)}")
-        
-        # 处理COUNTD值
-        if data_countd:
-            print(f"    开始处理COUNTD数据")
-            countd_row = data_countd[0] if data_countd else {}
-            print(f"    COUNTD数据: {countd_row}")
-            
-            if isinstance(countd_row, dict):
-                for dim in dimension_names:
-                    # COUNTD字段可能以 "COUNTD(维度名)" 的格式返回
-                    countd_value = countd_row.get(dim) or countd_row.get(f"COUNTD({dim})")
-                    if countd_value is not None:
-                        try:
-                            dimension_results[dim]["unique_count"] = int(countd_value)
-                            print(f"    维度 {dim} COUNTD: {countd_value}")
-                        except (ValueError, TypeError):
-                            print(f"    警告: 无法解析 {dim} 的COUNTD值: {countd_value}")
-            elif isinstance(countd_row, list):
-                for i, dim in enumerate(dimension_names):
-                    if i < len(countd_row) and countd_row[i] is not None:
-                        try:
-                            dimension_results[dim]["unique_count"] = int(countd_row[i])
-                            print(f"    维度 {dim} COUNTD: {countd_row[i]}")
-                        except (ValueError, TypeError):
-                            print(f"    警告: 无法解析 {dim} 的COUNTD值: {countd_row[i]}")
-        
-        print(f"    提取结果: {[(k, len(v['sample_values']), v['unique_count']) for k, v in dimension_results.items()]}")
-        return dimension_results
-        
-    except Exception as e:
-        print(f"Warning: Failed to fetch dimension samples: {e}")
-        import traceback
-        traceback.print_exc()
-        return {dim: {"sample_values": [], "unique_count": 0} for dim in dimension_names}
+        for future in as_completed(futures):
+            try:
+                dim, result = future.result()
+                results[dim] = result
+            except Exception as e:
+                dim = futures[future]
+                print(f"    [ERROR] 获取 {dim} 样例失败: {e}")
+                results[dim] = {"sample_values": [], "unique_count": 0}
+    
+    return results
 
 
-async def fetch_valid_max_date_async(
-    api_key: str,
-    domain: str,
+def _fetch_single_dimension_samples(
+    client: VizQLClient,
     datasource_luid: str,
-    date_field_name: str,
-    measure_field_name: str,
-    site: Optional[str] = None
-) -> Optional[str]:
-    """
-    获取日期字段的有效最大值（度量不为空且不为0的最大日期）
+    dimension_name: str,
+    measure_field: str,
+    api_key: str,
+    site: Optional[str] = None,
+    sample_size: int = 5
+) -> Dict[str, Any]:
+    """获取单个维度的样例数据和 COUNTD"""
+    result = {"sample_values": [], "unique_count": 0}
     
-    这个函数在维度层级LLM识别出日期字段和度量字段后调用
-    用于获取有业务数据的最大日期
-    
-    Args:
-        api_key: Tableau认证token
-        domain: Tableau域名
-        datasource_luid: 数据源LUID
-        date_field_name: 日期字段名称
-        measure_field_name: 度量字段名称（用于筛选）
-        site: Tableau站点
-    
-    Returns:
-        有效的最大日期字符串，如果查询失败返回None
-    """
     try:
-        import aiohttp
-        
-        # 构建查询：获取日期字段的MAX值，筛选度量不为空且不为0
+        # 构建查询：维度 + COUNTD 计算字段
         query = {
             "fields": [
+                {"fieldCaption": dimension_name},
                 {
-                    "fieldCaption": date_field_name,
-                    "function": "MAX"
+                    "fieldCaption": f"countd_{dimension_name}",
+                    "calculation": f"{{FIXED : COUNTD([{dimension_name}])}}"
                 }
             ],
-            "filters": [
-                {
-                    "filterType": "QUANTITATIVE_NUMERICAL",
-                    "field": {"fieldCaption": measure_field_name},
-                    "quantitativeFilterType": "RANGE",
-                    "min": 0.000001,  # 大于0（排除0值）
-                    "max": 999999999999,  # 正无穷大
-                    "includeNulls": False  # 排除空值
-                }
-            ]
+            "filters": [{
+                "filterType": "TOP",
+                "field": {"fieldCaption": dimension_name},
+                "fieldToMeasure": {"fieldCaption": measure_field, "function": "SUM"},
+                "howMany": sample_size,
+                "direction": "TOP"
+            }]
         }
         
-        print(f"    查询日期字段 {date_field_name} 的有效最大值（筛选 {measure_field_name} > 0）")
+        response = client.query_datasource(
+            datasource_luid=datasource_luid,
+            query=query,
+            api_key=api_key,
+            site=site
+        )
         
-        # 构建请求
-        full_url = f"{domain}/api/v1/vizql-data-service/query-datasource"
-        headers = {
-            'X-Tableau-Auth': api_key,
-            'Content-Type': 'application/json'
-        }
-        if site:
-            headers['X-Tableau-Site'] = site
-        
-        payload = {
-            "datasource": {"datasourceLuid": datasource_luid},
-            "query": query
-        }
-        
-        # 发送请求
-        # 使用统一的SSL配置
-        ssl_param = get_aiohttp_ssl()
-        async with aiohttp.ClientSession() as session:
-            async with session.post(full_url, json=payload, headers=headers, ssl=ssl_param) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    data = result.get("data", [])
-                    
-                    if data and len(data) > 0:
-                        row = data[0]
-                        
-                        # 提取MAX值
-                        max_date = None
-                        if isinstance(row, dict):
-                            max_date = row.get(f"MAX({date_field_name})") or row.get(date_field_name)
-                        elif isinstance(row, list) and len(row) > 0:
-                            max_date = row[0]
-                        
-                        if max_date is not None:
-                            max_date_str = str(max_date).strip()
-                            
-                            # 与今天-1比较，取最小值
-                            from datetime import datetime, timedelta
-                            try:
-                                # 尝试解析日期 - 支持多种格式
-                                datasource_max_date = None
-                                try:
-                                    # 尝试 ISO 格式
-                                    datasource_max_date = datetime.fromisoformat(max_date_str).date()
-                                except ValueError:
-                                    # 尝试其他常见格式
-                                    for fmt in ["%Y/%m/%d", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"]:
-                                        try:
-                                            datasource_max_date = datetime.strptime(max_date_str, fmt).date()
-                                            break
-                                        except ValueError:
-                                            continue
-                                
-                                if datasource_max_date is None:
-                                    print(f"    ⚠️  无法解析日期格式: {max_date_str}")
-                                    return None
-                                
-                                today_minus_1 = datetime.now().date() - timedelta(days=1)
-                                
-                                # 取两者最小值
-                                valid_max_date = min(datasource_max_date, today_minus_1)
-                                valid_max_date_str = valid_max_date.isoformat()
-                                
-                                print(f"    ✓ 数据源最大日期: {datasource_max_date}")
-                                print(f"    ✓ 今天-1: {today_minus_1}")
-                                print(f"    ✓ 有效最大日期（取最小值）: {valid_max_date_str}")
-                                
-                                return valid_max_date_str
-                            except Exception as e:
-                                print(f"    ⚠️  日期处理失败: {e}")
-                                return None
-                        else:
-                            print(f"    ⚠️  未找到有效最大日期")
-                            return None
-                    else:
-                        print(f"    ⚠️  查询返回空结果")
-                        return None
-                else:
-                    error_text = await response.text()
-                    print(f"    ✗ 查询失败: {response.status}, {error_text}")
-                    return None
+        # 处理结果
+        for row in response.get("data", []):
+            if isinstance(row, dict):
+                # 样例值
+                value = row.get(dimension_name)
+                if value is not None:
+                    value_str = str(value).strip()
+                    if value_str and value_str not in result["sample_values"]:
+                        result["sample_values"].append(value_str)
+                
+                # COUNTD（只取一次）
+                if result["unique_count"] == 0:
+                    countd = row.get(f"countd_{dimension_name}")
+                    if countd is not None:
+                        try:
+                            result["unique_count"] = int(countd)
+                        except (ValueError, TypeError):
+                            pass
     
     except Exception as e:
-        print(f"    ✗ 查询有效最大日期失败: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        print(f"    [ERROR] 获取 {dimension_name} 样例失败: {e}")
+    
+    return result
 
 
-def _fetch_dimension_samples(
+def get_datasource_luid_by_name(
     api_key: str,
     domain: str,
-    datasource_luid: str,
-    dimension_names: List[str],
-    measure_field: str,
-    sample_size: int = 1,
+    datasource_name: str,
     site: Optional[str] = None
-) -> Dict[str, List[str]]:
-    """
-    批量获取一批维度的样例数据（API层面限制返回行数）
-    
-    使用VizQL Data Service API + TopN Filter查询一批维度（3-5个），限制只返回N条数据
-    配合外层的并发调用，可以快速获取所有维度的样例数据
-    
-    Args:
-        api_key: Tableau认证token
-        domain: Tableau域名
-        datasource_luid: 数据源LUID
-        dimension_names: 维度字段名称列表（建议3-5个）
-        measure_field: 用于TopN排序的度量字段
-        sample_size: 每个维度的样例数量（默认1条）
-        site: Tableau站点
-    
-    Returns:
-        字典，key是维度名称，value是样例值列表
-    """
-    if not dimension_names:
-        return {}
-    
-    try:
-        from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient, VizQLClientConfig
-        
-        # 使用TopN Filter限制返回行数
-        # 使用度量字段排序,howMany=1只返回1条数据
-        sort_field = dimension_names[0]
-        
-        query = {
-            "fields": [{"fieldCaption": dim} for dim in dimension_names],
-            "filters": [
-                {
-                    "filterType": "TOP",
-                    "field": {"fieldCaption": sort_field},
-                    "fieldToMeasure": {"fieldCaption": measure_field, "function": "SUM"},
-                    "howMany": 1,  # 只返回1条数据
-                    "direction": "TOP"
-                }
-            ]
-        }
-        
-        # 查询数据
-        config = VizQLClientConfig(base_url=domain.rstrip("/"))
-        with VizQLClient(config=config) as client:
-            result = client.query_datasource(
-                datasource_luid=datasource_luid,
-                query=query,
-                api_key=api_key
-            )
-        
-        # 提取每个维度的样例值
-        data = result.get("data", [])
-        if not data:
-            return {dim: [] for dim in dimension_names}
-        
-        # 为每个维度收集样例值
-        dimension_samples = {dim: [] for dim in dimension_names}
-        
-        for row in data:
-            if isinstance(row, dict):
-                # 字典格式：{dim1: value1, dim2: value2, ...}
-                for dim in dimension_names:
-                    value = row.get(dim)
-                    if value is not None:
-                        dimension_samples[dim].append(str(value))
-            elif isinstance(row, list):
-                # 列表格式：[value1, value2, ...]
-                for i, dim in enumerate(dimension_names):
-                    if i < len(row) and row[i] is not None:
-                        dimension_samples[dim].append(str(row[i]))
-        
-        return dimension_samples
-        
-    except Exception as e:
-        # 获取样例数据失败不影响主流程，返回空样例
-        print(f"Warning: Failed to fetch dimension samples: {e}")
-        return {dim: [] for dim in dimension_names}
-
-
-def get_data_dictionary(api_key: str, domain: str, datasource_luid: str, site: Optional[str] = None, include_samples: bool = True) -> Dict[str, Any]:
-    """
-    获取数据源元数据（使用 VizQL + GraphQL 统一服务）。
-    
-    通过 VizQL API 获取字段数据，包含：
-    - VizQL API 提供的 logicalTableId
-    - GraphQL API 提供的准确 role
-    - 数据模型（逻辑表和关系）
-    
-    Args:
-        api_key: Tableau认证token
-        domain: Tableau域名
-        datasource_luid: 数据源LUID
-        site: Tableau站点
-        include_samples: 是否包含维度样例数据（默认True）
-    
-    Returns:
-        元数据字典
-    """
-    # 规范化域名
-    domain = (domain or "").rstrip("/")
-    
-    from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient, VizQLClientConfig
-    
-    vizql_config = VizQLClientConfig(base_url=domain, timeout=30, max_retries=3)
-    vizql_client = None
-    
-    try:
-        vizql_client = VizQLClient(config=vizql_config)
-        
-        # 从 VizQL API 获取字段（包含 logicalTableId）
-        vizql_fields = []
-        try:
-            response = vizql_client.read_metadata(datasource_luid=datasource_luid, api_key=api_key, site=site)
-            vizql_fields = response.get("data", [])
-        except Exception as e:
-            print(f"Warning: VizQL API failed: {e}")
-        
-        # 从 VizQL API 获取数据模型（逻辑表和关系）
-        data_model_dict = None
-        try:
-            model_response = vizql_client.get_datasource_model(datasource_luid=datasource_luid, api_key=api_key, site=site)
-            data_model_dict = {
-                "logicalTables": model_response.get("logicalTables", []),
-                "logicalTableRelationships": model_response.get("logicalTableRelationships", [])
-            }
-        except Exception as e:
-            print(f"Warning: Failed to get data model: {e}")
-        
-        # 从 GraphQL API 获取 role（同步版本）
-        role_map = _fetch_graphql_roles_sync(domain, datasource_luid, api_key, site)
-        
-        # 合并数据，构建字段列表
-        simplified_fields = []
-        for vf in vizql_fields:
-            field_name = vf.get("fieldCaption") or vf.get("fieldName", "")
-            
-            # 获取 role（优先 GraphQL，后备推断）
-            role = role_map.get(field_name) or role_map.get(vf.get("fieldName"))
-            if not role:
-                role = _infer_role_from_aggregation(vf.get("defaultAggregation"), vf.get("dataType"))
-            
-            field_dict = {
-                "name": field_name,
-                "fieldCaption": vf.get("fieldCaption", ""),
-                "fieldName": vf.get("fieldName"),
-                "role": role.upper() if role else "DIMENSION",
-                "dataType": vf.get("dataType", "UNKNOWN"),
-                "dataCategory": vf.get("dataCategory"),
-                "aggregation": vf.get("defaultAggregation"),
-                "logicalTableId": vf.get("logicalTableId"),  # VizQL 特有
-                "columnClass": vf.get("columnClass"),
-                "formula": vf.get("formula"),
-            }
-            simplified_fields.append(field_dict)
-        
-        # 批量获取维度样例数据（如果启用）
-        if include_samples:
-            dimension_names = [f['name'] for f in simplified_fields if f.get('role', '').upper() == 'DIMENSION']
-            measure_field = None
-            for f in simplified_fields:
-                if f.get('role', '').upper() == 'MEASURE':
-                    measure_field = f['name']
-                    break
-            
-            if dimension_names and measure_field:
-                # 使用同步方法获取样例
-                samples_dict = _fetch_dimension_samples(
-                    api_key=api_key,
-                    domain=domain,
-                    datasource_luid=datasource_luid,
-                    dimension_names=dimension_names,
-                    measure_field=measure_field,
-                    sample_size=1,
-                    site=site
-                )
-                
-                # 写入样例数据
-                for field in simplified_fields:
-                    if field.get('role', '').upper() == 'DIMENSION':
-                        field_name = field['name']
-                        if field_name in samples_dict:
-                            dim_data = samples_dict[field_name]
-                            if isinstance(dim_data, list) and dim_data:
-                                field['sample_values'] = dim_data
-        
-        return {
-            'datasource_luid': datasource_luid,
-            'fields': simplified_fields,
-            'field_count': len(simplified_fields),
-            'field_names': [f['name'] for f in simplified_fields],
-            'data_model': data_model_dict,  # 数据模型（逻辑表和关系）
-        }
-    
-    finally:
-        if vizql_client:
-            vizql_client.close()
-
-
-def _fetch_graphql_roles_sync(domain: str, datasource_luid: str, api_key: str, site: Optional[str] = None) -> Dict[str, str]:
-    """同步从 GraphQL API 获取字段 role"""
-    query = f'''
-    query fieldRoles {{
-      publishedDatasources(filter: {{luid: "{datasource_luid}"}}) {{
-        fields {{
-          name
-          ... on ColumnField {{ role }}
-          ... on CalculatedField {{ role }}
-          ... on BinField {{ role }}
-          ... on GroupField {{ role }}
-        }}
-      }}
-    }}
-    '''
-    
-    try:
-        full_url = f"{domain}/api/metadata/graphql"
-        payload = json.dumps({"query": query, "variables": {}})
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Tableau-Auth': api_key
-        }
-        if site:
-            headers['X-Tableau-Site'] = site
-        
-        response = requests.post(full_url, headers=headers, data=payload)
-        response.raise_for_status()
-        data = response.json()
-        
-        if 'errors' in data:
-            return {}
-        
-        ds_list = data.get('data', {}).get('publishedDatasources', [])
-        if not ds_list:
-            return {}
-        
-        role_map = {}
-        for field in ds_list[0].get('fields', []):
-            name = field.get('name', '')
-            role = field.get('role', 'dimension')
-            if name:
-                role_map[name] = role.lower() if role else 'dimension'
-        
-        return role_map
-    except Exception as e:
-        print(f"Warning: Failed to fetch GraphQL roles: {e}")
-    
-    return {}
-
-
-# =========================
-# New: Lookup by datasource name, then fetch metadata fields
-# =========================
-
-def _graphql_post(domain: str, api_key: str, query: str, variables: Optional[Dict[str, Any]] = None, site: Optional[str] = None) -> Dict[str, Any]:
-    """Lightweight helper to call Tableau Metadata GraphQL endpoint."""
-    # 规范化域名：去掉尾随斜杠
-    domain = (domain or "").rstrip("/")
-    full_url = f"{domain}/api/metadata/graphql"
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'X-Tableau-Auth': api_key
-    }
-    if site:
-        headers['X-Tableau-Site'] = site
-    payload = json.dumps({
-        "query": query,
-        "variables": variables or {}
-    })
-    resp = requests.post(full_url, headers=headers, data=payload)
-    resp.raise_for_status()
-    data = resp.json()
-    if 'errors' in data:
-        raise RuntimeError(f"GraphQL errors: {data['errors']}")
-    return data
-
-
-def get_datasource_luid_by_name(api_key: str, domain: str, datasource_name: str, site: Optional[str] = None) -> Optional[str]:
-    """
-    通过名称查找已发布数据源的 LUID（按策略多次尝试）：
-      1) exact + project：name == dsName 且 projectName == project
-      2) exact：name == dsName
-      3) contains：name contains dsName
-      4) 若仍未命中且 dsName 含括号/空格：去掉括号内容后重试 exact / contains
-    """
-    if not isinstance(datasource_name, str) or not datasource_name.strip():
+) -> Optional[str]:
+    """通过名称查找数据源 LUID"""
+    if not datasource_name or not datasource_name.strip():
         return None
 
-    raw = datasource_name.strip()
-
-    # 名称规范化：提取项目（若存在" | 项目 : xxx"），并保留左侧真实名称
-    project: Optional[str] = None
-    name = raw
-    splitter = " | 项目 : "
-    if splitter in raw:
-        parts = raw.split(splitter, 1)
+    domain = (domain or "").rstrip("/")
+    name = datasource_name.strip()
+    
+    # 提取项目名（如果存在）
+    project = None
+    if " | 项目 : " in name:
+        parts = name.split(" | 项目 : ", 1)
         name = parts[0].strip()
-        project = (parts[1] or "").strip() or None
+        project = parts[1].strip() if len(parts) > 1 else None
 
-    # 辅助：去掉括号中的描述（如 "销售分析(IMPALA)" → "销售分析"）
-    import re
-    def strip_parentheses(s: str) -> str:
-        return re.sub(r"\s*\([^)]*\)\s*", " ", s).strip()
+    def graphql_query(query: str, variables: Dict[str, Any]) -> Optional[Dict]:
+        try:
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-Tableau-Auth': api_key
+            }
+            if site:
+                headers['X-Tableau-Site'] = site
+            
+            response = requests.post(
+                f"{domain}/api/metadata/graphql",
+                headers=headers,
+                json={"query": query, "variables": variables}
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if 'errors' not in data:
+                    return data
+        except Exception:
+            pass
+        return None
 
-    # 查询1：exact + project
+    # 精确匹配 + 项目
     if project:
         q = """
         query($name:String!, $project:String!) {
           publishedDatasources(filter:{ name:$name, projectName:$project }) {
-            id luid name projectName updatedAt owner{username}
+            luid name projectName
           }
         }
         """
-        try:
-            data = _graphql_post(domain, api_key, q, {"name": name, "project": project}, site=site)
-            items = data.get("data", {}).get("publishedDatasources") or []
-            for it in items:
-                if (it.get("name") or "").strip() == name and (it.get("projectName") or "").strip() == project:
-                    return it.get("luid")
-        except Exception:
-            pass
+        data = graphql_query(q, {"name": name, "project": project})
+        if data:
+            for ds in data.get("data", {}).get("publishedDatasources", []):
+                if ds.get("name") == name and ds.get("projectName") == project:
+                    return ds.get("luid")
 
-    # 查询2：exact
-    q_exact = """
+    # 精确匹配
+    q = """
     query($name:String!) {
       publishedDatasources(filter:{ name:$name }) {
-        id luid name projectName updatedAt owner{username}
+        luid name
       }
     }
     """
-    try:
-        data = _graphql_post(domain, api_key, q_exact, {"name": name}, site=site)
-        items = data.get("data", {}).get("publishedDatasources") or []
-        for it in items:
-            if (it.get("name") or "").strip() == name:
-                return it.get("luid")
+    data = graphql_query(q, {"name": name})
+    if data:
+        items = data.get("data", {}).get("publishedDatasources", [])
+        for ds in items:
+            if ds.get("name") == name:
+                return ds.get("luid")
         if items:
-            # 兜底返回第一个
             return items[0].get("luid")
-    except Exception:
-        pass
 
-    # 查询3：contains
-    q_contains = """
+    # 模糊匹配
+    q = """
     query($kw:String!) {
       publishedDatasources(filter:{ name:{ contains:$kw } }) {
-        id luid name projectName updatedAt owner{username}
+        luid name
       }
     }
     """
-    try:
-        data = _graphql_post(domain, api_key, q_contains, {"kw": name}, site=site)
-        items = data.get("data", {}).get("publishedDatasources") or []
+    data = graphql_query(q, {"kw": name})
+    if data:
+        items = data.get("data", {}).get("publishedDatasources", [])
         if items:
-            for it in items:
-                if (it.get("name") or "").strip() == name:
-                    return it.get("luid")
             return items[0].get("luid")
-    except Exception:
-        pass
-
-    # 查询4：去括号后重试
-    name2 = strip_parentheses(name)
-    if name2 and name2 != name:
-        try:
-            data = _graphql_post(domain, api_key, q_exact, {"name": name2}, site=site)
-            items = data.get("data", {}).get("publishedDatasources") or []
-            for it in items:
-                if (it.get("name") or "").strip() == name2:
-                    return it.get("luid")
-            if not items:
-                data = _graphql_post(domain, api_key, q_contains, {"kw": name2}, site=site)
-                items = data.get("data", {}).get("publishedDatasources") or []
-                if items:
-                    for it in items:
-                        if (it.get("name") or "").strip() == name2:
-                            return it.get("luid")
-                    return items[0].get("luid")
-        except Exception:
-            pass
 
     return None
-
-
-def get_data_dictionary_by_name(api_key: str, domain: str, datasource_name: str, site: Optional[str] = None) -> Dict[str, Any]:
-    """
-    便捷入口：通过数据源名称解析 LUID，然后获取字段元数据。
-    支持传入 site：会在请求头附带 X-Tableau-Site。
-    """
-    luid = get_datasource_luid_by_name(api_key=api_key, domain=domain, datasource_name=datasource_name, site=site)
-    if not luid:
-        raise RuntimeError(f"Datasource not found by name: {datasource_name}")
-    return get_data_dictionary(api_key=api_key, domain=domain, datasource_luid=luid, site=site)
-
-# 统一：基于数据源名称构建维度/度量清单（从字段字典中归类）
-def _build_metadata_from_name(api_key: str, domain: str, datasource_name: str, site: Optional[str] = None) -> Dict[str, List[str]]:
-    """
-    使用 get_data_dictionary_by_name 获取字段字典，并按 dataType 将字段划分为 dimensions / measures：
-    - INTEGER / REAL 归为 measures
-    - 其他类型归为 dimensions
-    返回：{"dimensions": [...], "measures": [...], "fields": [...]}
-    """
-    dd = get_data_dictionary_by_name(api_key=api_key, domain=domain, datasource_name=datasource_name, site=site)
-    fields = dd.get("fields", []) or []
-
-    dims: List[str] = []
-    meas: List[str] = []
-
-    for f in fields:
-        name = f.get("name")
-        dt = f.get("dataType")
-        if not isinstance(name, str) or not name.strip():
-            continue
-        if str(dt) in ("INTEGER", "REAL"):
-            meas.append(name.strip())
-        else:
-            dims.append(name.strip())
-
-    return {
-        "dimensions": dims,
-        "measures": meas,
-        "fields": fields  # 添加完整的fields信息
-    }
-
-
-# ============================================================================
-# Unified Tableau Metadata Service (合并自 metadata_service.py)
-# ============================================================================
-
-from dataclasses import dataclass, field as dataclass_field
-from typing import Literal
-
-# 从 models 导入数据模型类
-from tableau_assistant.src.models.data_model import (
-    LogicalTable,
-    LogicalTableRelationship,
-    DataModel,
-)
-
-# ============= Data Classes =============
-
-@dataclass
-class ServiceFieldMetadata:
-    """
-    统一的字段元数据模型（服务层）。
-    
-    合并了 VizQL API 和 GraphQL API 的字段信息。
-    """
-    name: str
-    fieldCaption: str
-    dataType: str
-    role: str  # dimension 或 measure
-    
-    # VizQL 特有字段
-    fieldName: Optional[str] = None
-    defaultAggregation: Optional[str] = None
-    columnClass: Optional[str] = None
-    logicalTableId: Optional[str] = None
-    logicalTableCaption: Optional[str] = None
-    
-    # GraphQL 特有字段
-    aggregation: Optional[str] = None
-    formula: Optional[str] = None
-    dataCategory: Optional[str] = None
-    
-    # 样例数据
-    sampleValues: Optional[List[str]] = None
-    uniqueCount: Optional[int] = None
-
-
-@dataclass
-class MetadataCache:
-    """元数据缓存"""
-    fields: Optional[List[ServiceFieldMetadata]] = None
-    data_model: Optional[DataModel] = None
-    graphql_roles: Optional[Dict[str, str]] = None
-
-
-class TableauMetadataService:
-    """
-    统一的 Tableau 元数据服务。
-    
-    整合 VizQL API 和 GraphQL API，提供：
-    - 字段元数据（含准确的 role 和 logicalTableId）
-    - 数据模型（逻辑表和关系）
-    - 维度样例数据
-    - 数据源 LUID 查找
-    
-    Usage:
-        service = TableauMetadataService(domain="https://10ax.online.tableau.com")
-        fields = service.get_fields(datasource_luid, api_key, site)
-    """
-    
-    def __init__(
-        self,
-        domain: str,
-        timeout: int = 30,
-        max_retries: int = 3,
-        enable_cache: bool = True
-    ):
-        self._domain = domain.rstrip("/")
-        self._timeout = timeout
-        self._max_retries = max_retries
-        self._enable_cache = enable_cache
-        
-        # VizQL 客户端
-        from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient, VizQLClientConfig
-        self._vizql_config = VizQLClientConfig(
-            base_url=self._domain,
-            timeout=timeout,
-            max_retries=max_retries
-        )
-        self._vizql_client: Optional[VizQLClient] = None
-        
-        # 缓存
-        self._cache: Dict[str, MetadataCache] = {}
-    
-    def _get_vizql_client(self):
-        if self._vizql_client is None:
-            from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient
-            self._vizql_client = VizQLClient(config=self._vizql_config)
-        return self._vizql_client
-    
-    def _get_cache(self, datasource_luid: str) -> MetadataCache:
-        if datasource_luid not in self._cache:
-            self._cache[datasource_luid] = MetadataCache()
-        return self._cache[datasource_luid]
-    
-    def clear_cache(self, datasource_luid: Optional[str] = None) -> None:
-        if datasource_luid:
-            self._cache.pop(datasource_luid, None)
-        else:
-            self._cache.clear()
-    
-    def _graphql_post(self, query: str, variables: Optional[Dict], api_key: str, site: Optional[str] = None) -> Dict:
-        url = f"{self._domain}/api/metadata/graphql"
-        headers = {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-Tableau-Auth': api_key
-        }
-        if site:
-            headers['X-Tableau-Site'] = site
-        
-        response = requests.post(url, headers=headers, data=json.dumps({"query": query, "variables": variables or {}}), timeout=self._timeout)
-        response.raise_for_status()
-        data = response.json()
-        if 'errors' in data:
-            raise RuntimeError(f"GraphQL errors: {data['errors']}")
-        return data
-    
-    def _fetch_graphql_roles(self, datasource_luid: str, api_key: str, site: Optional[str] = None) -> Dict[str, str]:
-        """从 GraphQL API 获取字段 role（轻量级查询，带缓存）"""
-        if self._enable_cache:
-            cache = self._get_cache(datasource_luid)
-            if cache.graphql_roles is not None:
-                return cache.graphql_roles
-        
-        query = f'''
-        query fieldRoles {{
-          publishedDatasources(filter: {{luid: "{datasource_luid}"}}) {{
-            fields {{
-              name
-              ... on ColumnField {{ role }}
-              ... on CalculatedField {{ role }}
-              ... on BinField {{ role }}
-              ... on GroupField {{ role }}
-            }}
-          }}
-        }}
-        '''
-        
-        try:
-            data = self._graphql_post(query, None, api_key, site)
-            ds_list = data.get('data', {}).get('publishedDatasources', [])
-            if not ds_list:
-                return {}
-            
-            role_map = {}
-            for field in ds_list[0].get('fields', []):
-                name = field.get('name', '')
-                role = field.get('role', 'dimension')
-                if name:
-                    role_map[name] = role.lower() if role else 'dimension'
-            
-            if self._enable_cache:
-                self._get_cache(datasource_luid).graphql_roles = role_map
-            
-            return role_map
-        except Exception as e:
-            print(f"Warning: Failed to fetch GraphQL roles: {e}")
-            return {}
-    
-    def get_fields(self, datasource_luid: str, api_key: str, site: Optional[str] = None) -> List[ServiceFieldMetadata]:
-        """获取字段元数据（合并 VizQL 和 GraphQL）"""
-        if self._enable_cache:
-            cache = self._get_cache(datasource_luid)
-            if cache.fields is not None:
-                return cache.fields
-        
-        # 从 VizQL API 获取字段
-        vizql_fields = []
-        try:
-            client = self._get_vizql_client()
-            response = client.read_metadata(datasource_luid=datasource_luid, api_key=api_key, site=site)
-            vizql_fields = response.get("data", [])
-        except Exception as e:
-            print(f"Warning: VizQL API failed: {e}")
-        
-        # 从 GraphQL API 获取 role
-        role_map = self._fetch_graphql_roles(datasource_luid, api_key, site)
-        
-        # 合并数据
-        fields = []
-        for vf in vizql_fields:
-            role = role_map.get(vf.get("fieldCaption")) or role_map.get(vf.get("fieldName"))
-            if not role:
-                role = self._infer_role(vf.get("defaultAggregation"), vf.get("dataType"))
-            
-            field = ServiceFieldMetadata(
-                name=vf.get("fieldCaption") or vf.get("fieldName", ""),
-                fieldCaption=vf.get("fieldCaption", ""),
-                dataType=vf.get("dataType", "UNKNOWN"),
-                role=role.lower() if role else "dimension",
-                fieldName=vf.get("fieldName"),
-                defaultAggregation=vf.get("defaultAggregation"),
-                columnClass=vf.get("columnClass"),
-                logicalTableId=vf.get("logicalTableId"),
-                formula=vf.get("formula"),
-                aggregation=vf.get("defaultAggregation")
-            )
-            fields.append(field)
-        
-        if self._enable_cache:
-            self._get_cache(datasource_luid).fields = fields
-        
-        return fields
-    
-    def _infer_role(self, default_aggregation: Optional[str], data_type: Optional[str] = None) -> str:
-        """推断字段 role（后备逻辑）- 委托给模块级函数"""
-        return _infer_role_from_aggregation(default_aggregation, data_type)
-    
-    def get_data_model(self, datasource_luid: str, api_key: str, site: Optional[str] = None) -> DataModel:
-        """获取数据模型"""
-        if self._enable_cache:
-            cache = self._get_cache(datasource_luid)
-            if cache.data_model is not None:
-                return cache.data_model
-        
-        client = self._get_vizql_client()
-        response = client.get_datasource_model(datasource_luid=datasource_luid, api_key=api_key, site=site)
-        
-        logical_tables = [
-            LogicalTable(logicalTableId=t.get("logicalTableId", ""), caption=t.get("caption", ""))
-            for t in response.get("logicalTables", [])
-        ]
-        relationships = [
-            LogicalTableRelationship(
-                fromLogicalTableId=r.get("fromLogicalTable", {}).get("logicalTableId", ""),
-                toLogicalTableId=r.get("toLogicalTable", {}).get("logicalTableId", "")
-            )
-            for r in response.get("logicalTableRelationships", [])
-        ]
-        
-        data_model = DataModel(logicalTables=logical_tables, logicalTableRelationships=relationships)
-        
-        if self._enable_cache:
-            self._get_cache(datasource_luid).data_model = data_model
-        
-        return data_model
-    
-    def get_dimensions(self, datasource_luid: str, api_key: str, site: Optional[str] = None) -> List[ServiceFieldMetadata]:
-        """获取所有维度字段"""
-        return [f for f in self.get_fields(datasource_luid, api_key, site) if f.role == "dimension"]
-    
-    def get_measures(self, datasource_luid: str, api_key: str, site: Optional[str] = None) -> List[ServiceFieldMetadata]:
-        """获取所有度量字段"""
-        return [f for f in self.get_fields(datasource_luid, api_key, site) if f.role == "measure"]
-    
-    def get_field_by_name(
-        self,
-        datasource_luid: str,
-        api_key: str,
-        field_name: str,
-        site: Optional[str] = None
-    ) -> Optional[ServiceFieldMetadata]:
-        """通过名称获取字段"""
-        fields = self.get_fields(datasource_luid, api_key, site)
-        for f in fields:
-            if f.name == field_name or f.fieldCaption == field_name:
-                return f
-        return None
-    
-    def get_dimension_samples(
-        self,
-        datasource_luid: str,
-        api_key: str,
-        site: Optional[str] = None,
-        dimension_names: Optional[List[str]] = None,
-        sample_size: int = 3
-    ) -> Dict[str, List[str]]:
-        """
-        获取维度样例数据。
-        
-        Args:
-            datasource_luid: 数据源 LUID
-            api_key: Tableau 认证 token
-            site: Tableau 站点
-            dimension_names: 要获取样例的维度列表（None 表示所有维度）
-            sample_size: 每个维度的样例数量
-        
-        Returns:
-            {dimension_name: [sample_values]} 映射
-        """
-        # 如果没有指定维度，先获取所有维度
-        if dimension_names is None:
-            fields = self.get_fields(datasource_luid, api_key, site)
-            dimension_names = [f.name for f in fields if f.role == "dimension"]
-        
-        if not dimension_names:
-            return {}
-        
-        # 找一个度量字段用于 TopN 排序
-        fields = self.get_fields(datasource_luid, api_key, site)
-        measure_field = None
-        for f in fields:
-            if f.role == "measure":
-                measure_field = f.name
-                break
-        
-        if not measure_field:
-            print("Warning: No measure field found for TopN sorting")
-            return {dim: [] for dim in dimension_names}
-        
-        # 使用同步方法获取样例
-        return _fetch_dimension_samples(
-            api_key=api_key,
-            domain=self._domain,
-            datasource_luid=datasource_luid,
-            dimension_names=dimension_names,
-            measure_field=measure_field,
-            sample_size=sample_size,
-            site=site
-        )
-    
-    def close(self) -> None:
-        if self._vizql_client:
-            self._vizql_client.close()
-            self._vizql_client = None
-        self._cache.clear()
-    
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
-        return False

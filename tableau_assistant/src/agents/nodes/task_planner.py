@@ -28,6 +28,7 @@ from tableau_assistant.src.models.query_plan import (
     ProcessingInstruction,
     SubTask
 )
+# Legacy models for backward compatibility - task_planner needs refactoring for new entity-based model
 from tableau_assistant.src.models.question import SubQuestion, SubQuestionExecutionType
 from tableau_assistant.src.agents.base_agent import BaseVizQLAgent
 from tableau_assistant.prompts.task_planner import (

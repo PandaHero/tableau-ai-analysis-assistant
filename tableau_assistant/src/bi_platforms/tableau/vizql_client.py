@@ -3,9 +3,10 @@ VizQL Data Service Client
 
 Production-grade client for Tableau VizQL Data Service API with:
 - Pydantic model validation
-- Connection pooling
+- Connection pooling (sync) / aiohttp session (async)
 - Automatic retry with exponential backoff
 - Unified error handling
+- Both sync and async support
 """
 import os
 import logging
@@ -15,6 +16,14 @@ import requests
 from requests.adapters import HTTPAdapter
 from pydantic import BaseModel, Field, ConfigDict
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+
+# Async imports (optional)
+try:
+    import aiohttp
+    import asyncio
+    HAS_AIOHTTP = True
+except ImportError:
+    HAS_AIOHTTP = False
 
 from tableau_assistant.src.exceptions import (
     VizQLError,
@@ -333,3 +342,229 @@ class VizQLClient:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
         return False
+
+    # ==================== Async Methods ====================
+    
+    async def query_datasource_async(
+        self,
+        datasource_luid: str,
+        query: Dict[str, Any],
+        api_key: str,
+        site: Optional[str] = None,
+        session: Optional["aiohttp.ClientSession"] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute VizQL query asynchronously.
+        
+        Args:
+            datasource_luid: Datasource LUID
+            query: VizQL query dict
+            api_key: Tableau auth token
+            site: Tableau site (optional)
+            session: Optional aiohttp session (for connection reuse)
+        
+        Returns:
+            Query result dict
+        
+        Raises:
+            VizQLError: On API failure
+        """
+        if not HAS_AIOHTTP:
+            raise ImportError("aiohttp is required for async operations. Install with: pip install aiohttp")
+        
+        url = f"{self.config.base_url}/api/v1/vizql-data-service/query-datasource"
+        
+        headers = {
+            "X-Tableau-Auth": api_key,
+            "Content-Type": "application/json"
+        }
+        if site:
+            headers["X-Tableau-Site"] = site
+        
+        payload = {
+            "datasource": {"datasourceLuid": datasource_luid},
+            "query": query
+        }
+        
+        return await self._execute_request_async(url, headers, payload, session)
+    
+    async def read_metadata_async(
+        self,
+        datasource_luid: str,
+        api_key: str,
+        site: Optional[str] = None,
+        session: Optional["aiohttp.ClientSession"] = None
+    ) -> Dict[str, Any]:
+        """
+        Read datasource metadata asynchronously.
+        
+        Args:
+            datasource_luid: Datasource LUID
+            api_key: Tableau auth token
+            site: Tableau site (optional)
+            session: Optional aiohttp session
+        
+        Returns:
+            Metadata dict
+        """
+        if not HAS_AIOHTTP:
+            raise ImportError("aiohttp is required for async operations")
+        
+        url = f"{self.config.base_url}/api/v1/vizql-data-service/read-metadata"
+        
+        headers = {
+            "X-Tableau-Auth": api_key,
+            "Content-Type": "application/json"
+        }
+        if site:
+            headers["X-Tableau-Site"] = site
+        
+        payload = {
+            "datasource": {"datasourceLuid": datasource_luid}
+        }
+        
+        return await self._execute_request_async(url, headers, payload, session)
+    
+    async def get_datasource_model_async(
+        self,
+        datasource_luid: str,
+        api_key: str,
+        site: Optional[str] = None,
+        session: Optional["aiohttp.ClientSession"] = None
+    ) -> Dict[str, Any]:
+        """
+        Get datasource data model asynchronously.
+        
+        Args:
+            datasource_luid: Datasource LUID
+            api_key: Tableau auth token
+            site: Tableau site (optional)
+            session: Optional aiohttp session
+        
+        Returns:
+            Data model dict
+        """
+        if not HAS_AIOHTTP:
+            raise ImportError("aiohttp is required for async operations")
+        
+        url = f"{self.config.base_url}/api/v1/vizql-data-service/get-datasource-model"
+        
+        headers = {
+            "X-Tableau-Auth": api_key,
+            "Content-Type": "application/json"
+        }
+        if site:
+            headers["X-Tableau-Site"] = site
+        
+        payload = {
+            "datasource": {"datasourceLuid": datasource_luid}
+        }
+        
+        return await self._execute_request_async(url, headers, payload, session)
+    
+    async def _execute_request_async(
+        self,
+        url: str,
+        headers: Dict[str, str],
+        payload: Dict[str, Any],
+        session: Optional["aiohttp.ClientSession"] = None
+    ) -> Dict[str, Any]:
+        """
+        Execute async HTTP request with retry logic.
+        
+        Args:
+            url: Request URL
+            headers: Request headers
+            payload: Request payload
+            session: Optional aiohttp session
+        
+        Returns:
+            Response JSON
+        """
+        ssl_param = self._get_aiohttp_ssl()
+        
+        async def _do_request(sess: "aiohttp.ClientSession") -> Dict[str, Any]:
+            for attempt in range(self.config.max_retries):
+                try:
+                    async with sess.post(
+                        url,
+                        json=payload,
+                        headers=headers,
+                        ssl=ssl_param,
+                        timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+                    ) as response:
+                        if response.status == 200:
+                            return await response.json()
+                        else:
+                            await self._handle_error_async(response)
+                            
+                except aiohttp.ClientError as e:
+                    if attempt == self.config.max_retries - 1:
+                        raise VizQLNetworkError(f"Connection error after {self.config.max_retries} attempts: {e}")
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            
+            raise VizQLError(message="Max retries exceeded")
+        
+        # Use provided session or create a new one
+        if session:
+            return await _do_request(session)
+        else:
+            async with aiohttp.ClientSession() as new_session:
+                return await _do_request(new_session)
+    
+    def _get_aiohttp_ssl(self):
+        """Get SSL parameter for aiohttp."""
+        try:
+            from tableau_assistant.cert_manager import get_ssl_config
+            return get_ssl_config().get_aiohttp_ssl_param()
+        except ImportError:
+            return self.config.verify_ssl
+    
+    async def _handle_error_async(self, response: "aiohttp.ClientResponse") -> None:
+        """Handle async API error response."""
+        status_code = response.status
+        
+        try:
+            error_data = await response.json()
+            error_code = error_data.get("errorCode")
+            message = error_data.get("message", await response.text())
+            debug = error_data.get("debug")
+        except Exception:
+            error_code = None
+            message = await response.text()
+            debug = None
+        
+        if status_code in (401, 403):
+            raise VizQLAuthError(
+                message=f"Authentication failed: {message}",
+                error_code=error_code,
+                debug=debug
+            )
+        elif status_code == 400:
+            raise VizQLValidationError(
+                message=f"Validation error: {message}",
+                error_code=error_code,
+                debug=debug
+            )
+        elif status_code == 429:
+            retry_after = response.headers.get("Retry-After")
+            raise VizQLRateLimitError(
+                message=f"Rate limit exceeded: {message}",
+                retry_after=int(retry_after) if retry_after else None,
+                error_code=error_code,
+                debug=debug
+            )
+        elif 500 <= status_code < 600:
+            raise VizQLServerError(
+                message=f"Server error: {message}",
+                status_code=status_code,
+                error_code=error_code,
+                debug=debug
+            )
+        else:
+            raise VizQLError(
+                status_code=status_code,
+                message=message,
+                error_code=error_code,
+                debug=debug
+            )
