@@ -119,3 +119,9 @@ data/*.db
 # Exclude Tableau temp files
 *.twbr
 desktop.ini
+
+# Third-party projects
+DB-GPT-main/
+
+# IDE specific
+.trae/

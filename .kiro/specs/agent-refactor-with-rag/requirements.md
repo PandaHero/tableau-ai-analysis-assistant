@@ -13,7 +13,7 @@
 
 **当前状态**：
 - 已实现 RAG 增强功能（SemanticMapper、FieldIndexer、Reranker 等）
-- 已有 Agent 节点（Understanding、Planning、Insight、Replanner 等）
+- 已有 Agent 节点（Understanding、Insight、Replanner 等）
 - 缺少统一的中间件架构和工具化封装
 
 **目标收益**：
@@ -151,7 +151,7 @@
 
 ### 需求 5: 元数据工具
 
-**用户故事:** 作为开发者，我希望 Agent 可以通过工具访问数据源元数据，以便在 Planning 和 Boost 阶段获取字段信息。
+**用户故事:** 作为开发者，我希望 Agent 可以通过工具访问数据源元数据，以便在 Boost 阶段获取字段信息。
 
 **优先级**: P0（核心功能）
 
@@ -171,10 +171,11 @@ StoreManager          ← SQLite 缓存
 #### 验收标准
 
 1. 当 Agent 需要元数据时，Metadata_Tools 应提供 get_metadata 工具，该工具委托给 MetadataManager.get_metadata_async() 方法
-2. 当定义 get_metadata 工具时，Metadata_Tools 应使用 @tool 装饰器并定义清晰的输入参数（use_cache: bool = True, enhance: bool = True）和返回类型
+2. 当定义 get_metadata 工具时，Metadata_Tools 应使用 @tool 装饰器并定义清晰的输入参数（use_cache: bool = True, enhance: bool = True, filter_role: Optional[str] = None, filter_category: Optional[str] = None）和返回类型
 3. 当工具被调用时，Metadata_Tools 应将 MetadataManager 返回的 Metadata 对象转换为 LLM 友好的格式（字段列表摘要，而非完整对象）
 4. 当返回结果时，Metadata_Tools 应包含字段的关键信息：name、fieldCaption、role、dataType、category、level、granularity、sample_values（前 5 个）
-5. 当字段数量超过 50 时，Metadata_Tools 应返回摘要信息并提示 Agent 可以使用 filter 参数按 role 或 category 过滤
+5. 当提供 filter_role 或 filter_category 参数时，Metadata_Tools 应按指定条件过滤字段列表（默认返回全量）
+6. 当返回全量字段列表且输出超过 token 限制时，FilesystemMiddleware 应自动保存到文件并返回文件引用（参见 R12）
 
 ### 需求 6: 日期处理工具
 
@@ -381,7 +382,7 @@ Synthesis (合成层)
 
 #### 验收标准
 
-1. 当对话 token 数超过阈值（可配置，默认 100000）时，SummarizationMiddleware 应触发总结
+1. 当对话 token 数超过阈值（可配置，默认 20000，根据模型上下文长度调整）时，SummarizationMiddleware 应触发总结
 2. 当触发总结时，SummarizationMiddleware 应保留最近 N 条消息（可配置，默认 10）
 3. 当总结完成时，SummarizationMiddleware 应用总结消息替换旧消息
 4. 当总结失败时，SummarizationMiddleware 应保留原始消息并记录警告
@@ -469,18 +470,32 @@ Synthesis (合成层)
 4. 当存储任务时，TodoListMiddleware 应将任务状态持久化到 VizQLState.todos
 
 
-### 需求 17: Replanner 重规划路由
+### 需求 17: 智能重规划路由
 
-**用户故事:** 作为开发者，我希望有正确的重规划路由，以便后续问题能被高效处理。
+**用户故事:** 作为开发者，我希望有智能的重规划路由，以便 Replanner Agent 能根据分析完成度智能决定下一步。
 
 **优先级**: P0（核心功能）
 
+**说明**：Replanner Agent 是智能的，它会评估完成度、识别缺失方面、生成新问题，并智能决定下一步路由。
+
 #### 验收标准
 
-1. 当 Replanner 决定重规划（should_replan=True 且 replan_count < max）时，StateGraph 应路由回 Understanding 节点（重新进行语义理解）
+**完成度评估**：
+1. 当 Replanner Agent 评估分析时，应输出 completeness_score（0-1）表示完成度
 2. 当 completeness_score >= 0.9 时，Replanner_Agent 应设置 should_replan 为 False 并路由到 END
-3. 当 replan_count 达到 max_replan_rounds 时，StateGraph 应路由到 END，无论 completeness_score 如何
-4. 当路由到 Planning 时，StateGraph 应使用 ReplanDecision 中的 new_question 作为 current_question
+3. 当 completeness_score < 0.9 且存在缺失方面时，Replanner_Agent 应生成针对性的新问题
+
+**路由决策**：
+4. 当 Replanner 决定重规划（should_replan=True）时，StateGraph 应路由到 Understanding 节点（重新理解新问题）
+5. 当 Replanner 决定不重规划（should_replan=False）时，StateGraph 应路由到 END
+6. 当重规划时，系统应使用 new_questions[0] 作为新的 question，回到 Understanding 重新理解
+
+**边界条件**：
+7. 当 replan_count 达到 max_replan_rounds 时，StateGraph 应路由到 END，无论 completeness_score 如何
+8. 当没有洞察结果时，Replanner_Agent 应直接路由到 END（无法评估完成度）
+
+**历史记录**：
+9. 当发生重规划时，系统应记录 replan_history（轮次、原因、新问题、完成度评分）
 
 ### 需求 18: 状态管理
 
@@ -581,7 +596,7 @@ Synthesis (合成层)
 ### NFR-3: 兼容性要求
 
 - 兼容现有 RAG 模块 API（SemanticMapper、FieldIndexer、Reranker）
-- 兼容现有 Agent 节点逻辑（Understanding、Planning、Insight、Replanner）
+- 兼容现有 Agent 节点逻辑（Understanding、Insight、Replanner）
 - 兼容现有前端 API 接口（/chat、/stream 端点）
 - 支持多种 LLM 提供商：Claude、DeepSeek、Qwen、OpenAI（通过 model_manager 切换）
 
