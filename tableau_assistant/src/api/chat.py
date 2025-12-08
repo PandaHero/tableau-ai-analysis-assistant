@@ -20,11 +20,11 @@ from tableau_assistant.src.models.api import (
     ErrorResponse,
     StreamEvent
 )
-from tableau_assistant.src.models.state import VizQLInput
-from tableau_assistant.src.agents.workflows.vizql_workflow import (
-    create_vizql_workflow,
-    run_vizql_workflow_stream
-)
+from tableau_assistant.src.models.workflow.state import VizQLInput
+
+# TODO: 迁移到新的 workflow 模块
+# from tableau_assistant.src.workflow.factory import create_tableau_workflow
+# 旧的导入已删除，需要在新 workflow 中实现这些功能
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -58,10 +58,18 @@ async def chat_query(request: VizQLQueryRequest) -> VizQLQueryResponse:
         HTTPException: 如果查询失败
     """
     try:
-        from tableau_assistant.src.agents.workflows.vizql_workflow import run_vizql_workflow_sync, request_to_input
+        # TODO: 迁移到新的 workflow 模块
+        # from tableau_assistant.src.workflow.factory import create_tableau_workflow
+        raise HTTPException(
+            status_code=501,
+            detail=ErrorResponse(
+                error="NotImplemented",
+                message="同步查询功能正在迁移中，请使用流式查询 /api/chat/stream"
+            ).model_dump()
+        )
         
         # 将API请求转换为工作流输入（已验证，无需重复验证）
-        workflow_input = request_to_input(request)
+        workflow_input = {"question": request.question, "boost_question": request.boost_question}
         
         # 执行工作流
         result = run_vizql_workflow_sync(
@@ -128,18 +136,23 @@ async def generate_sse_events(
     Yields:
         SSE格式的事件字符串
     """
-    from tableau_assistant.src.agents.workflows.streaming import stream_workflow_events
+    # TODO: 迁移到新的 workflow 模块
+    # from tableau_assistant.src.workflow.factory import create_tableau_workflow
     
     try:
+        # 临时返回未实现错误
+        error_event = StreamEvent(
+            event_type="error",
+            data={"message": "流式查询功能正在迁移中"},
+            timestamp=time.time()
+        )
+        yield f"data: {error_event.model_dump_json()}\n\n"
+        return
+        
         # 使用 StreamingEventHandler 处理事件
         # 它会自动转换 LangGraph 事件为前端友好的格式
-        async for sse_event in stream_workflow_events(
-            input_data=input_data,
-            datasource_luid=datasource_luid,
-            user_id=user_id,
-            session_id=session_id
-        ):
-            yield sse_event
+        # async for sse_event in stream_workflow_events(...):
+        #     yield sse_event
             
     except Exception as e:
         # 发送错误事件
@@ -169,10 +182,9 @@ async def chat_query_stream(request: VizQLQueryRequest):
         SSE流式响应
     """
     try:
-        from tableau_assistant.src.agents.workflows.vizql_workflow import request_to_input
-        
+        # TODO: 迁移到新的 workflow 模块
         # 将API请求转换为工作流输入
-        workflow_input = request_to_input(request)
+        workflow_input = {"question": request.question, "boost_question": request.boost_question}
         
         return StreamingResponse(
             generate_sse_events(

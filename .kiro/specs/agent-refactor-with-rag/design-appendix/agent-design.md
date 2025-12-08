@@ -2,7 +2,9 @@
 
 ## 概述
 
-本文档描述 Agent 节点（LLM 节点）的详细设计，包括 Boost、Understanding、Replanner 的 Prompt 模板和节点逻辑。
+本文档描述 Agent 节点（LLM 节点）的详细设计，包括 Understanding（含原 Boost 功能）、Insight、Replanner 的 Prompt 模板和节点逻辑。
+
+**架构变更说明**：Boost Agent 已移除，其功能（元数据获取、问题分类）合并到 Understanding Agent。
 
 **设计规范**：本文档遵循 `prompt-and-schema-design.md` 中定义的设计规范，基于 `PROMPT_AND_MODEL_GUIDE.md` 中的前沿研究。
 
@@ -21,124 +23,28 @@
 
 | Agent/Node | 类型 | 可用工具/组件 | 工具来源 | 输入 | 输出 |
 |------------|------|--------------|---------|------|------|
-| Boost Agent | LLM | get_metadata | 业务工具 | original_question | boosted_question |
-| Understanding Agent | LLM | get_schema_module, parse_date, detect_date_format | 业务工具 | current_question | SemanticQuery |
-| QueryBuilder Node | 代码优先 + LLM fallback | FieldMapper + ImplementationResolver + ExpressionGenerator | 组件 | SemanticQuery | VizQLQuery |
-| Execute Node | 非 LLM | VizQL API 调用 | 代码 | VizQLQuery | QueryResult |
+| Understanding Agent | LLM | get_metadata, get_schema_module, parse_date, detect_date_format | 业务工具 | question | SemanticQuery |
+| FieldMapper Node | RAG + LLM 混合 | SemanticMapper | 组件 | SemanticQuery | MappedQuery |
+| QueryBuilder Node | 纯代码 | ImplementationResolver + ExpressionGenerator | 组件 | MappedQuery | VizQLQuery |
+| Execute Node | 纯代码 | VizQL API 调用 | 代码 | VizQLQuery | QueryResult |
 | Insight Agent | LLM | AnalysisCoordinator | 组件 | QueryResult | accumulated_insights |
 | Replanner Agent | LLM | write_todos | TodoListMiddleware | insights, QueryResult | ReplanDecision |
 
----
-
-## 1. Boost Agent
-
-### 职责
-
-- 使用元数据增强用户问题
-- 补充字段信息，使问题更明确
-
-### Prompt 模板（4 段式结构）
-
-```python
-# tableau_assistant/src/agents/boost/prompt.py
-
-from tableau_assistant.src.prompts.base import VizQLPrompt
-from pydantic import BaseModel
-
-class BoostPrompt(VizQLPrompt):
-    """Boost Agent 的 Prompt 模板"""
-    
-    def get_role(self) -> str:
-        return """Data analysis assistant who enhances user questions with metadata context.
-
-Expertise:
-- Understanding business terminology
-- Mapping vague terms to specific fields
-- Preserving user intent while adding clarity"""
-    
-    def get_task(self) -> str:
-        return """Enhance user question using datasource metadata.
-
-Process: Get metadata → Identify vague terms → Map to specific fields → Output enhanced question"""
-    
-    def get_specific_domain_knowledge(self) -> str:
-        return """**Think step by step:**
-
-Step 1: Understand user intent
-- What does the user want to know?
-- What business concepts are mentioned?
-
-Step 2: Identify vague terms
-- Are there ambiguous business terms?
-- Are there terms that could map to multiple fields?
-
-Step 3: Map to specific fields
-- Use metadata to find exact field names
-- Preserve original meaning while adding specificity
-
-Step 4: Preserve user constraints
-- Keep time ranges if specified
-- Keep aggregation methods if specified
-- Don't add assumptions"""
-    
-    def get_constraints(self) -> str:
-        return """MUST:
-- Use get_metadata tool to get field information
-- Preserve user's original intent
-- Keep time ranges and aggregations if specified
-
-MUST NOT:
-- Add time ranges if not specified
-- Change aggregation methods without reason
-- Invent fields not in metadata"""
-    
-    def get_user_template(self) -> str:
-        return """Enhance this question:
-
-Question: {question}
-Datasource: {datasource}"""
-    
-    def get_output_model(self) -> type:
-        return str  # 直接输出增强后的问题字符串
-```
-
-### 节点实现
-
-```python
-# tableau_assistant/src/agents/boost/node.py
-
-async def boost_node(state: VizQLState, runtime) -> Dict[str, Any]:
-    """
-    Boost Agent 节点
-    
-    流程：
-    1. 调用 get_metadata 获取元数据
-    2. 根据元数据增强问题
-    """
-    llm = get_llm_with_tools([get_metadata])
-    
-    prompt = BoostPrompt()
-    messages = prompt.format_messages(
-        question=state["question"],
-        datasource=state["datasource"]
-    )
-    
-    response = await llm.ainvoke(messages)
-    
-    return {
-        "boosted_question": response.content,
-        "current_question": response.content,
-    }
-```
+**说明**：
+- Boost Agent 已移除，功能合并到 Understanding Agent（get_metadata 工具 + 问题分类）
+- FieldMapper 从 QueryBuilder 内部组件提升为独立节点（RAG + LLM 混合）
+- QueryBuilder 现在是纯代码节点，只包含 ImplementationResolver + ExpressionGenerator
 
 ---
 
-## 2. Understanding Agent
+## 1. Understanding Agent（含原 Boost 功能）
 
 ### 职责
 
-- 理解用户问题的语义
-- 输出 SemanticQuery（纯语义，无 VizQL 概念）
+- **问题分类**：判断是否为分析类问题（is_analysis_question）
+- **元数据获取**：调用 get_metadata 工具获取字段信息（原 Boost 功能）
+- **语义理解**：理解用户问题的语义
+- **输出 SemanticQuery**：纯语义，无 VizQL 概念
 - 使用动态 Schema 模块选择，减少 token 消耗
 
 ### Prompt 模板（4 段式结构）
@@ -154,30 +60,43 @@ from typing import Type
 from pydantic import BaseModel
 
 class UnderstandingPrompt(VizQLPrompt):
-    """Understanding Agent 的 Prompt 模板
+    """Understanding Agent 的 Prompt 模板（含原 Boost 功能）
     
     设计原则：
     - Prompt 教 LLM 如何思考（领域知识 + 推理步骤）
     - Schema 告诉 LLM 输出什么（字段填写规则）
     - 思考步骤与 Schema 中的 <decision_rule> 对应
+    
+    架构变更：
+    - Boost Agent 已移除，功能合并到此 Agent
+    - 新增：问题分类（is_analysis_question）
+    - 新增：元数据获取（get_metadata 工具）
     """
     
     def get_role(self) -> str:
-        return """Data analysis expert who understands user questions and extracts structured query intent.
+        return """Data analysis expert who classifies questions and extracts structured query intent.
 
 Expertise:
+- Question classification (analysis vs non-analysis)
 - Semantic understanding of business terminology
 - Dimension vs Measure classification
 - Time expression parsing
 - Analysis type detection (cumulative, ranking, percentage, etc.)"""
     
     def get_task(self) -> str:
-        return """Understand user question and output SemanticQuery (pure semantic, no VizQL concepts).
+        return """Classify question type, get metadata, and output SemanticQuery (pure semantic, no VizQL concepts).
 
-Process: Analyze question → Extract entities → Classify roles → Detect analysis type → Output structured JSON"""
+Process: Get metadata → Classify question → Extract entities → Classify roles → Detect analysis type → Output structured JSON"""
     
     def get_specific_domain_knowledge(self) -> str:
         return """**Think step by step:**
+
+Step 0: Get metadata and classify question (原 Boost 功能)
+- Use get_metadata tool to get available fields
+- Determine if this is an analysis question (is_analysis_question)
+- Analysis questions: queries about data, trends, comparisons, aggregations
+- Non-analysis questions: greetings, help requests, system questions
+- If not analysis question, return early with is_analysis_question=False
 
 Step 1: Understand user intent
 - What does the user want to know?
@@ -274,16 +193,19 @@ Current date: {current_date}"""
 
 async def understanding_node(state: VizQLState, runtime) -> Dict[str, Any]:
     """
-    Understanding Agent 节点
+    Understanding Agent 节点（含原 Boost 功能）
     
     流程：
-    1. 构建 Prompt（包含思考步骤）
-    2. LLM 分析问题，调用工具获取需要的信息
-    3. LLM 根据 Schema 的 <decision_rule> 生成 SemanticQuery
+    1. 调用 get_metadata 获取元数据（原 Boost 功能）
+    2. 判断是否为分析类问题（is_analysis_question）
+    3. 如果不是分析类问题，直接返回
+    4. 构建 Prompt（包含思考步骤）
+    5. LLM 分析问题，调用工具获取需要的信息
+    6. LLM 根据 Schema 的 <decision_rule> 生成 SemanticQuery
     """
-    llm = get_llm_with_tools([get_schema_module, parse_date, detect_date_format])
+    llm = get_llm_with_tools([get_metadata, get_schema_module, parse_date, detect_date_format])
     
-    current_question = state.get("boosted_question") or state.get("question", "")
+    current_question = state.get("question", "")
     metadata = state.get("metadata")
     
     prompt = UnderstandingPrompt()
@@ -296,11 +218,26 @@ async def understanding_node(state: VizQLState, runtime) -> Dict[str, Any]:
     # 调用 LLM（自动处理 tool calls）
     response = await process_tool_calls(llm, messages, tool_map)
     
-    # 解析输出（Pydantic 验证）
-    semantic_query = SemanticQuery.model_validate_json(response.content)
+    # 解析输出
+    # LLM 输出包含两部分：is_analysis_question（路由决策）和 semantic_query（语义查询）
+    output = json.loads(response.content)
+    is_analysis_question = output.get("is_analysis_question", True)
+    
+    # 如果不是分析类问题，直接返回（semantic_query 为 None）
+    if not is_analysis_question:
+        return {
+            "semantic_query": None,
+            "is_analysis_question": False,
+            "understanding_complete": True,
+            "current_question": current_question,
+        }
+    
+    # 解析 SemanticQuery（Pydantic 验证）
+    semantic_query = SemanticQuery.model_validate(output.get("semantic_query", {}))
     
     return {
         "semantic_query": semantic_query,
+        "is_analysis_question": True,
         "understanding_complete": True,
         "current_question": current_question,
     }
@@ -327,7 +264,7 @@ SCHEMA_MODULES = {
 
 ---
 
-## 3. Replanner Agent
+## 2. Replanner Agent
 
 ### 职责
 

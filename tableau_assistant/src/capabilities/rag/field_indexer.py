@@ -88,11 +88,23 @@ class FieldIndexer:
         self.index_dir.mkdir(parents=True, exist_ok=True)
         
         # 初始化 Embedding 提供者
-        base_provider = embedding_provider or EmbeddingProviderFactory.create("mock")
-        if use_cache:
+        # 优先使用传入的 provider，否则尝试创建真实的 Embedding 提供者
+        if embedding_provider is not None:
+            base_provider = embedding_provider
+        else:
+            base_provider = self._create_default_embedding_provider()
+        
+        # 如果没有可用的 Embedding 提供者，embedding_provider 为 None
+        # 上层调用者应检查此属性并回退到 LLM
+        if base_provider is None:
+            self.embedding_provider = None
+            self._rag_available = False
+        elif use_cache:
             self.embedding_provider = CachedEmbeddingProvider(base_provider)
+            self._rag_available = True
         else:
             self.embedding_provider = base_provider
+            self._rag_available = True
         
         # 字段分块存储
         self._chunks: Dict[str, FieldChunk] = {}  # field_name -> FieldChunk
@@ -104,6 +116,59 @@ class FieldIndexer:
         
         # 元数据哈希（用于增量更新检测）
         self._metadata_hash: Optional[str] = None
+    
+    @property
+    def rag_available(self) -> bool:
+        """
+        检查 RAG 是否可用
+        
+        如果没有配置 Embedding 提供者，RAG 不可用，应回退到 LLM。
+        
+        Returns:
+            True 如果 RAG 可用，False 如果应回退到 LLM
+        """
+        return self._rag_available
+    
+    def _create_default_embedding_provider(self) -> Optional[EmbeddingProvider]:
+        """
+        创建默认的 Embedding 提供者
+        
+        根据环境变量自动检测可用的 Embedding 提供者：
+        1. 检测 ZHIPUAI_API_KEY / ZHIPU_API_KEY - 使用智谱 AI
+        2. 检测 OPENAI_API_KEY - 使用 OpenAI
+        3. 如果没有配置任何 Embedding API Key，返回 None（由上层回退到 LLM）
+        
+        Returns:
+            EmbeddingProvider 实例，或 None（表示应回退到 LLM）
+        """
+        import os
+        
+        # 1. 尝试智谱 AI（如果配置了专用 API Key）
+        zhipu_key = os.environ.get("ZHIPUAI_API_KEY") or os.environ.get("ZHIPU_API_KEY")
+        if zhipu_key:
+            try:
+                provider = EmbeddingProviderFactory.create("zhipu")
+                logger.info("使用智谱 AI Embedding 提供者")
+                return provider
+            except Exception as e:
+                logger.warning(f"初始化智谱 AI Embedding 失败: {e}")
+        
+        # 2. 尝试 OpenAI（如果配置了专用 API Key）
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        if openai_key:
+            try:
+                provider = EmbeddingProviderFactory.create("openai")
+                logger.info("使用 OpenAI Embedding 提供者")
+                return provider
+            except Exception as e:
+                logger.warning(f"初始化 OpenAI Embedding 失败: {e}")
+        
+        # 3. 没有配置 Embedding API Key，返回 None（由上层回退到 LLM）
+        logger.warning(
+            "未配置 Embedding API Key (ZHIPUAI_API_KEY 或 OPENAI_API_KEY)，"
+            "字段映射将回退到 LLM 直接匹配"
+        )
+        return None
     
     def build_index_text(self, field_metadata: Any) -> str:
         """
@@ -164,10 +229,24 @@ class FieldIndexer:
             force_rebuild: 是否强制重建索引
         
         Returns:
-            索引的字段数量
+            索引的字段数量（如果 RAG 不可用返回 0）
         """
         if not fields:
             return 0
+        
+        # 如果 RAG 不可用，只存储字段元数据（不做向量化）
+        if not self._rag_available:
+            logger.info("RAG 不可用，仅存储字段元数据（将回退到 LLM 匹配）")
+            self._chunks.clear()
+            self._field_names.clear()
+            for field in fields:
+                chunk = FieldChunk.from_field_metadata(
+                    field, 
+                    max_samples=self.index_config.max_samples
+                )
+                self._chunks[chunk.field_name] = chunk
+                self._field_names.append(chunk.field_name)
+            return 0  # 返回 0 表示没有向量索引
         
         # 计算元数据哈希
         new_hash = self._compute_metadata_hash(fields)
@@ -405,10 +484,15 @@ class FieldIndexer:
             role_filter: 按角色过滤（dimension/measure）
         
         Returns:
-            检索结果列表
+            检索结果列表（如果 RAG 不可用返回空列表）
         """
         if not self._chunks:
             logger.warning("索引为空，请先调用 index_fields()")
+            return []
+        
+        # 如果 RAG 不可用，返回空列表（由上层回退到 LLM）
+        if not self._rag_available:
+            logger.debug("RAG 不可用，返回空结果（将回退到 LLM 匹配）")
             return []
         
         # 向量化查询

@@ -1,73 +1,400 @@
 """
-Store管理器
+统一存储管理器
 
-使用LangGraph 1.0的Store功能管理缓存和持久化数据
-替代部分Redis缓存功能
+提供业务数据的持久化存储，基于 SQLite 实现。
+
+生产级特性：
+- 线程安全：使用线程锁保护并发访问
+- 连接池：每个线程独立连接
+- 事务支持：自动提交或回滚
+- TTL 过期机制：自动清理过期数据
+- 性能优化：WAL模式、索引、批量操作
+- 错误处理：完善的异常处理和日志记录
+
+支持的命名空间：
+- metadata: 元数据缓存（默认1小时）
+- dimension_hierarchy: 维度层级缓存（默认24小时）
+- data_model: 数据模型缓存（默认24小时）
+- user_preferences: 用户偏好（永久）
+- question_history: 问题历史（永久）
+- anomaly_knowledge: 异常知识库（永久）
 """
-import logging
-import time
+import sqlite3
 import json
+import time
+import logging
+import threading
 import os
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
-
-from langgraph.store.memory import InMemoryStore
-from langgraph.store.base import Item
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Tuple, Union, TYPE_CHECKING
+from contextlib import contextmanager
+from dataclasses import dataclass
 
 if TYPE_CHECKING:
     from tableau_assistant.src.models.metadata import Metadata
+    from tableau_assistant.src.models.data_model import DataModel
 
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class StoreItem:
+    """存储项，兼容 LangGraph Store 的 Item 接口"""
+    namespace: Tuple[str, ...]
+    key: str
+    value: Dict[str, Any]
+    created_at: float
+    updated_at: float = 0.0
+    expires_at: Optional[float] = None
+
+
 class StoreManager:
     """
-    Store管理器
+    统一存储管理器
     
-    封装LangGraph Store的常用操作，提供统一的缓存接口
+    将 PersistentStore 的 SQLite 实现与高级业务接口合并，
+    提供单一的存储管理入口。
     
-    支持的命名空间：
-    - ("metadata",) - 元数据缓存（默认1小时，可通过METADATA_CACHE_TTL配置）
-    - ("dimension_hierarchy",) - 维度层级缓存（默认24小时，可通过DIMENSION_HIERARCHY_CACHE_TTL配置）
-    - ("data_model",) - 数据模型缓存（默认24小时，可通过DATA_MODEL_CACHE_TTL配置）
-    - ("user_preferences",) - 用户偏好（永久）
-    - ("question_history", user_id) - 问题历史（永久）
-    - ("anomaly_knowledge",) - 异常知识库（永久）
+    使用示例：
+        # 创建管理器
+        store = StoreManager()
+        
+        # 业务操作
+        store.put_metadata("ds_123", metadata_obj)
+        metadata = store.get_metadata("ds_123")
+        
+        # 低级操作
+        store.put(("custom",), "key1", {"data": "value"}, ttl=3600)
+        item = store.get(("custom",), "key1")
     """
     
     # 缓存过期时间（秒）- 从环境变量读取，提供默认值
-    METADATA_TTL = int(os.getenv('METADATA_CACHE_TTL', '3600'))  # 默认1小时
-    DIMENSION_HIERARCHY_TTL = int(os.getenv('DIMENSION_HIERARCHY_CACHE_TTL', '86400'))  # 默认24小时
-    DATA_MODEL_TTL = int(os.getenv('DATA_MODEL_CACHE_TTL', '86400'))  # 默认24小时
+    METADATA_TTL = int(os.getenv('METADATA_CACHE_TTL', '3600'))  # 1小时
+    DIMENSION_HIERARCHY_TTL = int(os.getenv('DIMENSION_HIERARCHY_CACHE_TTL', '86400'))  # 24小时
+    DATA_MODEL_TTL = int(os.getenv('DATA_MODEL_CACHE_TTL', '86400'))  # 24小时
     
-    # Store查询限制（基于LLM上下文长度）
-    # 假设每个item平均1KB，40K上下文可以容纳约40个items
-    # 为了安全起见，设置为上下文的10%
-    DEFAULT_SEARCH_LIMIT = 4000  # 约4000个items
+    # 默认搜索限制
+    DEFAULT_SEARCH_LIMIT = 1000
     
     def __init__(
         self,
-        store: Optional[InMemoryStore] = None,
+        db_path: str = "data/business_cache.db",
+        enable_wal: bool = True,
+        cache_size: int = -64000,  # 64MB
+        timeout: float = 30.0,
         max_search_limit: Optional[int] = None
     ):
         """
-        初始化Store管理器
+        初始化存储管理器
         
         Args:
-            store: InMemoryStore实例，如果为None则创建新实例
-            max_search_limit: 最大搜索限制，如果为None则从配置文件读取
+            db_path: SQLite 数据库文件路径
+            enable_wal: 是否启用WAL模式（提高并发性能）
+            cache_size: SQLite 缓存大小（负数表示KB）
+            timeout: 数据库锁超时时间（秒）
+            max_search_limit: 最大搜索限制
         """
-        self.store = store or InMemoryStore()
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # 优先级：参数 > 配置文件 > 默认值
+        self.enable_wal = enable_wal
+        self.cache_size = cache_size
+        self.timeout = timeout
+        
+        # 搜索限制
         if max_search_limit is not None:
             self.max_search_limit = max_search_limit
         else:
             try:
                 from tableau_assistant.src.config.settings import settings
-                self.max_search_limit = settings.store_max_search_limit
+                self.max_search_limit = getattr(settings, 'store_max_search_limit', self.DEFAULT_SEARCH_LIMIT)
             except Exception:
                 self.max_search_limit = self.DEFAULT_SEARCH_LIMIT
+        
+        # 线程锁
+        self._lock = threading.RLock()
+        
+        # 线程本地存储（每个线程独立连接）
+        self._local = threading.local()
+        
+        # 初始化数据库
+        self._init_db()
+        
+        logger.info(f"StoreManager initialized: {self.db_path}")
+
+    # ========== 数据库连接管理 ==========
     
+    def _get_connection(self) -> sqlite3.Connection:
+        """获取当前线程的数据库连接"""
+        if not hasattr(self._local, 'conn') or self._local.conn is None:
+            self._local.conn = sqlite3.connect(
+                str(self.db_path),
+                timeout=self.timeout,
+                check_same_thread=False,
+                isolation_level=None  # 自动提交模式
+            )
+            
+            cursor = self._local.conn.cursor()
+            
+            # WAL模式（提高并发性能）
+            if self.enable_wal:
+                cursor.execute("PRAGMA journal_mode=WAL")
+            
+            # 性能优化
+            cursor.execute(f"PRAGMA cache_size={self.cache_size}")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA temp_store=MEMORY")
+            
+            logger.debug(f"Created DB connection for thread {threading.current_thread().name}")
+        
+        return self._local.conn
+    
+    @contextmanager
+    def _transaction(self):
+        """事务上下文管理器"""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN")
+            yield cursor
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"Transaction failed: {e}")
+            raise
+        finally:
+            cursor.close()
+    
+    def _init_db(self):
+        """初始化数据库表和索引"""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            try:
+                # 主存储表
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS store (
+                        namespace TEXT NOT NULL,
+                        key TEXT NOT NULL,
+                        value TEXT NOT NULL,
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL,
+                        expires_at REAL,
+                        PRIMARY KEY (namespace, key)
+                    )
+                """)
+                
+                # 索引
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_namespace ON store(namespace)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_expires_at ON store(expires_at)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_updated_at ON store(updated_at)")
+                
+                # 版本表
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS schema_version (
+                        version INTEGER PRIMARY KEY,
+                        applied_at REAL NOT NULL
+                    )
+                """)
+                cursor.execute("INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (1, ?)", (time.time(),))
+                
+                conn.commit()
+                logger.info("Database initialized successfully")
+                
+            except Exception as e:
+                conn.rollback()
+                logger.error(f"Failed to initialize database: {e}")
+                raise
+    
+    # ========== 低级存储操作 ==========
+    
+    def put(
+        self,
+        namespace: Tuple[str, ...],
+        key: str,
+        value: Dict[str, Any],
+        ttl: Optional[float] = None
+    ) -> None:
+        """
+        保存数据
+        
+        Args:
+            namespace: 命名空间元组，如 ("metadata",) 或 ("question_history", "user_123")
+            key: 键
+            value: 值（字典）
+            ttl: 生存时间（秒），None 表示永不过期
+        """
+        with self._lock:
+            try:
+                namespace_str = ":".join(namespace)
+                value_json = json.dumps(value, ensure_ascii=False)
+                now = time.time()
+                expires_at = now + ttl if ttl else None
+                
+                with self._transaction() as cursor:
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO store (namespace, key, value, created_at, updated_at, expires_at)
+                        VALUES (?, ?, ?, 
+                            COALESCE((SELECT created_at FROM store WHERE namespace = ? AND key = ?), ?),
+                            ?, ?)
+                    """, (namespace_str, key, value_json, namespace_str, key, now, now, expires_at))
+                
+                logger.debug(f"Put: {namespace_str}:{key} (ttl={ttl})")
+                
+            except Exception as e:
+                logger.error(f"Failed to put data: {e}")
+                raise
+    
+    def get(
+        self,
+        namespace: Tuple[str, ...],
+        key: str
+    ) -> Optional[StoreItem]:
+        """
+        获取数据
+        
+        Args:
+            namespace: 命名空间元组
+            key: 键
+        
+        Returns:
+            StoreItem 或 None（如果不存在或已过期）
+        """
+        with self._lock:
+            try:
+                namespace_str = ":".join(namespace)
+                now = time.time()
+                
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT value, created_at, updated_at, expires_at FROM store 
+                    WHERE namespace = ? AND key = ?
+                """, (namespace_str, key))
+                
+                row = cursor.fetchone()
+                if row:
+                    expires_at = row[3]
+                    if expires_at and expires_at < now:
+                        logger.debug(f"Data expired: {namespace_str}:{key}")
+                        self.delete(namespace, key)
+                        return None
+                    
+                    return StoreItem(
+                        namespace=namespace,
+                        key=key,
+                        value=json.loads(row[0]),
+                        created_at=row[1],
+                        updated_at=row[2],
+                        expires_at=expires_at
+                    )
+                
+                return None
+                
+            except Exception as e:
+                logger.error(f"Failed to get data: {e}")
+                raise
+    
+    def delete(self, namespace: Tuple[str, ...], key: str) -> None:
+        """删除数据"""
+        with self._lock:
+            try:
+                namespace_str = ":".join(namespace)
+                
+                with self._transaction() as cursor:
+                    cursor.execute("DELETE FROM store WHERE namespace = ? AND key = ?", (namespace_str, key))
+                
+                logger.debug(f"Delete: {namespace_str}:{key}")
+                
+            except Exception as e:
+                logger.error(f"Failed to delete data: {e}")
+                raise
+    
+    def search(
+        self,
+        namespace_prefix: Tuple[str, ...],
+        query: Optional[str] = None,
+        limit: int = 100
+    ) -> List[StoreItem]:
+        """
+        搜索数据
+        
+        Args:
+            namespace_prefix: 命名空间前缀
+            query: 查询字符串（简单文本匹配）
+            limit: 返回结果数量限制
+        
+        Returns:
+            StoreItem 列表
+        """
+        with self._lock:
+            try:
+                namespace_str = ":".join(namespace_prefix)
+                now = time.time()
+                
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                
+                if query:
+                    cursor.execute("""
+                        SELECT namespace, key, value, created_at, updated_at, expires_at FROM store 
+                        WHERE namespace LIKE ? AND value LIKE ?
+                        AND (expires_at IS NULL OR expires_at > ?)
+                        ORDER BY updated_at DESC
+                        LIMIT ?
+                    """, (f"{namespace_str}%", f"%{query}%", now, limit))
+                else:
+                    cursor.execute("""
+                        SELECT namespace, key, value, created_at, updated_at, expires_at FROM store 
+                        WHERE namespace LIKE ?
+                        AND (expires_at IS NULL OR expires_at > ?)
+                        ORDER BY updated_at DESC
+                        LIMIT ?
+                    """, (f"{namespace_str}%", now, limit))
+                
+                items = []
+                for row in cursor.fetchall():
+                    items.append(StoreItem(
+                        namespace=tuple(row[0].split(":")),
+                        key=row[1],
+                        value=json.loads(row[2]),
+                        created_at=row[3],
+                        updated_at=row[4],
+                        expires_at=row[5]
+                    ))
+                
+                logger.debug(f"Search: {namespace_str} - found {len(items)} items")
+                return items
+                
+            except Exception as e:
+                logger.error(f"Failed to search: {e}")
+                raise
+    
+    def clear_namespace(self, namespace: Tuple[str, ...]) -> int:
+        """
+        清空指定命名空间的所有数据
+        
+        Returns:
+            删除的记录数
+        """
+        with self._lock:
+            try:
+                namespace_str = ":".join(namespace)
+                
+                with self._transaction() as cursor:
+                    cursor.execute("DELETE FROM store WHERE namespace LIKE ?", (f"{namespace_str}%",))
+                    deleted = cursor.rowcount
+                
+                logger.info(f"Cleared namespace {namespace_str}: {deleted} records")
+                return deleted
+                
+            except Exception as e:
+                logger.error(f"Failed to clear namespace: {e}")
+                raise
+
     # ========== 元数据缓存 ==========
     
     def get_metadata(self, datasource_luid: str, datasource_updated_at: str = None):
@@ -76,7 +403,7 @@ class StoreManager:
         
         Args:
             datasource_luid: 数据源LUID
-            datasource_updated_at: 数据源最后更新时间（可选，用于版本检测）
+            datasource_updated_at: 数据源最后更新时间（用于版本检测）
         
         Returns:
             Metadata对象，如果不存在或已过期返回None
@@ -84,30 +411,21 @@ class StoreManager:
         try:
             from tableau_assistant.src.models.metadata import Metadata
             
-            item = self.store.get(
-                namespace=("metadata",),
-                key=datasource_luid
-            )
+            item = self.get(namespace=("metadata",), key=datasource_luid)
             
-            if item and self._is_valid(item, self.METADATA_TTL):
+            if item and self._check_ttl(item.value, self.METADATA_TTL):
                 metadata_dict = item.value
                 
-                # 版本检测：如果提供了数据源更新时间，检查是否匹配
+                # 版本检测
                 if datasource_updated_at:
                     cached_version = metadata_dict.get("_datasource_updated_at")
                     if cached_version and cached_version != datasource_updated_at:
                         logger.info(f"数据源已更新，缓存失效: {datasource_luid}")
-                        logger.debug(f"  缓存版本: {cached_version}")
-                        logger.debug(f"  当前版本: {datasource_updated_at}")
                         return None
                 
-                # 反序列化为Metadata对象
-                # 移除内部字段（不属于Metadata模型）
-                metadata_dict = {
-                    k: v for k, v in metadata_dict.items() 
-                    if not k.startswith("_")
-                }
-                return Metadata.model_validate(metadata_dict)
+                # 移除内部字段，反序列化
+                clean_dict = {k: v for k, v in metadata_dict.items() if not k.startswith("_")}
+                return Metadata.model_validate(clean_dict)
             
             return None
         except Exception as e:
@@ -120,69 +438,48 @@ class StoreManager:
         metadata,
         datasource_updated_at: str = None
     ) -> bool:
-        """
-        保存元数据到缓存
-        
-        Args:
-            datasource_luid: 数据源LUID
-            metadata: Metadata模型对象
-            datasource_updated_at: 数据源最后更新时间（可选，用于版本检测）
-        
-        Returns:
-            是否保存成功
-        """
+        """保存元数据到缓存"""
         try:
             from tableau_assistant.src.models.metadata import Metadata
             
-            # 序列化为字典
             if isinstance(metadata, Metadata):
                 metadata_dict = metadata.model_dump()
             else:
-                # 向后兼容：如果传入的是字典，直接使用
                 metadata_dict = metadata
             
-            # 添加内部字段
             data = {
                 **metadata_dict,
                 "_cached_at": time.time(),
             }
-            
-            # 添加版本信息（如果提供）
             if datasource_updated_at:
                 data["_datasource_updated_at"] = datasource_updated_at
             
-            self.store.put(
-                namespace=("metadata",),
-                key=datasource_luid,
-                value=data
-            )
+            self.put(namespace=("metadata",), key=datasource_luid, value=data, ttl=self.METADATA_TTL)
+            logger.info(f"元数据已缓存: {datasource_luid}")
             return True
         except Exception as e:
             logger.error(f"保存元数据失败: {e}")
             return False
     
+    def clear_metadata_cache(self, datasource_luid: str) -> bool:
+        """清除指定数据源的元数据缓存"""
+        try:
+            self.delete(namespace=("metadata",), key=datasource_luid)
+            self.delete(namespace=("dimension_hierarchy",), key=datasource_luid)
+            logger.info(f"已清除数据源缓存: {datasource_luid}")
+            return True
+        except Exception as e:
+            logger.error(f"清除缓存失败: {e}")
+            return False
+    
     # ========== 维度层级缓存 ==========
     
-    def get_dimension_hierarchy(
-        self,
-        datasource_luid: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        获取维度层级缓存
-        
-        Args:
-            datasource_luid: 数据源LUID
-        
-        Returns:
-            维度层级字典，如果不存在或已过期返回None
-        """
+    def get_dimension_hierarchy(self, datasource_luid: str) -> Optional[Dict[str, Any]]:
+        """获取维度层级缓存"""
         try:
-            item = self.store.get(
-                namespace=("dimension_hierarchy",),
-                key=datasource_luid
-            )
+            item = self.get(namespace=("dimension_hierarchy",), key=datasource_luid)
             
-            if item and self._is_valid(item, self.DIMENSION_HIERARCHY_TTL):
+            if item and self._check_ttl(item.value, self.DIMENSION_HIERARCHY_TTL):
                 return item.value
             
             return None
@@ -190,62 +487,39 @@ class StoreManager:
             logger.error(f"获取维度层级失败: {e}")
             return None
     
-    def put_dimension_hierarchy(
-        self,
-        datasource_luid: str,
-        hierarchy: Dict[str, Any]
-    ) -> bool:
-        """
-        保存维度层级到缓存
-        
-        Args:
-            datasource_luid: 数据源LUID
-            hierarchy: 维度层级字典
-        
-        Returns:
-            是否保存成功
-        """
+    def put_dimension_hierarchy(self, datasource_luid: str, hierarchy: Dict[str, Any]) -> bool:
+        """保存维度层级到缓存"""
         try:
-            # 添加时间戳
-            data = {
-                **hierarchy,
-                "_cached_at": time.time()
-            }
-            
-            self.store.put(
-                namespace=("dimension_hierarchy",),
-                key=datasource_luid,
-                value=data
-            )
+            data = {**hierarchy, "_cached_at": time.time()}
+            self.put(namespace=("dimension_hierarchy",), key=datasource_luid, value=data, ttl=self.DIMENSION_HIERARCHY_TTL)
+            logger.info(f"维度层级已缓存: {datasource_luid}")
             return True
         except Exception as e:
             logger.error(f"保存维度层级失败: {e}")
             return False
     
+    def clear_dimension_hierarchy_cache(self, datasource_luid: str) -> bool:
+        """清除维度层级缓存"""
+        try:
+            self.delete(namespace=("dimension_hierarchy",), key=datasource_luid)
+            logger.info(f"已清除维度层级缓存: {datasource_luid}")
+            return True
+        except Exception as e:
+            logger.error(f"清除维度层级缓存失败: {e}")
+            return False
+    
     # ========== 数据模型缓存 ==========
     
     def get_data_model(self, datasource_luid: str) -> Optional[Any]:
-        """
-        获取数据模型缓存
-        
-        Args:
-            datasource_luid: 数据源LUID
-        
-        Returns:
-            DataModel对象，如果不存在或已过期返回None
-        """
+        """获取数据模型缓存"""
         try:
             from tableau_assistant.src.models.data_model import DataModel, LogicalTable, LogicalTableRelationship
             
-            item = self.store.get(
-                namespace=("data_model",),
-                key=datasource_luid
-            )
+            item = self.get(namespace=("data_model",), key=datasource_luid)
             
-            if item and self._is_valid(item, self.DATA_MODEL_TTL):
+            if item and self._check_ttl(item.value, self.DATA_MODEL_TTL):
                 data = item.value
                 
-                # 反序列化为DataModel对象
                 logical_tables = [
                     LogicalTable(
                         logicalTableId=t.get("logicalTableId", ""),
@@ -271,155 +545,68 @@ class StoreManager:
             logger.error(f"获取数据模型失败: {e}")
             return None
     
-    def put_data_model(
-        self,
-        datasource_luid: str,
-        data_model: Any
-    ) -> bool:
-        """
-        保存数据模型到缓存
-        
-        Args:
-            datasource_luid: 数据源LUID
-            data_model: DataModel对象
-        
-        Returns:
-            是否保存成功
-        """
+    def put_data_model(self, datasource_luid: str, data_model: Any) -> bool:
+        """保存数据模型到缓存"""
         try:
             from tableau_assistant.src.models.data_model import DataModel
             
-            # 序列化为字典
             if isinstance(data_model, DataModel):
                 data = {
                     "logicalTables": [
-                        {
-                            "logicalTableId": t.logicalTableId,
-                            "caption": t.caption
-                        }
+                        {"logicalTableId": t.logicalTableId, "caption": t.caption}
                         for t in data_model.logicalTables
                     ],
                     "logicalTableRelationships": [
-                        {
-                            "fromLogicalTableId": r.fromLogicalTableId,
-                            "toLogicalTableId": r.toLogicalTableId
-                        }
+                        {"fromLogicalTableId": r.fromLogicalTableId, "toLogicalTableId": r.toLogicalTableId}
                         for r in data_model.logicalTableRelationships
                     ],
                     "_cached_at": time.time()
                 }
             else:
-                # 向后兼容：如果传入的是字典，直接使用
-                data = {
-                    **data_model,
-                    "_cached_at": time.time()
-                }
+                data = {**data_model, "_cached_at": time.time()}
             
-            self.store.put(
-                namespace=("data_model",),
-                key=datasource_luid,
-                value=data
-            )
-            
-            logger.info(f"数据模型已缓存（24小时）: {datasource_luid}")
+            self.put(namespace=("data_model",), key=datasource_luid, value=data, ttl=self.DATA_MODEL_TTL)
+            logger.info(f"数据模型已缓存: {datasource_luid}")
             return True
         except Exception as e:
             logger.error(f"保存数据模型失败: {e}")
             return False
     
     def clear_data_model_cache(self, datasource_luid: str) -> bool:
-        """
-        清除指定数据源的数据模型缓存
-        
-        Args:
-            datasource_luid: 数据源LUID
-        
-        Returns:
-            是否清除成功
-        """
+        """清除数据模型缓存"""
         try:
-            self.store.delete(
-                namespace=("data_model",),
-                key=datasource_luid
-            )
-            
+            self.delete(namespace=("data_model",), key=datasource_luid)
             logger.info(f"已清除数据模型缓存: {datasource_luid}")
             return True
         except Exception as e:
             logger.error(f"清除数据模型缓存失败: {e}")
             return False
-    
+
     # ========== 用户偏好 ==========
     
     def get_user_preferences(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """
-        获取用户偏好
-        
-        Args:
-            user_id: 用户ID
-        
-        Returns:
-            用户偏好字典，如果不存在返回None
-        """
+        """获取用户偏好"""
         try:
-            item = self.store.get(
-                namespace=("user_preferences",),
-                key=user_id
-            )
+            item = self.get(namespace=("user_preferences",), key=user_id)
             return item.value if item else None
         except Exception as e:
             logger.error(f"获取用户偏好失败: {e}")
             return None
     
-    def put_user_preferences(
-        self,
-        user_id: str,
-        preferences: Dict[str, Any]
-    ) -> bool:
-        """
-        保存用户偏好
-        
-        Args:
-            user_id: 用户ID
-            preferences: 用户偏好字典
-        
-        Returns:
-            是否保存成功
-        """
+    def put_user_preferences(self, user_id: str, preferences: Dict[str, Any]) -> bool:
+        """保存用户偏好（永久存储）"""
         try:
-            self.store.put(
-                namespace=("user_preferences",),
-                key=user_id,
-                value=preferences
-            )
+            self.put(namespace=("user_preferences",), key=user_id, value=preferences, ttl=None)
             return True
         except Exception as e:
             logger.error(f"保存用户偏好失败: {e}")
             return False
     
-    def update_user_preferences(
-        self,
-        user_id: str,
-        updates: Dict[str, Any]
-    ) -> bool:
-        """
-        更新用户偏好（增量更新）
-        
-        Args:
-            user_id: 用户ID
-            updates: 要更新的字段
-        
-        Returns:
-            是否更新成功
-        """
+    def update_user_preferences(self, user_id: str, updates: Dict[str, Any]) -> bool:
+        """更新用户偏好（增量更新）"""
         try:
-            # 获取现有偏好
             current = self.get_user_preferences(user_id) or {}
-            
-            # 合并更新
             updated = {**current, **updates}
-            
-            # 保存
             return self.put_user_preferences(user_id, updated)
         except Exception as e:
             logger.error(f"更新用户偏好失败: {e}")
@@ -433,33 +620,15 @@ class StoreManager:
         question: str,
         metadata: Optional[Dict[str, Any]] = None
     ) -> bool:
-        """
-        添加问题到历史记录
-        
-        Args:
-            user_id: 用户ID
-            question: 问题文本
-            metadata: 额外的元数据（如datasource_luid、timestamp等）
-        
-        Returns:
-            是否添加成功
-        """
+        """添加问题到历史记录"""
         try:
-            # 生成唯一key（使用时间戳）
             key = f"q_{int(time.time() * 1000)}"
-            
-            # 构建数据
             data = {
                 "question": question,
                 "timestamp": time.time(),
                 **(metadata or {})
             }
-            
-            self.store.put(
-                namespace=("question_history", user_id),
-                key=key,
-                value=data
-            )
+            self.put(namespace=("question_history", user_id), key=key, value=data, ttl=None)
             return True
         except Exception as e:
             logger.error(f"添加问题历史失败: {e}")
@@ -471,62 +640,33 @@ class StoreManager:
         query: str,
         limit: int = 5
     ) -> List[Dict[str, Any]]:
-        """
-        语义搜索历史问题
-        
-        Args:
-            user_id: 用户ID
-            query: 查询文本
-            limit: 返回结果数量
-        
-        Returns:
-            相似问题列表
-        """
+        """搜索历史问题（简单文本匹配）"""
         try:
-            results = self.store.search(
-                ("question_history", user_id),  # namespace_prefix作为位置参数
+            results = self.search(
+                namespace_prefix=("question_history", user_id),
                 query=query,
                 limit=limit
             )
-            
-            # 转换为字典列表
             return [item.value for item in results]
         except Exception as e:
             logger.error(f"搜索问题历史失败: {e}")
             return []
     
-    def get_recent_questions(
-        self,
-        user_id: str,
-        limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        """
-        获取最近的问题（按时间倒序）
-        
-        Args:
-            user_id: 用户ID
-            limit: 返回结果数量
-        
-        Returns:
-            最近问题列表
-        """
+    def get_recent_questions(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取最近的问题（按时间倒序）"""
         try:
-            # 使用search获取所有问题（query=None返回所有）
-            # 使用max_search_limit避免超出LLM上下文限制
-            items = self.store.search(
-                ("question_history", user_id),  # namespace_prefix作为位置参数
-                query=None,  # None查询返回所有
+            items = self.search(
+                namespace_prefix=("question_history", user_id),
+                query=None,
                 limit=self.max_search_limit
             )
             
-            # 按时间戳排序
             sorted_items = sorted(
                 items,
                 key=lambda x: x.value.get("timestamp", 0),
                 reverse=True
             )
             
-            # 返回前N个
             return [item.value for item in sorted_items[:limit]]
         except Exception as e:
             logger.error(f"获取最近问题失败: {e}")
@@ -534,83 +674,33 @@ class StoreManager:
     
     # ========== 异常知识库 ==========
     
-    def get_anomaly_explanation(
-        self,
-        anomaly_key: str
-    ) -> Optional[Dict[str, Any]]:
-        """
-        获取异常解释
-        
-        Args:
-            anomaly_key: 异常标识（如"low_profit_rate_east_region"）
-        
-        Returns:
-            异常解释字典，如果不存在返回None
-        """
+    def get_anomaly_explanation(self, anomaly_key: str) -> Optional[Dict[str, Any]]:
+        """获取异常解释"""
         try:
-            item = self.store.get(
-                namespace=("anomaly_knowledge",),
-                key=anomaly_key
-            )
+            item = self.get(namespace=("anomaly_knowledge",), key=anomaly_key)
             return item.value if item else None
         except Exception as e:
             logger.error(f"获取异常解释失败: {e}")
             return None
     
-    def put_anomaly_explanation(
-        self,
-        anomaly_key: str,
-        explanation: Dict[str, Any]
-    ) -> bool:
-        """
-        保存异常解释
-        
-        Args:
-            anomaly_key: 异常标识
-            explanation: 异常解释字典（包含description、reason、suggestion等）
-        
-        Returns:
-            是否保存成功
-        """
+    def put_anomaly_explanation(self, anomaly_key: str, explanation: Dict[str, Any]) -> bool:
+        """保存异常解释"""
         try:
-            # 添加时间戳
-            data = {
-                **explanation,
-                "_created_at": time.time()
-            }
-            
-            self.store.put(
-                namespace=("anomaly_knowledge",),
-                key=anomaly_key,
-                value=data
-            )
+            data = {**explanation, "_created_at": time.time()}
+            self.put(namespace=("anomaly_knowledge",), key=anomaly_key, value=data, ttl=None)
             return True
         except Exception as e:
             logger.error(f"保存异常解释失败: {e}")
             return False
     
-    def search_anomaly_knowledge(
-        self,
-        query: str,
-        limit: int = 5
-    ) -> List[Dict[str, Any]]:
-        """
-        语义搜索异常知识库
-        
-        Args:
-            query: 查询文本（如"利润率低"）
-            limit: 返回结果数量
-        
-        Returns:
-            相似异常列表
-        """
+    def search_anomaly_knowledge(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """搜索异常知识库"""
         try:
-            results = self.store.search(
-                ("anomaly_knowledge",),  # namespace_prefix作为位置参数
+            results = self.search(
+                namespace_prefix=("anomaly_knowledge",),
                 query=query,
                 limit=limit
             )
-            
             return [item.value for item in results]
         except Exception as e:
             logger.error(f"搜索异常知识库失败: {e}")
@@ -618,255 +708,232 @@ class StoreManager:
     
     # ========== 工具方法 ==========
     
-    def _is_valid(self, item: Item, ttl: int) -> bool:
-        """
-        检查缓存项是否有效（未过期）
-        
-        Args:
-            item: Store中的Item
-            ttl: 过期时间（秒）
-        
-        Returns:
-            是否有效
-        """
-        if not item or not item.value:
-            return False
-        
-        cached_at = item.value.get("_cached_at", 0)
+    def _check_ttl(self, value: Dict[str, Any], ttl: int) -> bool:
+        """检查缓存是否在 TTL 内有效"""
+        cached_at = value.get("_cached_at", 0)
         if cached_at == 0:
             return True  # 没有时间戳，认为永久有效
-        
         return (time.time() - cached_at) < ttl
     
-    def clear_metadata_cache(self, datasource_luid: str) -> bool:
-        """
-        清除指定数据源的元数据缓存
-        
-        Args:
-            datasource_luid: 数据源LUID
-        
-        Returns:
-            是否清除成功
-        """
-        try:
-            # 清除元数据缓存
-            self.store.delete(
-                namespace=("metadata",),
-                key=datasource_luid
-            )
-            
-            # 清除维度层级缓存
-            self.store.delete(
-                namespace=("dimension_hierarchy",),
-                key=datasource_luid
-            )
-            
-            logger.info(f"已清除数据源缓存: {datasource_luid}")
-            return True
-        except Exception as e:
-            logger.error(f"清除缓存失败: {e}")
-            return False
-    
-    def clear_dimension_hierarchy_cache(self, datasource_luid: str) -> bool:
-        """
-        清除指定数据源的维度层级缓存
-        
-        Args:
-            datasource_luid: 数据源LUID
-        
-        Returns:
-            是否清除成功
-        """
-        try:
-            # 清除维度层级缓存
-            self.store.delete(
-                namespace=("dimension_hierarchy",),
-                key=datasource_luid
-            )
-            
-            logger.info(f"已清除维度层级缓存: {datasource_luid}")
-            return True
-        except Exception as e:
-            logger.error(f"清除维度层级缓存失败: {e}")
-            return False
-    
-    def clear_namespace(self, namespace: tuple) -> bool:
-        """
-        清空指定命名空间的所有数据
-        
-        Args:
-            namespace: 命名空间元组
-        
-        Returns:
-            是否清空成功
-        
-        注意：
-            InMemoryStore不支持list和delete方法，此功能暂不可用
-        """
-        try:
-            # InMemoryStore不支持list和delete
-            logger.warning("InMemoryStore不支持clear_namespace")
-            return False
-        except Exception as e:
-            logger.error(f"清空命名空间失败: {e}")
-            return False
+    def cleanup_expired(self) -> int:
+        """清理所有过期数据"""
+        with self._lock:
+            try:
+                now = time.time()
+                
+                with self._transaction() as cursor:
+                    cursor.execute(
+                        "DELETE FROM store WHERE expires_at IS NOT NULL AND expires_at < ?",
+                        (now,)
+                    )
+                    deleted = cursor.rowcount
+                
+                if deleted > 0:
+                    logger.info(f"Cleaned up {deleted} expired records")
+                
+                return deleted
+                
+            except Exception as e:
+                logger.error(f"Failed to cleanup expired data: {e}")
+                raise
     
     def get_stats(self) -> Dict[str, Any]:
-        """
-        获取Store统计信息
-        
-        Returns:
-            统计信息字典
-        """
+        """获取存储统计信息"""
+        with self._lock:
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                
+                # 总记录数
+                cursor.execute("SELECT COUNT(*) FROM store")
+                total_count = cursor.fetchone()[0]
+                
+                # 按命名空间统计
+                cursor.execute("""
+                    SELECT 
+                        CASE 
+                            WHEN namespace LIKE 'metadata%' THEN 'metadata'
+                            WHEN namespace LIKE 'dimension_hierarchy%' THEN 'dimension_hierarchy'
+                            WHEN namespace LIKE 'data_model%' THEN 'data_model'
+                            WHEN namespace LIKE 'user_preferences%' THEN 'user_preferences'
+                            WHEN namespace LIKE 'question_history%' THEN 'question_history'
+                            WHEN namespace LIKE 'anomaly_knowledge%' THEN 'anomaly_knowledge'
+                            ELSE 'other'
+                        END as ns_group,
+                        COUNT(*) as count 
+                    FROM store 
+                    GROUP BY ns_group
+                """)
+                namespace_stats = {row[0]: row[1] for row in cursor.fetchall()}
+                
+                # 数据库大小
+                db_size = self.db_path.stat().st_size if self.db_path.exists() else 0
+                
+                return {
+                    "total_count": total_count,
+                    "namespace_stats": namespace_stats,
+                    "db_size_bytes": db_size,
+                    "db_size_mb": round(db_size / (1024 * 1024), 2),
+                    "db_path": str(self.db_path)
+                }
+                
+            except Exception as e:
+                logger.error(f"Failed to get stats: {e}")
+                return {}
+    
+    def vacuum(self):
+        """优化数据库（回收空间、重建索引）"""
+        with self._lock:
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                
+                logger.info("Starting database vacuum...")
+                cursor.execute("VACUUM")
+                logger.info("Database vacuum completed")
+                
+            except Exception as e:
+                logger.error(f"Failed to vacuum database: {e}")
+                raise
+    
+    def backup(self, backup_path: str):
+        """备份数据库"""
+        with self._lock:
+            try:
+                import shutil
+                
+                backup_file = Path(backup_path)
+                backup_file.parent.mkdir(parents=True, exist_ok=True)
+                
+                self.close()
+                shutil.copy2(self.db_path, backup_file)
+                
+                logger.info(f"Database backed up to: {backup_file}")
+                
+                # 重新初始化
+                self._init_db()
+                
+            except Exception as e:
+                logger.error(f"Failed to backup database: {e}")
+                raise
+    
+    def close(self):
+        """关闭数据库连接"""
+        with self._lock:
+            try:
+                if hasattr(self._local, 'conn') and self._local.conn:
+                    self._local.conn.close()
+                    self._local.conn = None
+                    logger.debug("Database connection closed")
+            except Exception as e:
+                logger.error(f"Error closing connection: {e}")
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
+    
+    def __del__(self):
         try:
-            # 使用search(query=None)获取所有items并统计数量
-            # 使用max_search_limit避免超出LLM上下文限制
-            stats = {
-                "metadata_count": len(self.store.search(("metadata",), query=None, limit=self.max_search_limit)),
-                "dimension_hierarchy_count": len(self.store.search(("dimension_hierarchy",), query=None, limit=self.max_search_limit)),
-                "user_preferences_count": len(self.store.search(("user_preferences",), query=None, limit=self.max_search_limit)),
-                "anomaly_knowledge_count": len(self.store.search(("anomaly_knowledge",), query=None, limit=self.max_search_limit)),
-            }
-            return stats
-        except Exception as e:
-            logger.error(f"获取统计信息失败: {e}")
-            return {}
+            self.close()
+        except:
+            pass
 
 
+# ========== 全局实例管理 ==========
 
-
-
-# 全局Store管理器实例（可选）
 _global_store_manager: Optional[StoreManager] = None
 
 
-def get_store_manager(store: Optional[InMemoryStore] = None) -> StoreManager:
+def get_store_manager(db_path: str = None) -> StoreManager:
     """
-    获取全局Store管理器实例
+    获取全局 StoreManager 实例
     
     Args:
-        store: InMemoryStore实例，如果为None则使用全局实例
+        db_path: 数据库路径，如果为 None 则使用默认路径
     
     Returns:
-        StoreManager实例
+        StoreManager 实例
     """
     global _global_store_manager
     
-    if store:
-        return StoreManager(store)
-    
     if _global_store_manager is None:
-        _global_store_manager = StoreManager()
+        _global_store_manager = StoreManager(db_path=db_path or "data/business_cache.db")
     
     return _global_store_manager
 
 
-# 示例用法
+def reset_store_manager():
+    """重置全局实例（主要用于测试）"""
+    global _global_store_manager
+    if _global_store_manager:
+        _global_store_manager.close()
+        _global_store_manager = None
+
+
+# ========== 测试代码 ==========
+
 if __name__ == "__main__":
-    # 创建Store管理器
-    manager = StoreManager()
+    import tempfile
     
     print("=" * 60)
-    print("测试元数据缓存")
+    print("测试统一存储管理器")
     print("=" * 60)
     
-    # 保存元数据
-    metadata = {
-        "datasource_name": "Superstore",
-        "fields": ["地区", "销售额", "利润"],
-        "dimensions": ["地区"],
-        "measures": ["销售额", "利润"]
-    }
-    manager.put_metadata("abc123", metadata)
-    print("✓ 元数据已保存")
+    # 使用临时数据库
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
     
-    # 获取元数据
-    cached = manager.get_metadata("abc123")
-    print(f"✓ 元数据已获取: {cached['datasource_name']}")
+    manager = StoreManager(db_path=db_path)
     
-    print("\n" + "=" * 60)
-    print("测试维度层级缓存")
-    print("=" * 60)
+    # 测试低级 API
+    print("\n1. 测试低级存储 API...")
+    manager.put(("test",), "key1", {"name": "测试数据", "value": 123})
+    item = manager.get(("test",), "key1")
+    print(f"   ✓ 低级 API: {item.value if item else None}")
     
-    # 保存维度层级
-    hierarchy = {
-        "地区": {
-            "category": "地理",
-            "level": 1,
-            "granularity": "粗粒度"
-        }
-    }
-    manager.put_dimension_hierarchy("abc123", hierarchy)
-    print("✓ 维度层级已保存")
+    # 测试维度层级
+    print("\n2. 测试维度层级缓存...")
+    hierarchy = {"地区": {"level": 1, "category": "地理"}}
+    manager.put_dimension_hierarchy("ds_123", hierarchy)
+    cached = manager.get_dimension_hierarchy("ds_123")
+    print(f"   ✓ 维度层级: {list(cached.keys()) if cached else None}")
     
-    # 获取维度层级
-    cached_hierarchy = manager.get_dimension_hierarchy("abc123")
-    print(f"✓ 维度层级已获取: {list(cached_hierarchy.keys())}")
+    # 测试用户偏好
+    print("\n3. 测试用户偏好...")
+    manager.put_user_preferences("user_456", {"theme": "dark"})
+    manager.update_user_preferences("user_456", {"language": "zh"})
+    prefs = manager.get_user_preferences("user_456")
+    print(f"   ✓ 用户偏好: {prefs}")
     
-    print("\n" + "=" * 60)
-    print("测试用户偏好")
-    print("=" * 60)
+    # 测试问题历史
+    print("\n4. 测试问题历史...")
+    manager.add_question_history("user_456", "2024年销售额是多少？")
+    manager.add_question_history("user_456", "各地区利润对比")
+    recent = manager.get_recent_questions("user_456", limit=2)
+    print(f"   ✓ 最近问题: {len(recent)} 条")
     
-    # 保存用户偏好
-    preferences = {
-        "detail_level": "high",
-        "preferred_viz": "bar",
-        "favorite_dimensions": ["地区", "产品类别"]
-    }
-    manager.put_user_preferences("user_456", preferences)
-    print("✓ 用户偏好已保存")
+    # 测试 TTL 过期
+    print("\n5. 测试 TTL 过期...")
+    manager.put(("ttl_test",), "expire_soon", {"data": "will expire"}, ttl=1)
+    item_before = manager.get(("ttl_test",), "expire_soon")
+    print(f"   过期前: {item_before.value if item_before else None}")
+    import time as t
+    t.sleep(1.5)
+    item_after = manager.get(("ttl_test",), "expire_soon")
+    print(f"   过期后: {item_after}")
     
-    # 更新用户偏好
-    manager.update_user_preferences("user_456", {"detail_level": "medium"})
-    print("✓ 用户偏好已更新")
-    
-    # 获取用户偏好
-    cached_prefs = manager.get_user_preferences("user_456")
-    print(f"✓ 用户偏好已获取: detail_level={cached_prefs['detail_level']}")
-    
-    print("\n" + "=" * 60)
-    print("测试问题历史")
-    print("=" * 60)
-    
-    # 添加问题历史
-    manager.add_question_history("user_456", "2016年各地区的销售额")
-    manager.add_question_history("user_456", "2015年各地区的利润")
-    manager.add_question_history("user_456", "华东地区的销售趋势")
-    print("✓ 问题历史已添加")
-    
-    # 获取最近问题
-    recent = manager.get_recent_questions("user_456", limit=3)
-    print(f"✓ 最近问题: {len(recent)}个")
-    for i, q in enumerate(recent):
-        print(f"  {i+1}. {q['question']}")
-    
-    # 语义搜索
-    similar = manager.search_question_history("user_456", "销售额", limit=2)
-    print(f"✓ 相似问题: {len(similar)}个")
-    for i, q in enumerate(similar):
-        print(f"  {i+1}. {q['question']}")
-    
-    print("\n" + "=" * 60)
-    print("测试异常知识库")
-    print("=" * 60)
-    
-    # 保存异常解释
-    anomaly = {
-        "description": "华东地区利润率异常低",
-        "reason": "促销活动导致折扣过大",
-        "suggestion": "调整促销策略，提高利润率"
-    }
-    manager.put_anomaly_explanation("low_profit_rate_east", anomaly)
-    print("✓ 异常解释已保存")
-    
-    # 获取异常解释
-    cached_anomaly = manager.get_anomaly_explanation("low_profit_rate_east")
-    print(f"✓ 异常解释已获取: {cached_anomaly['description']}")
-    
-    print("\n" + "=" * 60)
-    print("Store统计信息")
-    print("=" * 60)
-    
+    # 测试统计
+    print("\n6. 存储统计...")
     stats = manager.get_stats()
-    for key, value in stats.items():
-        print(f"  {key}: {value}")
+    print(f"   总记录数: {stats['total_count']}")
+    print(f"   数据库大小: {stats['db_size_mb']} MB")
+    print(f"   命名空间: {stats['namespace_stats']}")
+    
+    # 清理
+    manager.close()
+    Path(db_path).unlink(missing_ok=True)
+    
+    print("\n✓ 测试完成")

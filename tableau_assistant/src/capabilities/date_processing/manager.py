@@ -44,7 +44,7 @@ class DateManager:
             └── STRING field date format detection and conversion
     
     Usage scenarios:
-    - MetadataManager uses DateManager to detect STRING field date formats
+    - DataModelManager uses DateManager to detect STRING field date formats
     - QueryBuilder uses DateManager to parse date ranges and convert date formats
     - DateFilterConverter uses DateManager to build date filters
     

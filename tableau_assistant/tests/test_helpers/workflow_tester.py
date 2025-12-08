@@ -13,7 +13,7 @@ from typing import Tuple, List, Dict, Any, Optional
 
 from tableau_assistant.tests.test_helpers.test_environment import TestEnvironment
 from tableau_assistant.tests.test_helpers.test_models import TestStageResult
-from tableau_assistant.src.models.state import VizQLState
+from tableau_assistant.src.models.workflow.state import VizQLState
 from tableau_assistant.src.models.boost import QuestionBoost
 from tableau_assistant.src.models.question import QuestionUnderstanding
 from tableau_assistant.src.models.query_plan import QueryPlanningResult

@@ -10,6 +10,8 @@
 
 ## 工作流架构图
 
+**注意**：Boost Agent 已移除，其功能（元数据获取、问题分类）合并到 Understanding Agent。FieldMapper 已从 QueryBuilder 内部组件提升为独立节点。
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         StateGraph 工作流                                    │
@@ -17,67 +19,71 @@
 │   START                                                                      │
 │     │                                                                        │
 │     ▼                                                                        │
-│  ┌─────────┐                                                                 │
-│  │ Boost?  │──── No ────────────────────────┐                               │
-│  └────┬────┘                                │                               │
-│       │ Yes                                 │                               │
-│       ▼                                     │                               │
-│  ┌─────────────────────────────────────┐   │                               │
-│  │        Boost Agent (LLM)            │   │                               │
-│  │  工具: get_metadata                 │   │                               │
-│  │  输出: boosted_question             │   │                               │
-│  └────────────────┬────────────────────┘   │                               │
-│                   │                        │                               │
-│                   ▼                        ▼                               │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │              Understanding Agent (LLM)                               │   │
-│  │  工具: get_schema_module, parse_date, detect_date_format             │   │
-│  │  输出: SemanticQuery (纯语义，无 VizQL 概念)                         │   │
-│  └────────────────────────────┬────────────────────────────────────────┘   │
-│                               │                                             │
-│                               ▼                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │           QueryBuilder Node (代码优先 + LLM fallback)                │   │
-│  │  组件: FieldMapper + ImplementationResolver + ExpressionGenerator    │   │
-│  │  输出: VizQLQuery                                                    │   │
-│  └────────────────────────────┬────────────────────────────────────────┘   │
-│                               │                                             │
-│                               ▼                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │              Execute Node (非 LLM)                                   │   │
-│  │  功能: VizQL API 调用                                                │   │
-│  │  输出: QueryResult                                                   │   │
-│  └────────────────────────────┬────────────────────────────────────────┘   │
-│                               │                                             │
-│                               ▼                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                Insight Agent (LLM)                                   │   │
-│  │  组件: AnalysisCoordinator (渐进式洞察)                              │   │
-│  │  输出: accumulated_insights                                          │   │
-│  └────────────────────────────┬────────────────────────────────────────┘   │
-│                               │                                             │
-│                               ▼                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │               Replanner Agent (LLM)                                  │   │
-│  │  工具: write_todos (来自 TodoListMiddleware)                         │   │
-│  │  输出: ReplanDecision                                                │   │
-│  └────────────────────────────┬────────────────────────────────────────┘   │
-│                               │                                             │
-│                    ┌──────────┴──────────┐                                  │
-│                    │  智能重规划决策      │                                  │
-│                    │  (LLM 评估完成度)    │                                  │
-│                    └──────────┬──────────┘                                  │
-│                               │                                             │
-│           ┌───────────────────┴───────────────────┐                         │
-│           │                                       │                         │
-│    completeness < 0.9                    completeness >= 0.9                │
-│    且 replan_count < max                 或 replan_count >= max             │
-│           │                                       │                         │
-│           ▼                                       ▼                         │
-│    ┌──────────────┐                        ┌──────────┐                     │
-│    │Understanding │                        │   END    │                     │
-│    │ (重新理解)   │                        └──────────┘                     │
-│    └──────────────┘                                                         │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │         Understanding Agent (LLM) - 含原 Boost 功能                  │    │
+│  │  工具: get_metadata, get_schema_module, parse_date, detect_date_format│   │
+│  │  功能: 问题分类 + 语义理解                                           │    │
+│  │  输出: SemanticQuery (纯语义，无 VizQL 概念)                         │    │
+│  └────────────────────────────┬────────────────────────────────────────┘    │
+│                               │                                              │
+│                    ┌──────────┴──────────┐                                   │
+│                    │ is_analysis_question?│                                   │
+│                    └──────────┬──────────┘                                   │
+│                               │                                              │
+│           ┌───────────────────┴───────────────────┐                          │
+│           │                                       │                          │
+│        = True                                  = False                       │
+│           │                                       │                          │
+│           ▼                                       ▼                          │
+│  ┌─────────────────────────────────────┐   ┌──────────┐                     │
+│  │    FieldMapper Node (RAG + LLM)     │   │   END    │                     │
+│  │  组件: SemanticMapper               │   │ (友好提示)│                     │
+│  │  输出: MappedQuery (技术字段)       │   └──────────┘                     │
+│  └────────────────┬────────────────────┘                                    │
+│                   │                                                          │
+│                   ▼                                                          │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │           QueryBuilder Node (纯代码)                                 │    │
+│  │  组件: ImplementationResolver + ExpressionGenerator                  │    │
+│  │  输出: VizQLQuery                                                    │    │
+│  └────────────────────────────┬────────────────────────────────────────┘    │
+│                               │                                              │
+│                               ▼                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │              Execute Node (纯代码)                                   │    │
+│  │  功能: VizQL API 调用                                                │    │
+│  │  输出: QueryResult                                                   │    │
+│  └────────────────────────────┬────────────────────────────────────────┘    │
+│                               │                                              │
+│                               ▼                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                Insight Agent (LLM)                                   │    │
+│  │  组件: AnalysisCoordinator (渐进式洞察)                              │    │
+│  │  输出: accumulated_insights                                          │    │
+│  └────────────────────────────┬────────────────────────────────────────┘    │
+│                               │                                              │
+│                               ▼                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │               Replanner Agent (LLM)                                  │    │
+│  │  工具: write_todos (来自 TodoListMiddleware)                         │    │
+│  │  输出: ReplanDecision                                                │    │
+│  └────────────────────────────┬────────────────────────────────────────┘    │
+│                               │                                              │
+│                    ┌──────────┴──────────┐                                   │
+│                    │  智能重规划决策      │                                   │
+│                    │  (LLM 评估完成度)    │                                   │
+│                    └──────────┬──────────┘                                   │
+│                               │                                              │
+│           ┌───────────────────┴───────────────────┐                          │
+│           │                                       │                          │
+│    completeness < 0.9                    completeness >= 0.9                 │
+│    且 replan_count < max                 或 replan_count >= max              │
+│           │                                       │                          │
+│           ▼                                       ▼                          │
+│    ┌──────────────┐                        ┌──────────┐                      │
+│    │Understanding │                        │   END    │                      │
+│    │ (重新理解)   │                        └──────────┘                      │
+│    └──────────────┘                                                          │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -113,7 +119,8 @@ def create_tableau_workflow(
     """
     创建 Tableau Assistant 的完整工作流
     
-    工作流包含 6 个节点：Boost → Understanding → QueryBuilder → Execute → Insight → Replanner
+    工作流包含 6 个节点：Understanding → FieldMapper → QueryBuilder → Execute → Insight → Replanner
+    （注：Boost Agent 已移除，功能合并到 Understanding Agent）
     所有 LLM 节点共享同一套中间件栈。
     
     Args:
@@ -152,23 +159,25 @@ def create_tableau_workflow(
     # 创建 StateGraph
     graph = StateGraph(VizQLState)
     
-    # 添加节点
-    graph.add_node("boost", boost_node)                    # LLM
-    graph.add_node("understanding", understanding_node)    # LLM
-    graph.add_node("query_builder", query_builder_node)    # 代码优先 + LLM fallback
-    graph.add_node("execute", execute_node)                # 非 LLM
+    # 添加节点（6 个节点，Boost 已移除，功能合并到 Understanding）
+    graph.add_node("understanding", understanding_node)    # LLM（含原 Boost 功能）
+    graph.add_node("field_mapper", field_mapper_node)      # RAG + LLM 混合
+    graph.add_node("query_builder", query_builder_node)    # 纯代码
+    graph.add_node("execute", execute_node)                # 纯代码
     graph.add_node("insight", insight_node)                # LLM
     graph.add_node("replanner", replanner_node)            # LLM
     
-    # 条件边：是否跳过 Boost
+    # 起始边
+    graph.add_edge(START, "understanding")
+    
+    # 条件边：非分析类问题直接结束
     graph.add_conditional_edges(
-        START,
-        lambda state: "boost" if state.get("boost_question", True) else "understanding"
+        "understanding",
+        lambda state: "field_mapper" if state.get("is_analysis_question", True) else END
     )
     
     # 顺序边
-    graph.add_edge("boost", "understanding")
-    graph.add_edge("understanding", "query_builder")
+    graph.add_edge("field_mapper", "query_builder")
     graph.add_edge("query_builder", "execute")
     graph.add_edge("execute", "insight")
     graph.add_edge("insight", "replanner")
@@ -233,17 +242,17 @@ def route_after_replanner(state: VizQLState) -> str:
     return END
 
 
-def route_after_start(state: VizQLState) -> str:
+def route_after_understanding(state: VizQLState) -> str:
     """
-    起始路由逻辑
+    Understanding 后的路由逻辑
     
     决策规则：
-    1. 如果 boost_question=True → 返回 boost
-    2. 否则 → 返回 understanding
+    1. 如果 is_analysis_question=True → 返回 field_mapper
+    2. 否则 → 返回 END（非分析类问题，直接结束）
     """
-    if state.get("boost_question", True):
-        return "boost"
-    return "understanding"
+    if state.get("is_analysis_question", True):
+        return "field_mapper"
+    return END
 ```
 
 ### 重规划决策流程

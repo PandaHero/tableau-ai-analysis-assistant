@@ -20,7 +20,14 @@ except ImportError:
     # 如果测试模块不可用，保持 None
     pass
 
-from tableau_assistant.src.agents.workflows.streaming import stream_workflow_events
+# TODO: 迁移到新的 workflow 模块
+# from tableau_assistant.src.workflow.factory import create_tableau_workflow
+
+# 临时占位函数
+async def stream_workflow_events(app, input_data, config):
+    """临时占位函数，待迁移"""
+    import time
+    yield f"data: {json.dumps({'type': 'error', 'data': {'message': '流式功能正在迁移中'}, 'timestamp': time.time()})}\n\n"
 
 router = APIRouter(prefix="/api/stream", tags=["streaming"])
 

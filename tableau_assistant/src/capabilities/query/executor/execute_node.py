@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 
-from tableau_assistant.src.models.state import VizQLState
+from tableau_assistant.src.models.workflow.state import VizQLState
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def _get_tableau_config(configurable: Dict[str, Any]) -> Dict[str, str]:
     if store:
         try:
             from tableau_assistant.src.capabilities.storage import StoreManager
-            from tableau_assistant.src.models.context import get_tableau_config
+            from tableau_assistant.src.models.workflow.context import get_tableau_config
             store_manager = StoreManager(store)
             return get_tableau_config(store_manager)
         except Exception as e:

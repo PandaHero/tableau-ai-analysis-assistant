@@ -106,17 +106,17 @@ class QueryExecutor:
             logger.info("QueryExecutor初始化完成（未集成QueryBuilder）")
     
     @classmethod
-    async def create_with_metadata(
+    async def create_with_data_model(
         cls,
-        metadata_manager,
+        data_model_manager,
         max_retries: int = 3,
         retry_delay: float = 1.0,
         timeout: int = 30,
         anchor_date: Optional[datetime] = None,
         week_start_day: int = 0
     ) -> 'QueryExecutor':
-        """创建带有元数据的QueryExecutor实例（工厂方法）"""
-        metadata = await metadata_manager.get_metadata_async()
+        """创建带有数据模型的QueryExecutor实例（工厂方法）"""
+        metadata = await data_model_manager.get_data_model_async()
         logger.info(f"通过工厂方法创建QueryExecutor (datasource={metadata.datasource_name}, fields={metadata.field_count})")
         return cls(
             max_retries=max_retries,

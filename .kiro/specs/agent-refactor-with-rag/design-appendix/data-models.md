@@ -46,9 +46,15 @@ class VizQLState(TypedDict):
     metadata: Optional[Metadata]           # 数据源元数据
     
     # ═══════════════════════════════════════════════════════════════════════
+    # 问题分类（Understanding Agent 输出）
+    # ═══════════════════════════════════════════════════════════════════════
+    is_analysis_question: bool               # 是否为分析类问题（用于路由决策）
+    
+    # ═══════════════════════════════════════════════════════════════════════
     # 理解和查询构建
     # ═══════════════════════════════════════════════════════════════════════
     semantic_query: Optional[SemanticQuery]  # Understanding Agent 输出（纯语义）
+    mapped_query: Optional[MappedQuery]      # FieldMapper Node 输出（技术字段映射）
     vizql_query: Optional[VizQLQuery]        # QueryBuilder Node 输出（技术字段）
     
     # ═══════════════════════════════════════════════════════════════════════
@@ -1104,6 +1110,140 @@ Prompt Step 5 (检测分析类型) → 填写 analyses
                 )
         
         return self
+```
+
+
+---
+
+## 2.8 MappedQuery（FieldMapper Node 输出）
+
+```python
+# tableau_assistant/src/models/semantic/mapped_query.py
+
+from pydantic import BaseModel, Field
+from typing import Dict, List, Optional
+
+class FieldMapping(BaseModel):
+    """
+    单个字段的映射结果
+    
+    <what>业务术语到技术字段的映射</what>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    business_term: str = Field(
+        description="业务术语（来自 SemanticQuery）"
+    )
+    
+    technical_field: str = Field(
+        description="技术字段名（数据源中的实际字段名）"
+    )
+    
+    confidence: float = Field(
+        ge=0.0, le=1.0,
+        description="映射置信度（0-1）"
+    )
+    
+    mapping_source: Literal["rag_direct", "rag_llm_fallback", "cache"] = Field(
+        description="""映射来源
+        
+<values>
+- rag_direct: RAG 高置信度直接返回（>= 0.9）
+- rag_llm_fallback: RAG 低置信度 + LLM 判断（< 0.9）
+- cache: 缓存命中
+</values>"""
+    )
+    
+    # 维度层级信息（可选）
+    category: Optional[str] = Field(
+        default=None,
+        description="维度类别（geographic、temporal、product 等）"
+    )
+    
+    level: Optional[int] = Field(
+        default=None,
+        description="层级级别（1=最高级，如国家；2=次级，如省份）"
+    )
+    
+    granularity: Optional[str] = Field(
+        default=None,
+        description="粒度描述（country、province、city 等）"
+    )
+
+
+class MappedQuery(BaseModel):
+    """
+    映射后的查询 - FieldMapper Node 输出
+    
+    <what>SemanticQuery 中的业务术语已映射为技术字段名</what>
+    
+    <design_principles>
+    - 保留 SemanticQuery 的语义结构
+    - 添加字段映射信息
+    - 包含映射置信度和来源
+    </design_principles>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    # 原始 SemanticQuery（保留语义结构）
+    semantic_query: SemanticQuery = Field(
+        description="原始语义查询"
+    )
+    
+    # 字段映射结果
+    field_mappings: Dict[str, FieldMapping] = Field(
+        description="""字段映射字典
+        
+<what>业务术语 → 技术字段的映射</what>
+<how>key 是业务术语，value 是 FieldMapping</how>
+
+<examples>
+{
+    "销售额": FieldMapping(
+        business_term="销售额",
+        technical_field="Sales",
+        confidence=0.95,
+        mapping_source="rag_direct"
+    ),
+    "省份": FieldMapping(
+        business_term="省份",
+        technical_field="Province",
+        confidence=0.85,
+        mapping_source="rag_llm_fallback",
+        category="geographic",
+        level=2,
+        granularity="province"
+    )
+}
+</examples>"""
+    )
+    
+    # 低置信度备选项（置信度 < 0.7 时提供）
+    low_confidence_alternatives: Optional[Dict[str, List[FieldMapping]]] = Field(
+        default=None,
+        description="""低置信度字段的备选项
+        
+<when>当某个字段的映射置信度 < 0.7 时提供 top-3 备选</when>
+
+<examples>
+{
+    "区域": [
+        FieldMapping(business_term="区域", technical_field="Region", confidence=0.65),
+        FieldMapping(business_term="区域", technical_field="Province", confidence=0.55),
+        FieldMapping(business_term="区域", technical_field="City", confidence=0.45)
+    ]
+}
+</examples>"""
+    )
+    
+    def get_technical_field(self, business_term: str) -> Optional[str]:
+        """获取业务术语对应的技术字段名"""
+        mapping = self.field_mappings.get(business_term)
+        return mapping.technical_field if mapping else None
+    
+    def get_all_technical_fields(self) -> List[str]:
+        """获取所有技术字段名"""
+        return [m.technical_field for m in self.field_mappings.values()]
 ```
 
 

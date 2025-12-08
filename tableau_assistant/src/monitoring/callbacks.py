@@ -16,7 +16,7 @@ class SQLiteTrackingCallback(BaseCallbackHandler):
     """
     基于 SQLite 的追踪 Callback
     
-    追踪所有 LLM 调用并保存到 SQLite（通过 PersistentStore）
+    追踪所有 LLM 调用并保存到 SQLite（通过 StoreManager）
     """
     
     def __init__(self, store, user_id: str, session_id: str, agent_name: str = "unknown"):
@@ -24,7 +24,7 @@ class SQLiteTrackingCallback(BaseCallbackHandler):
         初始化追踪 Callback
         
         Args:
-            store: PersistentStore 实例
+            store: StoreManager 实例
             user_id: 用户ID
             session_id: 会话ID
             agent_name: Agent 名称

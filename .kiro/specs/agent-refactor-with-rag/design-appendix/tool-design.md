@@ -27,13 +27,13 @@ class ToolRegistry:
     工具注册表
     
     管理业务工具的注册。
-    注意：中间件提供的工具（如 write_todos）由中间件自动注入，不在此注册。
+    注意：
+    - 中间件提供的工具（如 write_todos）由中间件自动注入，不在此注册
+    - FieldMapper 是独立节点（RAG + LLM 混合），不是工具
     """
     
     _tools: Dict[str, List[BaseTool]] = {
-        "boost": [],
-        "understanding": [],
-        "query_builder": [],
+        "understanding": [],  # 含原 Boost 功能
         "insight": [],
         "replanner": [],
     }
@@ -51,19 +51,20 @@ class ToolRegistry:
     @classmethod
     def auto_discover(cls):
         """自动发现并注册业务工具"""
-        # boost_tools
-        cls.register("boost", get_metadata)
-        
-        # understanding_tools
-        cls.register("understanding", get_schema_module)
-        cls.register("understanding", parse_date)
-        cls.register("understanding", detect_date_format)
-        
-        # query_builder_tools (用于 FieldMapper 组件)
-        cls.register("query_builder", semantic_map_fields)
+        # understanding_tools（含原 Boost 功能）
+        cls.register("understanding", get_metadata)        # 元数据获取（原 Boost 功能）
+        cls.register("understanding", get_schema_module)   # 动态 Schema 模块选择
+        cls.register("understanding", parse_date)          # 日期解析
+        cls.register("understanding", detect_date_format)  # 日期格式检测
         
         # replanner_tools
         # 注意：write_todos 由 TodoListMiddleware 自动注入
+        
+        # 说明：
+        # - Boost Agent 已移除，功能合并到 Understanding Agent
+        # - FieldMapper Node 是独立节点（RAG + LLM 混合），直接调用 SemanticMapper
+        # - QueryBuilder Node 是纯代码节点，调用 ImplementationResolver + ExpressionGenerator
+        # - Execute Node 是纯代码节点，直接调用 VizQL API
 ```
 
 ---
@@ -170,46 +171,30 @@ def detect_date_format(sample_values: List[str]) -> Dict[str, Any]:
 
 ---
 
-## 4. RAG 工具
+## 4. FieldMapper Node（独立节点，非工具）
 
-```python
-# tableau_assistant/src/tools/rag_tool.py
+**注意**：FieldMapper 已从工具提升为独立的工作流节点，详见 `node-design.md`。
 
-from langchain_core.tools import tool
-from tableau_assistant.src.capabilities.rag import SemanticMapper
+**设计变更说明**：
+- **旧设计**：`semantic_map_fields` 是工具，供 FieldMapper 组件内部调用
+- **新设计**：FieldMapper 是独立节点（RAG + LLM 混合），直接调用 SemanticMapper
 
-
-@tool
-async def semantic_map_fields(
-    business_terms: List[str],
-    context: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """
-    将业务术语映射到技术字段
-    
-    Args:
-        business_terms: 业务术语列表
-        context: 问题上下文
-    
-    Returns:
-        映射结果列表，每个包含 matched_field, confidence, alternatives
-    """
-    results = await semantic_mapper.map_fields_batch(business_terms, context)
-    return [
-        {
-            "term": r.term,
-            "matched_field": r.matched_field.fieldCaption if r.matched_field else None,
-            "confidence": r.confidence,
-            "category": r.matched_field.category if r.matched_field else None,
-            "level": r.matched_field.level if r.matched_field else None,
-            "alternatives": [
-                {"field": a.field.fieldCaption, "score": a.score}
-                for a in r.alternatives[:3]
-            ] if r.confidence < 0.7 else []
-        }
-        for r in results
-    ]
+**架构关系**：
 ```
+Understanding Node
+    ↓ SemanticQuery（业务术语）
+FieldMapper Node（RAG + LLM 混合节点）
+    ├── SemanticMapper.search()  ← RAG 检索（已实现）
+    ├── 置信度 >= 0.9? → 直接返回（快速路径，无需 LLM）
+    └── 置信度 < 0.9? → LLM 从 top-k 候选中选择
+    ↓ MappedQuery（技术字段）
+QueryBuilder Node（纯代码）
+```
+
+**优势**：
+1. 清晰分离职责：语义理解 → 字段映射 → 查询构建
+2. 减少冗余封装：不再需要 `semantic_map_fields` 工具
+3. 更好的可观测性：FieldMapper 作为独立节点，可以单独监控和调试
 
 ---
 

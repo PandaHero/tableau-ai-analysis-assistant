@@ -1,51 +1,54 @@
 """
-Data models module
+Data models module (Refactored)
 
-Contains all data model definitions:
-- state.py: LangGraph state models
-- context.py: Runtime context models
-- api.py: API input/output models
-- vizql_types.py: VizQL query types
-- question.py: Question-related models
-- result.py: Result-related models
+Organized into subpackages:
+- workflow/: LangGraph state and context models
+- semantic/: Pure semantic layer models (SemanticQuery, MappedQuery)
+- vizql/: VizQL technical models (VizQLQuery, QueryResult)
+- common/: Shared models (errors, metadata)
+
+Legacy models are kept for backward compatibility but will be deprecated.
 """
 
-# ========== LangGraph 1.0 Models ==========
-from .state import (
+# ========== Workflow Models (New Location) ==========
+from .workflow import (
     VizQLState,
     VizQLInput,
     VizQLOutput,
-    create_initial_state
+    VizQLContext,
+    create_initial_state,
 )
 
-from .context import VizQLContext
+# Context utilities (for backward compatibility with old import path)
+from .workflow.context import get_tableau_config, set_tableau_config
 
-# ========== API Models ==========
-from .api import (
-    # Request models
-    VizQLQueryRequest,
-    QuestionBoostRequest,
-    MetadataInitRequest,
+# ========== Semantic Models (New - Updated per data-models.md spec) ==========
+from .semantic import (
+    # Enums
+    AnalysisType,
+    ComputationScope,
+    MappingSource,
+    FilterType,  # NEW: time_range, set, quantitative, match
+    TimeGranularity as SemanticTimeGranularity,  # Avoid conflict with legacy
+    AggregationType as SemanticAggregationType,  # Avoid conflict with legacy
+    DimensionCategory,
+    DimensionLevel,
     
-    # Response models
-    VizQLQueryResponse,
-    QuestionBoostResponse,
-    MetadataInitResponse,
-    KeyFinding,
-    AnalysisStep,
-    Recommendation,
-    Visualization,
+    # Query components
+    MeasureSpec,
+    DimensionSpec,
+    FilterSpec,
+    AnalysisSpec,
+    OutputControl,
+    SemanticQuery,
     
-    # Error models
-    ErrorResponse,
-    ErrorDetail,
-    
-    # Stream event models
-    StreamEvent
+    # Field mapping
+    FieldMapping,
+    MappedQuery,
 )
 
-# ========== VizQL Types ==========
-from .vizql_types import (
+# ========== VizQL Models (New Location) ==========
+from .vizql import (
     # Enums
     FunctionEnum,
     SortDirection,
@@ -76,22 +79,59 @@ from .vizql_types import (
     QueryRequest,
     QueryOutput,
     
-    # VizQL API Metadata (for API responses)
+    # Metadata
     VizQLFieldMetadata,
     VizQLMetadataOutput,
+    
+    # Result
+    QueryResult,
     
     # Helper functions
     create_basic_field,
     create_function_field,
     create_set_filter,
-    create_relative_date_filter
+    create_relative_date_filter,
 )
 
-# ========== Question Models ==========
+# ========== Common Models (New) ==========
+from .common import (
+    TransientError,
+    PermanentError,
+    UserError,
+    ErrorCategory,
+    classify_error,
+)
+
+# ========== Legacy Imports (Backward Compatibility) ==========
+# These will be deprecated in future versions
+
+from .api import (
+    # Request models
+    VizQLQueryRequest,
+    QuestionBoostRequest,
+    MetadataInitRequest,
+    
+    # Response models
+    VizQLQueryResponse,
+    QuestionBoostResponse,
+    MetadataInitResponse,
+    KeyFinding,
+    AnalysisStep,
+    Recommendation,
+    Visualization,
+    
+    # Error models
+    ErrorResponse,
+    ErrorDetail,
+    
+    # Stream event models
+    StreamEvent
+)
+
 from .question import (
     # Enums
     EntityRole,
-    AggregationType,
+    AggregationType as LegacyAggregationType,
     EntityType,
     DateFunction,
     QuestionType,
@@ -99,15 +139,15 @@ from .question import (
     TimeRangeType,
     RelativeType,
     PeriodType,
-    SubQuestionExecutionType,  # Legacy compatibility
+    SubQuestionExecutionType,
     
     # Models
     QueryEntity,
     TimeRange,
     ReasoningStep,
     QuestionUnderstanding,
-    SubQuestion,  # Legacy compatibility
-    QuerySubQuestion,  # Legacy compatibility alias
+    SubQuestion,
+    QuerySubQuestion,
     
     # Helper functions
     create_entity,
@@ -115,23 +155,19 @@ from .question import (
     create_time_range_relative,
 )
 
-# ========== Boost Models ==========
 from .boost import QuestionBoost
 
-# ========== Internal Metadata Models ==========
 from .metadata import (
-    FieldMetadata,  # Internal field metadata model
-    Metadata,       # Internal datasource metadata model
+    FieldMetadata,
+    Metadata,
 )
 
-# ========== Data Model ==========
 from .data_model import (
     LogicalTable,
     LogicalTableRelationship,
     DataModel,
 )
 
-# ========== Result Models ==========
 from .result import (
     # Enums
     InsightType,
@@ -164,30 +200,34 @@ from .result import (
     create_anomaly_detection
 )
 
+
 __all__ = [
-    # LangGraph 1.0
+    # ========== Workflow ==========
     "VizQLState",
     "VizQLInput",
     "VizQLOutput",
     "VizQLContext",
     "create_initial_state",
     
-    # API
-    "VizQLQueryRequest",
-    "QuestionBoostRequest",
-    "MetadataInitRequest",
-    "VizQLQueryResponse",
-    "QuestionBoostResponse",
-    "MetadataInitResponse",
-    "KeyFinding",
-    "AnalysisStep",
-    "Recommendation",
-    "Visualization",
-    "ErrorResponse",
-    "ErrorDetail",
-    "StreamEvent",
+    # ========== Semantic (New - Updated per data-models.md spec) ==========
+    "AnalysisType",
+    "ComputationScope",
+    "MappingSource",
+    "FilterType",
+    "SemanticTimeGranularity",
+    "SemanticAggregationType",
+    "DimensionCategory",
+    "DimensionLevel",
+    "MeasureSpec",
+    "DimensionSpec",
+    "FilterSpec",
+    "AnalysisSpec",
+    "OutputControl",
+    "SemanticQuery",
+    "FieldMapping",
+    "MappedQuery",
     
-    # VizQL
+    # ========== VizQL ==========
     "FunctionEnum",
     "SortDirection",
     "ReturnFormat",
@@ -212,14 +252,35 @@ __all__ = [
     "QueryOutput",
     "VizQLFieldMetadata",
     "VizQLMetadataOutput",
+    "QueryResult",
     "create_basic_field",
     "create_function_field",
     "create_set_filter",
     "create_relative_date_filter",
     
-    # Question
+    # ========== Common ==========
+    "TransientError",
+    "PermanentError",
+    "UserError",
+    "ErrorCategory",
+    "classify_error",
+    
+    # ========== Legacy (Backward Compatibility) ==========
+    "VizQLQueryRequest",
+    "QuestionBoostRequest",
+    "MetadataInitRequest",
+    "VizQLQueryResponse",
+    "QuestionBoostResponse",
+    "MetadataInitResponse",
+    "KeyFinding",
+    "AnalysisStep",
+    "Recommendation",
+    "Visualization",
+    "ErrorResponse",
+    "ErrorDetail",
+    "StreamEvent",
     "EntityRole",
-    "AggregationType",
+    "LegacyAggregationType",
     "EntityType",
     "DateFunction",
     "QuestionType",
@@ -227,30 +288,22 @@ __all__ = [
     "TimeRangeType",
     "RelativeType",
     "PeriodType",
-    "SubQuestionExecutionType",  # Legacy
+    "SubQuestionExecutionType",
     "QueryEntity",
     "TimeRange",
     "ReasoningStep",
     "QuestionUnderstanding",
-    "SubQuestion",  # Legacy
-    "QuerySubQuestion",  # Legacy
+    "SubQuestion",
+    "QuerySubQuestion",
     "create_entity",
     "create_time_range_absolute",
     "create_time_range_relative",
-    
-    # Boost
     "QuestionBoost",
-    
-    # Internal Metadata
     "FieldMetadata",
     "Metadata",
-    
-    # Data Model
     "LogicalTable",
     "LogicalTableRelationship",
     "DataModel",
-    
-    # Result
     "InsightType",
     "Importance",
     "AnomalyType",

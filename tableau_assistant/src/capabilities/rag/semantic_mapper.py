@@ -275,6 +275,18 @@ class SemanticMapper:
         self._history_reuse_hits = 0
         self._rerank_count = 0
     
+    @property
+    def rag_available(self) -> bool:
+        """
+        检查 RAG 是否可用
+        
+        如果 FieldIndexer 没有配置 Embedding 提供者，RAG 不可用。
+        
+        Returns:
+            True 如果 RAG 可用，False 如果应回退到 LLM
+        """
+        return self.field_indexer.rag_available
+    
     def _init_retriever(self) -> None:
         """初始化检索器"""
         if self._retriever is not None:

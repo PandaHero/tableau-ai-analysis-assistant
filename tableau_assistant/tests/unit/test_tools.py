@@ -7,9 +7,9 @@
 - parse_date (date_processing/tool.py)
 - detect_statistics (data_processing/tool.py)
 - process_query_result (data_processing/tool.py)
-- save_large_result (storage/tool.py)
 
 注意：get_metadata 和 semantic_map_fields 是异步工具，需要单独测试
+注意：大结果保存由 FilesystemMiddleware 自动处理，不再需要单独的工具
 """
 import json
 import pytest
@@ -262,93 +262,6 @@ class TestDetectStatisticsTool:
             detect_statistics.invoke({
                 "data_json": json.dumps([])
             })
-
-
-class TestSaveLargeResultTool:
-    """save_large_result 工具测试"""
-    
-    def test_save_json(self):
-        """测试保存 JSON 格式"""
-        from tableau_assistant.src.capabilities.storage.tool import save_large_result
-        
-        data = [
-            {"region": "East", "sales": 100},
-            {"region": "West", "sales": 200}
-        ]
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = save_large_result.invoke({
-                "data_json": json.dumps(data),
-                "task_id": "test_q1",
-                "format": "json",
-                "compress": False,
-                "base_path": tmpdir
-            })
-            
-            assert result["format"] == "json"
-            assert result["compressed"] is False
-            assert result["row_count"] == 2
-            assert result["column_count"] == 2
-            assert os.path.exists(result["file_path"])
-    
-    def test_save_csv(self):
-        """测试保存 CSV 格式"""
-        from tableau_assistant.src.capabilities.storage.tool import save_large_result
-        
-        data = [
-            {"region": "East", "sales": 100},
-            {"region": "West", "sales": 200}
-        ]
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = save_large_result.invoke({
-                "data_json": json.dumps(data),
-                "task_id": "test_q2",
-                "format": "csv",
-                "compress": False,
-                "base_path": tmpdir
-            })
-            
-            assert result["format"] == "csv"
-            assert os.path.exists(result["file_path"])
-    
-    def test_save_compressed(self):
-        """测试保存压缩文件"""
-        from tableau_assistant.src.capabilities.storage.tool import save_large_result
-        
-        data = [{"value": i} for i in range(100)]
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = save_large_result.invoke({
-                "data_json": json.dumps(data),
-                "task_id": "test_q3",
-                "format": "json",
-                "compress": True,
-                "base_path": tmpdir
-            })
-            
-            assert result["compressed"] is True
-            assert result["file_path"].endswith(".gz")
-    
-    def test_nested_data_format(self):
-        """测试嵌套数据格式"""
-        from tableau_assistant.src.capabilities.storage.tool import save_large_result
-        
-        data = {
-            "data": [
-                {"region": "East", "sales": 100}
-            ]
-        }
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = save_large_result.invoke({
-                "data_json": json.dumps(data),
-                "task_id": "test_q4",
-                "format": "json",
-                "base_path": tmpdir
-            })
-            
-            assert result["row_count"] == 1
 
 
 class TestProcessQueryResultTool:

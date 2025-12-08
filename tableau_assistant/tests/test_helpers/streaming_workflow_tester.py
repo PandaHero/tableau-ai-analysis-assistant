@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from tableau_assistant.tests.test_helpers.test_environment import TestEnvironment
 from tableau_assistant.tests.test_helpers.test_models import TestStageResult, TestResult
 from tableau_assistant.src.workflows.vizql_workflow import run_vizql_workflow_stream
-from tableau_assistant.src.models.state import VizQLInput
+from tableau_assistant.src.models.workflow.state import VizQLInput
 
 
 @dataclass

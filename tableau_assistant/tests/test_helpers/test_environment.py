@@ -4,7 +4,7 @@
 负责创建和管理测试所需的运行时环境，包括：
 - Runtime环境
 - Store Manager
-- Metadata Manager
+- DataModelManager
 - Tableau配置
 """
 import os
@@ -14,10 +14,9 @@ from typing import Optional
 from dotenv import load_dotenv
 
 from langgraph.runtime import Runtime
-from tableau_assistant.src.models.context import VizQLContext, set_tableau_config
-from tableau_assistant.src.components.store_manager import StoreManager
-from tableau_assistant.src.components.metadata_manager import MetadataManager
-from tableau_assistant.src.components.persistent_store import PersistentStore
+from tableau_assistant.src.models.workflow.context import VizQLContext, set_tableau_config
+from tableau_assistant.src.capabilities.storage import StoreManager
+from tableau_assistant.src.capabilities.data_model import DataModelManager
 
 
 class TestEnvironment:
@@ -29,7 +28,7 @@ class TestEnvironment:
     Attributes:
         runtime: LangGraph Runtime实例
         store_manager: Store Manager实例
-        metadata_manager: Metadata Manager实例
+        data_model_manager: DataModelManager实例
         datasource_luid: 数据源LUID
         tableau_config: Tableau配置信息
     """
@@ -44,12 +43,12 @@ class TestEnvironment:
         """
         self.runtime: Optional[Runtime] = None
         self.store_manager: Optional[StoreManager] = None
-        self.metadata_manager: Optional[MetadataManager] = None
+        self.data_model_manager: Optional[DataModelManager] = None
         self.datasource_luid: Optional[str] = None
         self.tableau_config: Optional[dict] = None
         self.use_persistent_store = use_persistent_store
         self.db_path = db_path
-        self.store: Optional[PersistentStore] = None
+        self.store: Optional[StoreManager] = None
         self._is_setup = False
     
     async def setup(self) -> bool:
@@ -92,8 +91,8 @@ class TestEnvironment:
             # 5. 初始化Store Manager
             self._initialize_store_manager()
             
-            # 6. 初始化Metadata Manager
-            self._initialize_metadata_manager()
+            # 6. 初始化 DataModelManager
+            self._initialize_data_model_manager()
             
             # 7. 设置Tableau配置
             self._setup_tableau_config()
@@ -122,15 +121,9 @@ class TestEnvironment:
     
     def _create_runtime(self):
         """创建Runtime环境"""
-        # 创建Store（持久化或内存）
-        if self.use_persistent_store:
-            self.store = PersistentStore(db_path=self.db_path)
-            print(f"✓ 使用持久化存储: {self.db_path}")
-        else:
-            # 如果需要使用InMemoryStore，需要导入
-            from langgraph.store.memory import InMemoryStore
-            self.store = InMemoryStore()
-            print("✓ 使用内存存储")
+        # 创建Store（统一使用 StoreManager，基于 SQLite 持久化）
+        self.store = StoreManager(db_path=self.db_path)
+        print(f"✓ 使用持久化存储: {self.db_path}")
         
         # 创建VizQLContext
         context = VizQLContext(
@@ -156,12 +149,12 @@ class TestEnvironment:
         
         self.store_manager = StoreManager(self.runtime.store)
     
-    def _initialize_metadata_manager(self):
-        """初始化Metadata Manager"""
+    def _initialize_data_model_manager(self):
+        """初始化 DataModelManager"""
         if not self.runtime:
             raise RuntimeError("Runtime未初始化")
         
-        self.metadata_manager = MetadataManager(self.runtime)
+        self.data_model_manager = DataModelManager(self.runtime)
     
     def _setup_tableau_config(self):
         """设置Tableau配置"""
@@ -209,7 +202,7 @@ class TestEnvironment:
             # 重置状态
             self.runtime = None
             self.store_manager = None
-            self.metadata_manager = None
+            self.data_model_manager = None
             self.datasource_luid = None
             self.tableau_config = None
             self.store = None
@@ -246,19 +239,19 @@ class TestEnvironment:
             raise RuntimeError("环境未设置，请先调用setup()")
         return self.store_manager
     
-    def get_metadata_manager(self) -> MetadataManager:
+    def get_data_model_manager(self) -> DataModelManager:
         """
-        获取Metadata Manager实例
+        获取 DataModelManager 实例
         
         Returns:
-            MetadataManager实例
+            DataModelManager 实例
         
         Raises:
             RuntimeError: 如果环境未设置
         """
-        if not self._is_setup or not self.metadata_manager:
+        if not self._is_setup or not self.data_model_manager:
             raise RuntimeError("环境未设置，请先调用setup()")
-        return self.metadata_manager
+        return self.data_model_manager
     
     def get_datasource_luid(self) -> str:
         """

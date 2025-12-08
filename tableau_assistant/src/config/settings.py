@@ -61,8 +61,33 @@ class Settings(BaseSettings):
     # 任务调度配置
     parallel_upper_limit: int = int(os.getenv("Parallel_Upper_Limit", "3"))
     max_retry_times: int = int(os.getenv("MAX_RETRY_TIMES", "2"))
-    max_replan_rounds: int = int(os.getenv("Maximum_Replan_Rounds", "6"))
+    max_replan_rounds: int = int(os.getenv("MAX_REPLAN_ROUNDS", "3"))
     max_subtasks_per_round: int = int(os.getenv("MAX_SUBTASKS_PER_ROUND", "10"))
+
+    # 中间件配置 (Middleware)
+    # SummarizationMiddleware - 根据模型上下文长度调整，预留30%给输出
+    # - Claude 3.5: 200K context → threshold ~60K
+    # - DeepSeek: 64K context → threshold ~20K
+    # - Qwen: 32K context → threshold ~10K
+    summarization_token_threshold: int = int(os.getenv("SUMMARIZATION_TOKEN_THRESHOLD", "20000"))
+    messages_to_keep: int = int(os.getenv("MESSAGES_TO_KEEP", "10"))
+    
+    # RetryMiddleware
+    model_max_retries: int = int(os.getenv("MODEL_MAX_RETRIES", "3"))
+    tool_max_retries: int = int(os.getenv("TOOL_MAX_RETRIES", "3"))
+    
+    # FilesystemMiddleware - 大结果自动转存阈值
+    filesystem_token_limit: int = int(os.getenv("FILESYSTEM_TOKEN_LIMIT", "20000"))
+    
+    # HumanInTheLoopMiddleware - 需要人工确认的工具列表（逗号分隔）
+    _interrupt_on_str: str = os.getenv("INTERRUPT_ON", "")
+    
+    @property
+    def interrupt_on(self) -> list[str] | None:
+        """返回需要人工确认的工具列表"""
+        if not self._interrupt_on_str:
+            return None
+        return [tool.strip() for tool in self._interrupt_on_str.split(",") if tool.strip()]
 
     # API配置
     api_host: str = os.getenv("HOST", "127.0.0.1")
