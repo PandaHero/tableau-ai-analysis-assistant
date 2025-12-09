@@ -8,7 +8,6 @@ Embedding 提供者（向后兼容）
     from tableau_assistant.src.model_manager import (
         EmbeddingProvider,
         ZhipuEmbedding,
-        MockEmbedding,
         EmbeddingProviderFactory,
     )
 """
@@ -17,7 +16,6 @@ Embedding 提供者（向后兼容）
 from tableau_assistant.src.model_manager.embeddings import (
     EmbeddingProvider,
     ZhipuEmbedding,
-    MockEmbedding,
     EmbeddingProviderFactory,
 )
 
@@ -28,7 +26,6 @@ from tableau_assistant.src.capabilities.rag.models import EmbeddingResult
 __all__ = [
     "EmbeddingProvider",
     "ZhipuEmbedding",
-    "MockEmbedding",
     "EmbeddingProviderFactory",
     "EmbeddingResult",
 ]

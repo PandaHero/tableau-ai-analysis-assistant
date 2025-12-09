@@ -87,13 +87,27 @@ class BaseReranker(ABC):
                 unique.append(candidate)
         return unique
     
-    def _update_ranks(self, results: List[RetrievalResult]) -> List[RetrievalResult]:
-        """更新排名"""
+    def _update_ranks(self, results: List[RetrievalResult], recalculate_score: bool = False) -> List[RetrievalResult]:
+        """
+        更新排名
+        
+        Args:
+            results: 重排序后的结果列表
+            recalculate_score: 是否根据新排名重新计算分数
+                              如果为 True，排名第一的分数为 1.0，后续递减
+        """
         updated = []
+        n = len(results)
         for rank, result in enumerate(results, 1):
+            # 根据新排名重新计算分数：rank=1 -> 1.0, rank=2 -> 0.9, ...
+            if recalculate_score and n > 0:
+                new_score = max(0.5, 1.0 - (rank - 1) * 0.1)  # 最低 0.5
+            else:
+                new_score = result.score
+            
             updated.append(RetrievalResult(
                 field_chunk=result.field_chunk,
-                score=result.score,
+                score=new_score,
                 source=result.source,
                 rank=rank,
                 rerank_score=result.rerank_score,
@@ -354,10 +368,12 @@ class LLMReranker(BaseReranker):
             llm_call_fn: 自定义 LLM 调用函数
         
         使用示例：
-            # 方式1：使用模型管理器
-            reranker = RerankerFactory.create_llm_from_provider(
-                provider="zhipu",
-                model_name="glm-4-flash"
+            # 方式1：使用模型管理器的 select_reranker
+            from tableau_assistant.src.model_manager import select_reranker
+            reranker = select_reranker(
+                "llm",
+                llm_provider="zhipu",
+                llm_model="glm-4-flash"
             )
             
             # 方式2：自定义调用函数
@@ -416,7 +432,8 @@ class LLMReranker(BaseReranker):
                 if i not in ranked_set:
                     reranked.append(candidate)
             
-            return self._update_ranks(reranked[:k])
+            # Rerank 后根据新排名重新计算分数
+            return self._update_ranks(reranked[:k], recalculate_score=True)
             
         except Exception as e:
             logger.error(f"LLM 重排序失败: {e}")
@@ -434,7 +451,7 @@ class LLMReranker(BaseReranker):
             info += ")"
             candidate_list.append(info)
         
-        return f"""你是一个 Tableau 数据分析专家。请根据用户的查询意图，对以下数据字段按相关性从高到低排序。
+        return f"""你是一个 Tableau 数据分析专家。请根据用户查询中的**核心业务术语**，对以下数据字段按相关性从高到低排序。
 
 用户查询: {query}
 
@@ -442,9 +459,13 @@ class LLMReranker(BaseReranker):
 {chr(10).join(candidate_list)}
 
 排序规则:
-1. 字段名称或含义与查询最匹配的排在前面
-2. 考虑字段角色（dimension/measure）是否符合查询意图
-3. 考虑数据类型是否适合查询需求
+1. 只关注查询中的**核心业务术语**（如"销售额"、"省份"、"数量"），忽略时间限定词（如"2024年"、"去年"）
+2. 字段名称或含义与核心业务术语最匹配的排在前面
+3. 注意区分：
+   - "额"/"金额"/"amt" 表示金额类度量
+   - "数"/"数量"/"num"/"qty" 表示数量类度量
+   - "率"/"rate" 表示比率类度量
+4. 考虑字段角色（dimension/measure）是否符合查询意图
 
 请只返回排序后的字段编号，用逗号分隔。例如: 2,0,1,3
 """
@@ -462,99 +483,10 @@ class LLMReranker(BaseReranker):
         return indices
 
 
-class RerankerFactory:
-    """
-    重排序器工厂
-    
-    创建不同类型的重排序器。
-    
-    推荐：
-    - LLMReranker：精度最高，利用本地/云端 LLM
-    - RRFReranker：备选方案，零延迟零成本
-    - CrossEncoderReranker：轻量级方案，使用 embedding 计算相似度
-    """
-    
-    @staticmethod
-    def create_default(top_k: int = 5) -> DefaultReranker:
-        """创建默认重排序器（按分数排序）"""
-        return DefaultReranker(top_k)
-    
-    @staticmethod
-    def create_rrf(top_k: int = 5, k: int = 60) -> RRFReranker:
-        """创建 RRF 重排序器（备选方案，零延迟）"""
-        return RRFReranker(top_k, k)
-    
-    @staticmethod
-    def create_cross_encoder(
-        top_k: int = 5,
-        embedding_provider: Optional[Any] = None
-    ) -> CrossEncoderReranker:
-        """创建交叉编码器重排序器（轻量级方案）"""
-        return CrossEncoderReranker(top_k, embedding_provider)
-    
-    @staticmethod
-    def create_llm(
-        top_k: int = 5,
-        llm_client: Optional[Any] = None,
-        model: Optional[str] = None,
-        llm_call_fn: Optional[Callable[[str], str]] = None
-    ) -> LLMReranker:
-        """创建 LLM 重排序器"""
-        return LLMReranker(top_k, llm_client, model, llm_call_fn)
-    
-    @staticmethod
-    def create_llm_from_provider(
-        provider: str,
-        model_name: str,
-        top_k: int = 5,
-        temperature: float = 0.1
-    ) -> LLMReranker:
-        """
-        使用模型管理器创建 LLM 重排序器（推荐）
-        
-        Args:
-            provider: 模型提供商（zhipu/deepseek/openai/local 等）
-            model_name: 模型名称
-            top_k: 返回结果数量
-            temperature: 温度参数
-        
-        Examples:
-            # 使用智谱
-            reranker = RerankerFactory.create_llm_from_provider(
-                provider="zhipu",
-                model_name="glm-4-flash"
-            )
-            
-            # 使用 DeepSeek
-            reranker = RerankerFactory.create_llm_from_provider(
-                provider="deepseek",
-                model_name="deepseek-chat"
-            )
-        """
-        try:
-            from tableau_assistant.src.model_manager import select_model
-            
-            llm = select_model(provider, model_name, temperature)
-            
-            def llm_call_fn(prompt: str) -> str:
-                response = llm.invoke(prompt)
-                return response.content
-            
-            return LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn)
-            
-        except ImportError as e:
-            logger.error(f"无法导入模型管理器: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"创建 LLM 重排序器失败: {e}")
-            raise
-
-
 __all__ = [
     "BaseReranker",
     "DefaultReranker",
     "CrossEncoderReranker",
     "RRFReranker",
     "LLMReranker",
-    "RerankerFactory",
 ]

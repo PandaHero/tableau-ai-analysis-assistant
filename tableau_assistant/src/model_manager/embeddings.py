@@ -612,69 +612,18 @@ class OpenAIEmbedding(EmbeddingProvider):
         return response.data[0].embedding
 
 
-class MockEmbedding(EmbeddingProvider):
-    """
-    Mock Embedding 提供者（用于测试）
-    """
-    
-    def __init__(
-        self,
-        dimensions: int = 1024,
-        batch_size: int = 32,
-        seed: Optional[int] = None,
-        deterministic: bool = False
-    ):
-        super().__init__(
-            model_name="mock-embedding",
-            dimensions=dimensions,
-            batch_size=batch_size
-        )
-        self.seed = seed
-        self.deterministic = deterministic or (seed is not None)
-        
-        if seed is not None:
-            import random
-            random.seed(seed)
-    
-    def _get_deterministic_vector(self, text: str) -> List[float]:
-        """基于文本哈希生成确定性向量"""
-        import random
-        text_hash = self.compute_text_hash(text)
-        seed = int(text_hash[:8], 16)
-        rng = random.Random(seed)
-        return [rng.random() for _ in range(self.dimensions)]
-    
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """生成 Mock 向量"""
-        import random
-        
-        if self.deterministic:
-            return [self._get_deterministic_vector(text) for text in texts]
-        
-        return [
-            [random.random() for _ in range(self.dimensions)]
-            for _ in texts
-        ]
-    
-    def embed_query(self, text: str) -> List[float]:
-        """生成 Mock 查询向量"""
-        import random
-        
-        if self.deterministic:
-            return self._get_deterministic_vector(text)
-        
-        return [random.random() for _ in range(self.dimensions)]
-
-
 class EmbeddingProviderFactory:
     """
     Embedding 提供者工厂
+    
+    支持两种使用方式：
+    1. create(provider_name) - 显式指定提供者
+    2. get_default() - 根据环境变量自动检测可用的提供者
     """
     
     _providers: Dict[str, type] = {
         "zhipu": ZhipuEmbedding,
         "openai": OpenAIEmbedding,
-        "mock": MockEmbedding,
     }
     
     @classmethod
@@ -685,18 +634,21 @@ class EmbeddingProviderFactory:
     @classmethod
     def create(
         cls,
-        provider_name: str = "zhipu",
+        provider_name: str,
         **kwargs
     ) -> EmbeddingProvider:
         """
-        创建 Embedding 提供者
+        创建指定的 Embedding 提供者
         
         Args:
-            provider_name: 提供者名称（zhipu, openai, mock）
+            provider_name: 提供者名称（zhipu, openai）
             **kwargs: 传递给提供者的参数
         
         Returns:
             EmbeddingProvider 实例
+            
+        Raises:
+            ValueError: 未知的提供者名称
         """
         if provider_name not in cls._providers:
             available = ", ".join(cls._providers.keys())
@@ -709,6 +661,55 @@ class EmbeddingProviderFactory:
         return provider_class(**kwargs)
     
     @classmethod
+    def get_default(cls, **kwargs) -> Optional[EmbeddingProvider]:
+        """
+        根据环境变量自动检测并创建默认的 Embedding 提供者
+        
+        检测顺序：
+        1. ZHIPUAI_API_KEY / ZHIPU_API_KEY → 使用智谱 AI
+        2. OPENAI_API_KEY → 使用 OpenAI
+        3. 都没有配置 → 返回 None
+        
+        Args:
+            **kwargs: 传递给提供者的参数
+        
+        Returns:
+            EmbeddingProvider 实例，或 None（表示没有可用的提供者）
+            
+        Example:
+            # 自动检测
+            provider = EmbeddingProviderFactory.get_default()
+            if provider:
+                vector = provider.embed_query("hello")
+        """
+        # 1. 尝试智谱 AI
+        zhipu_key = os.environ.get("ZHIPUAI_API_KEY") or os.environ.get("ZHIPU_API_KEY")
+        if zhipu_key:
+            try:
+                provider = cls.create("zhipu", **kwargs)
+                logger.debug("使用智谱 AI Embedding 提供者")
+                return provider
+            except Exception as e:
+                logger.warning(f"初始化智谱 AI Embedding 失败: {e}")
+        
+        # 2. 尝试 OpenAI
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        if openai_key:
+            try:
+                provider = cls.create("openai", **kwargs)
+                logger.debug("使用 OpenAI Embedding 提供者")
+                return provider
+            except Exception as e:
+                logger.warning(f"初始化 OpenAI Embedding 失败: {e}")
+        
+        # 3. 没有可用的提供者
+        logger.warning(
+            "未配置 Embedding API Key (ZHIPUAI_API_KEY 或 OPENAI_API_KEY)，"
+            "Embedding 功能不可用"
+        )
+        return None
+    
+    @classmethod
     def available_providers(cls) -> List[str]:
         """获取可用的提供者列表"""
         return list(cls._providers.keys())
@@ -719,7 +720,6 @@ __all__ = [
     "EmbeddingProvider",
     "ZhipuEmbedding",
     "OpenAIEmbedding",
-    "MockEmbedding",
     "EmbeddingProviderFactory",
     "SUPPORTED_EMBEDDING_PROVIDERS",
 ]

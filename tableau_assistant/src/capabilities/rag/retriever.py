@@ -1,7 +1,6 @@
 """
 检索器抽象层
 
-参考 DB-GPT 的 BaseRetriever 实现模式，提供统一的检索器接口。
 
 主要功能：
 - BaseRetriever 抽象基类

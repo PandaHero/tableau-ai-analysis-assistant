@@ -1,7 +1,6 @@
 """
 字段索引器
 
-参考 DB-GPT 的 DBSchemaAssembler 实现模式，提供字段索引能力。
 
 主要功能：
 - 构建增强索引文本
@@ -27,7 +26,7 @@ except ImportError:
 
 from tableau_assistant.src.capabilities.rag.models import FieldChunk, RetrievalResult, RetrievalSource
 from tableau_assistant.src.capabilities.rag.embeddings import EmbeddingProvider, EmbeddingProviderFactory
-from tableau_assistant.src.capabilities.rag.cache import VectorCache, CachedEmbeddingProvider
+from tableau_assistant.src.capabilities.rag.cache import CachedEmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -133,42 +132,12 @@ class FieldIndexer:
         """
         创建默认的 Embedding 提供者
         
-        根据环境变量自动检测可用的 Embedding 提供者：
-        1. 检测 ZHIPUAI_API_KEY / ZHIPU_API_KEY - 使用智谱 AI
-        2. 检测 OPENAI_API_KEY - 使用 OpenAI
-        3. 如果没有配置任何 Embedding API Key，返回 None（由上层回退到 LLM）
+        使用 EmbeddingProviderFactory.get_default() 自动检测可用的提供者。
         
         Returns:
             EmbeddingProvider 实例，或 None（表示应回退到 LLM）
         """
-        import os
-        
-        # 1. 尝试智谱 AI（如果配置了专用 API Key）
-        zhipu_key = os.environ.get("ZHIPUAI_API_KEY") or os.environ.get("ZHIPU_API_KEY")
-        if zhipu_key:
-            try:
-                provider = EmbeddingProviderFactory.create("zhipu")
-                logger.info("使用智谱 AI Embedding 提供者")
-                return provider
-            except Exception as e:
-                logger.warning(f"初始化智谱 AI Embedding 失败: {e}")
-        
-        # 2. 尝试 OpenAI（如果配置了专用 API Key）
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        if openai_key:
-            try:
-                provider = EmbeddingProviderFactory.create("openai")
-                logger.info("使用 OpenAI Embedding 提供者")
-                return provider
-            except Exception as e:
-                logger.warning(f"初始化 OpenAI Embedding 失败: {e}")
-        
-        # 3. 没有配置 Embedding API Key，返回 None（由上层回退到 LLM）
-        logger.warning(
-            "未配置 Embedding API Key (ZHIPUAI_API_KEY 或 OPENAI_API_KEY)，"
-            "字段映射将回退到 LLM 直接匹配"
-        )
-        return None
+        return EmbeddingProviderFactory.get_default()
     
     def build_index_text(self, field_metadata: Any) -> str:
         """
@@ -411,18 +380,22 @@ class FieldIndexer:
             logger.error(f"构建 FAISS 索引失败: {e}")
             self._faiss_index = None
     
-    def _faiss_search(self, query_vector: List[float], top_k: int) -> List[Tuple[str, float]]:
+    def _faiss_search(self, query_vector: List[float], top_k: int) -> List[Tuple[str, float, float]]:
         """
         使用 FAISS 进行向量搜索
         
         使用内积索引，查询向量需要归一化以获得余弦相似度。
+        归一化后的向量内积就是余弦相似度，范围 [-1, 1]。
+        对于正常的语义相似度，值通常在 [0, 1] 范围。
         
         Args:
             query_vector: 查询向量
             top_k: 返回结果数量
         
         Returns:
-            (field_name, similarity) 列表，相似度范围 [0, 1]
+            (field_name, confidence, raw_score) 列表
+            - confidence: 归一化置信度 [0, 1]，使用 max(0, score) 而非 (score+1)/2
+            - raw_score: 原始 FAISS 内积分数，用于调试
         """
         try:
             # 转换并归一化查询向量
@@ -438,9 +411,12 @@ class FieldIndexer:
             for score, idx in zip(scores_array[0], indices[0]):
                 if idx >= 0 and idx < len(self._field_names):  # 有效索引
                     field_name = self._field_names[idx]
-                    # 内积分数范围 [-1, 1]，转换为 [0, 1]
-                    similarity = (score + 1.0) / 2.0
-                    scores.append((field_name, similarity))
+                    # 修改: 直接使用余弦相似度，不做 (score+1)/2 转换
+                    # 归一化后的向量内积就是余弦相似度，范围 [-1, 1]
+                    # 对于正常的语义相似度，值通常在 [0, 1] 范围
+                    confidence = max(0.0, min(1.0, float(score)))
+                    raw_score = float(score)
+                    scores.append((field_name, confidence, raw_score))
             
             return scores
             
@@ -448,7 +424,7 @@ class FieldIndexer:
             logger.error(f"FAISS 搜索失败: {e}")
             return self._simple_search(query_vector)
     
-    def _simple_search(self, query_vector: List[float]) -> List[Tuple[str, float]]:
+    def _simple_search(self, query_vector: List[float]) -> List[Tuple[str, float, float]]:
         """
         简单向量搜索（余弦相似度）
         
@@ -456,12 +432,16 @@ class FieldIndexer:
             query_vector: 查询向量
         
         Returns:
-            (field_name, similarity) 列表，按相似度降序排列
+            (field_name, confidence, raw_score) 列表，按相似度降序排列
+            - confidence: 归一化置信度 [0, 1]
+            - raw_score: 原始余弦相似度分数
         """
         scores = []
         for field_name, field_vector in self._vectors.items():
             similarity = self._cosine_similarity(query_vector, field_vector)
-            scores.append((field_name, similarity))
+            # confidence 和 raw_score 相同（余弦相似度本身就在 [-1, 1] 范围）
+            confidence = max(0.0, min(1.0, similarity))
+            scores.append((field_name, confidence, similarity))
         
         # 按相似度排序
         scores.sort(key=lambda x: x[1], reverse=True)
@@ -506,8 +486,9 @@ class FieldIndexer:
             scores = self._simple_search(query_vector)
         
         # 应用过滤器
+        # scores 格式: (field_name, confidence, raw_score)
         filtered_scores = []
-        for field_name, similarity in scores:
+        for field_name, confidence, raw_score in scores:
             chunk = self._chunks[field_name]
             
             if category_filter and chunk.category != category_filter:
@@ -515,18 +496,19 @@ class FieldIndexer:
             if role_filter and chunk.role != role_filter:
                 continue
             
-            filtered_scores.append((field_name, similarity))
+            filtered_scores.append((field_name, confidence, raw_score))
         
         # 返回 top-k
         top_scores = filtered_scores[:top_k]
         
         results = []
-        for rank, (field_name, score) in enumerate(top_scores, 1):
+        for rank, (field_name, confidence, raw_score) in enumerate(top_scores, 1):
             results.append(RetrievalResult(
                 field_chunk=self._chunks[field_name],
-                score=max(0.0, min(1.0, score)),  # 确保分数在 0-1 之间
+                score=confidence,  # 已经在 [0, 1] 范围内
                 source=RetrievalSource.EMBEDDING,
-                rank=rank
+                rank=rank,
+                raw_score=raw_score  # 传递原始分数用于调试
             ))
         
         return results
@@ -590,8 +572,9 @@ class FieldIndexer:
             )
         
         # 应用过滤器
+        # scores 格式: (field_name, confidence, raw_score)
         filtered_scores = []
-        for field_name, similarity in scores:
+        for field_name, confidence, raw_score in scores:
             chunk = self._chunks[field_name]
             
             if category_filter and chunk.category != category_filter:
@@ -599,18 +582,19 @@ class FieldIndexer:
             if role_filter and chunk.role != role_filter:
                 continue
             
-            filtered_scores.append((field_name, similarity))
+            filtered_scores.append((field_name, confidence, raw_score))
         
         # 返回 top-k
         top_scores = filtered_scores[:top_k]
         
         results = []
-        for rank, (field_name, score) in enumerate(top_scores, 1):
+        for rank, (field_name, confidence, raw_score) in enumerate(top_scores, 1):
             results.append(RetrievalResult(
                 field_chunk=self._chunks[field_name],
-                score=max(0.0, min(1.0, score)),  # 确保分数在 0-1 之间
+                score=confidence,  # 已经在 [0, 1] 范围内
                 source=RetrievalSource.EMBEDDING,
-                rank=rank
+                rank=rank,
+                raw_score=raw_score  # 传递原始分数用于调试
             ))
         
         return results

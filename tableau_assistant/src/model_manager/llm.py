@@ -332,7 +332,63 @@ def _create_zhipu_model(
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 高层 API：自动从环境变量读取配置
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_llm(
+    temperature: Optional[float] = None,
+    model_name: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> BaseChatModel:
+    """
+    获取 LLM 实例（自动从环境变量读取配置）
+    
+    这是推荐的高层 API，自动从环境变量读取 provider 和 model_name。
+    
+    环境变量：
+        - LLM_MODEL_PROVIDER: 模型提供商（默认 "local"）
+        - LLM_MODEL_NAME: 模型名称（默认 "qwen2.5-72b"）
+        - TOOLING_LLM_MODEL: 工具调用模型（优先级高于 LLM_MODEL_NAME）
+        - LLM_TEMPERATURE: 默认温度（默认 0.2）
+    
+    Args:
+        temperature: 温度参数（可选，覆盖环境变量默认值）
+        model_name: 模型名称（可选，覆盖环境变量）
+        provider: 提供商（可选，覆盖环境变量）
+    
+    Returns:
+        配置好的 LLM 实例
+    
+    Examples:
+        # 使用默认配置（从环境变量读取）
+        llm = get_llm()
+        
+        # 指定 temperature
+        llm = get_llm(temperature=0.1)
+        
+        # 完全自定义
+        llm = get_llm(temperature=0.3, model_name="gpt-4o", provider="openai")
+    """
+    _provider = provider or os.environ.get("LLM_MODEL_PROVIDER", "local")
+    _model_name = (
+        model_name
+        or os.environ.get("TOOLING_LLM_MODEL")
+        or os.environ.get("LLM_MODEL_NAME", "qwen2.5-72b")
+    )
+    _temperature = temperature if temperature is not None else float(os.environ.get("LLM_TEMPERATURE", "0.2"))
+    
+    return select_model(
+        provider=_provider,
+        model_name=_model_name,
+        temperature=_temperature
+    )
+
+
 __all__ = [
+    # 底层 API
     "select_model",
     "SUPPORTED_LLM_PROVIDERS",
+    # 高层 API
+    "get_llm",
 ]

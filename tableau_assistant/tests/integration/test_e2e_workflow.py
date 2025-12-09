@@ -464,7 +464,7 @@ class E2ETestRunner:
         print(f"{'='*70}")
         
         try:
-            from tableau_assistant.src.nodes.field_mapper.node import FieldMapperNode
+            from tableau_assistant.src.agents.field_mapper import FieldMapperNode
             from tableau_assistant.src.capabilities.rag.semantic_mapper import SemanticMapper
             from tableau_assistant.src.capabilities.rag.field_indexer import FieldIndexer
         except ImportError as e:
@@ -478,9 +478,12 @@ class E2ETestRunner:
         print(f"  索引字段数: {indexed_count}")
         print(f"  Embedding 提供者: {type(field_indexer.embedding_provider).__name__}")
         
-        # 创建语义映射器
+        # 创建语义映射器（自动启用两阶段检索 + LLMReranker）
         print("\n[3.2] 创建语义映射器...")
         semantic_mapper = SemanticMapper(field_indexer=field_indexer)
+        print(f"  两阶段检索: {'启用' if semantic_mapper.config.use_two_stage else '禁用'}")
+        print(f"  混合检索: {'启用' if semantic_mapper.config.use_hybrid else '禁用'}")
+        print(f"  Reranker: {type(semantic_mapper.reranker).__name__ if semantic_mapper.reranker else '无'}")
         
         # 创建 FieldMapper 节点
         mapper = FieldMapperNode()

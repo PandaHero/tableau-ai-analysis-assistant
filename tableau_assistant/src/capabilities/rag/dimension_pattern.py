@@ -25,7 +25,8 @@ except ImportError:
     NUMPY_AVAILABLE = False
 
 from tableau_assistant.src.capabilities.rag.embeddings import EmbeddingProvider, EmbeddingProviderFactory
-from tableau_assistant.src.capabilities.rag.cache import VectorCache
+# VectorCache 已删除，使用 StoreManager 替代
+# from tableau_assistant.src.capabilities.rag.cache import VectorCache
 
 logger = logging.getLogger(__name__)
 
@@ -197,8 +198,9 @@ class DimensionPatternStore:
         # 初始化 Embedding 提供者
         self._embedding_provider = embedding_provider or EmbeddingProviderFactory.create("mock")
         
-        # 向量缓存
-        self._vector_cache = VectorCache() if use_cache else None
+        # 向量缓存（VectorCache 已删除，暂时禁用缓存）
+        # TODO: 使用 StoreManager 替代
+        self._vector_cache = None
         
         # 内存中的向量索引
         self._patterns: Dict[str, DimensionPattern] = {}

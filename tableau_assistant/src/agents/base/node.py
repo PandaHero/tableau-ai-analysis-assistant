@@ -16,6 +16,7 @@ Agent 基础工具模块
 
     from tableau_assistant.src.agents.base import (
         get_llm,
+        get_agent_temperature,
         call_llm_with_tools,
         parse_json_response,
         stream_llm_call,
@@ -23,16 +24,20 @@ Agent 基础工具模块
     
     # 在 Agent 节点中使用
     async def my_agent_node(state, config):
-        llm = get_llm(agent_name="my_agent")
-        tools = [my_tool_1, my_tool_2]
+        # 方式 1：使用 agent_name 自动选择 temperature
+        llm = get_llm(agent_name="understanding")  # temperature=0.1
         
+        # 方式 2：直接指定 temperature
+        llm = get_llm(temperature=0.1)
+        
+        tools = [my_tool_1, my_tool_2]
         messages = MY_PROMPT.format_messages(...)
         
-        # 方式 1：带工具调用
+        # 带工具调用
         response = await call_llm_with_tools(llm, messages, tools)
         result = parse_json_response(response, MyOutputModel)
         
-        # 方式 2：流式输出（无工具）
+        # 流式输出（无工具）
         response = await stream_llm_call(llm, messages)
         result = parse_json_response(response, MyOutputModel)
 """
@@ -56,7 +61,14 @@ T = TypeVar('T', bound=BaseModel)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Agent Temperature 配置
+# LLM 获取（从 model_manager 导入）
+# ═══════════════════════════════════════════════════════════════════════════
+
+from tableau_assistant.src.model_manager import get_llm as _get_llm
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Agent Temperature 配置（Agent 层配置，不放在 model_manager）
 # ═══════════════════════════════════════════════════════════════════════════
 
 AGENT_TEMPERATURE_CONFIG = {
@@ -72,66 +84,49 @@ AGENT_TEMPERATURE_CONFIG = {
 def get_agent_temperature(agent_name: str) -> float:
     """获取指定 Agent 的默认 temperature"""
     return AGENT_TEMPERATURE_CONFIG.get(
-        agent_name.lower(), 
+        agent_name.lower(),
         AGENT_TEMPERATURE_CONFIG["default"]
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# LLM 获取
-# ═══════════════════════════════════════════════════════════════════════════
-
 def get_llm(
-    temperature: Optional[float] = None,
-    model_name: Optional[str] = None,
-    provider: Optional[str] = None,
     agent_name: Optional[str] = None,
+    temperature: Optional[float] = None,
+    **kwargs
 ) -> BaseChatModel:
     """
-    获取 LLM 实例
+    获取 LLM 实例（Agent 层封装）
+    
+    这是 Agent 层的便捷函数，支持通过 agent_name 自动选择 temperature。
+    底层调用 model_manager.get_llm。
     
     Args:
-        temperature: 温度参数（可选）
-        model_name: 模型名称（可选，默认从环境变量读取）
-        provider: 提供商（可选，默认从环境变量读取）
-        agent_name: Agent 名称（用于获取默认 temperature）
+        agent_name: Agent 名称（可选，用于自动选择 temperature）
+        temperature: 温度参数（可选，覆盖 agent_name 配置）
+        **kwargs: 传递给 model_manager.get_llm 的其他参数
     
     Returns:
         配置好的 LLM 实例
     
-    Example:
-        # 使用默认配置
-        llm = get_llm()
+    Examples:
+        # 使用 agent 对应的 temperature
+        llm = get_llm(agent_name="understanding")  # temperature=0.1
         
-        # 指定 Agent 名称（自动获取对应 temperature）
-        llm = get_llm(agent_name="dimension_hierarchy")
+        # 显式指定 temperature（覆盖 agent_name）
+        llm = get_llm(agent_name="understanding", temperature=0.3)
         
-        # 完全自定义
-        llm = get_llm(temperature=0.3, model_name="gpt-4o")
+        # 直接指定 temperature
+        llm = get_llm(temperature=0.1)
     """
-    import os
-    from tableau_assistant.src.model_manager.llm import select_model
-    
-    _provider = provider or os.environ.get("LLM_MODEL_PROVIDER", "local")
-    _model_name = (
-        model_name 
-        or os.environ.get("TOOLING_LLM_MODEL") 
-        or os.environ.get("LLM_MODEL_NAME", "qwen2.5-72b")
-    )
-    
-    # 确定 temperature
+    # Temperature 优先级：显式参数 > agent_name 配置
     if temperature is not None:
         _temperature = temperature
     elif agent_name:
         _temperature = get_agent_temperature(agent_name)
     else:
-        _temperature = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
+        _temperature = None  # 使用 model_manager 的默认值
     
-    return select_model(
-        provider=_provider, 
-        model_name=_model_name, 
-        temperature=_temperature
-    )
+    return _get_llm(temperature=_temperature, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -184,7 +179,7 @@ async def call_llm_with_tools(
         LLM 最终响应内容（字符串）
     
     Example:
-        llm = get_llm(agent_name="understanding")
+        llm = get_llm(temperature=0.1)  # 或 get_llm(agent_name="understanding")
         tools = [get_metadata, parse_date]
         messages = MY_PROMPT.format_messages(question="各省份销售额")
         
@@ -257,30 +252,61 @@ async def call_llm_with_tools(
 # 流式输出
 # ═══════════════════════════════════════════════════════════════════════════
 
+# 流式输出回调类型
+from typing import Callable, Union, AsyncIterator
+from typing_extensions import Protocol
+
+
+class StreamCallback(Protocol):
+    """流式输出回调协议"""
+    def __call__(self, token: str) -> None: ...
+
+
+class AsyncStreamCallback(Protocol):
+    """异步流式输出回调协议"""
+    async def __call__(self, token: str) -> None: ...
+
+
+StreamCallbackType = Union[StreamCallback, AsyncStreamCallback, None]
+
+
 async def stream_llm_call(
     llm: BaseChatModel,
     messages: List[Dict[str, str]],
     print_output: bool = True,
+    on_token: StreamCallbackType = None,
 ) -> str:
     """
     流式调用 LLM（无工具）
     
     适用于不需要工具调用的场景，如维度层级推断。
+    支持回调函数实时接收 token。
     
     Args:
         llm: LLM 实例
         messages: 消息列表
-        print_output: 是否打印流式输出
+        print_output: 是否打印流式输出到控制台
+        on_token: 可选的回调函数，每个 token 生成时调用
+                  支持同步或异步回调: (token: str) -> None
     
     Returns:
         完整的响应内容
     
     Example:
-        llm = get_llm(agent_name="dimension_hierarchy")
-        messages = DIMENSION_HIERARCHY_PROMPT.format_messages(dimensions=dims_str)
-        
+        # 基础用法
         response = await stream_llm_call(llm, messages)
-        result = parse_json_response(response, DimensionHierarchyResult)
+        
+        # 带回调
+        tokens = []
+        response = await stream_llm_call(
+            llm, messages, 
+            on_token=lambda t: tokens.append(t)
+        )
+        
+        # 异步回调（如 WebSocket 推送）
+        async def send_to_ws(token):
+            await websocket.send(token)
+        response = await stream_llm_call(llm, messages, on_token=send_to_ws)
     """
     langchain_messages = convert_messages(messages)
     
@@ -289,6 +315,8 @@ async def stream_llm_call(
     
     if print_output:
         print("  🔄 [流式输出] ", end="", flush=True)
+    
+    import asyncio
     
     async for event in llm.astream_events(langchain_messages, version="v2"):
         event_type = event.get("event")
@@ -301,6 +329,13 @@ async def stream_llm_call(
                         print(token, end="", flush=True)
                     collected_content.append(token)
                     token_count += 1
+                    
+                    # 调用回调
+                    if on_token:
+                        if asyncio.iscoroutinefunction(on_token):
+                            await on_token(token)
+                        else:
+                            on_token(token)
     
     if print_output:
         print(f" ✓ ({token_count} tokens)")
@@ -310,6 +345,114 @@ async def stream_llm_call(
         raise ValueError("LLM 返回空内容")
     
     return full_content
+
+
+async def stream_llm_call_generator(
+    llm: BaseChatModel,
+    messages: List[Dict[str, str]],
+) -> AsyncIterator[str]:
+    """
+    流式调用 LLM，返回 async generator
+    
+    适用于需要逐 token 处理的场景，如 SSE/WebSocket 推送。
+    
+    Args:
+        llm: LLM 实例
+        messages: 消息列表
+    
+    Yields:
+        每个生成的 token
+    
+    Example:
+        async for token in stream_llm_call_generator(llm, messages):
+            await websocket.send(token)
+            
+        # 或收集完整响应
+        tokens = [token async for token in stream_llm_call_generator(llm, messages)]
+        full_response = "".join(tokens)
+    """
+    langchain_messages = convert_messages(messages)
+    
+    async for event in llm.astream_events(langchain_messages, version="v2"):
+        event_type = event.get("event")
+        if event_type == "on_chat_model_stream":
+            chunk = event.get("data", {}).get("chunk")
+            if chunk and hasattr(chunk, "content"):
+                token = chunk.content
+                if token:
+                    yield token
+
+
+# 带批次标识的流式 token
+from dataclasses import dataclass
+
+
+@dataclass
+class StreamToken:
+    """
+    带批次标识的流式 token
+    
+    用于并行流式输出场景，区分不同批次的输出。
+    """
+    batch_id: int           # 批次 ID（从 0 开始）
+    token: str              # token 内容
+    is_complete: bool = False  # 该批次是否完成
+
+
+# 带批次标识的回调类型
+class BatchStreamCallback(Protocol):
+    """带批次标识的流式输出回调协议"""
+    def __call__(self, batch_id: int, token: str) -> None: ...
+
+
+class AsyncBatchStreamCallback(Protocol):
+    """异步带批次标识的流式输出回调协议"""
+    async def __call__(self, batch_id: int, token: str) -> None: ...
+
+
+BatchStreamCallbackType = Union[BatchStreamCallback, AsyncBatchStreamCallback, None]
+
+
+async def stream_llm_call_with_batch_id(
+    llm: BaseChatModel,
+    messages: List[Dict[str, str]],
+    batch_id: int,
+    on_token: BatchStreamCallbackType = None,
+) -> str:
+    """
+    带批次标识的流式调用 LLM
+    
+    用于并行流式输出场景，每个 token 都带有批次 ID。
+    
+    Args:
+        llm: LLM 实例
+        messages: 消息列表
+        batch_id: 批次 ID
+        on_token: 回调函数 (batch_id: int, token: str) -> None
+    
+    Returns:
+        完整的响应内容
+    """
+    import asyncio
+    
+    langchain_messages = convert_messages(messages)
+    collected_content = []
+    
+    async for event in llm.astream_events(langchain_messages, version="v2"):
+        event_type = event.get("event")
+        if event_type == "on_chat_model_stream":
+            chunk = event.get("data", {}).get("chunk")
+            if chunk and hasattr(chunk, "content"):
+                token = chunk.content
+                if token:
+                    collected_content.append(token)
+                    if on_token:
+                        if asyncio.iscoroutinefunction(on_token):
+                            await on_token(batch_id, token)
+                        else:
+                            on_token(batch_id, token)
+    
+    return "".join(collected_content)
 
 
 async def invoke_llm(
@@ -436,6 +579,9 @@ __all__ = [
     
     # 流式输出
     "stream_llm_call",
+    "stream_llm_call_generator",
+    "stream_llm_call_with_batch_id",
+    "StreamToken",
     "invoke_llm",
     
     # JSON 解析

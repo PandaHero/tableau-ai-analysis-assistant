@@ -7,7 +7,8 @@ Contains workflow nodes that don't use LLM directly:
 - Execute: Pure code node for VizQL API execution
 """
 
-from tableau_assistant.src.nodes.field_mapper import (
+# FieldMapper 已迁移到 agents 包
+from tableau_assistant.src.agents.field_mapper import (
     field_mapper_node,
     FieldMapperNode,
 )

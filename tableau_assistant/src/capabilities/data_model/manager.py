@@ -358,7 +358,10 @@ class DataModelManager:
             metadata.dimension_hierarchy = filtered_hierarchy
             logger.info(f"从 SQLite 缓存加载维度层级到 metadata 对象")
         
-        # 3. 检查维度数量是否匹配
+        # 3. 将维度层级信息注入到各个 FieldMetadata 对象
+        self._inject_hierarchy_to_fields(metadata, filtered_hierarchy)
+        
+        # 4. 检查维度数量是否匹配
         # 计算当前维度数量
         current_dimensions = [f for f in metadata.fields if f.role.upper() == "DIMENSION"]
         current_dim_count = len(current_dimensions)
@@ -371,6 +374,35 @@ class DataModelManager:
         
         # 不需要推断
         return ""
+    
+    def _inject_hierarchy_to_fields(
+        self, 
+        metadata: Metadata, 
+        hierarchy_dict: Dict[str, Any]
+    ) -> None:
+        """
+        将维度层级信息注入到各个 FieldMetadata 对象
+        
+        这样 FieldIndexer 在构建索引时可以使用 category 等信息。
+        
+        Args:
+            metadata: Metadata 对象
+            hierarchy_dict: 维度层级字典
+        """
+        injected_count = 0
+        for field_name, attrs in hierarchy_dict.items():
+            field = metadata.get_field(field_name)
+            if field and isinstance(attrs, dict):
+                field.category = attrs.get('category')
+                field.category_detail = attrs.get('category_detail')
+                field.level = attrs.get('level')
+                field.granularity = attrs.get('granularity')
+                field.parent_dimension = attrs.get('parent_dimension')
+                field.child_dimension = attrs.get('child_dimension')
+                injected_count += 1
+        
+        if injected_count > 0:
+            logger.debug(f"已将维度层级信息注入到 {injected_count} 个字段")
     
     async def _enhance_data_model(self, metadata: Metadata) -> None:
         """

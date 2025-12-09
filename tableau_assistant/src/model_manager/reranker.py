@@ -68,7 +68,6 @@ def select_reranker(
         DefaultReranker,
         RRFReranker,
         LLMReranker,
-        RerankerFactory,
     )
     
     if reranker_type == "default":
@@ -105,21 +104,19 @@ def _create_llm_reranker(
     if llm_call_fn is not None:
         return LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn)
     
-    # 如果提供了 provider 和 model，使用模型管理器创建
+    # 如果提供了 provider 和 model，使用 select_model
     if llm_provider and llm_model:
         from tableau_assistant.src.model_manager.llm import select_model
-        
         llm = select_model(provider=llm_provider, model_name=llm_model, temperature=0.1)
-        
-        def llm_call_fn(prompt: str) -> str:
-            response = llm.invoke(prompt)
-            return response.content
-        
-        return LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn)
+    else:
+        # 否则使用 get_llm（自动从环境变量读取配置）
+        from tableau_assistant.src.model_manager.llm import get_llm
+        llm = get_llm(temperature=0.1)  # Reranker 需要精确判断，使用低 temperature
     
-    # 没有配置，返回默认（会降级到 DefaultReranker）
-    logger.warning("LLM 重排序器未配置 provider/model，将降级到默认排序")
-    return LLMReranker(top_k=top_k)
+    def _llm_call_fn(prompt: str) -> str:
+        return llm.invoke(prompt).content
+    
+    return LLMReranker(top_k=top_k, llm_call_fn=_llm_call_fn)
 
 
 __all__ = [

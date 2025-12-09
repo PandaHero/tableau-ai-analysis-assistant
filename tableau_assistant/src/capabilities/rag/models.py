@@ -135,14 +135,18 @@ class RetrievalResult:
     
     Attributes:
         field_chunk: 字段分块
-        score: 相关性分数 (0-1)
+        score: 归一化置信度 (0-1)
         source: 检索来源
         rank: 排名位置
+        raw_score: 原始分数（用于调试），如 FAISS 内积分数
     """
     field_chunk: FieldChunk
     score: float
     source: RetrievalSource
     rank: int
+    
+    # 原始分数（用于调试）
+    raw_score: Optional[float] = None
     
     # 可选的重排序信息
     rerank_score: Optional[float] = None

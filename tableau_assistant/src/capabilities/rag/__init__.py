@@ -19,14 +19,14 @@ Usage:
         EmbeddingProviderFactory,
     )
     
-    # 创建 Embedding 提供者
-    provider = EmbeddingProviderFactory.create("zhipu")
+    # 方式 1: 自动检测可用的 Embedding 提供者（推荐）
+    provider = EmbeddingProviderFactory.get_default()
+    if provider:
+        vectors = provider.embed_documents(["销售额", "利润"])
+        query_vector = provider.embed_query("销售金额")
     
-    # 向量化文档
-    vectors = provider.embed_documents(["销售额", "利润"])
-    
-    # 向量化查询
-    query_vector = provider.embed_query("销售金额")
+    # 方式 2: 显式指定提供者
+    provider = EmbeddingProviderFactory.create("zhipu")  # 或 "openai"
 """
 
 from tableau_assistant.src.capabilities.rag.models import (
@@ -39,11 +39,9 @@ from tableau_assistant.src.capabilities.rag.models import (
 from tableau_assistant.src.capabilities.rag.embeddings import (
     EmbeddingProvider,
     ZhipuEmbedding,
-    MockEmbedding,
     EmbeddingProviderFactory,
 )
 from tableau_assistant.src.capabilities.rag.cache import (
-    VectorCache,
     CachedEmbeddingProvider,
 )
 from tableau_assistant.src.capabilities.rag.field_indexer import (
@@ -72,17 +70,13 @@ from tableau_assistant.src.capabilities.rag.reranker import (
     DefaultReranker,
     RRFReranker,
     LLMReranker,
-    RerankerFactory,
 )
 from tableau_assistant.src.capabilities.rag.assembler import (
     ChunkStrategy,
     AssemblerConfig,
     KnowledgeAssembler,
 )
-from tableau_assistant.src.capabilities.rag.cache import (
-    MappingCache,
-    CacheManager,
-)
+# MappingCache 和 CacheManager 已删除，使用 StoreManager 替代
 from tableau_assistant.src.capabilities.rag.dimension_pattern import (
     DimensionPattern,
     PatternSearchResult,
@@ -111,10 +105,8 @@ __all__ = [
     # Embedding 提供者
     "EmbeddingProvider",
     "ZhipuEmbedding",
-    "MockEmbedding",
     "EmbeddingProviderFactory",
-    # 缓存
-    "VectorCache",
+    # 缓存（VectorCache, MappingCache, CacheManager 已删除，使用 StoreManager 替代）
     "CachedEmbeddingProvider",
     # 索引器
     "FieldIndexer",
@@ -139,14 +131,10 @@ __all__ = [
     "DefaultReranker",
     "RRFReranker",
     "LLMReranker",
-    "RerankerFactory",
     # 知识组装器
     "ChunkStrategy",
     "AssemblerConfig",
     "KnowledgeAssembler",
-    # 缓存管理器
-    "MappingCache",
-    "CacheManager",
     # 维度层级 RAG
     "DimensionPattern",
     "PatternSearchResult",

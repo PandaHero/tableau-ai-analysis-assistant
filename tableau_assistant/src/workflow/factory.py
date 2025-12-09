@@ -47,7 +47,7 @@ from tableau_assistant.src.workflow.routes import (
 )
 
 # Import Node implementations
-from tableau_assistant.src.nodes.field_mapper import field_mapper_node as _field_mapper_node
+from tableau_assistant.src.agents.field_mapper import field_mapper_node as _field_mapper_node
 from tableau_assistant.src.nodes.query_builder import query_builder_node as _query_builder_node
 from tableau_assistant.src.nodes.execute import execute_node as _execute_node
 
@@ -216,7 +216,7 @@ def create_tableau_workflow(
     # imported from tableau_assistant.src.agents.understanding
     
     # Use the actual FieldMapper Node implementation
-    # The _field_mapper_node is imported from tableau_assistant.src.nodes.field_mapper
+    # The _field_mapper_node is imported from tableau_assistant.src.agents.field_mapper
     
     # QueryBuilder and Execute nodes use actual implementations
     # imported from tableau_assistant.src.nodes

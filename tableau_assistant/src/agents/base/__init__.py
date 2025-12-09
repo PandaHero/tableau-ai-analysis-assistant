@@ -17,6 +17,9 @@ from .node import (
     
     # 流式输出
     stream_llm_call,
+    stream_llm_call_generator,
+    stream_llm_call_with_batch_id,
+    StreamToken,
     invoke_llm,
     
     # JSON 解析
@@ -44,6 +47,9 @@ __all__ = [
     
     # 流式输出
     "stream_llm_call",
+    "stream_llm_call_generator",
+    "stream_llm_call_with_batch_id",
+    "StreamToken",
     "invoke_llm",
     
     # JSON 解析
