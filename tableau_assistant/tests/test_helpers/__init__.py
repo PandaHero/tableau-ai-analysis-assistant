@@ -4,10 +4,8 @@
 提供端到端工作流测试所需的辅助类和工具：
 - TestEnvironment: 测试环境管理
 - TestReporter: 测试报告生成
-- WorkflowTester: 工作流测试器
 - MetadataTester: 元数据测试器
 - StoreTester: 存储测试器
-- TestOrchestrator: 测试协调器
 - 测试数据模型（TestCase, TestStageResult, TestResult, TestReport）
 """
 
@@ -23,10 +21,8 @@ from tableau_assistant.tests.test_helpers.test_models import (
 )
 from tableau_assistant.tests.test_helpers.test_environment import TestEnvironment
 from tableau_assistant.tests.test_helpers.test_reporter import TestReporter
-from tableau_assistant.tests.test_helpers.workflow_tester import WorkflowTester
 from tableau_assistant.tests.test_helpers.metadata_tester import MetadataTester
 from tableau_assistant.tests.test_helpers.store_tester import StoreTester
-from tableau_assistant.tests.test_helpers.test_orchestrator import TestOrchestrator
 
 # 导出的类和函数
 __all__ = [
@@ -39,8 +35,6 @@ __all__ = [
     # 测试组件
     "TestEnvironment",
     "TestReporter",
-    "WorkflowTester",
     "MetadataTester",
     "StoreTester",
-    "TestOrchestrator",
 ]

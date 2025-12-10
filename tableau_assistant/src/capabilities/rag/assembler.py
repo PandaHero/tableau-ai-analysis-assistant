@@ -29,7 +29,7 @@ from tableau_assistant.src.capabilities.rag.retriever import (
     MetadataFilter,
 )
 from tableau_assistant.src.capabilities.rag.reranker import BaseReranker
-from tableau_assistant.src.models.metadata import FieldMetadata, Metadata
+from tableau_assistant.src.models.metadata import Metadata, FieldMetadata
 
 logger = logging.getLogger(__name__)
 

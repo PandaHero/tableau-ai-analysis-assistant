@@ -23,8 +23,8 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Set
 
-from tableau_assistant.src.models.metadata import Metadata
-from tableau_assistant.src.models.dimension_hierarchy import (
+from tableau_assistant.src.models.metadata import (
+    Metadata,
     DimensionHierarchyResult,
     DimensionAttributes,
 )

@@ -290,54 +290,57 @@
     - 验证 Understanding Agent 在执行时调用 get_metadata 工具获取字段信息
     - **Validates: Requirements 2.9**
 
-- [ ] 17. 实现 Execute Node
-  - [ ] 17.1 实现 Execute Node
+- [x] 17. 实现 Execute Node
+  - [x] 17.1 实现 Execute Node
     - 直接调用 VizQL Data Service /query-datasource API（非 LLM 节点，不通过工具）
     - 构建 API 请求，解析响应
     - 返回 QueryResult（data、columns、row_count、execution_time）
     - _Requirements: 7.1, 7.2_
-  - [ ] 17.2 实现查询错误处理
+    - **实现**: `tableau_assistant/src/nodes/execute/node.py`
+  - [x] 17.2 实现查询错误处理
     - 返回包含错误代码和消息的结构化错误
+    - 支持错误分类：transient、permanent、user
     - _Requirements: 7.3_
-  - [ ] 17.3 实现大结果处理
+  - [x] 17.3 实现大结果处理
     - 大结果由 FilesystemMiddleware 自动处理
     - _Requirements: 7.4_
+    - **测试**: `tableau_assistant/tests/integration/test_execute_node.py`
 
-- [ ] 18. 实现 Insight Agent
-  - [ ] 18.1 实现 Insight Node 入口
+- [x] 18. 实现 Insight Agent
+  - [x] 18.1 实现 Insight Node 入口
     - 调用 AnalysisCoordinator 进行渐进式分析
     - 生成最终洞察报告
     - _Requirements: 8.1_
-  - [ ] 18.2 实现 AnalysisCoordinator
+  - [x] 18.2 实现 AnalysisCoordinator
     - 选择分析策略（direct/progressive/hybrid）
     - 编排分析流程
     - _Requirements: 8.1, 8.2_
-  - [ ] 18.3 实现 DataProfiler 组件
+  - [x] 18.3 实现 DataProfiler 组件
     - 生成数据画像（row_count、density、statistics）
     - 包含统计信息（均值、中位数、标准差、分位数）
     - 识别语义分组（时间列、分类列、数值列）
     - _Requirements: 8.1_
-  - [ ] 18.4 实现 AnomalyDetector 组件
+  - [x] 18.4 实现 AnomalyDetector 组件
     - 使用 IQR 方法检测离群值
     - 计算异常比例、异常详情
     - _Requirements: 8.1_
-  - [ ] 18.5 实现 SemanticChunker 组件
+  - [x] 18.5 实现 SemanticChunker 组件
     - 按业务逻辑分块（时间 > 类别 > 地理）
     - 支持按列分块和按行数分块
     - _Requirements: 8.3_
-  - [ ] 18.6 实现 ChunkAnalyzer 组件
+  - [x] 18.6 实现 ChunkAnalyzer 组件
     - 传递之前洞察摘要避免重复发现
     - 调用 LLM 分析每个数据块
     - _Requirements: 8.4_
-  - [ ] 18.7 实现 InsightAccumulator 组件
+  - [x] 18.7 实现 InsightAccumulator 组件
     - 检查重复、合并相似洞察、按优先级排序
     - 使用模式提取去重
     - _Requirements: 8.5_
-  - [ ] 18.8 实现 InsightSynthesizer 组件
+  - [x] 18.8 实现 InsightSynthesizer 组件
     - 合成最终 InsightResult
     - 支持合并多个分析结果
     - _Requirements: 8.6_
-  - [ ] 18.9 实现流式输出支持
+  - [x] 18.9 实现流式输出支持
     - 实时输出分析进度（chunk_start、chunk_complete、synthesizing、complete）
     - _Requirements: 8.7_
   - [ ]* 18.10 编写 Property Test：渐进式分析策略选择

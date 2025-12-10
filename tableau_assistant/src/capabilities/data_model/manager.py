@@ -21,8 +21,13 @@ from langgraph.runtime import Runtime
 
 from tableau_assistant.src.models.workflow.context import VizQLContext
 from tableau_assistant.src.capabilities.storage.store_manager import StoreManager
-from tableau_assistant.src.models.metadata import Metadata, FieldMetadata
-from tableau_assistant.src.models.data_model import DataModel, LogicalTable, LogicalTableRelationship
+from tableau_assistant.src.models.metadata import (
+    Metadata,
+    FieldMetadata,
+    DataModel,
+    LogicalTable,
+    LogicalTableRelationship,
+)
 
 if TYPE_CHECKING:
     from tableau_assistant.src.capabilities.date_processing.manager import DateManager

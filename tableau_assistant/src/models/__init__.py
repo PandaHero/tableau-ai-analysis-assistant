@@ -1,16 +1,19 @@
 """
-Data models module (Refactored)
+Data models module
 
 Organized into subpackages:
 - workflow/: LangGraph state and context models
 - semantic/: Pure semantic layer models (SemanticQuery, MappedQuery)
 - vizql/: VizQL technical models (VizQLQuery, QueryResult)
-- common/: Shared models (errors, metadata)
-
-Legacy models are kept for backward compatibility but will be deprecated.
+- common/: Shared error models
+- api/: API request/response models
+- metadata/: Metadata related models
+- question/: Question understanding models
+- insight/: Insight analysis models
+- replanner/: Replanner agent models
 """
 
-# ========== Workflow Models (New Location) ==========
+# ========== Workflow Models ==========
 from .workflow import (
     VizQLState,
     VizQLInput,
@@ -18,22 +21,19 @@ from .workflow import (
     VizQLContext,
     create_initial_state,
 )
-
-# Context utilities (for backward compatibility with old import path)
 from .workflow.context import get_tableau_config, set_tableau_config
 
-# ========== Semantic Models (New - Updated per data-models.md spec) ==========
+# ========== Semantic Models ==========
 from .semantic import (
     # Enums
     AnalysisType,
     ComputationScope,
     MappingSource,
-    FilterType,  # NEW: time_range, set, quantitative, match
-    TimeGranularity as SemanticTimeGranularity,  # Avoid conflict with legacy
-    AggregationType as SemanticAggregationType,  # Avoid conflict with legacy
+    FilterType,
+    TimeGranularity as SemanticTimeGranularity,
+    AggregationType as SemanticAggregationType,
     DimensionCategory,
     DimensionLevel,
-    
     # Query components
     MeasureSpec,
     DimensionSpec,
@@ -41,26 +41,23 @@ from .semantic import (
     AnalysisSpec,
     OutputControl,
     SemanticQuery,
-    
     # Field mapping
     FieldMapping,
     MappedQuery,
 )
 
-# ========== VizQL Models (New Location) ==========
+# ========== VizQL Models ==========
 from .vizql import (
     # Enums
     FunctionEnum,
     SortDirection,
     ReturnFormat,
     DataType,
-    
     # Field types
     BasicField,
     FunctionField,
     CalculationField,
     VizQLField,
-    
     # Filter types
     FilterField,
     SetFilter,
@@ -70,7 +67,6 @@ from .vizql import (
     QuantitativeDateFilter,
     RelativeDateFilter,
     VizQLFilter,
-    
     # Query structure
     VizQLQuery,
     Connection,
@@ -78,14 +74,11 @@ from .vizql import (
     QueryOptions,
     QueryRequest,
     QueryOutput,
-    
     # Metadata
     VizQLFieldMetadata,
     VizQLMetadataOutput,
-    
     # Result
     QueryResult,
-    
     # Helper functions
     create_basic_field,
     create_function_field,
@@ -93,7 +86,7 @@ from .vizql import (
     create_relative_date_filter,
 )
 
-# ========== Common Models (New) ==========
+# ========== Common Models ==========
 from .common import (
     TransientError,
     PermanentError,
@@ -102,16 +95,11 @@ from .common import (
     classify_error,
 )
 
-# ========== Legacy Imports (Backward Compatibility) ==========
-# These will be deprecated in future versions
-
+# ========== API Models ==========
 from .api import (
-    # Request models
     VizQLQueryRequest,
     QuestionBoostRequest,
     MetadataInitRequest,
-    
-    # Response models
     VizQLQueryResponse,
     QuestionBoostResponse,
     MetadataInitResponse,
@@ -119,15 +107,24 @@ from .api import (
     AnalysisStep,
     Recommendation,
     Visualization,
-    
-    # Error models
     ErrorResponse,
     ErrorDetail,
-    
-    # Stream event models
-    StreamEvent
+    StreamEvent,
 )
 
+# ========== Metadata Models ==========
+from .metadata import (
+    FieldMetadata,
+    Metadata,
+    LogicalTable,
+    LogicalTableRelationship,
+    DataModel,
+    DimensionHierarchyResult,
+    DimensionAttributes,
+    HierarchyLevel,
+)
+
+# ========== Question Models ==========
 from .question import (
     # Enums
     EntityRole,
@@ -140,7 +137,6 @@ from .question import (
     RelativeType,
     PeriodType,
     SubQuestionExecutionType,
-    
     # Models
     QueryEntity,
     TimeRange,
@@ -148,68 +144,69 @@ from .question import (
     QuestionUnderstanding,
     SubQuestion,
     QuerySubQuestion,
-    
     # Helper functions
     create_entity,
     create_time_range_absolute,
     create_time_range_relative,
+    # Time granularity
+    TimeGranularity,
+    get_field_granularity_from_format,
 )
 
-from .boost import QuestionBoost
-
-from .metadata import (
-    FieldMetadata,
-    Metadata,
-)
-
-from .data_model import (
-    LogicalTable,
-    LogicalTableRelationship,
-    DataModel,
-)
-
-from .result import (
-    # Enums
+# ========== Insight Models ==========
+from .insight import (
+    # Legacy
     InsightType,
     Importance,
     AnomalyType,
     TrendDirection,
-    
-    # Query results
     SubtaskResult,
     MergedData,
-    
-    # Statistical analysis
     DescriptiveStatistics,
     AnomalyDetection,
     TrendAnalysis,
     StatisticsResult,
-    
-    # Insights
-    Insight,
+    LegacyInsight,
     InsightCollection,
-    
-    # Replanning
-    ReplanDecision,
-    
-    # Final report
     FinalReport,
-    
-    # Helper functions
     create_insight,
-    create_anomaly_detection
+    create_anomaly_detection,
+    # Progressive insight
+    ChunkPriority,
+    ColumnStats,
+    SemanticGroup,
+    DataProfile,
+    AnomalyDetail,
+    AnomalyResult,
+    DataChunk,
+    TailDataSummary,
+    PriorityChunk,
+    Insight,
+    InsightQuality,
+    InsightResult,
+    NextBiteDecision,
+    ClusterInfo,
+    DataInsightProfile,
+)
+
+# ========== Replanner Models ==========
+from .replanner import (
+    ExplorationQuestion,
+    ReplanDecision,
 )
 
 
 __all__ = [
-    # ========== Workflow ==========
+    # Workflow
     "VizQLState",
     "VizQLInput",
     "VizQLOutput",
     "VizQLContext",
     "create_initial_state",
+    "get_tableau_config",
+    "set_tableau_config",
     
-    # ========== Semantic (New - Updated per data-models.md spec) ==========
+    # Semantic
     "AnalysisType",
     "ComputationScope",
     "MappingSource",
@@ -227,7 +224,7 @@ __all__ = [
     "FieldMapping",
     "MappedQuery",
     
-    # ========== VizQL ==========
+    # VizQL
     "FunctionEnum",
     "SortDirection",
     "ReturnFormat",
@@ -258,14 +255,14 @@ __all__ = [
     "create_set_filter",
     "create_relative_date_filter",
     
-    # ========== Common ==========
+    # Common
     "TransientError",
     "PermanentError",
     "UserError",
     "ErrorCategory",
     "classify_error",
     
-    # ========== Legacy (Backward Compatibility) ==========
+    # API
     "VizQLQueryRequest",
     "QuestionBoostRequest",
     "MetadataInitRequest",
@@ -279,6 +276,18 @@ __all__ = [
     "ErrorResponse",
     "ErrorDetail",
     "StreamEvent",
+    
+    # Metadata
+    "FieldMetadata",
+    "Metadata",
+    "LogicalTable",
+    "LogicalTableRelationship",
+    "DataModel",
+    "DimensionHierarchyResult",
+    "DimensionAttributes",
+    "HierarchyLevel",
+    
+    # Question
     "EntityRole",
     "LegacyAggregationType",
     "EntityType",
@@ -298,12 +307,10 @@ __all__ = [
     "create_entity",
     "create_time_range_absolute",
     "create_time_range_relative",
-    "QuestionBoost",
-    "FieldMetadata",
-    "Metadata",
-    "LogicalTable",
-    "LogicalTableRelationship",
-    "DataModel",
+    "TimeGranularity",
+    "get_field_granularity_from_format",
+    
+    # Insight
     "InsightType",
     "Importance",
     "AnomalyType",
@@ -314,10 +321,28 @@ __all__ = [
     "AnomalyDetection",
     "TrendAnalysis",
     "StatisticsResult",
-    "Insight",
+    "LegacyInsight",
     "InsightCollection",
-    "ReplanDecision",
     "FinalReport",
     "create_insight",
     "create_anomaly_detection",
+    "ChunkPriority",
+    "ColumnStats",
+    "SemanticGroup",
+    "DataProfile",
+    "AnomalyDetail",
+    "AnomalyResult",
+    "DataChunk",
+    "TailDataSummary",
+    "PriorityChunk",
+    "Insight",
+    "InsightQuality",
+    "InsightResult",
+    "NextBiteDecision",
+    "ClusterInfo",
+    "DataInsightProfile",
+    
+    # Replanner
+    "ExplorationQuestion",
+    "ReplanDecision",
 ]

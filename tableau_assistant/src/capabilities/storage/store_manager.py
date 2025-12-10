@@ -31,8 +31,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
-    from tableau_assistant.src.models.metadata import Metadata
-    from tableau_assistant.src.models.data_model import DataModel
+    from tableau_assistant.src.models.metadata import Metadata, DataModel
 
 logger = logging.getLogger(__name__)
 
@@ -513,7 +512,7 @@ class StoreManager:
     def get_data_model(self, datasource_luid: str) -> Optional[Any]:
         """获取数据模型缓存"""
         try:
-            from tableau_assistant.src.models.data_model import DataModel, LogicalTable, LogicalTableRelationship
+            from tableau_assistant.src.models.metadata import DataModel, LogicalTable, LogicalTableRelationship
             
             item = self.get(namespace=("data_model",), key=datasource_luid)
             
@@ -548,7 +547,7 @@ class StoreManager:
     def put_data_model(self, datasource_luid: str, data_model: Any) -> bool:
         """保存数据模型到缓存"""
         try:
-            from tableau_assistant.src.models.data_model import DataModel
+            from tableau_assistant.src.models.metadata import DataModel
             
             if isinstance(data_model, DataModel):
                 data = {

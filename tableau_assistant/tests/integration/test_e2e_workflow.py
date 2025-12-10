@@ -180,7 +180,7 @@ class E2ETestRunner:
         from tableau_assistant.src.agents.base import get_llm, parse_json_response
         from tableau_assistant.src.agents.base.node import convert_messages
         from tableau_assistant.src.agents.dimension_hierarchy.prompt import DIMENSION_HIERARCHY_PROMPT
-        from tableau_assistant.src.models.dimension_hierarchy import DimensionHierarchyResult
+        from tableau_assistant.src.models.metadata import DimensionHierarchyResult
         
         # 准备维度信息
         dimension_fields = self.metadata.get_dimensions()
@@ -548,7 +548,7 @@ class E2ETestRunner:
     
     async def run_e2e_test(
         self, 
-        question: str = "各省份的销售额",
+        question: str = "2024年各省份的销售额和利润",
         skip_hierarchy: bool = False
     ):
         """
@@ -615,7 +615,7 @@ async def main():
     parser.add_argument(
         "--question", "-q",
         type=str,
-        default="各省份的销售额",
+        default="2024年各省份的销售额和利润",
         help="测试问题"
     )
     parser.add_argument(
