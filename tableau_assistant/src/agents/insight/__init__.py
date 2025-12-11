@@ -3,35 +3,49 @@ Insight Agent
 
 LLM Agent that analyzes query results and generates insights.
 
-Architecture:
-- Calls AnalysisCoordinator for progressive analysis
-- Generates final insight report
-- Supports streaming output
+Architecture (per insight-design.md):
+- 双 LLM 协作模式：
+  - 主持人 LLM (CoordinatorPrompt): 决定分析顺序、累积洞察、决定早停
+  - 分析师 LLM (AnalystPrompt): 分析单个数据块、生成结构化洞察
+- AnalysisCoordinator 协调两个 LLM 的协作
+- ChunkAnalyzer 封装 LLM 调用
 
-Design Decision (per insight-design.md):
-- Insight Agent is a workflow node that calls AnalysisCoordinator
-- AnalysisCoordinator orchestrates the analysis flow (pure code)
-- ChunkAnalyzer is the ONLY component that calls LLM
-- All LLM prompts are defined in prompt.py
-
-Requirements:
-- R8.1: Progressive insight analysis
-- R8.7: Streaming output support
+Import Note:
+- 只在包级别导入 prompt（无循环依赖）
+- node.py 需要单独导入：from tableau_assistant.src.agents.insight.node import ...
+- 这样避免循环导入：
+  components/insight/analyzer.py → agents/insight/prompt.py → agents/insight/__init__.py
+  如果 __init__.py 导入 node.py，node.py 又导入 components/insight，就会循环
 """
 
-from .node import insight_node, insight_node_streaming, InsightAgent
 from .prompt import (
-    INSIGHT_SYSTEM_PROMPT,
-    CHUNK_USER_TEMPLATE,
-    FULL_ANALYSIS_USER_TEMPLATE,
+    # Output Models
+    InsightListOutput,
+    CoordinatorDecisionOutput,
+    # Prompt Classes
+    CoordinatorPrompt,
+    AnalystPrompt,
+    DirectAnalysisPrompt,
+    # Prompt Instances
+    COORDINATOR_PROMPT,
+    ANALYST_PROMPT,
+    DIRECT_ANALYSIS_PROMPT,
 )
 
+# 注意：不在包级别导入 node.py，避免循环导入
+# 需要使用 node 时，请直接导入：
+# from tableau_assistant.src.agents.insight.node import insight_node, InsightAgent
+
 __all__ = [
-    "insight_node",
-    "insight_node_streaming",
-    "InsightAgent",
-    # Prompts
-    "INSIGHT_SYSTEM_PROMPT",
-    "CHUNK_USER_TEMPLATE",
-    "FULL_ANALYSIS_USER_TEMPLATE",
+    # Output Models
+    "InsightListOutput",
+    "CoordinatorDecisionOutput",
+    # Prompt Classes
+    "CoordinatorPrompt",
+    "AnalystPrompt",
+    "DirectAnalysisPrompt",
+    # Prompt Instances
+    "COORDINATOR_PROMPT",
+    "ANALYST_PROMPT",
+    "DIRECT_ANALYSIS_PROMPT",
 ]

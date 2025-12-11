@@ -32,7 +32,6 @@ from tableau_assistant.src.models.semantic.enums import (
     AnalysisType,
     AggregationType,
     TimeGranularity,
-    FilterOperator,
 )
 from tableau_assistant.src.models.vizql.types import (
     BasicField,
@@ -73,49 +72,48 @@ AGG_TO_FUNCTION: Dict[AggregationType, FunctionEnum] = {
 }
 
 
-class VizQLQuery:
+# 使用 models/vizql/types.py 中的 Pydantic VizQLQuery
+from tableau_assistant.src.models.vizql.types import VizQLQuery as VizQLQueryModel
+
+
+class VizQLQueryBuilder:
     """
-    VizQL Query representation
+    VizQL Query Builder - 用于构建 VizQLQuery Pydantic 对象
     
-    Contains all fields needed for VizQL Data Service API call.
+    提供便捷方法来逐步构建查询，最终生成 VizQLQuery Pydantic 对象。
     """
     
     def __init__(self):
-        self.fields: List[Any] = []
-        self.filters: List[Dict[str, Any]] = []
-        self.limit: Optional[int] = None
-        self.sort_fields: List[Dict[str, Any]] = []
+        self._fields: List[Any] = []
+        self._filters: List[Any] = []
+        self._limit: Optional[int] = None
     
     def add_field(self, field: Any):
         """Add a field to the query."""
-        self.fields.append(field)
+        self._fields.append(field)
     
-    def add_filter(self, filter_spec: Dict[str, Any]):
+    def add_filter(self, filter_spec: Any):
         """Add a filter to the query."""
-        self.filters.append(filter_spec)
+        self._filters.append(filter_spec)
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for API call."""
-        result = {
-            "fields": [self._field_to_dict(f) for f in self.fields]
-        }
-        
-        if self.filters:
-            result["filters"] = self.filters
-        
-        if self.limit:
-            result["limit"] = self.limit
-        
-        return result
+    def set_limit(self, limit: int):
+        """Set result limit."""
+        self._limit = limit
     
-    def _field_to_dict(self, field: Any) -> Dict[str, Any]:
-        """Convert a field to dictionary."""
-        if hasattr(field, "model_dump"):
-            return field.model_dump(exclude_none=True)
-        elif isinstance(field, dict):
-            return field
-        else:
-            return {"fieldCaption": str(field)}
+    def build(self) -> VizQLQueryModel:
+        """Build and return VizQLQuery Pydantic object."""
+        return VizQLQueryModel(
+            fields=self._fields,
+            filters=self._filters if self._filters else None,
+        )
+    
+    @property
+    def limit(self) -> Optional[int]:
+        return self._limit
+    
+    @limit.setter
+    def limit(self, value: Optional[int]):
+        self._limit = value
 
 
 class QueryBuilderNode:
@@ -142,55 +140,63 @@ class QueryBuilderNode:
         self.resolver = ImplementationResolver(llm)
         self.generator = ExpressionGenerator()
     
-    async def build(self, mapped_query: MappedQuery) -> VizQLQuery:
+    async def build(self, mapped_query: MappedQuery) -> VizQLQueryModel:
         """
-        Build VizQLQuery from MappedQuery.
+        Build VizQLQuery Pydantic object from MappedQuery.
         
         Args:
             mapped_query: MappedQuery with field mappings
             
         Returns:
-            VizQLQuery ready for execution
+            VizQLQuery Pydantic object ready for execution
         """
         semantic_query = mapped_query.semantic_query
-        field_mappings = {
+        
+        # Simple field mappings for dimensions/measures/analyses (just need technical_field)
+        simple_field_mappings = {
             k: v.technical_field
             for k, v in mapped_query.field_mappings.items()
         }
         
-        query = VizQLQuery()
+        # Full field mappings for filters (need data_type, date_format for date handling)
+        full_field_mappings = mapped_query.field_mappings
+        
+        # 使用 Builder 构建查询
+        builder = VizQLQueryBuilder()
         
         # 1. Process dimensions
         for dim in semantic_query.dimensions:
-            field = self._build_dimension_field(dim, field_mappings)
-            query.add_field(field)
+            field = self._build_dimension_field(dim, simple_field_mappings)
+            builder.add_field(field)
         
         # 2. Process measures
         for measure in semantic_query.measures:
-            field = self._build_measure_field(measure, field_mappings)
-            query.add_field(field)
+            field = self._build_measure_field(measure, simple_field_mappings)
+            builder.add_field(field)
         
         # 3. Process analyses (table calcs / LOD)
         for analysis in semantic_query.analyses:
             field = self._build_analysis_field(
                 analysis,
                 semantic_query.dimensions,
-                field_mappings,
+                simple_field_mappings,
             )
             if field:
-                query.add_field(field)
+                builder.add_field(field)
         
-        # 4. Process filters
+        # 4. Process filters (use full field mappings for date type handling)
         for filter_spec in semantic_query.filters:
-            vizql_filter = self._build_filter(filter_spec, field_mappings)
+            vizql_filter = self._build_filter(filter_spec, full_field_mappings)
             if vizql_filter:
-                query.add_filter(vizql_filter)
+                builder.add_filter(vizql_filter)
         
         # 5. Process output control
         if semantic_query.output_control:
             if semantic_query.output_control.limit:
-                query.limit = semantic_query.output_control.limit
+                builder.limit = semantic_query.output_control.limit
         
+        # 构建 VizQLQuery Pydantic 对象
+        query = builder.build()
         logger.info(f"Built VizQLQuery with {len(query.fields)} fields")
         return query
     
@@ -328,69 +334,341 @@ class QueryBuilderNode:
     def _build_filter(
         self,
         filter_spec: FilterSpec,
-        field_mappings: Dict[str, str],
+        field_mappings: Dict[str, Any],
     ) -> Optional[Dict[str, Any]]:
         """
         Build VizQL filter specification.
         
         Converts semantic filter to VizQL filter format.
-        """
-        tech_field = field_mappings.get(filter_spec.field, filter_spec.field)
+        Uses DateParser for time range calculations.
+        Handles different field data types (DATE vs STRING) appropriately.
         
-        # Build filter based on operator
-        if filter_spec.operator == FilterOperator.IN:
+        VizQL valid filter types: DATE, MATCH, QUANTITATIVE_DATE, QUANTITATIVE_NUMERICAL, SET, TOP
+        
+        Date Filter Strategy by Field Type:
+        - DATE/DATETIME: Use QUANTITATIVE_DATE or DATE (RelativeDateFilter)
+        - STRING: Use DATEPARSE + QUANTITATIVE_DATE, or SET/MATCH for direct string matching
+        
+        Test Results Reference:
+        - DATE + QUANTITATIVE_DATE: ✓ Success
+        - DATE + DATE (RelativeDateFilter): ✓ Success
+        - DATE + SET: ✗ Failed (DATE type doesn't support SET filter)
+        - STRING + DATEPARSE + QUANTITATIVE_DATE: ✓ Success (use filter.field.calculation)
+        - STRING + SET: ✓ Success
+        - STRING + MATCH: ✓ Success
+        """
+        from tableau_assistant.src.models.semantic.enums import FilterType, TimeFilterMode
+        from tableau_assistant.src.capabilities.date_processing import DateParser
+        
+        # Get field mapping info (may be string or FieldMapping object)
+        field_mapping = field_mappings.get(filter_spec.field)
+        if isinstance(field_mapping, str):
+            tech_field = field_mapping
+            data_type = None
+            date_format = None
+        elif hasattr(field_mapping, 'technical_field'):
+            tech_field = field_mapping.technical_field
+            data_type = getattr(field_mapping, 'data_type', None)
+            date_format = getattr(field_mapping, 'date_format', None)
+        else:
+            tech_field = filter_spec.field
+            data_type = None
+            date_format = None
+        
+        # Build filter based on filter_type
+        if filter_spec.filter_type == FilterType.TIME_RANGE:
+            return self._build_time_range_filter(
+                filter_spec, tech_field, data_type, date_format
+            )
+        
+        elif filter_spec.filter_type == FilterType.SET:
+            # Set filter (enumeration values)
+            values = filter_spec.values or []
+            exclude = filter_spec.exclude or False
             return {
                 "field": {"fieldCaption": tech_field},
                 "filterType": "SET",
-                "values": filter_spec.value if isinstance(filter_spec.value, list) else [filter_spec.value],
-                "exclude": False,
+                "values": values,
+                "exclude": exclude,
             }
-        elif filter_spec.operator == FilterOperator.NOT_IN:
-            return {
-                "field": {"fieldCaption": tech_field},
-                "filterType": "SET",
-                "values": filter_spec.value if isinstance(filter_spec.value, list) else [filter_spec.value],
-                "exclude": True,
-            }
-        elif filter_spec.operator == FilterOperator.EQUALS:
-            return {
-                "field": {"fieldCaption": tech_field},
-                "filterType": "SET",
-                "values": [filter_spec.value],
-                "exclude": False,
-            }
-        elif filter_spec.operator == FilterOperator.BETWEEN:
-            # Date range filter
-            return {
-                "field": {"fieldCaption": tech_field},
-                "filterType": "QUANTITATIVE_RANGE",
-                "minValue": filter_spec.start_date,
-                "maxValue": filter_spec.end_date,
-            }
-        elif filter_spec.operator in (
-            FilterOperator.GREATER_THAN,
-            FilterOperator.GREATER_THAN_OR_EQUALS,
-            FilterOperator.LESS_THAN,
-            FilterOperator.LESS_THAN_OR_EQUALS,
-        ):
-            # Quantitative filter
+        
+        elif filter_spec.filter_type == FilterType.QUANTITATIVE:
+            # Quantitative range filter
             filter_dict = {
                 "field": {"fieldCaption": tech_field},
-                "filterType": "QUANTITATIVE_RANGE",
+                "filterType": "QUANTITATIVE_NUMERICAL",
             }
-            if filter_spec.operator in (FilterOperator.GREATER_THAN, FilterOperator.GREATER_THAN_OR_EQUALS):
-                filter_dict["minValue"] = filter_spec.value
-            else:
-                filter_dict["maxValue"] = filter_spec.value
+            if filter_spec.min_value is not None:
+                filter_dict["minValue"] = filter_spec.min_value
+            if filter_spec.max_value is not None:
+                filter_dict["maxValue"] = filter_spec.max_value
             return filter_dict
         
-        # Default: SET filter
-        return {
-            "field": {"fieldCaption": tech_field},
-            "filterType": "SET",
-            "values": [filter_spec.value] if not isinstance(filter_spec.value, list) else filter_spec.value,
-            "exclude": False,
+        elif filter_spec.filter_type == FilterType.MATCH:
+            # Pattern match filter
+            pattern = filter_spec.pattern
+            if not pattern:
+                return None
+            return {
+                "field": {"fieldCaption": tech_field},
+                "filterType": "MATCH",
+                "pattern": pattern,
+            }
+        
+        # Unknown filter type
+        logger.warning(f"Unknown filter_type: {filter_spec.filter_type}")
+        return None
+    
+    def _build_time_range_filter(
+        self,
+        filter_spec: FilterSpec,
+        tech_field: str,
+        data_type: Optional[str],
+        date_format: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Build time range filter based on field data type.
+        
+        Strategy:
+        - DATE/DATETIME type: Use QUANTITATIVE_DATE or DATE (RelativeDateFilter)
+        - STRING type: Use DATEPARSE + QUANTITATIVE_DATE
+        - Unknown type: Default to DATE type behavior
+        
+        Args:
+            filter_spec: FilterSpec with time_filter
+            tech_field: Technical field name
+            data_type: Field data type (DATE, DATETIME, STRING, etc.)
+            date_format: Date format for STRING type fields
+        
+        Returns:
+            VizQL filter specification dict
+        """
+        from tableau_assistant.src.models.semantic.enums import TimeFilterMode
+        from tableau_assistant.src.capabilities.date_processing import DateParser
+        
+        time_filter_spec = filter_spec.time_filter
+        if not time_filter_spec:
+            logger.warning(f"time_range filter missing time_filter spec for field {filter_spec.field}")
+            return None
+        
+        # Use DateParser to process time filter
+        parser = DateParser()
+        try:
+            result = parser.process_time_filter(time_filter_spec)
+        except Exception as e:
+            logger.error(f"DateParser failed: {e}")
+            return None
+        
+        filter_type = result.get("filter_type")
+        is_string_type = data_type == "STRING"
+        
+        # Handle STRING type date fields
+        if is_string_type:
+            return self._build_string_date_filter(
+                result, tech_field, date_format, time_filter_spec
+            )
+        
+        # Handle DATE/DATETIME type fields (or unknown type)
+        if filter_type == "QUANTITATIVE_DATE":
+            return {
+                "field": {"fieldCaption": tech_field},
+                "filterType": "QUANTITATIVE_DATE",
+                "quantitativeFilterType": result.get("quantitative_filter_type", "RANGE"),
+                "minDate": result.get("min_date"),
+                "maxDate": result.get("max_date"),
+            }
+        elif filter_type == "DATE":
+            # Relative date filter
+            filter_dict = {
+                "field": {"fieldCaption": tech_field},
+                "filterType": "DATE",
+                "periodType": result.get("period_type"),
+                "dateRangeType": result.get("date_range_type"),
+            }
+            if result.get("range_n") is not None:
+                filter_dict["rangeN"] = result.get("range_n")
+            if result.get("anchor_date") is not None:
+                filter_dict["anchorDate"] = result.get("anchor_date")
+            return filter_dict
+        elif filter_type == "SET":
+            # DATE type doesn't support SET filter well
+            # Convert to QUANTITATIVE_DATE range if possible
+            values = result.get("values", [])
+            if values:
+                # Try to convert SET to date range
+                min_date, max_date = self._set_values_to_date_range(values)
+                if min_date and max_date:
+                    logger.info(f"Converting SET filter to QUANTITATIVE_DATE range: {min_date} to {max_date}")
+                    return {
+                        "field": {"fieldCaption": tech_field},
+                        "filterType": "QUANTITATIVE_DATE",
+                        "quantitativeFilterType": "RANGE",
+                        "minDate": min_date,
+                        "maxDate": max_date,
+                    }
+            # Fallback to SET (may fail for DATE type)
+            logger.warning(f"Using SET filter for DATE type field {tech_field}, this may fail")
+            return {
+                "field": {"fieldCaption": tech_field},
+                "filterType": "SET",
+                "values": values,
+                "exclude": result.get("exclude", False),
+            }
+        else:
+            logger.warning(f"Unknown filter type from DateParser: {filter_type}")
+            return None
+    
+    def _build_string_date_filter(
+        self,
+        parser_result: Dict[str, Any],
+        tech_field: str,
+        date_format: Optional[str],
+        time_filter_spec: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Build date filter for STRING type date fields.
+        
+        Uses DATEPARSE to convert STRING to DATE, then applies QUANTITATIVE_DATE filter.
+        
+        VizQL API requires using filter.field.calculation for DATEPARSE:
+        {
+            "field": {"calculation": "DATEPARSE('yyyy-MM-dd', [field_name])"},
+            "filterType": "QUANTITATIVE_DATE",
+            ...
         }
+        
+        Args:
+            parser_result: Result from DateParser.process_time_filter()
+            tech_field: Technical field name
+            date_format: Date format pattern (e.g., 'yyyy-MM-dd')
+            time_filter_spec: Original TimeFilterSpec
+        
+        Returns:
+            VizQL filter specification dict
+        """
+        filter_type = parser_result.get("filter_type")
+        
+        # Default date format if not provided
+        if not date_format:
+            date_format = "yyyy-MM-dd"
+        
+        # Build DATEPARSE calculation expression
+        dateparse_calc = f"DATEPARSE('{date_format}', [{tech_field}])"
+        
+        if filter_type == "QUANTITATIVE_DATE":
+            # Use DATEPARSE + QUANTITATIVE_DATE
+            return {
+                "field": {"calculation": dateparse_calc},
+                "filterType": "QUANTITATIVE_DATE",
+                "quantitativeFilterType": parser_result.get("quantitative_filter_type", "RANGE"),
+                "minDate": parser_result.get("min_date"),
+                "maxDate": parser_result.get("max_date"),
+            }
+        elif filter_type == "DATE":
+            # Relative date filter with DATEPARSE
+            # Need to calculate actual dates since DATEPARSE + RelativeDateFilter may not work
+            from tableau_assistant.src.capabilities.date_processing import DateParser
+            parser = DateParser()
+            try:
+                start_date, end_date = parser.calculate_relative_dates(time_filter_spec)
+                return {
+                    "field": {"calculation": dateparse_calc},
+                    "filterType": "QUANTITATIVE_DATE",
+                    "quantitativeFilterType": "RANGE",
+                    "minDate": start_date,
+                    "maxDate": end_date,
+                }
+            except Exception as e:
+                logger.error(f"Failed to calculate relative dates for STRING field: {e}")
+                return None
+        elif filter_type == "SET":
+            # For STRING type, SET filter can work directly with string values
+            # But if we want date semantics, use DATEPARSE + QUANTITATIVE_DATE
+            values = parser_result.get("values", [])
+            if values:
+                min_date, max_date = self._set_values_to_date_range(values)
+                if min_date and max_date:
+                    return {
+                        "field": {"calculation": dateparse_calc},
+                        "filterType": "QUANTITATIVE_DATE",
+                        "quantitativeFilterType": "RANGE",
+                        "minDate": min_date,
+                        "maxDate": max_date,
+                    }
+            # Fallback to direct SET filter on STRING field
+            return {
+                "field": {"fieldCaption": tech_field},
+                "filterType": "SET",
+                "values": values,
+                "exclude": parser_result.get("exclude", False),
+            }
+        else:
+            logger.warning(f"Unknown filter type for STRING date field: {filter_type}")
+            return None
+    
+    def _set_values_to_date_range(
+        self,
+        values: List[str],
+    ) -> tuple:
+        """
+        Convert SET values to date range (min_date, max_date).
+        
+        Handles various date formats:
+        - Year: "2024" → "2024-01-01" to "2024-12-31"
+        - Month: "2024-01" → "2024-01-01" to "2024-01-31"
+        - Quarter: "2024-Q1" → "2024-01-01" to "2024-03-31"
+        - Day: "2024-01-15" → "2024-01-15" to "2024-01-15"
+        
+        Args:
+            values: List of date values
+        
+        Returns:
+            (min_date, max_date) tuple in YYYY-MM-DD format, or (None, None) if conversion fails
+        """
+        import re
+        from calendar import monthrange
+        
+        if not values:
+            return (None, None)
+        
+        all_dates = []
+        
+        for value in values:
+            # Year format: "2024"
+            if re.match(r'^\d{4}$', value):
+                year = int(value)
+                all_dates.append(f"{year}-01-01")
+                all_dates.append(f"{year}-12-31")
+            # Quarter format: "2024-Q1"
+            elif re.match(r'^\d{4}-Q[1-4]$', value, re.IGNORECASE):
+                year = int(value[:4])
+                quarter = int(value[-1])
+                start_month = (quarter - 1) * 3 + 1
+                end_month = quarter * 3
+                _, last_day = monthrange(year, end_month)
+                all_dates.append(f"{year}-{start_month:02d}-01")
+                all_dates.append(f"{year}-{end_month:02d}-{last_day:02d}")
+            # Month format: "2024-01"
+            elif re.match(r'^\d{4}-\d{2}$', value):
+                year = int(value[:4])
+                month = int(value[5:7])
+                _, last_day = monthrange(year, month)
+                all_dates.append(f"{year}-{month:02d}-01")
+                all_dates.append(f"{year}-{month:02d}-{last_day:02d}")
+            # Day format: "2024-01-15"
+            elif re.match(r'^\d{4}-\d{2}-\d{2}$', value):
+                all_dates.append(value)
+            else:
+                logger.warning(f"Unknown date format in SET values: {value}")
+        
+        if not all_dates:
+            return (None, None)
+        
+        # Sort and get min/max
+        all_dates.sort()
+        return (all_dates[0], all_dates[-1])
+    
+
 
 
 async def query_builder_node(state: Dict[str, Any], config: RunnableConfig | None = None) -> Dict[str, Any]:
@@ -398,11 +676,11 @@ async def query_builder_node(state: Dict[str, Any], config: RunnableConfig | Non
     QueryBuilder node entry point for LangGraph.
     
     Args:
-        state: VizQLState containing mapped_query
+        state: VizQLState containing mapped_query (MappedQuery object or dict)
         config: Optional configuration
         
     Returns:
-        Updated state with vizql_query
+        Updated state with vizql_query (VizQLQuery Pydantic object)
     """
     logger.info("QueryBuilder node started")
     
@@ -419,7 +697,8 @@ async def query_builder_node(state: Dict[str, Any], config: RunnableConfig | Non
         }
     
     try:
-        # Build VizQL query
+        # mapped_query 必须是 MappedQuery Pydantic 对象
+        # Build VizQL query - 返回 VizQLQuery Pydantic 对象
         builder = QueryBuilderNode()
         vizql_query = await builder.build(mapped_query)
         

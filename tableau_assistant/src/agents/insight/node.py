@@ -14,14 +14,16 @@ Requirements:
 """
 
 import logging
-from typing import Dict, Any, Optional, List, AsyncGenerator
+from typing import Dict, Any, Optional, List, AsyncGenerator, TYPE_CHECKING
 
 from langgraph.types import RunnableConfig
 
-from tableau_assistant.src.components.insight import (
-    AnalysisCoordinator,
-    InsightResult,
-)
+# 直接从具体模块导入，避免循环依赖
+# components/insight/__init__.py 导入 analyzer.py
+# analyzer.py 导入 agents/insight/prompt.py
+# 如果这里从 components/insight 包导入，会触发循环
+from tableau_assistant.src.components.insight.coordinator import AnalysisCoordinator
+from tableau_assistant.src.models.insight import InsightResult
 
 logger = logging.getLogger(__name__)
 
@@ -177,24 +179,16 @@ async def insight_node(state: Dict[str, Any], config: RunnableConfig | None = No
         "measures": [],
     }
     
-    # Extract dimensions and measures from semantic_query
+    # Extract dimensions and measures from semantic_query (SemanticQuery Pydantic object)
     semantic_query = state.get("semantic_query")
     if semantic_query:
-        if hasattr(semantic_query, 'dimensions'):
-            context["dimensions"] = [
-                {"name": d.name} if hasattr(d, 'name') else d
-                for d in semantic_query.dimensions
-            ]
-        elif isinstance(semantic_query, dict):
-            context["dimensions"] = semantic_query.get("dimensions", [])
-        
-        if hasattr(semantic_query, 'measures'):
-            context["measures"] = [
-                {"name": m.name} if hasattr(m, 'name') else m
-                for m in semantic_query.measures
-            ]
-        elif isinstance(semantic_query, dict):
-            context["measures"] = semantic_query.get("measures", [])
+        # semantic_query 是 SemanticQuery Pydantic 对象，直接访问属性
+        context["dimensions"] = [
+            {"name": d.name} for d in (semantic_query.dimensions or [])
+        ]
+        context["measures"] = [
+            {"name": m.name} for m in (semantic_query.measures or [])
+        ]
     
     try:
         # Get dimension_hierarchy from state (from metadata)
@@ -204,8 +198,8 @@ async def insight_node(state: Dict[str, Any], config: RunnableConfig | None = No
         agent = InsightAgent(dimension_hierarchy=dimension_hierarchy)
         result = await agent.analyze(query_result, context)
         
-        # Extract findings for state (Pydantic models use model_dump())
-        findings = [f.model_dump() for f in result.findings] if result.findings else []
+        # findings 保持为 Pydantic 对象列表
+        findings = result.findings if result.findings else []
         
         logger.info(f"Insight node completed: {len(findings)} insights")
         
@@ -255,11 +249,11 @@ async def insight_node_streaming(
         "measures": [],
     }
     
+    # semantic_query 是 SemanticQuery Pydantic 对象
     semantic_query = state.get("semantic_query")
     if semantic_query:
-        if isinstance(semantic_query, dict):
-            context["dimensions"] = semantic_query.get("dimensions", [])
-            context["measures"] = semantic_query.get("measures", [])
+        context["dimensions"] = [{"name": d.name} for d in (semantic_query.dimensions or [])]
+        context["measures"] = [{"name": m.name} for m in (semantic_query.measures or [])]
     
     try:
         agent = InsightAgent()
@@ -271,7 +265,8 @@ async def insight_node_streaming(
             if event.get("event") == "complete":
                 result = event.get("result")
                 if result:
-                    findings = [f.model_dump() for f in result.findings] if result.findings else []
+                    # findings 保持为 Pydantic 对象列表
+                    findings = result.findings if result.findings else []
                     yield {
                         "event": "state_update",
                         "state": {

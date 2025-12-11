@@ -270,13 +270,6 @@ class ReplanDecision(BaseModel):
 <when>ALWAYS (default: 0.8)</when>"""
     )
     
-    # 兼容旧接口
-    new_questions: List[str] = Field(
-        default_factory=list,
-        description="""<what>新问题列表（兼容旧接口）</what>
-<when>DEPRECATED - use exploration_questions instead</when>"""
-    )
-    
     def get_top_questions(self, n: int = 3) -> List[ExplorationQuestion]:
         """获取优先级最高的 N 个问题"""
         sorted_questions = sorted(self.exploration_questions, key=lambda q: q.priority)

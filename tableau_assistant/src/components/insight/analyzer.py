@@ -1,124 +1,48 @@
 """
-ChunkAnalyzer Component - AI 驱动的数据块分析器
+ChunkAnalyzer Component - 双 LLM 协作分析器
 
-基于设计文档 progressive-insight-analysis/design.md 实现：
-- AI 驱动的洞察累积
-- AI 驱动的下一口选择
-- 早停机制
+基于设计文档 insight-design.md 实现双 LLM 协作模式：
+- 分析师 LLM：分析单个数据块，生成结构化洞察，输出 List[Insight]
+- 主持人 LLM：决定分析顺序、累积洞察、决定早停，输出 NextBiteDecision
 
-这是 Insight 系统中唯一调用 LLM 的组件。
-Prompt 使用 VizQLPrompt 基类，自动注入 JSON Schema。
+方法：
+- analyze_chunk_with_analyst(): 使用分析师 LLM 分析数据块
+- decide_next_with_coordinator(): 使用主持人 LLM 决定下一步
+- analyze_full(): 直接分析小数据集（< 100 行）
 """
 
 import logging
 import json
+import re
 from typing import Dict, List, Any, Optional, Tuple
 
-from .models import (
-    DataChunk, 
-    Insight, 
+from tableau_assistant.src.models.insight import (
+    Insight,
+    InsightEvidence,
     PriorityChunk,
     NextBiteDecision,
     InsightQuality,
+    DataInsightProfile,
 )
 
-# 延迟导入 prompt，避免循环导入
-_prompts_loaded = False
-INSIGHT_ANALYSIS_PROMPT = None
-CHUNK_ANALYSIS_PROMPT = None
-AI_ANALYSIS_PROMPT = None
-InsightOutput = None
-AIAnalysisOutput = None
-
-def _load_prompts():
-    """延迟加载 prompt 模块"""
-    global _prompts_loaded
-    global INSIGHT_ANALYSIS_PROMPT, CHUNK_ANALYSIS_PROMPT, AI_ANALYSIS_PROMPT
-    global InsightOutput, AIAnalysisOutput
-    
-    if _prompts_loaded:
-        return
-    
-    _prompts_loaded = True
-    
-    # 尝试多种导入方式
-    import_errors = []
-    
-    # 方式 1: 相对导入（当作为包的一部分运行时）
-    try:
-        import importlib
-        prompt_module = importlib.import_module('src.agents.insight.prompt')
-        INSIGHT_ANALYSIS_PROMPT = getattr(prompt_module, 'INSIGHT_ANALYSIS_PROMPT', None)
-        CHUNK_ANALYSIS_PROMPT = getattr(prompt_module, 'CHUNK_ANALYSIS_PROMPT', None)
-        AI_ANALYSIS_PROMPT = getattr(prompt_module, 'AI_ANALYSIS_PROMPT', None)
-        InsightOutput = getattr(prompt_module, 'InsightOutput', None)
-        AIAnalysisOutput = getattr(prompt_module, 'AIAnalysisOutput', None)
-        if INSIGHT_ANALYSIS_PROMPT is not None:
-            logger.debug("成功通过 src.agents.insight.prompt 导入 prompt")
-            return
-    except ImportError as e:
-        import_errors.append(f"src.agents.insight.prompt: {e}")
-    
-    # 方式 2: 绝对导入
-    try:
-        import importlib
-        prompt_module = importlib.import_module('tableau_assistant.src.agents.insight.prompt')
-        INSIGHT_ANALYSIS_PROMPT = getattr(prompt_module, 'INSIGHT_ANALYSIS_PROMPT', None)
-        CHUNK_ANALYSIS_PROMPT = getattr(prompt_module, 'CHUNK_ANALYSIS_PROMPT', None)
-        AI_ANALYSIS_PROMPT = getattr(prompt_module, 'AI_ANALYSIS_PROMPT', None)
-        InsightOutput = getattr(prompt_module, 'InsightOutput', None)
-        AIAnalysisOutput = getattr(prompt_module, 'AIAnalysisOutput', None)
-        if INSIGHT_ANALYSIS_PROMPT is not None:
-            logger.debug("成功通过 tableau_assistant.src.agents.insight.prompt 导入 prompt")
-            return
-    except ImportError as e:
-        import_errors.append(f"tableau_assistant.src.agents.insight.prompt: {e}")
-    
-    # 方式 3: 直接文件导入
-    try:
-        import sys
-        import os
-        # 获取当前文件的目录
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # 向上两级到 src，然后进入 agents/insight
-        prompt_path = os.path.join(current_dir, '..', '..', 'agents', 'insight')
-        prompt_path = os.path.normpath(prompt_path)
-        if prompt_path not in sys.path:
-            sys.path.insert(0, prompt_path)
-        
-        from prompt import (
-            INSIGHT_ANALYSIS_PROMPT as _INSIGHT,
-            CHUNK_ANALYSIS_PROMPT as _CHUNK,
-            AI_ANALYSIS_PROMPT as _AI,
-            InsightOutput as _InsightOutput,
-            AIAnalysisOutput as _AIAnalysisOutput,
-        )
-        INSIGHT_ANALYSIS_PROMPT = _INSIGHT
-        CHUNK_ANALYSIS_PROMPT = _CHUNK
-        AI_ANALYSIS_PROMPT = _AI
-        InsightOutput = _InsightOutput
-        AIAnalysisOutput = _AIAnalysisOutput
-        logger.debug("成功通过直接文件导入 prompt")
-        return
-    except ImportError as e:
-        import_errors.append(f"直接文件导入: {e}")
-    
-    logger.warning(f"无法导入 prompt 模块，尝试了以下方式: {import_errors}")
+# 直接从 prompt.py 模块导入，不从 agents/insight 包导入
+# 这样避免触发 agents/insight/__init__.py 中的 node.py 导入（会导致循环依赖）
+from tableau_assistant.src.agents.insight.prompt import (
+    COORDINATOR_PROMPT,
+    ANALYST_PROMPT,
+    DIRECT_ANALYSIS_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class ChunkAnalyzer:
     """
-    AI 驱动的数据块分析器
+    双 LLM 协作分析器
     
-    核心功能：
-    1. 分析数据块并提取洞察
-    2. AI 驱动的洞察累积（理解语义，避免重复）
-    3. AI 驱动的下一口选择
-    4. 早停决策
-    
-    使用 VizQLPrompt 基类，自动注入 JSON Schema。
+    核心功能（来自 insight-design.md）：
+    1. 分析师 LLM：分析数据块并提取洞察
+    2. 主持人 LLM：决定分析顺序、累积洞察、决定早停
     """
     
     def __init__(self, llm=None, max_sample_rows: int = 50):
@@ -139,31 +63,31 @@ class ChunkAnalyzer:
             self._llm = get_llm()
         return self._llm
     
-    async def analyze_with_ai_decision(
+    async def analyze_chunk_with_analyst(
         self,
         chunk: PriorityChunk,
         context: Dict[str, Any],
-        accumulated_insights: List[Insight],
-        remaining_chunks: List[PriorityChunk],
-    ) -> Tuple[List[Insight], NextBiteDecision, InsightQuality]:
+        insight_profile: DataInsightProfile,
+        existing_insights: List[Insight],
+    ) -> List[Insight]:
         """
-        AI 驱动的分析与决策
+        使用分析师 LLM 分析数据块
         
-        核心理念（来自设计文档）：
-        1. AI 分析当前数据块，提取洞察
-        2. AI 累积洞察（理解含义，不是代码逻辑）
-        3. AI 根据累积的洞察，智能选择下一口吃什么
+        分析师 LLM 职责（来自 insight-design.md）：
+        - 分析单个数据块
+        - 结合整体画像和 top_n_summary 解读局部数据
+        - 生成结构化洞察
         
         Args:
             chunk: 当前要分析的数据块
             context: 分析上下文（question, dimensions, measures）
-            accumulated_insights: 已累积的洞察
-            remaining_chunks: 剩余的数据块
+            insight_profile: 整体数据画像（Phase 1 结果）
+            existing_insights: 已有洞察（避免重复）
             
         Returns:
-            (new_insights, next_bite_decision, insights_quality)
+            List[Insight]: 新发现的洞察
         """
-        # 准备数据
+        # 准备数据样本
         if chunk.chunk_type == "tail_data" and chunk.tail_summary:
             data_sample = json.dumps(
                 chunk.tail_summary.sample_data[:self.max_sample_rows],
@@ -178,100 +102,176 @@ class ChunkAnalyzer:
             )
         
         # 格式化已有洞察
-        if accumulated_insights:
-            insights_text = "\n".join([
-                f"- 洞察 {i+1} ({ins.type}): {ins.title}\n  描述: {ins.description[:100]}..."
-                for i, ins in enumerate(accumulated_insights[:5])
-            ])
-        else:
-            insights_text = "（还没有洞察，这是第一口）"
+        existing_text = "\n".join([
+            f"- {ins.type}: {ins.title}"
+            for ins in existing_insights[:5]
+        ]) if existing_insights else "（无）"
         
-        # 格式化剩余数据块
-        if remaining_chunks:
-            remaining_text = "\n".join([
-                f"- {rc.chunk_type} (优先级={rc.priority}): {rc.description}, 估算价值={rc.estimated_value}"
-                for rc in remaining_chunks
-            ])
-        else:
-            remaining_text = "（没有剩余数据块了）"
+        # 格式化 Top N 摘要
+        top_n_summary = json.dumps(
+            insight_profile.top_n_summary[:5] if insight_profile.top_n_summary else [],
+            ensure_ascii=False,
+            indent=2
+        )
+        
+        # 格式化统计信息
+        statistics_text = json.dumps(
+            {k: v.model_dump() for k, v in insight_profile.statistics.items()},
+            ensure_ascii=False,
+            indent=2
+        ) if insight_profile.statistics else "{}"
         
         try:
-            # 延迟加载 prompt
-            _load_prompts()
-            
-            if AI_ANALYSIS_PROMPT is None:
-                logger.warning("AI_ANALYSIS_PROMPT 未加载，使用默认响应")
-                return self._default_response(chunk.chunk_id, remaining_chunks)
-            
-            # 使用 Prompt 类格式化消息（自动注入 JSON Schema）
-            messages = AI_ANALYSIS_PROMPT.format_messages(
+            messages = ANALYST_PROMPT.format_messages(
                 question=context.get("question", ""),
-                accumulated_insights=insights_text,
+                distribution_type=insight_profile.distribution_type,
+                statistics=statistics_text,
+                pareto_ratio=f"{insight_profile.pareto_ratio:.1%}",
+                top_n_summary=top_n_summary,
                 chunk_type=chunk.chunk_type,
-                priority=chunk.priority,
                 row_count=chunk.row_count,
                 chunk_description=chunk.description,
                 data_sample=data_sample,
-                remaining_chunks=remaining_text,
+                existing_insights=existing_text,
             )
             
             llm = self._get_llm()
             response = await llm.ainvoke(messages)
             
-            result = self._parse_ai_analysis_response(response.content, chunk.chunk_id)
-            
-            logger.info(
-                f"AI analysis of {chunk.chunk_type}: "
-                f"{len(result[0])} insights, "
-                f"continue={result[1].should_continue}, "
-                f"next={result[1].next_chunk_type}"
-            )
-            
-            return result
+            insights = self._parse_insights_response(response.content)
+            logger.info(f"分析师 LLM 分析 {chunk.chunk_type}: {len(insights)} 个洞察")
+            return insights
             
         except Exception as e:
-            logger.error(f"Failed to analyze chunk {chunk.chunk_type}: {e}")
-            return self._default_response(chunk.chunk_id, remaining_chunks)
+            logger.error(f"分析师 LLM 分析失败 {chunk.chunk_type}: {e}")
+            return []
     
-    def _parse_ai_analysis_response(
+    async def decide_next_with_coordinator(
+        self,
+        context: Dict[str, Any],
+        insight_profile: DataInsightProfile,
+        accumulated_insights: List[Insight],
+        remaining_chunks: List[PriorityChunk],
+        analyzed_count: int,
+    ) -> Tuple[NextBiteDecision, InsightQuality]:
+        """
+        使用主持人 LLM 决定下一步
+        
+        主持人 LLM 职责（来自 insight-design.md）：
+        - 决定分析顺序（优先级）
+        - 累积洞察，判断完成度
+        - 决定是否早停
+        
+        Args:
+            context: 分析上下文（question）
+            insight_profile: 整体数据画像（Phase 1 结果）
+            accumulated_insights: 已累积的洞察
+            remaining_chunks: 剩余的数据块
+            analyzed_count: 已分析的块数
+            
+        Returns:
+            (NextBiteDecision, InsightQuality)
+        """
+        # 格式化已有洞察
+        insights_text = "\n".join([
+            f"- 洞察 {i+1} ({ins.type}): {ins.title}\n  描述: {ins.description[:100]}..."
+            for i, ins in enumerate(accumulated_insights[:5])
+        ]) if accumulated_insights else "（还没有洞察）"
+        
+        # 格式化剩余数据块
+        remaining_text = "\n".join([
+            f"- chunk_id={rc.chunk_id}, {rc.chunk_type} (优先级={rc.priority}): {rc.description}, 估算价值={rc.estimated_value}"
+            for rc in remaining_chunks
+        ]) if remaining_chunks else "（没有剩余数据块了）"
+        
+        try:
+            messages = COORDINATOR_PROMPT.format_messages(
+                question=context.get("question", ""),
+                distribution_type=insight_profile.distribution_type,
+                pareto_ratio=f"{insight_profile.pareto_ratio:.1%}",
+                anomaly_ratio=f"{insight_profile.anomaly_ratio:.1%}",
+                cluster_count=len(insight_profile.clusters),
+                chunking_strategy=insight_profile.recommended_chunking_strategy,
+                accumulated_insights=insights_text,
+                remaining_chunks=remaining_text,
+                analyzed_count=analyzed_count,
+            )
+            
+            llm = self._get_llm()
+            response = await llm.ainvoke(messages)
+            
+            decision, quality = self._parse_coordinator_response(response.content, remaining_chunks)
+            logger.info(
+                f"主持人 LLM 决策: continue={decision.should_continue}, "
+                f"next_chunk_id={decision.next_chunk_id}, "
+                f"completeness={decision.completeness_estimate:.2f}"
+            )
+            return decision, quality
+            
+        except Exception as e:
+            logger.error(f"主持人 LLM 决策失败: {e}")
+            return self._default_coordinator_response(remaining_chunks)
+    
+    async def analyze_full(
+        self,
+        data: List[Dict[str, Any]],
+        context: Dict[str, Any]
+    ) -> List[Insight]:
+        """
+        直接分析完整数据集（用于小数据集 < 100 行）
+        """
+        sample_data = data[:self.max_sample_rows]
+        data_str = json.dumps(sample_data, ensure_ascii=False, indent=2)
+        columns = list(data[0].keys()) if data else []
+        
+        try:
+            messages = DIRECT_ANALYSIS_PROMPT.format_messages(
+                row_count=len(data),
+                columns=", ".join(columns),
+                data=data_str,
+                question=context.get("question", ""),
+                dimensions=", ".join([
+                    d.get("name", str(d)) if isinstance(d, dict) else str(d) 
+                    for d in context.get("dimensions", [])
+                ]),
+                measures=", ".join([
+                    m.get("name", str(m)) if isinstance(m, dict) else str(m) 
+                    for m in context.get("measures", [])
+                ]),
+            )
+            
+            llm = self._get_llm()
+            response = await llm.ainvoke(messages)
+            
+            insights = self._parse_insights_response(response.content)
+            logger.info(f"直接分析完成: {len(insights)} 个洞察")
+            return insights
+            
+        except Exception as e:
+            logger.error(f"直接分析失败: {e}")
+            return []
+    
+    def _parse_coordinator_response(
         self,
         content: str,
-        chunk_id: int,
-    ) -> Tuple[List[Insight], NextBiteDecision, InsightQuality]:
-        """解析 AI 分析响应"""
+        remaining_chunks: List[PriorityChunk],
+    ) -> Tuple[NextBiteDecision, InsightQuality]:
+        """解析主持人 LLM 响应"""
         try:
             json_str = self._extract_json(content)
             if not json_str:
-                logger.warning("No JSON found in AI response")
-                return self._default_response(chunk_id, [])
+                logger.warning("主持人响应中没有找到 JSON")
+                return self._default_coordinator_response(remaining_chunks)
             
             result = json.loads(json_str)
-            
-            # 解析新洞察
-            new_insights = []
-            for raw in result.get("new_insights", []):
-                try:
-                    insight = Insight(
-                        type=self._normalize_type(raw.get("type", "pattern")),
-                        title=raw.get("title", "未命名洞察"),
-                        description=raw.get("description", ""),
-                        importance=float(raw.get("importance", 0.5)),
-                        evidence=raw.get("evidence"),
-                        related_columns=raw.get("related_columns", []),
-                        chunk_id=chunk_id,
-                    )
-                    new_insights.append(insight)
-                except Exception as e:
-                    logger.warning(f"Failed to parse insight: {e}")
             
             # 解析下一口决策
             nbd = result.get("next_bite_decision", {})
             next_bite = NextBiteDecision(
                 should_continue=nbd.get("should_continue", True),
-                next_chunk_type=nbd.get("next_chunk_type"),
+                next_chunk_id=nbd.get("next_chunk_id"),
                 reason=nbd.get("reason", ""),
-                eating_strategy=nbd.get("eating_strategy", ""),
-                confidence=float(nbd.get("confidence", 0.5)),
+                completeness_estimate=float(nbd.get("completeness_estimate", 0.0)),
             )
             
             # 解析洞察质量
@@ -283,34 +283,31 @@ class ChunkAnalyzer:
                 question_answered=iq.get("question_answered", False),
             )
             
-            return (new_insights, next_bite, quality)
+            return (next_bite, quality)
             
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON: {e}")
-            return self._default_response(chunk_id, [])
+            logger.warning(f"解析主持人响应 JSON 失败: {e}")
+            return self._default_coordinator_response(remaining_chunks)
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            return self._default_response(chunk_id, [])
+            logger.error(f"解析主持人响应时发生错误: {e}")
+            return self._default_coordinator_response(remaining_chunks)
     
-    def _default_response(
+    def _default_coordinator_response(
         self,
-        chunk_id: int,
         remaining_chunks: List[PriorityChunk],
-    ) -> Tuple[List[Insight], NextBiteDecision, InsightQuality]:
-        """返回默认响应"""
-        next_type = None
+    ) -> Tuple[NextBiteDecision, InsightQuality]:
+        """返回默认的主持人响应"""
+        next_chunk_id = None
         if remaining_chunks:
             sorted_chunks = sorted(remaining_chunks, key=lambda x: x.priority)
-            next_type = sorted_chunks[0].chunk_type if sorted_chunks else None
+            next_chunk_id = sorted_chunks[0].chunk_id if sorted_chunks else None
         
         return (
-            [],
             NextBiteDecision(
                 should_continue=bool(remaining_chunks),
-                next_chunk_type=next_type,
+                next_chunk_id=next_chunk_id,
                 reason="解析失败，使用默认决策",
-                eating_strategy="按优先级顺序继续",
-                confidence=0.3,
+                completeness_estimate=0.0,
             ),
             InsightQuality(
                 completeness=0.0,
@@ -320,106 +317,14 @@ class ChunkAnalyzer:
             ),
         )
     
-    async def analyze_chunk(
-        self,
-        chunk: DataChunk,
-        context: Dict[str, Any],
-        previous_insights: Optional[List[Insight]] = None
-    ) -> List[Insight]:
-        """
-        分析单个数据块（兼容旧接口）
-        """
-        sample_data = chunk.data[:self.max_sample_rows]
-        data_sample = json.dumps(sample_data, ensure_ascii=False, indent=2)
-        
-        # 格式化已有洞察
-        if previous_insights:
-            prev_text = "\n".join([f"- {i.title}" for i in previous_insights[:5]])
-        else:
-            prev_text = "（无）"
-        
-        try:
-            # 延迟加载 prompt
-            _load_prompts()
-            
-            if CHUNK_ANALYSIS_PROMPT is None:
-                logger.warning("CHUNK_ANALYSIS_PROMPT 未加载")
-                return []
-            
-            messages = CHUNK_ANALYSIS_PROMPT.format_messages(
-                chunk_name=chunk.chunk_name,
-                row_count=chunk.row_count,
-                columns=", ".join(chunk.column_names),
-                data_sample=data_sample,
-                question=context.get("question", ""),
-                dimensions=", ".join([d.get("name", str(d)) if isinstance(d, dict) else str(d) for d in context.get("dimensions", [])]),
-                measures=", ".join([m.get("name", str(m)) if isinstance(m, dict) else str(m) for m in context.get("measures", [])]),
-                previous_insights=prev_text,
-            )
-            
-            llm = self._get_llm()
-            response = await llm.ainvoke(messages)
-            
-            insights = self._parse_insights_response(response.content, chunk.chunk_id)
-            logger.info(f"Analyzed chunk {chunk.chunk_name}: {len(insights)} insights")
-            return insights
-            
-        except Exception as e:
-            logger.error(f"Failed to analyze chunk {chunk.chunk_name}: {e}")
-            return []
-    
-    async def analyze_full(
-        self,
-        data: List[Dict[str, Any]],
-        context: Dict[str, Any]
-    ) -> List[Insight]:
-        """
-        分析完整数据集（用于小数据集 < 100 行）
-        """
-        sample_data = data[:self.max_sample_rows]
-        data_str = json.dumps(sample_data, ensure_ascii=False, indent=2)
-        columns = list(data[0].keys()) if data else []
-        
-        try:
-            # 延迟加载 prompt
-            _load_prompts()
-            
-            if INSIGHT_ANALYSIS_PROMPT is None:
-                logger.warning("INSIGHT_ANALYSIS_PROMPT 未加载")
-                return []
-            
-            messages = INSIGHT_ANALYSIS_PROMPT.format_messages(
-                row_count=len(data),
-                columns=", ".join(columns),
-                data=data_str,
-                question=context.get("question", ""),
-                dimensions=", ".join([d.get("name", str(d)) if isinstance(d, dict) else str(d) for d in context.get("dimensions", [])]),
-                measures=", ".join([m.get("name", str(m)) if isinstance(m, dict) else str(m) for m in context.get("measures", [])]),
-            )
-            
-            llm = self._get_llm()
-            response = await llm.ainvoke(messages)
-            
-            insights = self._parse_insights_response(response.content)
-            logger.info(f"Analyzed full dataset: {len(insights)} insights")
-            return insights
-            
-        except Exception as e:
-            logger.error(f"Failed to analyze full dataset: {e}")
-            return []
-    
-    def _parse_insights_response(
-        self,
-        content: str,
-        chunk_id: Optional[int] = None
-    ) -> List[Insight]:
+    def _parse_insights_response(self, content: str) -> List[Insight]:
         """解析洞察列表响应"""
         insights = []
         
         try:
             json_str = self._extract_json(content)
             if not json_str:
-                logger.warning("No JSON found in LLM response")
+                logger.warning("LLM 响应中没有找到 JSON")
                 return []
             
             result = json.loads(json_str)
@@ -434,39 +339,54 @@ class ChunkAnalyzer:
             
             for raw in raw_insights:
                 try:
+                    # 解析 evidence 字段
+                    evidence = None
+                    raw_evidence = raw.get("evidence")
+                    if raw_evidence and isinstance(raw_evidence, dict):
+                        evidence = InsightEvidence(
+                            metric_name=raw_evidence.get("metric_name"),
+                            metric_value=raw_evidence.get("metric_value") or raw_evidence.get("value"),
+                            comparison_value=raw_evidence.get("comparison_value") or raw_evidence.get("second_place"),
+                            ratio=raw_evidence.get("ratio") or raw_evidence.get("growth_rate"),
+                            percentage=raw_evidence.get("percentage"),
+                            period=raw_evidence.get("period"),
+                            additional_data={
+                                k: v for k, v in raw_evidence.items()
+                                if k not in {"metric_name", "metric_value", "value", "comparison_value", 
+                                           "second_place", "ratio", "growth_rate", "percentage", "period"}
+                                and isinstance(v, (str, int, float, bool))
+                            } or None,
+                        )
+                    
                     insight = Insight(
                         type=self._normalize_type(raw.get("type", "pattern")),
                         title=raw.get("title", "未命名洞察"),
                         description=raw.get("description", ""),
                         importance=float(raw.get("importance", 0.5)),
-                        evidence=raw.get("evidence"),
-                        related_columns=raw.get("related_columns", []),
-                        chunk_id=chunk_id,
+                        evidence=evidence,
                     )
                     insights.append(insight)
                 except Exception as e:
-                    logger.warning(f"Failed to parse insight: {e}")
+                    logger.warning(f"解析洞察失败: {e}")
             
         except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON: {e}")
+            logger.warning(f"解析 JSON 失败: {e}")
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"解析响应时发生错误: {e}")
         
         return insights
     
     def _extract_json(self, content: str) -> Optional[str]:
         """从 LLM 响应中提取 JSON"""
-        import re
-        
-        # 尝试原始 JSON 对象（不在代码块中）
-        # 这是规范要求的格式
         content_stripped = content.strip()
+        
+        # 尝试原始 JSON 对象
         if content_stripped.startswith('{') and content_stripped.endswith('}'):
             return content_stripped
         if content_stripped.startswith('[') and content_stripped.endswith(']'):
             return content_stripped
         
-        # 尝试 ```json ... ``` 块（兼容旧格式）
+        # 尝试 ```json ... ``` 块
         match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
         if match:
             return match.group(1)

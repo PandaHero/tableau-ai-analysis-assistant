@@ -4,7 +4,7 @@ Tools module for Tableau Assistant
 This module provides the tool system for Agent nodes.
 
 Tool categories:
-- Business tools: get_data_model, parse_date, detect_date_format, get_schema_module
+- Business tools: get_data_model, process_time_filter, detect_date_format, get_schema_module
 - Middleware tools: write_todos (from TodoListMiddleware), read_file (from FilesystemMiddleware)
 
 Note:
@@ -39,7 +39,8 @@ from tableau_assistant.src.tools.data_model_tool import (
 )
 
 from tableau_assistant.src.tools.date_tool import (
-    parse_date,
+    process_time_filter,
+    calculate_relative_dates,
     detect_date_format,
     set_date_manager,
     get_date_manager,
@@ -79,7 +80,8 @@ __all__ = [
     "get_data_model_manager",
     "GetDataModelInput",
     # Date tools
-    "parse_date",
+    "process_time_filter",
+    "calculate_relative_dates",
     "detect_date_format",
     "set_date_manager",
     "get_date_manager",

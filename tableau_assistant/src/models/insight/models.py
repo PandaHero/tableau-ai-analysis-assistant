@@ -329,7 +329,7 @@ class DataChunk(BaseModel):
 <when>IF chunked by column</when>"""
     )
     
-    group_value: Optional[Any] = Field(
+    group_value: Optional[Union[str, int, float, bool]] = Field(
         default=None,
         description="""<what>分组值</what>
 <when>IF chunked by column</when>
@@ -341,46 +341,71 @@ class DataChunk(BaseModel):
     )
 
 
+class InsightEvidence(BaseModel):
+    """
+    洞察证据 - 支持洞察的具体数据
+    
+    <what>洞察的数据支撑，包含关键指标和对比数据</what>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    metric_name: Optional[str] = Field(
+        default=None,
+        description="""<what>指标名称</what>
+<when>IF insight involves a specific metric</when>"""
+    )
+    
+    metric_value: Optional[float] = Field(
+        default=None,
+        description="""<what>指标值</what>
+<when>IF insight involves a specific metric</when>"""
+    )
+    
+    comparison_value: Optional[float] = Field(
+        default=None,
+        description="""<what>对比值（如第二名、中位数等）</what>
+<when>IF insight involves comparison</when>"""
+    )
+    
+    ratio: Optional[float] = Field(
+        default=None,
+        description="""<what>比率（如是第二名的几倍）</what>
+<when>IF insight involves ratio comparison</when>"""
+    )
+    
+    percentage: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="""<what>百分比（如占总量的比例）</what>
+<when>IF insight involves percentage</when>"""
+    )
+    
+    period: Optional[str] = Field(
+        default=None,
+        description="""<what>时间周期</what>
+<when>IF insight involves time-based analysis</when>"""
+    )
+    
+    additional_data: Optional[Dict[str, Union[str, int, float, bool]]] = Field(
+        default=None,
+        description="""<what>其他补充数据</what>
+<when>IF standard fields don't cover all evidence</when>"""
+    )
+
+
 class Insight(BaseModel):
     """
-    单个洞察
+    单个洞察 - 分析师 LLM 输出
     
-    <what>一条具体的分析发现</what>
-    
-    <decision_tree>
-    START
-      │
-      ├─► type = ? (ALWAYS fill first)
-      │   │
-      │   ├─► trend: 数据变化趋势
-      │   ├─► anomaly: 异常值或离群点
-      │   ├─► comparison: 不同维度的对比
-      │   └─► pattern: 数据分布特征、规律
-      │
-      ├─► title = ? (ALWAYS fill)
-      │
-      ├─► description = ? (ALWAYS fill)
-      │
-      ├─► importance = ? (ALWAYS fill, default: 0.5)
-      │
-      ├─► evidence = ? (IF supporting data exists)
-      │
-      └─► related_columns = ? (IF columns are relevant)
-      
-    END
-    </decision_tree>
+    <what>一条具体的分析发现，由分析师 LLM 生成</what>
     
     <fill_order>
-    ┌────┬─────────────────────────┬─────────────────────────────────────┐
-    │ #  │ Field                   │ Condition                           │
-    ├────┼─────────────────────────┼─────────────────────────────────────┤
-    │ 1  │ type                    │ ALWAYS (determines insight category)│
-    │ 2  │ title                   │ ALWAYS                              │
-    │ 3  │ description             │ ALWAYS                              │
-    │ 4  │ importance              │ ALWAYS (default: 0.5)               │
-    │ 5  │ evidence                │ IF supporting data exists           │
-    │ 6  │ related_columns         │ IF columns are relevant             │
-    └────┴─────────────────────────┴─────────────────────────────────────┘
+    1. type - 决定洞察类型
+    2. title - 一句话总结
+    3. description - 详细描述
+    4. importance - 评估重要性
+    5. evidence - 提供数据支撑
     </fill_order>
     
     <examples>
@@ -390,69 +415,72 @@ class Insight(BaseModel):
         "title": "销售额持续增长",
         "description": "过去6个月销售额环比增长15%",
         "importance": 0.9,
-        "evidence": {"growth_rate": 0.15, "period": "6 months"},
-        "related_columns": ["Sales", "Order Date"]
+        "evidence": {"metric_name": "销售额", "ratio": 0.15, "period": "6 months"}
     }
     
     Example 2 - Anomaly insight:
     {
         "type": "anomaly",
-        "title": "检测到异常高值",
-        "description": "Technology 类别在 West 地区的销售额异常高",
-        "importance": 0.8,
-        "evidence": {"value": 50000, "expected": 15000},
-        "related_columns": ["Category", "Region", "Sales"]
+        "title": "A店销售额异常高",
+        "description": "A店销售额1000万，是第2名的5倍，属于极端异常值",
+        "importance": 0.95,
+        "evidence": {"metric_value": 1000, "comparison_value": 200, "ratio": 5.0}
+    }
+    
+    Example 3 - Comparison insight:
+    {
+        "type": "comparison",
+        "title": "Technology 类别贡献 60%",
+        "description": "Technology 类别销售额占总销售额的 60%，远超其他类别",
+        "importance": 0.85,
+        "evidence": {"metric_name": "Technology", "percentage": 0.6}
     }
     </examples>
     
     <anti_patterns>
-    ❌ ERROR 1: Using invalid type
-    Wrong: {"type": "summary"}
-    Right: {"type": "pattern"}
-    
-    ❌ ERROR 2: Missing required fields
-    Wrong: {"type": "trend", "title": "..."}
-    Right: {"type": "trend", "title": "...", "description": "..."}
+    ❌ Missing evidence for claims
+    ❌ Vague descriptions without numbers
+    ❌ Wrong type classification (e.g., using "pattern" for time-based changes)
     </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
+    # ===== 核心字段（分析师 LLM 输出）=====
     type: Literal["trend", "anomaly", "comparison", "pattern"] = Field(
         description="""<what>洞察类型</what>
-<when>ALWAYS required (fill first)</when>
-<how>Choose based on insight nature</how>
+<when>ALWAYS required</when>
+
+<decision_rule>
+IF data shows change over time → trend
+IF data shows outliers or unexpected values → anomaly
+IF data compares different groups/categories → comparison
+IF data shows distribution or recurring patterns → pattern
+</decision_rule>
 
 <values>
-- trend: 趋势洞察（数据变化趋势）
+- trend: 趋势洞察（数据随时间变化）
 - anomaly: 异常洞察（异常值或离群点）
 - comparison: 对比洞察（不同维度的对比）
 - pattern: 模式洞察（数据分布特征、规律）
-</values>
-
-<decision_rule>
-- 数据随时间变化 → trend
-- 发现异常值/离群点 → anomaly
-- 不同组之间对比 → comparison
-- 数据分布/规律 → pattern
-</decision_rule>"""
+</values>"""
     )
     
     title: str = Field(
         description="""<what>洞察标题</what>
 <when>ALWAYS required</when>
-<how>One-line summary of the insight</how>
+<how>一句话总结洞察内容，包含关键数据</how>
 
 <examples>
-- "销售额持续增长"
-- "检测到 5 个异常值"
-- "Technology 类别销售领先"
+- "A店销售额是第2名的5倍"
+- "Technology 类别贡献 60% 销售额"
+- "过去6个月销售额环比增长15%"
 </examples>"""
     )
     
     description: str = Field(
         description="""<what>洞察描述</what>
 <when>ALWAYS required</when>
-<how>Detailed explanation of the insight</how>"""
+<how>详细解释洞察内容，包含具体数据和业务含义</how>"""
     )
     
     importance: float = Field(
@@ -460,8 +488,14 @@ class Insight(BaseModel):
         ge=0.0,
         le=1.0,
         description="""<what>重要性评分</what>
-<when>ALWAYS (default: 0.5)</when>
-<how>Based on business impact and confidence</how>
+<when>ALWAYS required</when>
+
+<decision_rule>
+IF anomaly with high business impact → 0.8-1.0
+IF key finding answering user question → 0.7-0.9
+IF supporting information → 0.5-0.7
+IF minor observation → 0.0-0.5
+</decision_rule>
 
 <values>
 - 0.8-1.0: 高重要性（关键发现）
@@ -470,35 +504,11 @@ class Insight(BaseModel):
 </values>"""
     )
     
-    evidence: Optional[Dict[str, Any]] = Field(
+    evidence: Optional[InsightEvidence] = Field(
         default=None,
         description="""<what>支持证据</what>
-<when>IF supporting data exists</when>
-<how>Dict with key metrics/values</how>
-
-<examples>
-- {"growth_rate": 0.15, "period": "6 months"}
-- {"outlier_count": 5, "anomaly_ratio": 0.05}
-</examples>"""
-    )
-    
-    related_columns: List[str] = Field(
-        default_factory=list,
-        description="""<what>相关列</what>
-<when>IF columns are relevant to insight</when>
-<how>List of column names involved</how>"""
-    )
-    
-    chunk_id: Optional[int] = Field(
-        default=None,
-        description="""<what>来源块 ID</what>
-<when>IF insight from chunked analysis</when>"""
-    )
-    
-    timestamp: str = Field(
-        default_factory=lambda: datetime.now().isoformat(),
-        description="""<what>创建时间</what>
-<when>ALWAYS (auto-generated)</when>"""
+<when>ALWAYS required for meaningful insights</when>
+<how>使用 InsightEvidence 结构提供数据支撑</how>"""
     )
 
 
@@ -642,17 +652,38 @@ class PriorityChunk(BaseModel):
 
 class NextBiteDecision(BaseModel):
     """
-    下一口决策（由 AI 生成）
+    下一口决策 - 主持人 LLM 输出
     
-    <what>AI 决定下一步分析哪个数据块</what>
+    <what>主持人 LLM 决定下一步分析哪个数据块</what>
     
-    <design_note>
-    基于"AI 宝宝吃饭"理念：
-    - 吃了辣的 → 下一口选择清淡的
-    - 发现第一名 → 分析为什么第一
-    - 发现异常 → 深入调查
-    - 吃饱了 → 早停
-    </design_note>
+    <decision_tree>
+    START
+      │
+      ├─► Assess completeness_estimate
+      │   │
+      │   ├─► >= 0.8 AND core question answered
+      │   │   └─► should_continue = False, reason = "充分回答"
+      │   │
+      │   ├─► >= 0.6 AND remaining chunks low value
+      │   │   └─► should_continue = False, reason = "剩余价值低"
+      │   │
+      │   └─► < 0.6 OR important aspects missing
+      │       └─► should_continue = True
+      │           │
+      │           └─► Select next_chunk_id
+      │               ├─ Prefer anomaly chunks (highest priority)
+      │               ├─ Then cluster/pareto chunks (high priority)
+      │               └─ Then other chunks by estimated_value
+      │
+    END
+    </decision_tree>
+    
+    <fill_order>
+    1. completeness_estimate - 评估当前完成度
+    2. should_continue - 基于完成度决定是否继续
+    3. next_chunk_id - IF should_continue, 选择下一个块
+    4. reason - 解释决策原因
+    </fill_order>
     """
     model_config = ConfigDict(extra="forbid")
     
@@ -661,41 +692,63 @@ class NextBiteDecision(BaseModel):
 <when>ALWAYS required</when>
 
 <decision_rule>
-- 问题已充分回答 → False
-- 洞察质量高且完整 → False
-- 还有重要数据未分析 → True
-- 发现异常需要深入 → True
+IF completeness_estimate >= 0.8 AND core question answered → False
+IF completeness_estimate >= 0.6 AND remaining chunks have low value → False
+IF important aspects still missing → True
+IF anomaly discovered needs investigation → True
 </decision_rule>"""
     )
     
-    next_chunk_type: Optional[Literal["anomalies", "top_data", "mid_data", "low_data", "tail_data"]] = Field(
+    next_chunk_id: Optional[int] = Field(
         default=None,
-        description="""<what>下一个要分析的块类型</what>
-<when>IF should_continue is True</when>"""
+        description="""<what>下一个要分析的块 ID</what>
+
+<when>IF should_continue is True</when>
+
+<dependency>
+- field: should_continue
+- condition: should_continue == True
+- reason: Only need to select next chunk if continuing
+</dependency>
+
+<how>从剩余数据块中选择，优先选择高价值块</how>"""
     )
     
     reason: str = Field(
         default="",
-        description="""<what>决策原因</what>"""
-    )
-    
-    eating_strategy: str = Field(
-        default="",
-        description="""<what>吃饭策略说明</what>
-        
+        description="""<what>决策原因</what>
+<when>ALWAYS required</when>
+<how>解释为什么选择这个块或为什么停止</how>
+
 <examples>
-- "发现第一名，分析为什么第一"
-- "吃了辣的，选择清淡的"
-- "发现异常，深入调查"
-- "吃饱了，该停了"
+- "核心问题已充分回答，Top 3 门店及其原因已明确"
+- "发现异常值，需要分析 anomalies 块深入调查"
+- "缺少时间维度分析，选择 segment_0 块"
 </examples>"""
     )
     
-    confidence: float = Field(
-        default=0.5,
+    completeness_estimate: float = Field(
+        default=0.0,
         ge=0.0,
         le=1.0,
-        description="""<what>决策置信度</what>"""
+        description="""<what>完成度估计</what>
+<when>ALWAYS required (fill first)</when>
+<how>估计当前洞察对问题的回答完成度</how>
+
+<decision_rule>
+IF no insights yet → 0.0-0.2
+IF basic answer found but no explanation → 0.3-0.5
+IF answer with partial explanation → 0.5-0.7
+IF comprehensive answer with evidence → 0.7-0.9
+IF fully answered with multiple perspectives → 0.9-1.0
+</decision_rule>
+
+<values>
+- 0.0-0.3: 刚开始，需要更多分析
+- 0.3-0.6: 部分回答，还有重要方面未覆盖
+- 0.6-0.8: 大部分回答，可以考虑停止
+- 0.8-1.0: 充分回答，可以停止
+</values>"""
     )
 
 
@@ -704,6 +757,13 @@ class InsightQuality(BaseModel):
     洞察质量评估
     
     <what>评估当前洞察是否足够回答问题</what>
+    
+    <fill_order>
+    1. question_answered - 核心问题是否已回答
+    2. completeness - 回答的完整程度
+    3. confidence - 对回答的置信度
+    4. need_more_data - 是否需要更多数据
+    </fill_order>
     """
     model_config = ConfigDict(extra="forbid")
     
@@ -711,24 +771,50 @@ class InsightQuality(BaseModel):
         default=0.0,
         ge=0.0,
         le=1.0,
-        description="""<what>完整度（是否充分回答了问题）</what>"""
+        description="""<what>完整度（是否充分回答了问题）</what>
+<when>ALWAYS required</when>
+
+<values>
+- 0.0-0.3: 仅有初步发现
+- 0.3-0.6: 部分回答，缺少关键方面
+- 0.6-0.8: 大部分回答，细节可补充
+- 0.8-1.0: 完整回答
+</values>"""
     )
     
     confidence: float = Field(
         default=0.0,
         ge=0.0,
         le=1.0,
-        description="""<what>置信度</what>"""
+        description="""<what>置信度</what>
+<when>ALWAYS required</when>
+
+<values>
+- 0.0-0.3: 低置信度（数据不足或矛盾）
+- 0.3-0.6: 中等置信度
+- 0.6-0.8: 较高置信度
+- 0.8-1.0: 高置信度（充分证据支撑）
+</values>"""
     )
     
     need_more_data: bool = Field(
         default=True,
-        description="""<what>是否需要更多数据</what>"""
+        description="""<what>是否需要更多数据</what>
+<when>ALWAYS required</when>
+
+<decision_rule>
+IF completeness < 0.6 → True
+IF confidence < 0.5 → True
+IF question_answered == False → True
+ELSE → False
+</decision_rule>"""
     )
     
     question_answered: bool = Field(
         default=False,
-        description="""<what>核心问题是否已回答</what>"""
+        description="""<what>核心问题是否已回答</what>
+<when>ALWAYS required</when>
+<how>判断用户的核心问题是否得到直接回答</how>"""
     )
 
 
@@ -965,37 +1051,51 @@ class DataInsightProfile(BaseModel):
 
 class InsightResult(BaseModel):
     """
-    洞察结果
+    洞察结果 - Insight Agent 最终输出
     
-    <what>Insight Agent 输出的分析洞察</what>
+    <what>Insight Agent 输出的分析洞察，包含 Phase 1 和 Phase 2 的结果</what>
+    
+    <design_note>
+    根据 insight-design.md，InsightResult 包含：
+    - summary: 一句话总结
+    - findings: 洞察列表（分析师 LLM 生成）
+    - confidence: 整体置信度
+    - data_insight_profile: 数据画像（Phase 1 统计/ML 分析结果）
+    - need_more_data: 是否需要更多数据
+    - exploration_rounds: 探索轮数
+    - questions_executed: 执行的问题数
+    </design_note>
     
     <examples>
     Example - Complete result:
     {
-        "summary": "共发现 5 个关键洞察（2个趋势, 2个对比, 1个异常）",
+        "summary": "A店销售额最高（1000万），主要因为：1) Technology 类别贡献 60% 2) 过去12个月持续增长 3) 领先同城市门店 3 倍",
         "findings": [...],
-        "confidence": 0.85,
+        "confidence": 0.92,
         "strategy_used": "progressive",
         "chunks_analyzed": 3,
         "total_rows_analyzed": 500,
-        "execution_time": 5.2
+        "execution_time": 5.2,
+        "exploration_rounds": 2,
+        "questions_executed": 3
     }
     </examples>
     """
     model_config = ConfigDict(extra="forbid")
     
+    # ===== 核心输出字段 =====
     summary: Optional[str] = Field(
         default=None,
         description="""<what>一句话总结</what>
-<when>ALWAYS (may be empty for no insights)</when>
-<how>Format: "共发现 N 个关键洞察（X个类型1, Y个类型2）"</how>"""
+<when>ALWAYS required</when>
+<how>综合所有洞察的总结性描述</how>"""
     )
     
     findings: List[Insight] = Field(
         default_factory=list,
         description="""<what>洞察列表</what>
 <when>ALWAYS (may be empty)</when>
-<how>Sorted by importance descending</how>"""
+<how>按重要性降序排列</how>"""
     )
     
     confidence: float = Field(
@@ -1004,9 +1104,18 @@ class InsightResult(BaseModel):
         le=1.0,
         description="""<what>整体置信度</what>
 <when>ALWAYS required</when>
-<how>Average importance of findings</how>"""
+<how>基于洞察的完整度和质量</how>"""
     )
     
+    # ===== Phase 1 统计/ML 分析结果 =====
+    data_insight_profile: Optional[DataInsightProfile] = Field(
+        default=None,
+        description="""<what>数据洞察画像</what>
+<when>ALWAYS (Phase 1 分析结果)</when>
+<how>传递给 Replanner 指导探索问题生成</how>"""
+    )
+    
+    # ===== 分析过程信息 =====
     strategy_used: str = Field(
         default="direct",
         description="""<what>使用的分析策略</what>
@@ -1037,22 +1146,27 @@ class InsightResult(BaseModel):
 <when>ALWAYS required</when>"""
     )
     
-    # 新增：整体画像（传递给 Replanner）
-    data_insight_profile: Optional[DataInsightProfile] = Field(
-        default=None,
-        description="""<what>数据洞察画像</what>
-<when>IF Phase 1 analysis completed</when>
-<how>传递给 Replanner 指导探索问题生成</how>"""
-    )
-    
-    # 新增：是否需要更多数据
+    # ===== 重规划相关字段 =====
     need_more_data: bool = Field(
         default=False,
-        description="""<what>是否需要更多数据</what>"""
+        description="""<what>是否需要更多数据</what>
+<how>由主持人 LLM 判断</how>"""
     )
     
     missing_aspects: List[str] = Field(
         default_factory=list,
         description="""<what>缺失的方面</what>
 <how>用于指导 Replanner 生成探索问题</how>"""
+    )
+    
+    exploration_rounds: int = Field(
+        default=1,
+        description="""<what>探索轮数</what>
+<how>包括初始分析和重规划轮数</how>"""
+    )
+    
+    questions_executed: int = Field(
+        default=0,
+        description="""<what>执行的问题数</what>
+<how>重规划过程中执行的探索问题总数</how>"""
     )

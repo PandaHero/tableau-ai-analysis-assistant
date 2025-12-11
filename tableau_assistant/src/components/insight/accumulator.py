@@ -4,9 +4,9 @@ InsightAccumulator Component
 累积洞察，处理去重和合并。
 
 设计说明：
-- AI 驱动的智能累积在 ChunkAnalyzer.analyze_with_ai_decision() 中实现
-- 本组件提供基于代码逻辑的去重和合并（作为备用）
-- 主要用于兼容旧接口和简单场景
+- 主持人 LLM 负责智能累积洞察（在 ChunkAnalyzer.decide_next_with_coordinator() 中判断完成度）
+- 本组件提供基于代码逻辑的去重和合并
+- 用于 AnalysisCoordinator 中的洞察去重
 
 Requirements:
 - R8.5: Insight accumulation and deduplication
@@ -16,7 +16,7 @@ import logging
 from typing import List, Set, Optional
 import hashlib
 
-from .models import Insight
+from tableau_assistant.src.models.insight import Insight
 
 logger = logging.getLogger(__name__)
 
@@ -101,10 +101,9 @@ class InsightAccumulator:
         # Normalize title
         title_words = set(insight.title.lower().split())
         
-        # Create pattern components
+        # Create pattern components (based on type and title)
         components = [
             insight.type,  # Now a string literal, not enum
-            ",".join(sorted(insight.related_columns)),
             ",".join(sorted(title_words)),
         ]
         
@@ -130,21 +129,11 @@ class InsightAccumulator:
         
         Similarity is based on:
         - Same type
-        - Overlapping related columns
         - Similar titles
         """
         # Must be same type
         if insight1.type != insight2.type:
             return False
-        
-        # Check column overlap
-        cols1 = set(insight1.related_columns)
-        cols2 = set(insight2.related_columns)
-        
-        if cols1 and cols2:
-            overlap = len(cols1 & cols2) / len(cols1 | cols2)
-            if overlap < 0.5:
-                return False
         
         # Check title similarity (simple word overlap)
         words1 = set(insight1.title.lower().split())
@@ -176,19 +165,15 @@ class InsightAccumulator:
                 description=new_insight.description if len(new_insight.description) > len(existing.description) else existing.description,
                 importance=new_insight.importance,
                 evidence=self._merge_evidence(existing.evidence, new_insight.evidence),
-                related_columns=list(set(existing.related_columns + new_insight.related_columns)),
-                chunk_id=existing.chunk_id,
             )
         else:
-            # Just update evidence and columns
+            # Just update evidence
             self._insights[existing_idx] = Insight(
                 type=existing.type,
                 title=existing.title,
                 description=new_insight.description if len(new_insight.description) > len(existing.description) else existing.description,
                 importance=existing.importance,
                 evidence=self._merge_evidence(existing.evidence, new_insight.evidence),
-                related_columns=list(set(existing.related_columns + new_insight.related_columns)),
-                chunk_id=existing.chunk_id,
             )
     
     def _merge_evidence(self, evidence1: Optional[dict], evidence2: Optional[dict]) -> Optional[dict]:

@@ -16,7 +16,7 @@ from typing import Dict, List, Any, Optional
 import pandas as pd
 import numpy as np
 
-from .models import DataProfile, ColumnStats, SemanticGroup
+from tableau_assistant.src.models.insight import DataProfile, ColumnStats, SemanticGroup
 
 logger = logging.getLogger(__name__)
 

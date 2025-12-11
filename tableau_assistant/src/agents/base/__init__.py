@@ -13,6 +13,7 @@ from .node import (
     
     # 工具调用
     call_llm_with_tools,
+    stream_llm_with_tools,
     convert_messages,
     
     # 流式输出
@@ -43,6 +44,7 @@ __all__ = [
     
     # 工具调用
     "call_llm_with_tools",
+    "stream_llm_with_tools",
     "convert_messages",
     
     # 流式输出

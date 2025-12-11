@@ -8,9 +8,9 @@ Organized into subpackages:
 - common/: Shared error models
 - api/: API request/response models
 - metadata/: Metadata related models
-- question/: Question understanding models
 - insight/: Insight analysis models
 - replanner/: Replanner agent models
+- field_mapper/: Field mapper agent models
 """
 
 # ========== Workflow Models ==========
@@ -121,57 +121,11 @@ from .metadata import (
     DataModel,
     DimensionHierarchyResult,
     DimensionAttributes,
-    HierarchyLevel,
-)
-
-# ========== Question Models ==========
-from .question import (
-    # Enums
-    EntityRole,
-    AggregationType as LegacyAggregationType,
-    EntityType,
-    DateFunction,
-    QuestionType,
-    Complexity,
-    TimeRangeType,
-    RelativeType,
-    PeriodType,
-    SubQuestionExecutionType,
-    # Models
-    QueryEntity,
-    TimeRange,
-    ReasoningStep,
-    QuestionUnderstanding,
-    SubQuestion,
-    QuerySubQuestion,
-    # Helper functions
-    create_entity,
-    create_time_range_absolute,
-    create_time_range_relative,
-    # Time granularity
-    TimeGranularity,
-    get_field_granularity_from_format,
 )
 
 # ========== Insight Models ==========
 from .insight import (
-    # Legacy
-    InsightType,
-    Importance,
-    AnomalyType,
-    TrendDirection,
-    SubtaskResult,
-    MergedData,
-    DescriptiveStatistics,
-    AnomalyDetection,
-    TrendAnalysis,
-    StatisticsResult,
-    LegacyInsight,
-    InsightCollection,
-    FinalReport,
-    create_insight,
-    create_anomaly_detection,
-    # Progressive insight
+    # Progressive insight models
     ChunkPriority,
     ColumnStats,
     SemanticGroup,
@@ -193,6 +147,12 @@ from .insight import (
 from .replanner import (
     ExplorationQuestion,
     ReplanDecision,
+)
+
+# ========== Field Mapper Models ==========
+from .field_mapper import (
+    SingleSelectionResult,
+    BatchSelectionResult,
 )
 
 
@@ -285,47 +245,8 @@ __all__ = [
     "DataModel",
     "DimensionHierarchyResult",
     "DimensionAttributes",
-    "HierarchyLevel",
-    
-    # Question
-    "EntityRole",
-    "LegacyAggregationType",
-    "EntityType",
-    "DateFunction",
-    "QuestionType",
-    "Complexity",
-    "TimeRangeType",
-    "RelativeType",
-    "PeriodType",
-    "SubQuestionExecutionType",
-    "QueryEntity",
-    "TimeRange",
-    "ReasoningStep",
-    "QuestionUnderstanding",
-    "SubQuestion",
-    "QuerySubQuestion",
-    "create_entity",
-    "create_time_range_absolute",
-    "create_time_range_relative",
-    "TimeGranularity",
-    "get_field_granularity_from_format",
     
     # Insight
-    "InsightType",
-    "Importance",
-    "AnomalyType",
-    "TrendDirection",
-    "SubtaskResult",
-    "MergedData",
-    "DescriptiveStatistics",
-    "AnomalyDetection",
-    "TrendAnalysis",
-    "StatisticsResult",
-    "LegacyInsight",
-    "InsightCollection",
-    "FinalReport",
-    "create_insight",
-    "create_anomaly_detection",
     "ChunkPriority",
     "ColumnStats",
     "SemanticGroup",
@@ -345,4 +266,8 @@ __all__ = [
     # Replanner
     "ExplorationQuestion",
     "ReplanDecision",
+    
+    # Field Mapper
+    "SingleSelectionResult",
+    "BatchSelectionResult",
 ]

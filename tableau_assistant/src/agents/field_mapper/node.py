@@ -818,11 +818,13 @@ async def field_mapper_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Extracts business terms from SemanticQuery and maps them to technical fields.
     
     Args:
-        state: VizQLState containing semantic_query
+        state: VizQLState containing semantic_query (SemanticQuery Pydantic object)
     
     Returns:
-        State update with mapped_query
+        State update with mapped_query (MappedQuery Pydantic object)
     """
+    from tableau_assistant.src.models.semantic.query import MappedQuery, FieldMapping
+    
     start_time = time.time()
     
     semantic_query = state.get("semantic_query")
@@ -846,15 +848,16 @@ async def field_mapper_node(state: Dict[str, Any]) -> Dict[str, Any]:
     
     if not terms_to_map:
         logger.info("No terms to map in semantic query")
+        # 返回 MappedQuery Pydantic 对象
+        mapped_query = MappedQuery(
+            semantic_query=semantic_query,
+            field_mappings={},
+            overall_confidence=1.0,
+        )
         return {
             "current_stage": "field_mapper",
             "field_mapper_complete": True,
-            "mapped_query": {
-                "semantic_query": semantic_query,
-                "field_mappings": {},
-                "overall_confidence": 1.0,
-                "datasource_luid": datasource_luid
-            },
+            "mapped_query": mapped_query,
             "execution_path": ["field_mapper"]
         }
     
@@ -880,41 +883,31 @@ async def field_mapper_node(state: Dict[str, Any]) -> Dict[str, Any]:
             }]
         }
     
-    field_mappings = {}
-    confidences = []
-    low_confidence_alternatives = {}
+    # 构建 FieldMapping Pydantic 对象
+    field_mappings: Dict[str, FieldMapping] = {}
     
     for term, result in mapping_results.items():
-        field_mappings[term] = {
-            "business_term": result.business_term,
-            "technical_field": result.technical_field,
-            "confidence": result.confidence,
-            "mapping_source": result.mapping_source,
-            "category": result.category,
-            "level": result.level,
-            "granularity": result.granularity,
-        }
-        
-        if result.technical_field:
-            confidences.append(result.confidence)
-        
-        if result.alternatives:
-            low_confidence_alternatives[term] = result.alternatives
+        field_mappings[term] = FieldMapping(
+            business_term=result.business_term,
+            technical_field=result.technical_field or term,  # fallback to term if no mapping
+            confidence=result.confidence,
+            mapping_source=result.mapping_source,
+            category=result.category,
+            level=result.level,
+            granularity=result.granularity,
+            alternatives=result.alternatives,
+        )
     
-    overall_confidence = min(confidences) if confidences else 0.0
-    
-    mapped_query = {
-        "semantic_query": semantic_query,
-        "field_mappings": field_mappings,
-        "overall_confidence": overall_confidence,
-        "datasource_luid": datasource_luid,
-        "low_confidence_alternatives": low_confidence_alternatives if low_confidence_alternatives else None,
-    }
+    # 构建 MappedQuery Pydantic 对象
+    mapped_query = MappedQuery(
+        semantic_query=semantic_query,
+        field_mappings=field_mappings,
+    )
     
     latency_ms = int((time.time() - start_time) * 1000)
     logger.info(
         f"Field mapping complete: {len(field_mappings)} terms mapped, "
-        f"overall_confidence={overall_confidence:.2f}, latency={latency_ms}ms"
+        f"overall_confidence={mapped_query.overall_confidence:.2f}, latency={latency_ms}ms"
     )
     
     return {
@@ -926,30 +919,34 @@ async def field_mapper_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_terms_from_semantic_query(
-    semantic_query: Dict[str, Any]
+    semantic_query: "SemanticQuery"
 ) -> Dict[str, Optional[str]]:
-    """Extract business terms from SemanticQuery."""
+    """Extract business terms from SemanticQuery Pydantic object.
+    
+    Args:
+        semantic_query: SemanticQuery Pydantic object
+        
+    Returns:
+        Dict mapping business term to role (measure/dimension/None)
+    """
     terms = {}
     
-    for measure in semantic_query.get("measures", []):
-        name = measure.get("name")
-        if name:
-            terms[name] = "measure"
+    # 直接访问 Pydantic 对象属性
+    for measure in semantic_query.measures or []:
+        if measure.name:
+            terms[measure.name] = "measure"
     
-    for dimension in semantic_query.get("dimensions", []):
-        name = dimension.get("name")
-        if name:
-            terms[name] = "dimension"
+    for dimension in semantic_query.dimensions or []:
+        if dimension.name:
+            terms[dimension.name] = "dimension"
     
-    for filter_spec in semantic_query.get("filters", []):
-        field = filter_spec.get("field")
-        if field and field not in terms:
-            terms[field] = None
+    for filter_spec in semantic_query.filters or []:
+        if filter_spec.field and filter_spec.field not in terms:
+            terms[filter_spec.field] = None
     
-    for analysis in semantic_query.get("analyses", []):
-        target = analysis.get("target_measure")
-        if target and target not in terms:
-            terms[target] = "measure"
+    for analysis in semantic_query.analyses or []:
+        if analysis.target_measure and analysis.target_measure not in terms:
+            terms[analysis.target_measure] = "measure"
     
     return terms
 

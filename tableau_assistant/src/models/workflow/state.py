@@ -13,8 +13,15 @@ Architecture (refactored):
 
 Note: Boost Agent has been REMOVED, its functionality merged into Understanding Agent.
 """
+from __future__ import annotations
+
 from typing import TypedDict, Annotated, List, Dict, Any, Optional
 import operator
+
+# 运行时导入类型（LangGraph StateGraph 需要在运行时解析类型）
+from tableau_assistant.src.models.semantic.query import SemanticQuery, MappedQuery
+from tableau_assistant.src.models.vizql.types import VizQLQuery
+from tableau_assistant.src.models.replanner.replan_decision import ReplanDecision
 
 
 class VizQLState(TypedDict):
@@ -48,29 +55,31 @@ class VizQLState(TypedDict):
     
     # ═══════════════════════════════════════════════════════════════════════
     # Pure Semantic Layer (new architecture)
+    # All fields are Pydantic objects, NOT dicts
     # ═══════════════════════════════════════════════════════════════════════
     # Understanding Agent output (pure semantic, no VizQL concepts)
-    semantic_query: Optional[Dict[str, Any]]  # SemanticQuery as dict
+    semantic_query: Optional[SemanticQuery]  # SemanticQuery Pydantic object
     
     # FieldMapper Node output (business terms → technical fields)
-    mapped_query: Optional[Dict[str, Any]]    # MappedQuery as dict
+    mapped_query: Optional[MappedQuery]      # MappedQuery Pydantic object
     
     # QueryBuilder Node output (technical VizQL query)
-    vizql_query: Optional[Dict[str, Any]]     # VizQLQuery as dict
+    vizql_query: Optional[VizQLQuery]        # VizQLQuery Pydantic object
     
     # Execute Node output
-    query_result: Optional[Dict[str, Any]]    # QueryResult as dict
+    query_result: Optional[Dict[str, Any]]   # QueryResult dict
     
     # ═══════════════════════════════════════════════════════════════════════
     # Insight Agent Output (progressive accumulation)
+    # All insights are Pydantic objects
     # ═══════════════════════════════════════════════════════════════════════
-    insights: Annotated[List[Dict[str, Any]], operator.add]      # Current round insights
-    all_insights: Annotated[List[Dict[str, Any]], operator.add]  # All accumulated insights
+    insights: Annotated[List[Any], operator.add]      # Current round insights (Pydantic objects)
+    all_insights: Annotated[List[Any], operator.add]  # All accumulated insights (Pydantic objects)
     
     # ═══════════════════════════════════════════════════════════════════════
     # Replanner Agent Output (smart replanning)
     # ═══════════════════════════════════════════════════════════════════════
-    replan_decision: Optional[Dict[str, Any]]  # ReplanDecision as dict
+    replan_decision: Optional[ReplanDecision]  # ReplanDecision Pydantic object
     replan_count: int                          # Current replan count
     max_replan_rounds: int                     # Maximum replan rounds (default: 3)
     replan_history: Annotated[List[Dict[str, Any]], operator.add]  # Replan history

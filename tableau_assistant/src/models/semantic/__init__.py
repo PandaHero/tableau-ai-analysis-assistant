@@ -25,17 +25,14 @@ from .enums import (
     # 聚合类型
     AggregationType,
     
-    # 筛选操作符（保留用于兼容）
-    FilterOperator,
-    
     # 维度层级
     DimensionCategory,
     DimensionLevel,
     
-    # 时间范围类型（新增）
-    TimeRangeType,
-    RelativeTimeType,
-    PeriodUnit,
+    # 日期枚举（与 VizQL API 对齐）
+    TimeFilterMode,
+    PeriodType,
+    DateRangeType,
 )
 
 from .query import (
@@ -43,7 +40,7 @@ from .query import (
     MeasureSpec,
     DimensionSpec,
     FilterSpec,
-    TimeRangeSpec,
+    TimeFilterSpec,
     AnalysisSpec,
     OutputControl,
     SemanticQuery,
@@ -61,18 +58,17 @@ __all__ = [
     "FilterType",
     "TimeGranularity",
     "AggregationType",
-    "FilterOperator",
     "DimensionCategory",
     "DimensionLevel",
-    "TimeRangeType",
-    "RelativeTimeType",
-    "PeriodUnit",
+    "TimeFilterMode",
+    "PeriodType",
+    "DateRangeType",
     
     # ========== SemanticQuery ==========
     "MeasureSpec",
     "DimensionSpec",
     "FilterSpec",
-    "TimeRangeSpec",
+    "TimeFilterSpec",
     "AnalysisSpec",
     "OutputControl",
     "SemanticQuery",

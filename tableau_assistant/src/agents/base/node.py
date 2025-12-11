@@ -44,7 +44,7 @@ Agent 基础工具模块
 import json
 import logging
 import re
-from typing import Dict, Any, List, Optional, Type, TypeVar
+from typing import Dict, Any, List, Optional, Type, TypeVar, AsyncIterator
 
 from pydantic import BaseModel
 from langchain_core.language_models import BaseChatModel
@@ -163,24 +163,27 @@ async def call_llm_with_tools(
     messages: List[Dict[str, str]],
     tools: List[Any],
     max_iterations: int = 5,
+    streaming: bool = True,
 ) -> str:
     """
     调用 LLM 并处理工具调用
     
     这是 Agent 节点的核心函数，处理 LLM 与工具的交互循环。
+    默认使用流式调用，以便 LangGraph 的 astream_events 能捕获 token 事件。
     
     Args:
         llm: LLM 实例
         messages: 消息列表 [{"role": "system", "content": "..."}, ...]
         tools: 可用工具列表（@tool 装饰的函数）
         max_iterations: 最大迭代次数（防止无限循环）
+        streaming: 是否使用流式调用（默认 True，支持 token 级别流式输出）
     
     Returns:
         LLM 最终响应内容（字符串）
     
     Example:
         llm = get_llm(temperature=0.1)  # 或 get_llm(agent_name="understanding")
-        tools = [get_metadata, parse_date]
+        tools = [get_metadata, calculate_date_range]
         messages = MY_PROMPT.format_messages(question="各省份销售额")
         
         response = await call_llm_with_tools(llm, messages, tools)
@@ -199,7 +202,13 @@ async def call_llm_with_tools(
     for iteration in range(max_iterations):
         logger.debug(f"LLM iteration {iteration + 1}/{max_iterations}")
         
-        response = await llm_with_tools.ainvoke(langchain_messages)
+        if streaming:
+            # 流式调用 - 支持 token 级别输出
+            response = await _stream_llm_call_internal(llm_with_tools, langchain_messages)
+        else:
+            # 非流式调用
+            response = await llm_with_tools.ainvoke(langchain_messages)
+        
         langchain_messages.append(response)
         
         # 检查是否有工具调用
@@ -246,6 +255,209 @@ async def call_llm_with_tools(
             return msg.content
     
     return ""
+
+
+async def _stream_llm_call_internal(
+    llm: BaseChatModel,
+    messages: List,
+) -> AIMessage:
+    """
+    内部流式调用 LLM，返回完整的 AIMessage
+    
+    使用 astream_events 而不是 ainvoke，这样 LangGraph 的外层 astream_events 
+    能够捕获到 on_chat_model_stream 事件，实现 token 级别的流式输出。
+    
+    关键：LangGraph 的事件传播机制会将内部 LLM 调用的事件冒泡到外层，
+    所以在节点内部使用 astream_events 调用 LLM，外层的 workflow.astream_events
+    就能捕获到 token 事件。
+    
+    Args:
+        llm: 已绑定工具的 LLM 实例
+        messages: LangChain 消息列表
+    
+    Returns:
+        完整的 AIMessage（包含 content 和 tool_calls）
+    """
+    collected_content = []
+    tool_calls = []
+    
+    # 使用 astream_events 以便事件能被 LangGraph 捕获
+    async for event in llm.astream_events(messages, version="v2"):
+        event_type = event.get("event")
+        
+        if event_type == "on_chat_model_stream":
+            chunk = event.get("data", {}).get("chunk")
+            if chunk:
+                # 收集 content
+                if hasattr(chunk, "content") and chunk.content:
+                    collected_content.append(chunk.content)
+                
+                # 收集 tool_calls（流式累积）
+                if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                    for tc_chunk in chunk.tool_call_chunks:
+                        tc_index = tc_chunk.get("index", 0)
+                        while len(tool_calls) <= tc_index:
+                            tool_calls.append({"name": "", "args": "", "id": ""})
+                        
+                        if tc_chunk.get("name"):
+                            tool_calls[tc_index]["name"] = tc_chunk["name"]
+                        if tc_chunk.get("id"):
+                            tool_calls[tc_index]["id"] = tc_chunk["id"]
+                        if tc_chunk.get("args"):
+                            tool_calls[tc_index]["args"] += tc_chunk["args"]
+    
+    # 解析 tool_calls 的 args（从字符串到字典）
+    import json as json_module
+    parsed_tool_calls = []
+    for tc in tool_calls:
+        if tc["name"] and tc["id"]:
+            try:
+                args = json_module.loads(tc["args"]) if tc["args"] else {}
+            except json_module.JSONDecodeError:
+                args = {}
+            parsed_tool_calls.append({
+                "name": tc["name"],
+                "args": args,
+                "id": tc["id"],
+            })
+    
+    return AIMessage(
+        content="".join(collected_content),
+        tool_calls=parsed_tool_calls
+    )
+
+
+async def stream_llm_with_tools(
+    llm: BaseChatModel,
+    messages: List[Dict[str, str]],
+    tools: List[Any],
+    max_iterations: int = 5,
+) -> AsyncIterator[Dict[str, Any]]:
+    """
+    流式调用 LLM 并处理工具调用（Token 级别流式输出）
+    
+    与 call_llm_with_tools 功能相同，但支持 token 级别的流式输出。
+    
+    Args:
+        llm: LLM 实例
+        messages: 消息列表
+        tools: 可用工具列表
+        max_iterations: 最大迭代次数
+    
+    Yields:
+        事件字典，格式：
+        - {"type": "token", "content": "..."} - token 输出
+        - {"type": "tool_call", "name": "...", "args": {...}} - 工具调用
+        - {"type": "tool_result", "name": "...", "result": "..."} - 工具结果
+        - {"type": "complete", "content": "..."} - 完成，包含完整响应
+    
+    Example:
+        async for event in stream_llm_with_tools(llm, messages, tools):
+            if event["type"] == "token":
+                print(event["content"], end="", flush=True)
+            elif event["type"] == "complete":
+                result = parse_json_response(event["content"], SemanticQuery)
+    """
+    llm_with_tools = llm.bind_tools(tools)
+    langchain_messages = convert_messages(messages)
+    tool_map = {tool.name: tool for tool in tools}
+    
+    for iteration in range(max_iterations):
+        logger.debug(f"LLM streaming iteration {iteration + 1}/{max_iterations}")
+        
+        # 流式调用 LLM
+        collected_content = []
+        tool_calls = []
+        
+        async for event in llm_with_tools.astream_events(langchain_messages, version="v2"):
+            event_type = event.get("event")
+            
+            # Token 流式输出
+            if event_type == "on_chat_model_stream":
+                chunk = event.get("data", {}).get("chunk")
+                if chunk:
+                    # 收集 content
+                    if hasattr(chunk, "content") and chunk.content:
+                        collected_content.append(chunk.content)
+                        yield {"type": "token", "content": chunk.content}
+                    
+                    # 收集 tool_calls（流式累积）
+                    if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                        for tc_chunk in chunk.tool_call_chunks:
+                            # 找到或创建对应的 tool_call
+                            tc_index = tc_chunk.get("index", 0)
+                            while len(tool_calls) <= tc_index:
+                                tool_calls.append({"name": "", "args": "", "id": ""})
+                            
+                            if tc_chunk.get("name"):
+                                tool_calls[tc_index]["name"] = tc_chunk["name"]
+                            if tc_chunk.get("id"):
+                                tool_calls[tc_index]["id"] = tc_chunk["id"]
+                            if tc_chunk.get("args"):
+                                tool_calls[tc_index]["args"] += tc_chunk["args"]
+        
+        full_content = "".join(collected_content)
+        
+        # 构建 AIMessage 并添加到历史
+        import json as json_module
+        parsed_tool_calls = []
+        for tc in tool_calls:
+            if tc["name"] and tc["id"]:
+                try:
+                    args = json_module.loads(tc["args"]) if tc["args"] else {}
+                except json_module.JSONDecodeError:
+                    args = {}
+                parsed_tool_calls.append({
+                    "name": tc["name"],
+                    "args": args,
+                    "id": tc["id"],
+                })
+        
+        ai_message = AIMessage(content=full_content, tool_calls=parsed_tool_calls)
+        langchain_messages.append(ai_message)
+        
+        # 没有工具调用，完成
+        if not parsed_tool_calls:
+            logger.debug("No tool calls, streaming complete")
+            yield {"type": "complete", "content": full_content}
+            return
+        
+        # 处理工具调用
+        for tool_call in parsed_tool_calls:
+            tool_name = tool_call["name"]
+            tool_args = tool_call["args"]
+            tool_id = tool_call["id"]
+            
+            yield {"type": "tool_call", "name": tool_name, "args": tool_args}
+            logger.info(f"Tool call: {tool_name}({tool_args})")
+            
+            tool = tool_map.get(tool_name)
+            if tool is None:
+                tool_result = f"Error: Tool '{tool_name}' not found"
+                logger.warning(tool_result)
+            else:
+                try:
+                    if hasattr(tool, 'ainvoke'):
+                        tool_result = await tool.ainvoke(tool_args)
+                    else:
+                        tool_result = tool.invoke(tool_args)
+                except Exception as e:
+                    logger.error(f"Tool {tool_name} failed: {e}")
+                    tool_result = f"Error: {str(e)}"
+            
+            yield {"type": "tool_result", "name": tool_name, "result": str(tool_result)[:200]}
+            langchain_messages.append(
+                ToolMessage(content=str(tool_result), tool_call_id=tool_id)
+            )
+    
+    # 达到最大迭代次数
+    logger.warning(f"Max iterations ({max_iterations}) reached")
+    for msg in reversed(langchain_messages):
+        if hasattr(msg, 'content') and msg.content:
+            yield {"type": "complete", "content": msg.content}
+            return
+    
+    yield {"type": "complete", "content": ""}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -575,6 +787,7 @@ __all__ = [
     
     # 工具调用
     "call_llm_with_tools",
+    "stream_llm_with_tools",
     "convert_messages",
     
     # 流式输出

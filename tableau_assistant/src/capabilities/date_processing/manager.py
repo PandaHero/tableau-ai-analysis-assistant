@@ -20,7 +20,7 @@ import logging
 from tableau_assistant.src.capabilities.date_processing.calculator import DateCalculator
 from tableau_assistant.src.capabilities.date_processing.parser import DateParser
 from tableau_assistant.src.capabilities.date_processing.format_detector import DateFormatDetector, DateFormatType
-from tableau_assistant.src.models.question import TimeRange
+from tableau_assistant.src.models.semantic.query import TimeFilterSpec
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class DateManager:
             anchor_date=self.anchor_date,
             week_start_day=self.week_start_day
         )
-        self.parser = DateParser(date_calculator=self.calculator)
+        self.parser = DateParser()
         self.format_detector = DateFormatDetector()
         
         # Cache for field date formats
@@ -141,37 +141,66 @@ class DateManager:
     
     # ============= Date Parsing Functions =============
     
-    def parse_time_range(
+    def process_time_filter(
         self,
-        time_range: TimeRange,
-        reference_date: Optional[datetime] = None,
-        max_date: Optional[str] = None
-    ) -> Tuple[str, str]:
+        time_filter: TimeFilterSpec,
+        reference_date: Optional[datetime] = None
+    ) -> dict:
         """
-        Parse TimeRange to specific date range (delegates to DateParser).
+        Process TimeFilterSpec to VizQL compatible filter parameters (delegates to DateParser).
         
         Args:
-            time_range: TimeRange object output by LLM
+            time_filter: TimeFilterSpec object output by LLM
             reference_date: Reference date (for relative time calculation)
-            max_date: Maximum date of data source (optional)
+        
+        Returns:
+            VizQL filter parameters dictionary
+        
+        Examples:
+            >>> from tableau_assistant.src.models.semantic.enums import TimeFilterMode, PeriodType, DateRangeType
+            >>> time_filter = TimeFilterSpec(
+            ...     mode=TimeFilterMode.RELATIVE,
+            ...     period_type=PeriodType.MONTHS,
+            ...     date_range_type=DateRangeType.LASTN,
+            ...     range_n=3
+            ... )
+            >>> date_manager.process_time_filter(time_filter)
+            {"filter_type": "DATE", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}
+        """
+        return self.parser.process_time_filter(
+            time_filter=time_filter,
+            reference_date=reference_date
+        )
+    
+    def calculate_relative_dates(
+        self,
+        time_filter: TimeFilterSpec,
+        reference_date: Optional[datetime] = None
+    ) -> Tuple[str, str]:
+        """
+        Calculate relative dates to specific date range (delegates to DateParser).
+        
+        Args:
+            time_filter: TimeFilterSpec object (mode must be RELATIVE)
+            reference_date: Reference date (for relative time calculation)
         
         Returns:
             (start_date, end_date) tuple in "YYYY-MM-DD" format
         
         Examples:
-            >>> time_range = TimeRange(
-            ...     type="relative",
-            ...     relative_type="LASTN",
-            ...     period_type="MONTHS",
+            >>> from tableau_assistant.src.models.semantic.enums import TimeFilterMode, PeriodType, DateRangeType
+            >>> time_filter = TimeFilterSpec(
+            ...     mode=TimeFilterMode.RELATIVE,
+            ...     period_type=PeriodType.MONTHS,
+            ...     date_range_type=DateRangeType.LASTN,
             ...     range_n=3
             ... )
-            >>> date_manager.parse_time_range(time_range)
-            ("2024-10-01", "2024-12-31")
+            >>> date_manager.calculate_relative_dates(time_filter)
+            ("2024-10-01", "2024-12-11")
         """
-        return self.parser.calculate_date_range(
-            time_range=time_range,
-            reference_date=reference_date,
-            max_date=max_date
+        return self.parser.calculate_relative_dates(
+            time_filter=time_filter,
+            reference_date=reference_date
         )
     
     # ============= Date Format Detection Functions =============
@@ -340,7 +369,6 @@ class DateManager:
         return {
             "format_cache_size": len(self.field_formats_cache),
             "cached_fields": list(self.field_formats_cache.keys()),
-            "parser_cache_stats": self.parser.get_performance_stats()
         }
 
 

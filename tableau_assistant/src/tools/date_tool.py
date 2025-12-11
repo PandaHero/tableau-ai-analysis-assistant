@@ -1,22 +1,24 @@
 """
 Date Tools - 日期处理工具
 
-薄封装 DateManager，提供日期解析和格式检测功能。
+薄封装 DateManager，提供日期计算和格式检测功能。
+
+设计原则（与 VizQL API 对齐）：
+- LLM 负责：理解自然语言，输出 TimeFilterSpec 格式
+- 绝对日期：LLM 直接输出 RFC 3339 格式（YYYY-MM-DD），无需 DateParser 计算
+- 相对日期：DateParser 根据 period_type 和 date_range_type 计算具体日期
+- 离散日期：DateParser 展开为具体日期列表
 
 工具列表：
-- parse_date: 解析日期表达式（相对/绝对）
+- process_time_filter: 处理 TimeFilterSpec，返回 VizQL 兼容的筛选参数
+- calculate_relative_dates: 计算相对日期的具体日期范围
 - detect_date_format: 检测日期格式
 """
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Any
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 import logging
-
-from tableau_assistant.src.tools.base import (
-    ToolResponse,
-    ToolErrorCode,
-    format_tool_response,
-)
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -37,221 +39,183 @@ def get_date_manager() -> Any:
     return _date_manager
 
 
-class ParseDateInput(BaseModel):
-    """parse_date 工具输入参数"""
-    expression: str = Field(
-        description="日期表达式，如 '最近3个月', '2024年1月', 'last 7 days'"
+class ProcessTimeFilterInput(BaseModel):
+    """process_time_filter 工具输入参数"""
+    time_filter_json: str = Field(
+        description="""TimeFilterSpec JSON 格式，包含：
+- mode: "absolute_range", "relative", 或 "set"
+- 绝对日期范围: start_date, end_date (YYYY-MM-DD 格式)
+- 相对日期: period_type, date_range_type, range_n
+- 离散日期: date_values (日期值列表)"""
     )
     reference_date: Optional[str] = Field(
         default=None,
-        description="参考日期（YYYY-MM-DD 格式），默认为当前日期"
+        description="参考日期（YYYY-MM-DD 格式），用于相对时间计算"
     )
 
 
 class DetectDateFormatInput(BaseModel):
     """detect_date_format 工具输入参数"""
     sample_values: List[str] = Field(
-        description="日期样本值列表，至少提供 3 个样本"
+        description="日期样本值列表，至少提供 2 个样本"
     )
 
 
-def _parse_expression_to_time_range(expression: str) -> Any:
-    """
-    将自然语言日期表达式转换为 TimeRange 对象
-    
-    支持的表达式格式：
-    - 相对日期：最近N天/周/月/年、上个月、本季度
-    - 绝对日期：2024年1月、2024-01-01 到 2024-12-31
-    
-    Args:
-        expression: 日期表达式
-    
-    Returns:
-        TimeRange 对象
-    """
-    from tableau_assistant.src.models.question import TimeRange
-    
-    expression = expression.strip().lower()
-    
-    # 相对日期模式
-    relative_patterns = {
-        # 中文模式
-        r'最近(\d+)天': ('LASTN', 'DAYS'),
-        r'最近(\d+)周': ('LASTN', 'WEEKS'),
-        r'最近(\d+)个?月': ('LASTN', 'MONTHS'),
-        r'最近(\d+)年': ('LASTN', 'YEARS'),
-        r'最近(\d+)个?季度': ('LASTN', 'QUARTERS'),
-        r'上个?月': ('LAST', 'MONTHS'),
-        r'上个?季度': ('LAST', 'QUARTERS'),
-        r'上一?年': ('LAST', 'YEARS'),
-        r'本月': ('CURRENT', 'MONTHS'),
-        r'本季度': ('CURRENT', 'QUARTERS'),
-        r'本年|今年': ('CURRENT', 'YEARS'),
-        r'下个?月': ('NEXT', 'MONTHS'),
-        r'下个?季度': ('NEXT', 'QUARTERS'),
-        r'下一?年|明年': ('NEXT', 'YEARS'),
-        # 英文模式
-        r'last\s*(\d+)\s*days?': ('LASTN', 'DAYS'),
-        r'last\s*(\d+)\s*weeks?': ('LASTN', 'WEEKS'),
-        r'last\s*(\d+)\s*months?': ('LASTN', 'MONTHS'),
-        r'last\s*(\d+)\s*years?': ('LASTN', 'YEARS'),
-        r'last\s*(\d+)\s*quarters?': ('LASTN', 'QUARTERS'),
-        r'last\s*month': ('LAST', 'MONTHS'),
-        r'last\s*quarter': ('LAST', 'QUARTERS'),
-        r'last\s*year': ('LAST', 'YEARS'),
-        r'this\s*month': ('CURRENT', 'MONTHS'),
-        r'this\s*quarter': ('CURRENT', 'QUARTERS'),
-        r'this\s*year': ('CURRENT', 'YEARS'),
-        r'next\s*month': ('NEXT', 'MONTHS'),
-        r'next\s*quarter': ('NEXT', 'QUARTERS'),
-        r'next\s*year': ('NEXT', 'YEARS'),
-    }
-    
-    import re
-    
-    for pattern, (relative_type, period_type) in relative_patterns.items():
-        match = re.search(pattern, expression)
-        if match:
-            range_n = None
-            if match.groups():
-                try:
-                    range_n = int(match.group(1))
-                except (IndexError, ValueError):
-                    pass
-            
-            return TimeRange(
-                type="relative",
-                relative_type=relative_type,
-                period_type=period_type,
-                range_n=range_n
-            )
-    
-    # 绝对日期模式
-    # 年月格式：2024年1月、2024-01
-    year_month_patterns = [
-        r'(\d{4})年(\d{1,2})月',
-        r'(\d{4})-(\d{1,2})',
-        r'(\d{4})/(\d{1,2})',
-    ]
-    
-    for pattern in year_month_patterns:
-        match = re.search(pattern, expression)
-        if match:
-            year = int(match.group(1))
-            month = int(match.group(2))
-            
-            # 计算月份的开始和结束日期
-            import calendar
-            _, last_day = calendar.monthrange(year, month)
-            
-            return TimeRange(
-                type="absolute",
-                start_date=f"{year}-{month:02d}-01",
-                end_date=f"{year}-{month:02d}-{last_day:02d}"
-            )
-    
-    # 年份格式：2024年、2024
-    year_patterns = [
-        r'(\d{4})年',
-        r'^(\d{4})$',
-    ]
-    
-    for pattern in year_patterns:
-        match = re.search(pattern, expression)
-        if match:
-            year = int(match.group(1))
-            return TimeRange(
-                type="absolute",
-                start_date=f"{year}-01-01",
-                end_date=f"{year}-12-31"
-            )
-    
-    # 日期范围格式：2024-01-01 到 2024-12-31
-    range_patterns = [
-        r'(\d{4}-\d{2}-\d{2})\s*(?:到|至|-|~)\s*(\d{4}-\d{2}-\d{2})',
-        r'from\s*(\d{4}-\d{2}-\d{2})\s*to\s*(\d{4}-\d{2}-\d{2})',
-    ]
-    
-    for pattern in range_patterns:
-        match = re.search(pattern, expression)
-        if match:
-            return TimeRange(
-                type="absolute",
-                start_date=match.group(1),
-                end_date=match.group(2)
-            )
-    
-    # 无法解析
-    raise ValueError(f"无法解析日期表达式: {expression}")
-
-
 @tool
-def parse_date(
-    expression: str,
+def process_time_filter(
+    time_filter_json: str,
     reference_date: Optional[str] = None
 ) -> str:
     """
-    解析日期表达式
+    处理时间筛选，返回 VizQL 兼容的筛选参数
     
-    将自然语言日期表达式转换为具体的日期范围。
-    支持相对日期（如"最近3个月"）和绝对日期（如"2024年1月"）。
+    LLM 输出 TimeFilterSpec 格式，此工具转换为 VizQL 筛选参数。
     
     Args:
-        expression: 日期表达式，支持以下格式：
-            - 相对日期：最近N天/周/月/年、上个月、本季度、last 7 days
-            - 绝对日期：2024年1月、2024-01、2024年
-            - 日期范围：2024-01-01 到 2024-12-31
-        reference_date: 参考日期（YYYY-MM-DD 格式），用于计算相对日期，默认为当前日期
+        time_filter_json: TimeFilterSpec JSON 格式
+            绝对日期范围: {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-12-31"}
+            相对日期: {"mode": "relative", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}
+            离散日期: {"mode": "set", "date_values": ["2024-01", "2024-02"]}
+        reference_date: 参考日期（YYYY-MM-DD），用于相对时间计算
     
     Returns:
-        JSON 格式的日期范围：
-        - 成功：{"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"}
-        - 失败：{"start_date": null, "end_date": null, "error": "错误信息"}
+        JSON 格式的 VizQL 筛选参数:
+        - 绝对日期范围: {"filter_type": "QUANTITATIVE_DATE", "quantitative_filter_type": "RANGE", "min_date": "...", "max_date": "..."}
+        - 相对日期: {"filter_type": "DATE", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}
+        - 离散日期: {"filter_type": "SET", "values": [...], "exclude": false}
     
     Examples:
-        >>> parse_date("最近3个月")
-        {"start_date": "2024-10-01", "end_date": "2024-12-31"}
+        >>> process_time_filter('{"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-12-31"}')
+        {"filter_type": "QUANTITATIVE_DATE", "quantitative_filter_type": "RANGE", "min_date": "2024-01-01", "max_date": "2024-12-31"}
         
-        >>> parse_date("2024年1月")
-        {"start_date": "2024-01-01", "end_date": "2024-01-31"}
+        >>> process_time_filter('{"mode": "relative", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}')
+        {"filter_type": "DATE", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}
+    """
+    try:
+        from tableau_assistant.src.models.semantic.query import TimeFilterSpec
+        from tableau_assistant.src.models.semantic.enums import TimeFilterMode
         
-        >>> parse_date("last 7 days")
-        {"start_date": "2024-12-02", "end_date": "2024-12-08"}
+        # 解析 TimeFilterSpec
+        time_filter_dict = json.loads(time_filter_json)
+        time_filter = TimeFilterSpec(**time_filter_dict)
+        
+        # 根据模式生成 VizQL 筛选参数
+        if time_filter.mode == TimeFilterMode.ABSOLUTE_RANGE:
+            result = {
+                "filter_type": "QUANTITATIVE_DATE",
+                "quantitative_filter_type": "RANGE",
+                "min_date": time_filter.start_date,
+                "max_date": time_filter.end_date
+            }
+        
+        elif time_filter.mode == TimeFilterMode.RELATIVE:
+            result = {
+                "filter_type": "DATE",
+                "period_type": time_filter.period_type.value,
+                "date_range_type": time_filter.date_range_type.value,
+            }
+            if time_filter.range_n is not None:
+                result["range_n"] = time_filter.range_n
+            if time_filter.anchor_date is not None:
+                result["anchor_date"] = time_filter.anchor_date
+        
+        elif time_filter.mode == TimeFilterMode.SET:
+            # 展开日期值
+            expanded_values = _expand_date_values(time_filter.date_values)
+            result = {
+                "filter_type": "SET",
+                "values": expanded_values,
+                "exclude": False
+            }
+        
+        else:
+            return json.dumps({"error": f"不支持的时间筛选模式: {time_filter.mode}"})
+        
+        logger.info(f"process_time_filter: {result}")
+        return json.dumps(result, ensure_ascii=False)
+        
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"JSON 解析失败: {e}"})
+    except Exception as e:
+        logger.error(f"process_time_filter error: {e}")
+        return json.dumps({"error": str(e)})
+
+
+def _expand_date_values(date_values: List[str]) -> List[str]:
+    """展开日期值（将季度展开为月份）"""
+    import re
+    expanded = []
+    for value in date_values:
+        # 季度格式: 2024-Q1 → 展开为月份
+        quarter_match = re.match(r'^(\d{4})-Q([1-4])$', value, re.IGNORECASE)
+        if quarter_match:
+            year = int(quarter_match.group(1))
+            quarter = int(quarter_match.group(2))
+            start_month = (quarter - 1) * 3 + 1
+            for m in range(start_month, start_month + 3):
+                expanded.append(f"{year}-{m:02d}")
+        else:
+            expanded.append(value)
+    return expanded
+
+
+@tool
+def calculate_relative_dates(
+    time_filter_json: str,
+    reference_date: Optional[str] = None
+) -> str:
+    """
+    计算相对日期的具体日期范围
+    
+    当需要将相对日期转换为具体日期时使用（例如用于 QUANTITATIVE_DATE 筛选）。
+    
+    Args:
+        time_filter_json: TimeFilterSpec JSON 格式（mode 必须为 "relative"）
+        reference_date: 参考日期（YYYY-MM-DD），默认今天
+    
+    Returns:
+        JSON 格式: {"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"}
+    
+    Examples:
+        >>> calculate_relative_dates('{"mode": "relative", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}')
+        {"start_date": "2024-10-01", "end_date": "2024-12-11"}
     """
     global _date_manager
     
-    # 检查依赖
     if _date_manager is None:
-        return '{"start_date": null, "end_date": null, "error": "DateManager 未初始化"}'
+        return '{"error": "DateManager 未初始化"}'
     
     try:
-        # 解析表达式为 TimeRange
-        time_range = _parse_expression_to_time_range(expression)
+        from tableau_assistant.src.models.semantic.query import TimeFilterSpec
+        from tableau_assistant.src.models.semantic.enums import TimeFilterMode
+        from datetime import datetime
+        
+        # 解析 TimeFilterSpec
+        time_filter_dict = json.loads(time_filter_json)
+        time_filter = TimeFilterSpec(**time_filter_dict)
+        
+        if time_filter.mode != TimeFilterMode.RELATIVE:
+            return json.dumps({"error": "此工具只处理相对日期（mode=relative）"})
         
         # 解析参考日期
         ref_date = None
         if reference_date:
-            from datetime import datetime
-            try:
-                ref_date = datetime.strptime(reference_date, "%Y-%m-%d")
-            except ValueError:
-                return f'{{"start_date": null, "end_date": null, "error": "无效的参考日期格式: {reference_date}，请使用 YYYY-MM-DD 格式"}}'
+            ref_date = datetime.strptime(reference_date, "%Y-%m-%d")
         
-        # 使用 DateManager 解析
-        start_date, end_date = _date_manager.parse_time_range(
-            time_range=time_range,
+        # 使用 DateManager 计算日期范围
+        start_date, end_date = _date_manager.calculate_relative_dates(
+            time_filter=time_filter,
             reference_date=ref_date
         )
         
-        logger.info(f"parse_date: '{expression}' -> {start_date} to {end_date}")
-        return f'{{"start_date": "{start_date}", "end_date": "{end_date}"}}'
+        logger.info(f"calculate_relative_dates: {start_date} to {end_date}")
+        return json.dumps({"start_date": start_date, "end_date": end_date})
         
-    except ValueError as e:
-        logger.warning(f"parse_date failed: {e}")
-        return f'{{"start_date": null, "end_date": null, "error": "{str(e)}"}}'
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"JSON 解析失败: {e}"})
     except Exception as e:
-        logger.error(f"parse_date error: {e}")
-        return f'{{"start_date": null, "end_date": null, "error": "解析失败: {str(e)}"}}'
+        logger.error(f"calculate_relative_dates error: {e}")
+        return json.dumps({"error": str(e)})
 
 
 @tool
@@ -262,70 +226,48 @@ def detect_date_format(sample_values: List[str]) -> str:
     分析样本值，检测其日期格式类型。用于处理 STRING 类型的日期字段。
     
     Args:
-        sample_values: 日期样本值列表，建议至少提供 3 个样本以提高准确性
+        sample_values: 日期样本值列表，至少 2 个样本
     
     Returns:
-        JSON 格式的检测结果：
-        - 成功：{"format_type": "ISO_DATE", "pattern": "YYYY-MM-DD", "conversion_hint": "..."}
-        - 失败：{"format_type": null, "error": "错误信息"}
-    
-    Examples:
-        >>> detect_date_format(["2024-01-15", "2024-02-20", "2024-03-25"])
-        {"format_type": "ISO_DATE", "pattern": "YYYY-MM-DD", "conversion_hint": "使用 YYYY-MM-DD 格式解析"}
-        
-        >>> detect_date_format(["01/15/2024", "02/20/2024", "03/25/2024"])
-        {"format_type": "US_DATE", "pattern": "MM/DD/YYYY", "conversion_hint": "使用 MM/DD/YYYY 格式解析"}
-        
-        >>> detect_date_format(["15/01/2024", "20/02/2024", "25/03/2024"])
-        {"format_type": "EU_DATE", "pattern": "DD/MM/YYYY", "conversion_hint": "使用 DD/MM/YYYY 格式解析"}
+        JSON 格式: {"format_type": "ISO_DATE", "pattern": "YYYY-MM-DD"}
     """
     global _date_manager
     
-    # 检查依赖
     if _date_manager is None:
         return '{"format_type": null, "error": "DateManager 未初始化"}'
     
-    # 验证输入
-    if not sample_values:
-        return '{"format_type": null, "error": "样本值列表不能为空"}'
-    
-    if len(sample_values) < 2:
-        return '{"format_type": null, "error": "建议至少提供 2 个样本值以提高检测准确性"}'
+    if not sample_values or len(sample_values) < 2:
+        return '{"format_type": null, "error": "至少需要 2 个样本值"}'
     
     try:
-        # 使用 DateManager 检测格式
         format_type = _date_manager.detect_field_date_format(
             sample_values=sample_values,
             confidence_threshold=0.7
         )
         
         if format_type:
-            # 获取格式信息
             info = _date_manager.get_format_info(format_type)
-            
-            result = {
+            return json.dumps({
                 "format_type": format_type.value,
                 "pattern": info.get("pattern", ""),
-                "conversion_hint": f"使用 {info.get('pattern', '')} 格式解析"
-            }
-            
-            logger.info(f"detect_date_format: detected {format_type.value}")
-            
-            import json
-            return json.dumps(result, ensure_ascii=False)
+            }, ensure_ascii=False)
         else:
-            return '{"format_type": null, "error": "无法检测日期格式，样本值可能不是有效的日期"}'
+            return '{"format_type": null, "error": "无法检测日期格式"}'
         
     except Exception as e:
         logger.error(f"detect_date_format error: {e}")
-        return f'{{"format_type": null, "error": "检测失败: {str(e)}"}}'
+        return json.dumps({"format_type": None, "error": str(e)})
 
 
 __all__ = [
-    "parse_date",
+    # 工具（与 VizQL API 对齐）
+    "process_time_filter",
+    "calculate_relative_dates",
     "detect_date_format",
+    # 依赖注入
     "set_date_manager",
     "get_date_manager",
-    "ParseDateInput",
+    # 输入模型
+    "ProcessTimeFilterInput",
     "DetectDateFormatInput",
 ]

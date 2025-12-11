@@ -77,11 +77,13 @@ class MappingSource(str, Enum):
     - rag_llm_fallback: RAG retrieval with LLM selection (confidence < 0.9)
     - cache_hit: Retrieved from cache
     - exact_match: Exact string match
+    - llm_only: LLM direct matching (when RAG is not available)
     """
     RAG_HIGH_CONFIDENCE = "rag_high_confidence"
     RAG_LLM_FALLBACK = "rag_llm_fallback"
     CACHE_HIT = "cache_hit"
     EXACT_MATCH = "exact_match"
+    LLM_ONLY = "llm_only"
 
 
 class TimeGranularity(str, Enum):
@@ -135,26 +137,6 @@ class FilterType(str, Enum):
     MATCH = "match"                # 模糊匹配筛选
 
 
-class FilterOperator(str, Enum):
-    """
-    Filter operator enum (保留用于兼容)
-    
-    Defines comparison operators for filters.
-    """
-    EQUALS = "equals"
-    NOT_EQUALS = "not_equals"
-    GREATER_THAN = "greater_than"
-    GREATER_THAN_OR_EQUALS = "greater_than_or_equals"
-    LESS_THAN = "less_than"
-    LESS_THAN_OR_EQUALS = "less_than_or_equals"
-    IN = "in"
-    NOT_IN = "not_in"
-    BETWEEN = "between"
-    CONTAINS = "contains"
-    STARTS_WITH = "starts_with"
-    ENDS_WITH = "ends_with"
-
-
 class DimensionCategory(str, Enum):
     """
     Dimension category enum
@@ -182,48 +164,78 @@ class DimensionLevel(str, Enum):
     DETAIL = "detail"
 
 
-class TimeRangeType(str, Enum):
+# ═══════════════════════════════════════════════════════════════════════════
+# 日期枚举（与 VizQL API 对齐）
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TimeFilterMode(str, Enum):
     """
-    Time range type enum
+    时间筛选模式（与 VizQL filterType 对齐）
     
-    时间范围类型枚举。
+    <mapping_to_vizql>
+    - ABSOLUTE_RANGE → filterType: "QUANTITATIVE_DATE"
+    - RELATIVE → filterType: "DATE" (RelativeDateFilter)
+    - SET → filterType: "SET"
+    </mapping_to_vizql>
     
     <decision_rule>
-    - "2024年" / "Q1" / "3月" → ABSOLUTE
-    - "最近3个月" / "本月" / "上个月" → RELATIVE
+    - 具体日期/日期范围 ("2024年", "1月到5月") → ABSOLUTE_RANGE
+    - 相对表达 ("最近3个月", "本月", "年初至今") → RELATIVE
+    - 多个离散日期点 ("1月和2月", "Q1和Q3") → SET
     </decision_rule>
     """
-    ABSOLUTE = "absolute"    # 绝对时间（具体日期/年/月/季度）
-    RELATIVE = "relative"    # 相对时间（最近N天/月/年）
+    ABSOLUTE_RANGE = "absolute_range"  # 绝对日期范围（单点或范围）
+    RELATIVE = "relative"              # 相对日期（最近N天/月/年）
+    SET = "set"                        # 多个离散日期点
 
 
-class RelativeTimeType(str, Enum):
+class PeriodType(str, Enum):
     """
-    Relative time calculation type enum
+    时间周期类型（与 VizQL PeriodType 完全对齐）
     
-    相对时间计算类型枚举。
+    <vizql_mapping>
+    直接映射到 VizQL API 的 PeriodType enum
+    </vizql_mapping>
     
     <decision_rule>
-    - "本月" / "今年" → CURRENT
-    - "上个月" / "去年" → LAST
+    - "分钟" → MINUTES
+    - "小时" → HOURS
+    - "天/日" → DAYS
+    - "周" → WEEKS
+    - "月" → MONTHS
+    - "季度" → QUARTERS
+    - "年" → YEARS
+    </decision_rule>
+    """
+    MINUTES = "MINUTES"
+    HOURS = "HOURS"
+    DAYS = "DAYS"
+    WEEKS = "WEEKS"
+    MONTHS = "MONTHS"
+    QUARTERS = "QUARTERS"
+    YEARS = "YEARS"
+
+
+class DateRangeType(str, Enum):
+    """
+    相对日期范围类型（与 VizQL dateRangeType 完全对齐）
+    
+    <vizql_mapping>
+    直接映射到 VizQL API 的 RelativeDateFilter.dateRangeType
+    </vizql_mapping>
+    
+    <decision_rule>
+    - "本月" / "今年" / "本周" → CURRENT
+    - "上个月" / "去年" / "上周" → LAST
     - "最近3个月" / "最近7天" → LASTN
+    - "下个月" / "明年" → NEXT
+    - "未来3个月" → NEXTN
     - "年初至今" / "月初至今" → TODATE
     </decision_rule>
     """
-    CURRENT = "current"      # 当前周期（本月、今年）
-    LAST = "last"            # 上一个周期（上个月、去年）
-    LASTN = "lastn"          # 最近N个周期（最近3个月）
-    TODATE = "todate"        # 至今（年初至今、月初至今）
-
-
-class PeriodUnit(str, Enum):
-    """
-    Time period unit enum
-    
-    时间周期单位枚举。
-    """
-    DAY = "day"
-    WEEK = "week"
-    MONTH = "month"
-    QUARTER = "quarter"
-    YEAR = "year"
+    CURRENT = "CURRENT"    # 当前周期（本月、今年）
+    LAST = "LAST"          # 上一个周期（上个月、去年）
+    LASTN = "LASTN"        # 最近N个周期（最近3个月）
+    NEXT = "NEXT"          # 下一个周期
+    NEXTN = "NEXTN"        # 未来N个周期
+    TODATE = "TODATE"      # 至今（年初至今、月初至今）

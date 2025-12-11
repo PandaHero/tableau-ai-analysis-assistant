@@ -20,11 +20,7 @@ from tableau_assistant.src.models.api import (
     ErrorResponse,
     StreamEvent
 )
-from tableau_assistant.src.models.workflow.state import VizQLInput
-
-# TODO: 迁移到新的 workflow 模块
-# from tableau_assistant.src.workflow.factory import create_tableau_workflow
-# 旧的导入已删除，需要在新 workflow 中实现这些功能
+from tableau_assistant.src.workflow.executor import WorkflowExecutor, EventType
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -112,50 +108,50 @@ async def chat_query(request: VizQLQueryRequest) -> VizQLQueryResponse:
 
 
 async def generate_sse_events(
-    input_data: VizQLInput,
-    datasource_luid: str,
-    user_id: str,
+    question: str,
     session_id: str
 ) -> AsyncGenerator[str, None]:
     """
     生成SSE事件流
     
-    使用 StreamingEventHandler 处理 workflow 事件并转换为前端友好的格式
+    使用 WorkflowExecutor.stream() 获取工作流事件并转换为 SSE 格式。
+    支持 token 级别的流式输出。
     
-    为什么是异步的？
-    - 需要等待 LLM 生成每个 token（I/O 密集型操作）
-    - SSE 协议本身就是异步流式传输
-    - 使用异步可以高效处理多个并发请求
+    事件类型：
+    - node_start: 节点开始执行
+    - token: LLM 生成的 token（实时流式）
+    - node_complete: 节点执行完成
+    - complete: 工作流完成
+    - error: 错误
     
     Args:
-        input_data: 工作流输入（已验证）
-        datasource_luid: 数据源LUID
-        user_id: 用户ID
+        question: 用户问题
         session_id: 会话ID
     
     Yields:
         SSE格式的事件字符串
     """
-    # TODO: 迁移到新的 workflow 模块
-    # from tableau_assistant.src.workflow.factory import create_tableau_workflow
-    
     try:
-        # 临时返回未实现错误
-        error_event = StreamEvent(
-            event_type="error",
-            data={"message": "流式查询功能正在迁移中"},
-            timestamp=time.time()
-        )
-        yield f"data: {error_event.model_dump_json()}\n\n"
-        return
+        executor = WorkflowExecutor()
         
-        # 使用 StreamingEventHandler 处理事件
-        # 它会自动转换 LangGraph 事件为前端友好的格式
-        # async for sse_event in stream_workflow_events(...):
-        #     yield sse_event
+        async for event in executor.stream(question, thread_id=session_id):
+            # 转换为前端友好的格式
+            sse_event = StreamEvent(
+                event_type=event.type.value,
+                data={
+                    "node": event.node_name,
+                    "content": event.content,
+                    "data": event.data,
+                },
+                timestamp=event.timestamp
+            )
+            yield f"data: {sse_event.model_dump_json()}\n\n"
             
+            # 完成或错误时结束
+            if event.type in (EventType.COMPLETE, EventType.ERROR):
+                break
+                
     except Exception as e:
-        # 发送错误事件
         error_event = StreamEvent(
             event_type="error",
             data={"message": str(e)},
@@ -169,11 +165,14 @@ async def chat_query_stream(request: VizQLQueryRequest):
     """
     VizQL查询API（流式版本）
     
-    使用SSE推送实时进度
+    使用SSE推送实时进度，支持 token 级别的流式输出。
     
-    注意：
-        - FastAPI自动使用VizQLQueryRequest验证请求
-        - 验证通过后，request已经是验证过的Pydantic模型
+    事件类型：
+    - node_start: 节点开始执行
+    - token: LLM 生成的 token（实时流式）
+    - node_complete: 节点执行完成
+    - complete: 工作流完成
+    - error: 错误
     
     Args:
         request: VizQL查询请求（已验证）
@@ -182,16 +181,12 @@ async def chat_query_stream(request: VizQLQueryRequest):
         SSE流式响应
     """
     try:
-        # TODO: 迁移到新的 workflow 模块
-        # 将API请求转换为工作流输入
-        workflow_input = {"question": request.question, "boost_question": request.boost_question}
+        session_id = request.session_id or f"session_{int(time.time())}"
         
         return StreamingResponse(
             generate_sse_events(
-                input_data=workflow_input,
-                datasource_luid=request.datasource_luid,
-                user_id=request.user_id or "default_user",
-                session_id=request.session_id or f"session_{int(time.time())}"
+                question=request.question,
+                session_id=session_id
             ),
             media_type="text/event-stream",
             headers={

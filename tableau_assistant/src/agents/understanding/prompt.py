@@ -80,6 +80,10 @@ Step 3: Classify entity roles
 
 Step 4: Detect filters
 - Time filters: absolute dates or relative time expressions
+  - For absolute time filters, MUST specify both value AND granularity
+  - granularity: year/quarter/month/week/day (tells DateParser how to interpret value)
+  - Example: "2024年" → value="2024", granularity="year"
+  - Example: "2024年3月" → value="2024-03", granularity="month"
 - Set filters: specific values to include/exclude
 - Quantitative filters: numeric ranges
 

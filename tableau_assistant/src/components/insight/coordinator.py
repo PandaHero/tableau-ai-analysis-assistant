@@ -19,7 +19,7 @@ import time
 from typing import Dict, List, Any, Optional, AsyncGenerator
 import pandas as pd
 
-from .models import (
+from tableau_assistant.src.models.insight import (
     DataProfile,
     DataInsightProfile,
     InsightResult,
@@ -197,7 +197,7 @@ class AnalysisCoordinator:
         context: Dict[str, Any]
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        流式分析（带进度更新）
+        流式分析（带进度更新）- 双 LLM 协作模式
         
         Yields:
         - {"event": "start", "total_rows": N, "strategy": "..."}
@@ -216,10 +216,9 @@ class AnalysisCoordinator:
             yield {"event": "complete", "result": InsightResult(summary="无数据可分析")}
             return
         
-        # 数据画像
+        # Phase 1: 数据画像和统计分析
         profile = self.profiler.profile(data_list)
-        
-        # 异常检测
+        insight_profile = self.statistical_analyzer.analyze(data_list, profile)
         anomalies = self.anomaly_detector.detect(data_list)
         
         # 选择策略
@@ -236,18 +235,20 @@ class AnalysisCoordinator:
             **context,
             "anomalies": anomalies,
             "profile": profile,
+            "insight_profile": insight_profile,
         }
         
         # 直接分析策略
         if strategy == "direct":
             result = await self._direct_analysis(data_list, analysis_context, profile)
             result.execution_time = time.time() - start_time
+            result.data_insight_profile = insight_profile
             yield {"event": "complete", "result": result}
             return
         
-        # AI 驱动的渐进式分析
+        # Phase 2: 双 LLM 协作的渐进式分析
         async for event in self._progressive_analysis_streaming(
-            data_list, analysis_context, profile, anomalies.outliers, start_time
+            data_list, analysis_context, profile, insight_profile, start_time
         ):
             yield event
     
@@ -259,13 +260,14 @@ class AnalysisCoordinator:
         insight_profile: DataInsightProfile,
     ) -> InsightResult:
         """
-        两阶段渐进式分析（基于 Phase 1 结果）
+        两阶段渐进式分析 - 双 LLM 协作模式
         
-        核心流程：
+        核心流程（来自 insight-design.md）：
         1. 使用 Phase 1 推荐的分块策略
-        2. 主持人 LLM 选择下一个数据块
-        3. 分析师 LLM 分析并累积洞察
-        4. 主持人 LLM 判断是否继续
+        2. 循环：
+           a. 分析师 LLM 分析当前数据块
+           b. 主持人 LLM 决定下一步（继续/早停）
+        3. 合成最终结果
         """
         # 1. 使用 Phase 1 推荐的分块策略
         chunks = self.chunker.chunk_by_strategy(
@@ -280,13 +282,13 @@ class AnalysisCoordinator:
         if not chunks:
             return InsightResult(summary="无法分块数据")
         
-        # 2. 渐进式分析主循环
+        # 2. 渐进式分析主循环 - 双 LLM 协作
         accumulated_insights: List[Insight] = []
         remaining_chunks = chunks.copy()
         analyzed_count = 0
         
         while remaining_chunks:
-            # 选择下一个数据块
+            # 选择下一个数据块（按优先级）
             next_chunk = self._select_next_chunk(remaining_chunks, accumulated_insights)
             
             if next_chunk is None:
@@ -298,19 +300,12 @@ class AnalysisCoordinator:
             
             logger.info(f"🍽️ 分析块 {analyzed_count}: {next_chunk.chunk_type} (优先级={next_chunk.priority})")
             
-            # 分析师 LLM 分析（传递 Phase 1 上下文）
-            analysis_context_with_profile = {
-                **context,
-                "insight_profile": insight_profile,
-                "top_n_summary": insight_profile.top_n_summary,
-                "statistics": insight_profile.statistics,
-            }
-            
-            new_insights, next_decision, quality = await self.analyzer.analyze_with_ai_decision(
-                next_chunk,
-                analysis_context_with_profile,
-                accumulated_insights,
-                remaining_chunks,
+            # ===== 分析师 LLM：分析当前数据块 =====
+            new_insights = await self.analyzer.analyze_chunk_with_analyst(
+                chunk=next_chunk,
+                context=context,
+                insight_profile=insight_profile,
+                existing_insights=accumulated_insights,
             )
             
             # 累积新洞察
@@ -319,18 +314,30 @@ class AnalysisCoordinator:
                     accumulated_insights.append(insight)
                     logger.info(f"💡 新洞察: {insight.title}")
             
-            # 主持人 LLM 决定是否继续
+            # ===== 主持人 LLM：决定下一步 =====
+            next_decision, quality = await self.analyzer.decide_next_with_coordinator(
+                context=context,
+                insight_profile=insight_profile,
+                accumulated_insights=accumulated_insights,
+                remaining_chunks=remaining_chunks,
+                analyzed_count=analyzed_count,
+            )
+            
+            # 主持人决定是否继续
             if not next_decision.should_continue:
                 logger.info(f"✅ 主持人决定早停: {next_decision.reason}")
                 break
             
             # 如果主持人推荐了特定的下一个块，调整剩余块的顺序
-            if next_decision.next_chunk_type:
-                remaining_chunks = self._reorder_chunks(
-                    remaining_chunks, next_decision.next_chunk_type
+            if next_decision.next_chunk_id is not None:
+                remaining_chunks = self._reorder_chunks_by_id(
+                    remaining_chunks, next_decision.next_chunk_id
                 )
             
-            logger.info(f"➡️ 主持人决策: 继续分析 {next_decision.next_chunk_type or '下一个优先块'}")
+            logger.info(
+                f"➡️ 主持人决策: 继续分析 chunk_id={next_decision.next_chunk_id}, "
+                f"完成度={next_decision.completeness_estimate:.2f}"
+            )
         
         # 3. 合成最终结果
         return self.synthesizer.synthesize(
@@ -340,95 +347,24 @@ class AnalysisCoordinator:
             total_rows=profile.row_count,
         )
     
-    async def _progressive_analysis_ai_driven(
-        self,
-        data: List[Dict[str, Any]],
-        context: Dict[str, Any],
-        profile: DataProfile,
-        detected_anomalies: List[int],
-    ) -> InsightResult:
-        """
-        AI 驱动的渐进式分析（旧版，保留兼容）
-        
-        核心流程（来自设计文档）：
-        1. 智能优先级分块
-        2. AI 选择下一个数据块
-        3. AI 分析并累积洞察
-        4. AI 判断是否继续
-        """
-        # 1. 智能优先级分块
-        chunks = self.chunker.chunk_with_priority(data, detected_anomalies)
-        logger.info(f"Created {len(chunks)} priority chunks")
-        
-        if not chunks:
-            return InsightResult(summary="无法分块数据")
-        
-        # 2. 渐进式分析主循环
-        accumulated_insights: List[Insight] = []
-        remaining_chunks = chunks.copy()
-        analyzed_count = 0
-        
-        while remaining_chunks:
-            # 选择下一个数据块
-            next_chunk = self._select_next_chunk(remaining_chunks, accumulated_insights)
-            
-            if next_chunk is None:
-                logger.info("No more chunks to analyze")
-                break
-            
-            remaining_chunks.remove(next_chunk)
-            analyzed_count += 1
-            
-            logger.info(f"🍽️ Analyzing chunk {analyzed_count}: {next_chunk.chunk_type} (priority={next_chunk.priority})")
-            
-            # AI 分析并决策
-            new_insights, next_decision, quality = await self.analyzer.analyze_with_ai_decision(
-                next_chunk,
-                context,
-                accumulated_insights,
-                remaining_chunks,
-            )
-            
-            # 累积新洞察
-            for insight in new_insights:
-                if not self._is_duplicate(insight, accumulated_insights):
-                    accumulated_insights.append(insight)
-                    logger.info(f"💡 New insight: {insight.title}")
-            
-            # AI 决定是否继续
-            if not next_decision.should_continue:
-                logger.info(f"✅ AI decided to stop: {next_decision.reason}")
-                break
-            
-            # 如果 AI 推荐了特定的下一个块，调整剩余块的顺序
-            if next_decision.next_chunk_type:
-                remaining_chunks = self._reorder_chunks(
-                    remaining_chunks, next_decision.next_chunk_type
-                )
-            
-            logger.info(f"➡️ AI decision: continue with {next_decision.next_chunk_type}")
-        
-        # 3. 合成最终结果
-        return self.synthesizer.synthesize(
-            insights=accumulated_insights,
-            strategy_used="progressive_ai_driven",
-            chunks_analyzed=analyzed_count,
-            total_rows=profile.row_count,
-        )
-    
     async def _progressive_analysis_streaming(
         self,
         data: List[Dict[str, Any]],
         context: Dict[str, Any],
         profile: DataProfile,
-        detected_anomalies: List[int],
+        insight_profile: DataInsightProfile,
         start_time: float,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        流式渐进式分析
+        流式渐进式分析 - 双 LLM 协作模式
         """
-        # 智能优先级分块
-        chunks = self.chunker.chunk_with_priority(data, detected_anomalies)
+        # 使用 Phase 1 推荐的分块策略
+        chunks = self.chunker.chunk_by_strategy(
+            data=data,
+            strategy=insight_profile.recommended_chunking_strategy,
+            insight_profile=insight_profile,
+            semantic_groups=profile.semantic_groups,
+        )
         
         if not chunks:
             yield {"event": "complete", "result": InsightResult(summary="无法分块数据")}
@@ -440,7 +376,7 @@ class AnalysisCoordinator:
             "chunk_types": [c.chunk_type for c in chunks],
         }
         
-        # 渐进式分析主循环
+        # 渐进式分析主循环 - 双 LLM 协作
         accumulated_insights: List[Insight] = []
         remaining_chunks = chunks.copy()
         analyzed_count = 0
@@ -462,12 +398,12 @@ class AnalysisCoordinator:
                 "analyzed_count": analyzed_count,
             }
             
-            # AI 分析
-            new_insights, next_decision, quality = await self.analyzer.analyze_with_ai_decision(
-                next_chunk,
-                context,
-                accumulated_insights,
-                remaining_chunks,
+            # ===== 分析师 LLM：分析当前数据块 =====
+            new_insights = await self.analyzer.analyze_chunk_with_analyst(
+                chunk=next_chunk,
+                context=context,
+                insight_profile=insight_profile,
+                existing_insights=accumulated_insights,
             )
             
             # 流式输出新洞察
@@ -485,7 +421,15 @@ class AnalysisCoordinator:
                 "insights_count": len(new_insights),
             }
             
-            # AI 决策
+            # ===== 主持人 LLM：决定下一步 =====
+            next_decision, quality = await self.analyzer.decide_next_with_coordinator(
+                context=context,
+                insight_profile=insight_profile,
+                accumulated_insights=accumulated_insights,
+                remaining_chunks=remaining_chunks,
+                analyzed_count=analyzed_count,
+            )
+            
             yield {
                 "event": "ai_decision",
                 "decision": next_decision.model_dump(),
@@ -503,15 +447,15 @@ class AnalysisCoordinator:
                 break
             
             # 调整顺序
-            if next_decision.next_chunk_type:
-                remaining_chunks = self._reorder_chunks(
-                    remaining_chunks, next_decision.next_chunk_type
+            if next_decision.next_chunk_id is not None:
+                remaining_chunks = self._reorder_chunks_by_id(
+                    remaining_chunks, next_decision.next_chunk_id
                 )
         
         # 合成结果
         result = self.synthesizer.synthesize(
             insights=accumulated_insights,
-            strategy_used="progressive_ai_driven",
+            strategy_used=f"two_phase_{insight_profile.recommended_chunking_strategy}",
             chunks_analyzed=analyzed_count,
             total_rows=profile.row_count,
             execution_time=time.time() - start_time,
@@ -536,13 +480,27 @@ class AnalysisCoordinator:
         sorted_chunks = sorted(remaining_chunks, key=lambda x: x.priority)
         return sorted_chunks[0]
     
+    def _reorder_chunks_by_id(
+        self,
+        chunks: List[PriorityChunk],
+        preferred_chunk_id: int,
+    ) -> List[PriorityChunk]:
+        """
+        根据主持人 LLM 推荐的 chunk_id 重新排序数据块
+        """
+        preferred = [c for c in chunks if c.chunk_id == preferred_chunk_id]
+        others = [c for c in chunks if c.chunk_id != preferred_chunk_id]
+        
+        # 优先分析主持人推荐的块
+        return preferred + sorted(others, key=lambda x: x.priority)
+    
     def _reorder_chunks(
         self,
         chunks: List[PriorityChunk],
         preferred_type: str,
     ) -> List[PriorityChunk]:
         """
-        根据 AI 推荐重新排序数据块
+        根据 AI 推荐重新排序数据块（按类型）
         """
         preferred = [c for c in chunks if c.chunk_type == preferred_type]
         others = [c for c in chunks if c.chunk_type != preferred_type]
@@ -617,6 +575,8 @@ class AnalysisCoordinator:
     
     def _create_anomaly_insights(self, anomalies) -> List[Insight]:
         """从检测到的异常创建洞察"""
+        from tableau_assistant.src.models.insight import InsightEvidence
+        
         if not anomalies or not anomalies.anomaly_details:
             return []
         
@@ -625,14 +585,14 @@ class AnalysisCoordinator:
         if anomalies.anomaly_ratio > 0.05:
             importance = 0.9 if anomalies.anomaly_ratio > 0.1 else 0.7
             
-            evidence = None
-            if anomalies.anomaly_details:
-                first_detail = anomalies.anomaly_details[0]
-                evidence = {
+            evidence = InsightEvidence(
+                metric_name="异常值数量",
+                metric_value=float(len(anomalies.outliers)),
+                percentage=anomalies.anomaly_ratio,
+                additional_data={
                     "outlier_count": len(anomalies.outliers),
-                    "anomaly_ratio": anomalies.anomaly_ratio,
-                    "sample_values": first_detail.values if hasattr(first_detail, 'values') else {},
-                }
+                } if anomalies.anomaly_details else None,
+            )
             
             insights.append(Insight(
                 type="anomaly",
@@ -640,7 +600,6 @@ class AnalysisCoordinator:
                 description=f"数据中有 {anomalies.anomaly_ratio:.1%} 的记录存在异常值，可能需要进一步调查。",
                 importance=importance,
                 evidence=evidence,
-                related_columns=[d.column for d in anomalies.anomaly_details if d.column],
             ))
         
         return insights

@@ -1,90 +1,108 @@
 # Tableau AI Analysis Assistant
 
-基于 LangGraph 的智能 Tableau 数据分析助手，支持自然语言查询、语义字段映射和 VizQL 查询生成。
+基于 LangGraph 的智能 Tableau 数据分析助手，支持自然语言查询、语义字段映射、VizQL 查询生成和智能洞察分析。
 
-## 🚀 项目状态
+## ✨ 核心特性
 
-**当前阶段**：Agent 重构 + RAG 增强 - 设计阶段
+- **自然语言查询** - 用自然语言提问，自动生成 VizQL 查询
+- **Token 级流式输出** - 实时推送 LLM 生成的每个 token，提供流畅的用户体验
+- **RAG 语义字段映射** - 向量检索 + LLM 混合匹配，高置信度快速路径
+- **纯语义中间层** - LLM 只做语义理解，VizQL 转换由确定性代码完成
+- **智能洞察分析** - 自动分析查询结果，生成数据洞察
+- **智能重规划** - 评估分析完成度，自动生成探索问题
 
-- ✅ 需求文档完成
-- ✅ 详细设计文档完成
-- ✅ Prompt 模板和数据模型编写指南完成（基于前沿研究）
-- ⏳ 纯语义中间层设计中
-
-## 📋 功能特性
-
-### 核心功能
-- **自然语言查询**：使用自然语言提问，自动生成 VizQL 查询
-- **语义字段映射**：基于 RAG 的智能字段映射系统（向量检索 + LLM 判断）
-- **纯语义中间层**：LLM 只做语义理解，VizQL 技术转换由确定性代码完成
-- **表计算支持**：累计、移动平均、排名、占比、同比环比等
-- **LOD 表达式**：支持不同粒度的聚合计算
-
-### 设计原则
-基于 Google、Anthropic、OpenAI 等机构的前沿研究：
-- **XML 结构化**：Schema 字段描述使用 XML 标签（Anthropic 研究）
-- **决策树**：用树状决策路径替代依赖矩阵（Google Tree of Thoughts）
-- **填写顺序**：先简单后复杂（Google Least-to-Most Prompting）
-- **位置敏感**：关键信息放开头/结尾（Lost in the Middle 研究）
-- **代码级验证**：Pydantic Validator 确保 100% 可靠（Calibration 研究）
-
-## 📚 文档
-
-### 规范文档
-- [Prompt 模板和数据模型编写指南](tableau_assistant/docs/PROMPT_AND_MODEL_GUIDE.md) - **核心规范**
-
-### 设计文档
-- [需求文档](.kiro/specs/agent-refactor-with-rag/requirements.md)
-- [设计文档](.kiro/specs/agent-refactor-with-rag/design.md)
-- [纯语义中间层设计](.kiro/specs/agent-refactor-with-rag/design-appendix-semantic-layer.md)
-- [Prompt 设计](.kiro/specs/agent-refactor-with-rag/design-appendix-prompts.md)
-- [数据模型设计](.kiro/specs/agent-refactor-with-rag/design-appendix-data-models.md)
-- [QueryBuilder 设计](.kiro/specs/agent-refactor-with-rag/design-appendix-query-builder.md)
-
-## 🏗️ 项目结构
+## 🏗️ 系统架构
 
 ```
-tableau-ai-analysis-assistant/
-├── .kiro/specs/                      # 设计文档
-│   └── agent-refactor-with-rag/      # 当前重构设计
-│       ├── requirements.md           # 需求文档
-│       ├── design.md                 # 设计文档
-│       └── design-appendix-*.md      # 详细设计文档
-├── tableau_assistant/                # 主应用
-│   ├── docs/                         # 文档
-│   │   └── PROMPT_AND_MODEL_GUIDE.md # Prompt和数据模型编写指南
-│   ├── prompts/                      # Prompt 模板
-│   │   ├── understanding.py          # 问题理解 Prompt
-│   │   ├── field_mapping.py          # 字段映射 Prompt
-│   │   └── modules/                  # 动态模块化 Prompt
-│   ├── src/
-│   │   ├── agents/                   # Agent 实现
-│   │   │   └── nodes/                # LangGraph 节点
-│   │   ├── capabilities/             # 能力模块
-│   │   │   ├── rag/                  # RAG 语义映射
-│   │   │   └── metadata/             # 元数据管理
-│   │   ├── bi_platforms/             # BI 平台集成
-│   │   │   └── tableau/              # Tableau 集成
-│   │   ├── models/                   # Pydantic 数据模型
-│   │   └── model_manager/            # 模型管理器
-│   └── tests/                        # 测试
-│       ├── unit/                     # 单元测试
-│       └── integration/              # 集成测试
-└── README.md                         # 本文件
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Tableau AI Analysis Assistant                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  用户问题 ──► /api/chat/stream (SSE)                                         │
+│                    │                                                         │
+│                    ▼                                                         │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │                    LangGraph Workflow (6 节点)                        │   │
+│  │                                                                       │   │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐               │   │
+│  │  │Understanding│───►│FieldMapper │───►│QueryBuilder │               │   │
+│  │  │   (LLM)     │    │ (RAG+LLM)  │    │   (Code)    │               │   │
+│  │  └─────────────┘    └─────────────┘    └─────────────┘               │   │
+│  │         │                                     │                       │   │
+│  │         │           ┌─────────────┐           │                       │   │
+│  │         │           │  Replanner  │◄──────────┤                       │   │
+│  │         │           │   (LLM)     │           │                       │   │
+│  │         │           └─────────────┘           │                       │   │
+│  │         │                  │                  ▼                       │   │
+│  │         │           ┌─────────────┐    ┌─────────────┐               │   │
+│  │         └──────────►│   Insight   │◄───│   Execute   │               │   │
+│  │                     │   (LLM)     │    │   (Code)    │               │   │
+│  │                     └─────────────┘    └─────────────┘               │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+│                    │                                                         │
+│                    ▼                                                         │
+│  Token 流式输出 ◄── on_chat_model_stream 事件                                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## 🛠️ 技术栈
+## 📁 项目结构
 
-- **Python 3.10+**
-- **LangGraph** - Agent 编排框架
-- **LangChain** - LLM 应用框架
-- **Anthropic Claude / OpenAI GPT** - LLM 模型
-- **Sentence Transformers** - 向量嵌入
-- **SQLite** - 向量缓存存储
-- **Pydantic** - 数据验证和 Schema 生成
-- **VizQL Data Service** - Tableau 数据查询
+```
+tableau_assistant/
+├── src/
+│   ├── agents/                    # Agent 节点实现
+│   │   ├── base/                  # 基础工具（LLM调用、流式输出）
+│   │   ├── understanding/         # 问题理解 Agent
+│   │   ├── field_mapper/          # 字段映射 Agent (RAG+LLM)
+│   │   ├── insight/               # 洞察分析 Agent
+│   │   └── replanner/             # 重规划 Agent
+│   │
+│   ├── nodes/                     # 纯代码节点
+│   │   ├── query_builder/         # VizQL 查询构建
+│   │   └── execute/               # 查询执行
+│   │
+│   ├── workflow/                  # 工作流编排
+│   │   ├── factory.py             # 工作流创建
+│   │   ├── executor.py            # 执行器（支持流式）
+│   │   └── routes.py              # 路由逻辑
+│   │
+│   ├── api/                       # FastAPI 端点
+│   │   └── chat.py                # 聊天 API（含 SSE 流式）
+│   │
+│   ├── capabilities/              # 能力模块
+│   │   ├── rag/                   # RAG 语义映射
+│   │   ├── storage/               # 缓存存储
+│   │   └── date_processing/       # 日期处理
+│   │
+│   ├── models/                    # Pydantic 数据模型
+│   │   ├── semantic/              # 语义层模型
+│   │   ├── vizql/                 # VizQL 模型
+│   │   ├── workflow/              # 工作流状态
+│   │   └── api/                   # API 模型
+│   │
+│   ├── middleware/                # 中间件
+│   │   ├── filesystem.py          # 大结果自动转存
+│   │   └── patch_tool_calls.py    # 工具调用修复
+│   │
+│   ├── model_manager/             # 模型管理
+│   │   ├── llm.py                 # LLM 选择器
+│   │   ├── embeddings.py          # Embedding 提供者
+│   │   └── reranker.py            # 重排序器
+│   │
+│   └── tools/                     # LangChain 工具
+│       ├── metadata_tool.py       # 元数据获取
+│       ├── date_tool.py           # 日期处理
+│       └── schema_tool.py         # Schema 获取
+│
+└── tests/                         # 测试
+    ├── test_streaming.py          # 流式输出测试
+    └── integration/               # 集成测试
+```
 
-## 📦 安装
+## 🚀 快速开始
+
+### 1. 安装依赖
 
 ```bash
 # 克隆仓库
@@ -96,81 +114,139 @@ python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # 安装依赖
-pip install -r requirements.txt
-
-# 配置环境变量
-cp .env.example .env
-# 编辑 .env 文件，填入必要的配置
+pip install -r tableau_assistant/requirements.txt
 ```
 
-## 🚀 快速开始
+### 2. 配置环境变量
 
 ```bash
-# 启动服务
+cp .env.example .env
+# 编辑 .env 文件，配置 LLM 和 Tableau 连接
+```
+
+关键配置项：
+```env
+# LLM 配置
+LLM_API_BASE=http://your-llm-api/v1
+LLM_MODEL_PROVIDER=local
+TOOLING_LLM_MODEL=qwen3
+
+# Tableau 配置
+TABLEAU_DOMAIN=https://your-tableau-server.com
+TABLEAU_SITE=your-site
+DATASOURCE_LUID=your-datasource-luid
+```
+
+### 3. 启动服务
+
+```bash
 python start.py
-
-# 访问 API 文档
-# http://localhost:8000/docs
 ```
 
-## 📐 架构概览
+### 4. 测试流式输出
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                    自然语言 → VizQL 查询转换流程                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  用户问题 (自然语言)                                                          │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │  Stage 1: Understanding Agent (纯语义理解层) - LLM                   │    │
-│  │  输出: SemanticQuery (纯语义，无 VizQL 概念)                         │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │  Stage 2: FieldMapper (RAG + LLM 混合字段映射)                       │    │
-│  │  输出: 业务术语 → 技术字段名 映射                                    │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│       │                                                                      │
-│       ▼                                                                      │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │  Stage 3-6: 确定性代码转换                                           │    │
-│  │  ImplementationResolver → ExpressionGenerator → QueryBuilder         │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│       │                                                                      │
-│       ▼                                                                      │
-│  VizQL Data Service API 调用                                                 │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+```bash
+python -m tableau_assistant.tests.test_streaming
 ```
 
-## 📈 设计原则（15条）
+## 📡 API 端点
 
-基于前沿研究的设计原则，详见 [PROMPT_AND_MODEL_GUIDE.md](tableau_assistant/docs/PROMPT_AND_MODEL_GUIDE.md)：
+### 流式查询 (推荐)
 
-| # | 原则 | 核心思想 | 研究来源 |
-|---|------|---------|---------|
-| 1 | 最小激活 | 高密度关键词 | Sparse Attention |
-| 2 | 正交分解 | 独立决策 | 认知科学 |
-| 3 | 语义一致 | 统一术语 | Instruction Tuning |
-| 4 | 渐进约束 | 先理解后结构化 | CoT |
-| 5 | ICL本质 | 模式激活 | Meta研究 |
-| 6 | 信息瓶颈 | 保留相关信息 | 信息论 |
-| 7 | MDL | 最短描述 | 信息论 |
-| 8 | XML结构化 | 显式边界标记 | Anthropic |
-| 9 | 位置敏感 | 开头/结尾高注意力 | Lost in the Middle |
-| 10 | 决策树 | 树状决策路径 | Tree of Thoughts |
-| 11 | 填写顺序 | 先简单后复杂 | Least-to-Most |
-| 12 | 选项限制 | ≤7个选项 | 工作记忆 |
-| 13 | 双向显式 | 正反关系都说明 | Reversal Curse |
-| 14 | 外部验证 | 代码级验证 | Calibration |
-| 15 | 格式标准化 | 统一格式 | Prompt Sensitivity |
+```
+POST /api/chat/stream
+Content-Type: application/json
 
-## 🤝 贡献
+{
+    "question": "各产品类别的销售额是多少",
+    "datasource_luid": "your-datasource-luid"
+}
+```
 
-欢迎贡献！请查看设计文档了解当前进度和待完成任务。
+响应：SSE 事件流
+```
+data: {"event_type": "node_start", "data": {"node": "understanding"}, ...}
+data: {"event_type": "token", "data": {"content": "{"}, ...}
+data: {"event_type": "token", "data": {"content": "measures"}, ...}
+...
+data: {"event_type": "node_complete", "data": {"node": "understanding"}, ...}
+data: {"event_type": "complete", ...}
+```
+
+### 前端使用示例
+
+```javascript
+const response = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        question: '各产品类别的销售额',
+        datasource_luid: 'abc123'
+    })
+});
+
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
+
+while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    
+    const text = decoder.decode(value);
+    const lines = text.split('\n');
+    
+    for (const line of lines) {
+        if (line.startsWith('data: ')) {
+            const event = JSON.parse(line.slice(6));
+            
+            if (event.event_type === 'token') {
+                // 实时显示 token
+                appendToOutput(event.data.content);
+            }
+        }
+    }
+}
+```
+
+## 🛠️ 技术栈
+
+| 组件 | 技术 |
+|------|------|
+| Agent 编排 | LangGraph 1.0 |
+| LLM 框架 | LangChain |
+| API 框架 | FastAPI |
+| 数据验证 | Pydantic v2 |
+| 向量检索 | Sentence Transformers |
+| 缓存存储 | SQLite |
+| BI 平台 | Tableau VizQL Data Service |
+
+## 📊 工作流节点
+
+| 节点 | 类型 | 功能 |
+|------|------|------|
+| Understanding | LLM | 问题理解，输出 SemanticQuery |
+| FieldMapper | RAG+LLM | 业务术语 → 技术字段映射 |
+| QueryBuilder | Code | SemanticQuery → VizQL 转换 |
+| Execute | Code | 执行 VizQL 查询 |
+| Insight | LLM | 分析结果，生成洞察 |
+| Replanner | LLM | 评估完成度，生成探索问题 |
+
+## 🔧 中间件
+
+- **SummarizationMiddleware** - 对话历史自动总结
+- **ModelRetryMiddleware** - LLM 调用指数退避重试
+- **ToolRetryMiddleware** - 工具调用重试
+- **FilesystemMiddleware** - 大结果自动转存
+- **PatchToolCallsMiddleware** - 修复悬空工具调用
+
+## 📈 设计原则
+
+基于 Google、Anthropic、OpenAI 等机构的前沿研究：
+
+- **XML 结构化** - Schema 字段描述使用 XML 标签
+- **决策树** - 用树状决策路径替代依赖矩阵
+- **填写顺序** - 先简单后复杂
+- **代码级验证** - Pydantic Validator 确保 100% 可靠
 
 ## 📄 许可证
 
@@ -182,5 +258,5 @@ python start.py
 
 ---
 
-**最后更新**: 2024-12-04
-**版本**: v2.0.0-alpha
+**最后更新**: 2025-12-11
+**版本**: v2.1.0

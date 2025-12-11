@@ -16,7 +16,7 @@ Semantic Query Models (按规范文档重构)
 - `<decision_rule>` 桥梁：将 Prompt 中的抽象思考转化为具体填写动作
 """
 from pydantic import BaseModel, Field, ConfigDict, model_validator
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Optional, Literal, TYPE_CHECKING
 from .enums import (
     AnalysisType,
     ComputationScope,
@@ -26,9 +26,10 @@ from .enums import (
     FilterType,
     DimensionCategory,
     DimensionLevel,
-    TimeRangeType,
-    RelativeTimeType,
-    PeriodUnit,
+    # 日期枚举（与 VizQL API 对齐）
+    TimeFilterMode,
+    PeriodType,
+    DateRangeType,
 )
 
 
@@ -211,249 +212,139 @@ IF is_time == true:
         return self
 
 
-class TimeRangeSpec(BaseModel):
+class TimeFilterSpec(BaseModel):
     """
-    时间范围规格（结构化）
+    时间筛选规格（新版，与 VizQL API 对齐）
     
-    <what>时间筛选的结构化表示，由 LLM 直接输出</what>
+    <what>时间筛选的结构化表示，直接映射到 VizQL 日期筛选类型</what>
     
     <design_principles>
-    - LLM 负责理解自然语言，输出结构化格式
-    - DateParser 负责计算具体日期（start_date, end_date）
-    - 避免在 QueryBuilder 阶段再次调用 LLM
+    1. 与 VizQL API 的三种日期筛选类型直接对应
+    2. LLM 输出 RFC 3339 格式日期（YYYY-MM-DD），无需 DateParser 再计算
+    3. 相对日期由 DateParser 计算，绝对日期直接透传
+    4. 所有多值字段使用 Enum 类型
     </design_principles>
     
-    <decision_tree>
-    START
-      │
-      ├─► range_type = ? (ALWAYS fill first)
-      │   │
-      │   ├─► absolute
-      │   │   └─► fill value (required, e.g., "2024", "2024-Q1", "2024-03")
-      │   │
-      │   └─► relative
-      │       ├─► fill relative_type (required)
-      │       ├─► fill period_unit (required)
-      │       └─► fill period_count (IF relative_type = lastn)
-      │
-    END
-    </decision_tree>
+    <vizql_mapping>
+    - mode=ABSOLUTE_RANGE → filterType: "QUANTITATIVE_DATE"
+    - mode=RELATIVE → filterType: "DATE" (RelativeDateFilter)
+    - mode=SET → filterType: "SET"
+    </vizql_mapping>
     
     <examples>
-    Example 1 - Absolute year:
-    Input: "2024年"
-    Output: {"range_type": "absolute", "value": "2024"}
+    # 场景1: 单点绝对 - "2024年"
+    {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-12-31"}
     
-    Example 2 - Absolute quarter:
-    Input: "2024年第一季度"
-    Output: {"range_type": "absolute", "value": "2024-Q1"}
+    # 场景2: 绝对范围 - "2024年1月到5月"
+    {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-05-31"}
     
-    Example 3 - Absolute month:
-    Input: "2024年3月"
-    Output: {"range_type": "absolute", "value": "2024-03"}
+    # 场景3: 相对范围 - "最近3个月"
+    {"mode": "relative", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}
     
-    Example 4 - Relative last N:
-    Input: "最近3个月"
-    Output: {"range_type": "relative", "relative_type": "lastn", "period_unit": "month", "period_count": 3}
+    # 场景4: 相对范围 - "年初至今"
+    {"mode": "relative", "period_type": "YEARS", "date_range_type": "TODATE"}
     
-    Example 5 - Relative current:
-    Input: "本月"
-    Output: {"range_type": "relative", "relative_type": "current", "period_unit": "month"}
-    
-    Example 6 - Relative last:
-    Input: "上个月"
-    Output: {"range_type": "relative", "relative_type": "last", "period_unit": "month"}
-    
-    Example 7 - Relative to date:
-    Input: "年初至今"
-    Output: {"range_type": "relative", "relative_type": "todate", "period_unit": "year"}
+    # 场景5: 多离散点 - "2024年1月和2月"
+    {"mode": "set", "date_values": ["2024-01", "2024-02"]}
     </examples>
     """
     model_config = ConfigDict(extra="forbid")
     
-    range_type: TimeRangeType = Field(
-        description="""时间范围类型
+    mode: "TimeFilterMode" = Field(
+        description="""时间筛选模式
 
-<what>绝对时间还是相对时间</what>
+<what>决定使用哪种 VizQL 筛选类型</what>
 <when>ALWAYS required</when>
-<how>Detect from time expression in question</how>
 
 <decision_rule>
-- "2024年" / "Q1" / "3月" / "2024-03-15" → absolute
-- "最近3个月" / "本月" / "上个月" / "年初至今" → relative
-</decision_rule>
-
-<values>
-- absolute: 绝对时间（具体日期/年/月/季度）
-- relative: 相对时间（最近N天/月/年）
-</values>"""
+- 具体日期/日期范围 → ABSOLUTE_RANGE
+- 相对表达（最近N、本月、年初至今）→ RELATIVE
+- 多个离散日期点 → SET
+</decision_rule>"""
     )
     
-    # ═══════════════════════════════════════════════════════════════════════
-    # absolute 类型字段
-    # ═══════════════════════════════════════════════════════════════════════
-    
-    value: Optional[str] = Field(
+    # ABSOLUTE_RANGE 模式字段
+    start_date: Optional[str] = Field(
         default=None,
-        description="""绝对时间值
-
-<what>具体的时间值，标准格式</what>
-
-<when>ONLY when range_type = absolute</when>
-
-<dependency>
-- field: range_type
-- condition: range_type == "absolute"
-</dependency>
-
-<decision_rule>
-IF range_type != absolute THEN null (不填写！)
-IF range_type == absolute:
-  - "2024年" → "2024"
-  - "2024年第一季度" / "Q1" → "2024-Q1"
-  - "2024年3月" / "3月" → "2024-03"
-  - "2024年3月15日" → "2024-03-15"
-</decision_rule>
-
-<format>
-- 年份: "YYYY" (e.g., "2024")
-- 季度: "YYYY-QN" (e.g., "2024-Q1")
-- 月份: "YYYY-MM" (e.g., "2024-03")
-- 日期: "YYYY-MM-DD" (e.g., "2024-03-15")
-</format>
-
-<anti_patterns>
-❌ range_type=relative 时设置 value
-</anti_patterns>"""
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="""开始日期（RFC 3339 格式 YYYY-MM-DD）
+        
+<when>REQUIRED when mode = ABSOLUTE_RANGE</when>
+<format>LLM 必须直接输出计算后的日期</format>"""
     )
     
-    # ═══════════════════════════════════════════════════════════════════════
-    # relative 类型字段
-    # ═══════════════════════════════════════════════════════════════════════
-    
-    relative_type: Optional[RelativeTimeType] = Field(
+    end_date: Optional[str] = Field(
         default=None,
-        description="""相对时间类型
-
-<what>相对时间的计算方式</what>
-
-<when>ONLY when range_type = relative</when>
-
-<dependency>
-- field: range_type
-- condition: range_type == "relative"
-</dependency>
-
-<decision_rule>
-IF range_type != relative THEN null (不填写！)
-IF range_type == relative:
-  - "本月" / "今年" / "本周" → current
-  - "上个月" / "去年" / "上周" → last
-  - "最近3个月" / "最近7天" → lastn
-  - "年初至今" / "月初至今" → todate
-</decision_rule>
-
-<values>
-- current: 当前周期（本月、今年）
-- last: 上一个周期（上个月、去年）
-- lastn: 最近N个周期（最近3个月）
-- todate: 至今（年初至今、月初至今）
-</values>
-
-<anti_patterns>
-❌ range_type=absolute 时设置 relative_type
-</anti_patterns>"""
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="""结束日期（RFC 3339 格式 YYYY-MM-DD）
+        
+<when>REQUIRED when mode = ABSOLUTE_RANGE</when>
+<format>LLM 必须直接输出计算后的日期</format>"""
     )
     
-    period_unit: Optional[PeriodUnit] = Field(
+    # RELATIVE 模式字段
+    period_type: Optional["PeriodType"] = Field(
         default=None,
-        description="""时间周期单位
-
-<what>时间周期的单位</what>
-
-<when>ONLY when range_type = relative</when>
-
-<dependency>
-- field: range_type
-- condition: range_type == "relative"
-</dependency>
-
-<decision_rule>
-IF range_type != relative THEN null (不填写！)
-IF range_type == relative:
-  - "天" / "日" → day
-  - "周" → week
-  - "月" → month
-  - "季度" → quarter
-  - "年" → year
-</decision_rule>
-
-<values>
-- day: 天
-- week: 周
-- month: 月
-- quarter: 季度
-- year: 年
-</values>
-
-<anti_patterns>
-❌ range_type=absolute 时设置 period_unit
-</anti_patterns>"""
+        description="""时间周期类型（与 VizQL PeriodType 对齐）
+        
+<when>REQUIRED when mode = RELATIVE</when>
+<values>DAYS, WEEKS, MONTHS, QUARTERS, YEARS</values>"""
     )
     
-    period_count: Optional[int] = Field(
+    date_range_type: Optional["DateRangeType"] = Field(
+        default=None,
+        description="""相对日期范围类型（与 VizQL dateRangeType 对齐）
+        
+<when>REQUIRED when mode = RELATIVE</when>
+<values>CURRENT, LAST, LASTN, NEXT, NEXTN, TODATE</values>"""
+    )
+    
+    range_n: Optional[int] = Field(
         default=None,
         ge=1,
         description="""周期数量
-
-<what>最近N个周期中的N</what>
-
-<when>ONLY when relative_type = lastn</when>
-
-<dependency>
-- field: relative_type
-- condition: relative_type == "lastn"
-</dependency>
-
-<decision_rule>
-IF relative_type != lastn THEN null (不填写！)
-IF relative_type == lastn:
-  - "最近3个月" → 3
-  - "最近7天" → 7
-  - "最近2年" → 2
-</decision_rule>
-
-<anti_patterns>
-❌ relative_type != lastn 时设置 period_count
-</anti_patterns>"""
+        
+<when>REQUIRED when date_range_type = LASTN or NEXTN</when>"""
+    )
+    
+    anchor_date: Optional[str] = Field(
+        default=None,
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
+        description="""锚定日期（可选，默认今天）"""
+    )
+    
+    # SET 模式字段
+    date_values: Optional[List[str]] = Field(
+        default=None,
+        description="""离散日期值列表
+        
+<when>REQUIRED when mode = SET</when>
+<format>支持年("2024")、季度("2024-Q1")、月("2024-01")、日("2024-01-15")</format>"""
     )
     
     @model_validator(mode='after')
-    def validate_time_range_dependencies(self) -> 'TimeRangeSpec':
-        """验证时间范围类型相关的字段依赖"""
+    def validate_mode_dependencies(self) -> 'TimeFilterSpec':
+        """验证模式相关的字段依赖"""
+        from .enums import TimeFilterMode, DateRangeType
         
-        if self.range_type == TimeRangeType.ABSOLUTE:
-            if self.value is None:
-                raise ValueError("value is required when range_type=absolute")
-            # 清除 relative 相关字段
-            if self.relative_type is not None:
-                self.relative_type = None
-            if self.period_unit is not None:
-                self.period_unit = None
-            if self.period_count is not None:
-                self.period_count = None
+        if self.mode == TimeFilterMode.ABSOLUTE_RANGE:
+            if self.start_date is None:
+                raise ValueError("start_date is required when mode=absolute_range")
+            if self.end_date is None:
+                raise ValueError("end_date is required when mode=absolute_range")
         
-        elif self.range_type == TimeRangeType.RELATIVE:
-            if self.relative_type is None:
-                raise ValueError("relative_type is required when range_type=relative")
-            if self.period_unit is None:
-                raise ValueError("period_unit is required when range_type=relative")
-            # 清除 absolute 相关字段
-            if self.value is not None:
-                self.value = None
-            # lastn 类型需要 period_count
-            if self.relative_type == RelativeTimeType.LASTN and self.period_count is None:
-                raise ValueError("period_count is required when relative_type=lastn")
+        elif self.mode == TimeFilterMode.RELATIVE:
+            if self.period_type is None:
+                raise ValueError("period_type is required when mode=relative")
+            if self.date_range_type is None:
+                raise ValueError("date_range_type is required when mode=relative")
+            if self.date_range_type in (DateRangeType.LASTN, DateRangeType.NEXTN):
+                if self.range_n is None:
+                    raise ValueError("range_n is required when date_range_type=LASTN/NEXTN")
+        
+        elif self.mode == TimeFilterMode.SET:
+            if self.date_values is None or len(self.date_values) == 0:
+                raise ValueError("date_values is required when mode=set")
         
         return self
 
@@ -528,12 +419,12 @@ Prompt Step 4 (检测时间筛选) → 填写 filter_type
 </values>"""
     )
     
-    # time_range 类型字段
-    time_range: Optional[TimeRangeSpec] = Field(
+    # time_filter 类型字段（与 VizQL API 对齐）
+    time_filter: Optional[TimeFilterSpec] = Field(
         default=None,
-        description="""时间范围（结构化）
+        description="""时间筛选（新版，与 VizQL API 对齐）
 
-<what>时间筛选的结构化表示</what>
+<what>时间筛选的结构化表示，直接映射到 VizQL 日期筛选类型</what>
 
 <when>ONLY when filter_type = time_range</when>
 
@@ -545,16 +436,19 @@ Prompt Step 4 (检测时间筛选) → 填写 filter_type
 <decision_rule>
 IF filter_type != time_range THEN null (不填写！)
 IF filter_type == time_range:
-  - LLM 直接输出结构化 TimeRangeSpec
-  - 绝对时间: {"range_type": "absolute", "value": "2024"}
-  - 相对时间: {"range_type": "relative", "relative_type": "lastn", "period_unit": "month", "period_count": 3}
+  - 绝对日期: {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-12-31"}
+  - 相对日期: {"mode": "relative", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}
+  - 离散日期: {"mode": "set", "date_values": ["2024-01", "2024-02"]}
 </decision_rule>
 
 <examples>
-- "2024年" → {"range_type": "absolute", "value": "2024"}
-- "2024年Q1" → {"range_type": "absolute", "value": "2024-Q1"}
-- "最近3个月" → {"range_type": "relative", "relative_type": "lastn", "period_unit": "month", "period_count": 3}
-- "本月" → {"range_type": "relative", "relative_type": "current", "period_unit": "month"}
+- "2024年" → {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-12-31"}
+- "2024年Q1" → {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-03-31"}
+- "2024年1月到5月" → {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-05-31"}
+- "最近3个月" → {"mode": "relative", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}
+- "年初至今" → {"mode": "relative", "period_type": "YEARS", "date_range_type": "TODATE"}
+- "本月" → {"mode": "relative", "period_type": "MONTHS", "date_range_type": "CURRENT"}
+- "2024年1月和2月" → {"mode": "set", "date_values": ["2024-01", "2024-02"]}
 </examples>"""
     )
     
@@ -648,8 +542,8 @@ IF filter_type == set:
         """验证筛选类型相关的字段依赖"""
         
         if self.filter_type == FilterType.TIME_RANGE:
-            if self.time_range is None:
-                raise ValueError("time_range is required when filter_type=time_range")
+            if self.time_filter is None:
+                raise ValueError("time_filter is required when filter_type=time_range")
         
         if self.filter_type == FilterType.SET:
             if self.values is None:
@@ -1126,7 +1020,7 @@ class SemanticQuery(BaseModel):
         }]
     }
     
-    Example 4 - With time filter (absolute):
+    Example 4 - With time filter (absolute year):
     Input: "2024年各省份销售额"
     Output: {
         "measures": [{"name": "销售额", "aggregation": "sum"}],
@@ -1134,7 +1028,7 @@ class SemanticQuery(BaseModel):
         "filters": [{
             "field": "日期",
             "filter_type": "time_range",
-            "time_range": {"range_type": "absolute", "value": "2024"}
+            "time_filter": {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-12-31"}
         }]
     }
     
@@ -1146,7 +1040,43 @@ class SemanticQuery(BaseModel):
         "filters": [{
             "field": "日期",
             "filter_type": "time_range",
-            "time_range": {"range_type": "relative", "relative_type": "lastn", "period_unit": "month", "period_count": 3}
+            "time_filter": {"mode": "relative", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}
+        }]
+    }
+    
+    Example 6 - With time filter (absolute range):
+    Input: "2024年1月到5月各省份销售额"
+    Output: {
+        "measures": [{"name": "销售额", "aggregation": "sum"}],
+        "dimensions": [{"name": "省份", "is_time": false}],
+        "filters": [{
+            "field": "日期",
+            "filter_type": "time_range",
+            "time_filter": {"mode": "absolute_range", "start_date": "2024-01-01", "end_date": "2024-05-31"}
+        }]
+    }
+    
+    Example 7 - With time filter (multiple discrete dates):
+    Input: "2024年1月和2月各省份销售额"
+    Output: {
+        "measures": [{"name": "销售额", "aggregation": "sum"}],
+        "dimensions": [{"name": "省份", "is_time": false}],
+        "filters": [{
+            "field": "日期",
+            "filter_type": "time_range",
+            "time_filter": {"mode": "set", "date_values": ["2024-01", "2024-02"]}
+        }]
+    }
+    
+    Example 8 - With time filter (year to date):
+    Input: "年初至今各省份销售额"
+    Output: {
+        "measures": [{"name": "销售额", "aggregation": "sum"}],
+        "dimensions": [{"name": "省份", "is_time": false}],
+        "filters": [{
+            "field": "日期",
+            "filter_type": "time_range",
+            "time_filter": {"mode": "relative", "period_type": "YEARS", "date_range_type": "TODATE"}
         }]
     }
     </examples>
@@ -1317,6 +1247,35 @@ class FieldMapping(BaseModel):
 </values>"""
     )
     
+    # 字段数据类型（用于日期筛选策略选择）
+    data_type: Optional[str] = Field(
+        default=None,
+        description="""字段数据类型（来自元数据）
+
+<what>字段在数据源中的数据类型</what>
+<values>DATE, DATETIME, STRING, INTEGER, REAL, BOOLEAN</values>
+
+<usage>
+QueryBuilder 根据 data_type 选择日期筛选策略：
+- DATE/DATETIME: 使用 QUANTITATIVE_DATE 或 DATE (RelativeDateFilter)
+- STRING: 使用 DATEPARSE + QUANTITATIVE_DATE，或 SET/MATCH
+</usage>"""
+    )
+    
+    # 字段日期格式（STRING 类型日期字段）
+    date_format: Optional[str] = Field(
+        default=None,
+        description="""日期格式（仅 STRING 类型日期字段）
+
+<what>STRING 类型字段的日期格式模式</what>
+<format>Tableau DATEPARSE 格式，如 'yyyy-MM-dd', 'MM/dd/yyyy'</format>
+
+<usage>
+QueryBuilder 使用此格式生成 DATEPARSE 表达式：
+DATEPARSE('yyyy-MM-dd', [field_name])
+</usage>"""
+    )
+    
     # 维度层级信息（可选）
     category: Optional[DimensionCategory] = Field(
         default=None,
@@ -1386,10 +1345,11 @@ class MappedQuery(BaseModel):
 </examples>"""
     )
     
-    # 聚合置信度
-    overall_confidence: float = Field(
+    # 聚合置信度（可选，默认自动计算）
+    overall_confidence: Optional[float] = Field(
+        default=None,
         ge=0.0, le=1.0,
-        description="整体映射置信度（所有映射的最小值）"
+        description="整体映射置信度（所有映射的最小值），如果不提供则自动计算"
     )
     
     # 低置信度警告
@@ -1397,6 +1357,23 @@ class MappedQuery(BaseModel):
         default_factory=list,
         description="置信度 < 0.7 的字段列表"
     )
+    
+    @model_validator(mode='after')
+    def compute_overall_confidence(self) -> 'MappedQuery':
+        """自动计算 overall_confidence 和 low_confidence_fields"""
+        if self.field_mappings:
+            confidences = [m.confidence for m in self.field_mappings.values()]
+            if self.overall_confidence is None:
+                self.overall_confidence = min(confidences) if confidences else 1.0
+            # 自动填充低置信度字段
+            if not self.low_confidence_fields:
+                self.low_confidence_fields = [
+                    term for term, mapping in self.field_mappings.items()
+                    if mapping.confidence < 0.7
+                ]
+        elif self.overall_confidence is None:
+            self.overall_confidence = 1.0
+        return self
     
     def get_technical_field(self, business_term: str) -> Optional[str]:
         """获取业务术语对应的技术字段名"""
@@ -1418,7 +1395,7 @@ __all__ = [
     "MeasureSpec",
     "DimensionSpec",
     "FilterSpec",
-    "TimeRangeSpec",
+    "TimeFilterSpec",     # 与 VizQL API 对齐
     "AnalysisSpec",
     "OutputControl",
     "SemanticQuery",

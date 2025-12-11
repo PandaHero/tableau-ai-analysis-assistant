@@ -17,6 +17,11 @@ from typing import List, Optional, Dict, Any, Set, Tuple
 from dataclasses import dataclass, field
 
 try:
+    # 抑制 FAISS 的 AVX512/AVX2 加载日志
+    import logging as _logging
+    _faiss_logger = _logging.getLogger("faiss.loader")
+    _faiss_logger.setLevel(_logging.WARNING)
+    
     import faiss
     import numpy as np
     FAISS_AVAILABLE = True

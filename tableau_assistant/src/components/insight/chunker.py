@@ -15,7 +15,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
 
-from .models import (
+from tableau_assistant.src.models.insight import (
     PriorityChunk,
     TailDataSummary,
     ChunkPriority,

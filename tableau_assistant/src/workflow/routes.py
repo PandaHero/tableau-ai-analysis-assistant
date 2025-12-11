@@ -79,12 +79,24 @@ def route_after_replanner(
     Returns:
         Next node name: "understanding" or "end"
     """
-    replan_decision = state.get("replan_decision", {})
+    replan_decision = state.get("replan_decision")
     replan_count = state.get("replan_count", 0)
     
-    # Extract decision details for logging
-    should_replan = replan_decision.get("should_replan", False)
-    completeness_score = replan_decision.get("completeness_score", 1.0)
+    # Extract decision details - handle both Pydantic object and dict
+    if replan_decision is None:
+        should_replan = False
+        completeness_score = 1.0
+        exploration_questions = []
+    elif hasattr(replan_decision, "should_replan"):
+        # Pydantic object
+        should_replan = replan_decision.should_replan
+        completeness_score = replan_decision.completeness_score
+        exploration_questions = replan_decision.exploration_questions or []
+    else:
+        # Dict fallback
+        should_replan = replan_decision.get("should_replan", False)
+        completeness_score = replan_decision.get("completeness_score", 1.0)
+        exploration_questions = replan_decision.get("exploration_questions", [])
     
     # Check if max replan rounds reached
     if replan_count >= max_replan_rounds:
@@ -96,9 +108,17 @@ def route_after_replanner(
     
     # Route based on Replanner's smart decision
     if should_replan:
-        # Get new questions for logging
-        new_questions = replan_decision.get("new_questions", [])
-        next_question = new_questions[0] if new_questions else "N/A"
+        # Get exploration questions for logging
+        if exploration_questions:
+            first_q = exploration_questions[0]
+            if hasattr(first_q, "question"):
+                next_question = first_q.question
+            elif isinstance(first_q, dict):
+                next_question = first_q.get("question", "N/A")
+            else:
+                next_question = str(first_q)
+        else:
+            next_question = "N/A"
         
         logger.info(
             f"Replanning: round {replan_count + 1}/{max_replan_rounds}, "

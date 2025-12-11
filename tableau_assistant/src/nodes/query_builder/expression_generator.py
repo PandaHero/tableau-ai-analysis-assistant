@@ -36,7 +36,7 @@ from tableau_assistant.src.models.vizql.types import (
     TableCalcComputedAggregation,
     SortDirection,
 )
-from .implementation_resolver import ImplementationDecision, ImplementationType
+from .implementation_resolver import ImplementationDecision, ImplementationType, DimensionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -205,16 +205,19 @@ class ExpressionGenerator:
         self,
         target_field: str,
         aggregation: AggregationType,
-        addressing: List[str],
+        addressing: List[DimensionInfo],
     ) -> GeneratedExpression:
         """
         Generate running total table calculation.
         
         VizQL: RUNNING_SUM(SUM([Sales]))
         """
-        # Create dimension references for addressing
+        # Create dimension references for addressing with function info
         dimensions = [
-            TableCalcFieldReference(fieldCaption=dim)
+            TableCalcFieldReference(
+                fieldCaption=dim.field_name,
+                function=FunctionEnum(dim.function) if dim.function else None
+            )
             for dim in addressing
         ]
         
@@ -233,7 +236,7 @@ class ExpressionGenerator:
     def _generate_rank(
         self,
         target_field: str,
-        addressing: List[str],
+        addressing: List[DimensionInfo],
         direction: str = "desc",
     ) -> GeneratedExpression:
         """
@@ -242,7 +245,10 @@ class ExpressionGenerator:
         VizQL: RANK(SUM([Sales]))
         """
         dimensions = [
-            TableCalcFieldReference(fieldCaption=dim)
+            TableCalcFieldReference(
+                fieldCaption=dim.field_name,
+                function=FunctionEnum(dim.function) if dim.function else None
+            )
             for dim in addressing
         ]
         
@@ -265,7 +271,7 @@ class ExpressionGenerator:
         self,
         target_field: str,
         aggregation: AggregationType,
-        addressing: List[str],
+        addressing: List[DimensionInfo],
     ) -> GeneratedExpression:
         """
         Generate percent of total table calculation.
@@ -273,7 +279,10 @@ class ExpressionGenerator:
         VizQL: SUM([Sales]) / TOTAL(SUM([Sales]))
         """
         dimensions = [
-            TableCalcFieldReference(fieldCaption=dim)
+            TableCalcFieldReference(
+                fieldCaption=dim.field_name,
+                function=FunctionEnum(dim.function) if dim.function else None
+            )
             for dim in addressing
         ]
         
@@ -292,7 +301,7 @@ class ExpressionGenerator:
         self,
         target_field: str,
         aggregation: AggregationType,
-        addressing: List[str],
+        addressing: List[DimensionInfo],
         window_size: int = 3,
     ) -> GeneratedExpression:
         """
@@ -301,7 +310,10 @@ class ExpressionGenerator:
         VizQL: WINDOW_AVG(SUM([Sales]), -2, 0)
         """
         dimensions = [
-            TableCalcFieldReference(fieldCaption=dim)
+            TableCalcFieldReference(
+                fieldCaption=dim.field_name,
+                function=FunctionEnum(dim.function) if dim.function else None
+            )
             for dim in addressing
         ]
         
@@ -327,7 +339,7 @@ class ExpressionGenerator:
         self,
         target_field: str,
         aggregation: AggregationType,
-        addressing: List[str],
+        addressing: List[DimensionInfo],
         compare_period: str = "previous",
     ) -> GeneratedExpression:
         """
@@ -336,7 +348,10 @@ class ExpressionGenerator:
         VizQL: (SUM([Sales]) - LOOKUP(SUM([Sales]), -1)) / ABS(LOOKUP(SUM([Sales]), -1))
         """
         dimensions = [
-            TableCalcFieldReference(fieldCaption=dim)
+            TableCalcFieldReference(
+                fieldCaption=dim.field_name,
+                function=FunctionEnum(dim.function) if dim.function else None
+            )
             for dim in addressing
         ]
         
@@ -366,11 +381,14 @@ class ExpressionGenerator:
         self,
         target_field: str,
         aggregation: AggregationType,
-        addressing: List[str],
+        addressing: List[DimensionInfo],
     ) -> GeneratedExpression:
         """Generate custom table calculation."""
         dimensions = [
-            TableCalcFieldReference(fieldCaption=dim)
+            TableCalcFieldReference(
+                fieldCaption=dim.field_name,
+                function=FunctionEnum(dim.function) if dim.function else None
+            )
             for dim in addressing
         ]
         

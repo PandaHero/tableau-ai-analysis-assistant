@@ -44,20 +44,27 @@ class ImplementationType(str, Enum):
 
 
 @dataclass
+class DimensionInfo:
+    """Dimension information for table calculation addressing"""
+    field_name: str
+    function: Optional[str] = None  # e.g., "YEAR", "MONTH"
+
+
+@dataclass
 class ImplementationDecision:
     """
     Implementation decision result
     
     Contains:
     - impl_type: Type of implementation (table_calc, lod_fixed, etc.)
-    - addressing: List of fields for table calc addressing
-    - partitioning: List of fields for table calc partitioning
+    - addressing: List of DimensionInfo for table calc addressing
+    - partitioning: List of DimensionInfo for table calc partitioning
     - lod_dimensions: List of dimensions for LOD expression
     - reasoning: Explanation of the decision
     """
     impl_type: ImplementationType
-    addressing: List[str] = None
-    partitioning: List[str] = None
+    addressing: List[DimensionInfo] = None
+    partitioning: List[DimensionInfo] = None
     lod_dimensions: List[str] = None
     reasoning: str = ""
     
@@ -113,18 +120,29 @@ class ImplementationResolver:
         """
         logger.debug(f"Resolving implementation for analysis type: {analysis.type}")
         
-        # Get technical field names for dimensions
-        tech_dimensions = []
-        time_dimensions = []
-        non_time_dimensions = []
+        # Map time_granularity to VizQL function name
+        granularity_to_function = {
+            "year": "YEAR",
+            "quarter": "QUARTER",
+            "month": "MONTH",
+            "week": "WEEK",
+            "day": "DAY",
+        }
+        
+        # Get technical field names and function info for dimensions
+        tech_dimensions: List[DimensionInfo] = []
+        time_dimensions: List[DimensionInfo] = []
+        non_time_dimensions: List[DimensionInfo] = []
         
         for dim in dimensions:
             tech_field = field_mappings.get(dim.name, dim.name)
-            tech_dimensions.append(tech_field)
+            func = granularity_to_function.get(dim.time_granularity) if dim.time_granularity else None
+            dim_info = DimensionInfo(field_name=tech_field, function=func)
+            tech_dimensions.append(dim_info)
             if dim.time_granularity is not None:
-                time_dimensions.append(tech_field)
+                time_dimensions.append(dim_info)
             else:
-                non_time_dimensions.append(tech_field)
+                non_time_dimensions.append(dim_info)
         
         # Decision logic based on analysis type
         if analysis.type == AnalysisType.CUMULATIVE:
@@ -156,9 +174,9 @@ class ImplementationResolver:
     def _resolve_cumulative(
         self,
         analysis: AnalysisSpec,
-        tech_dimensions: List[str],
-        time_dimensions: List[str],
-        non_time_dimensions: List[str],
+        tech_dimensions: List[DimensionInfo],
+        time_dimensions: List[DimensionInfo],
+        non_time_dimensions: List[DimensionInfo],
     ) -> ImplementationDecision:
         """
         Resolve cumulative analysis.
@@ -182,7 +200,7 @@ class ImplementationResolver:
             # Single dimension - address by that dimension
             return ImplementationDecision(
                 impl_type=ImplementationType.TABLE_CALC,
-                addressing=tech_dimensions.copy(),
+                addressing=list(tech_dimensions),
                 reasoning="Single dimension cumulative: addressing by the dimension"
             )
         
@@ -194,8 +212,8 @@ class ImplementationResolver:
             if time_dimensions:
                 return ImplementationDecision(
                     impl_type=ImplementationType.TABLE_CALC,
-                    addressing=time_dimensions.copy(),
-                    partitioning=non_time_dimensions.copy(),
+                    addressing=list(time_dimensions),
+                    partitioning=list(non_time_dimensions),
                     reasoning="Multi-dimension per_group: addressing by time, partitioning by others"
                 )
             else:
@@ -203,23 +221,23 @@ class ImplementationResolver:
                 return ImplementationDecision(
                     impl_type=ImplementationType.TABLE_CALC,
                     addressing=[tech_dimensions[0]],
-                    partitioning=tech_dimensions[1:],
+                    partitioning=list(tech_dimensions[1:]),
                     reasoning="Multi-dimension per_group (no time): addressing by first dimension"
                 )
         else:
             # Across all: address by all dimensions
             return ImplementationDecision(
                 impl_type=ImplementationType.TABLE_CALC,
-                addressing=tech_dimensions.copy(),
+                addressing=list(tech_dimensions),
                 reasoning="Multi-dimension across_all: addressing by all dimensions"
             )
     
     def _resolve_ranking(
         self,
         analysis: AnalysisSpec,
-        tech_dimensions: List[str],
-        time_dimensions: List[str],
-        non_time_dimensions: List[str],
+        tech_dimensions: List[DimensionInfo],
+        time_dimensions: List[DimensionInfo],
+        non_time_dimensions: List[DimensionInfo],
     ) -> ImplementationDecision:
         """
         Resolve ranking analysis.
@@ -240,7 +258,7 @@ class ImplementationResolver:
         if dim_count == 1:
             return ImplementationDecision(
                 impl_type=ImplementationType.TABLE_CALC,
-                addressing=tech_dimensions.copy(),
+                addressing=list(tech_dimensions),
                 reasoning="Single dimension ranking"
             )
         
@@ -252,30 +270,30 @@ class ImplementationResolver:
                 # Rank within each time period
                 return ImplementationDecision(
                     impl_type=ImplementationType.TABLE_CALC,
-                    addressing=non_time_dimensions.copy() if non_time_dimensions else tech_dimensions[:1],
-                    partitioning=time_dimensions.copy(),
+                    addressing=list(non_time_dimensions) if non_time_dimensions else [tech_dimensions[0]],
+                    partitioning=list(time_dimensions),
                     reasoning="Multi-dimension per_group ranking: rank within time periods"
                 )
             else:
                 return ImplementationDecision(
                     impl_type=ImplementationType.TABLE_CALC,
                     addressing=[tech_dimensions[-1]],
-                    partitioning=tech_dimensions[:-1],
+                    partitioning=list(tech_dimensions[:-1]),
                     reasoning="Multi-dimension per_group ranking: rank within groups"
                 )
         else:
             return ImplementationDecision(
                 impl_type=ImplementationType.TABLE_CALC,
-                addressing=tech_dimensions.copy(),
+                addressing=list(tech_dimensions),
                 reasoning="Multi-dimension across_all ranking"
             )
     
     def _resolve_percentage(
         self,
         analysis: AnalysisSpec,
-        tech_dimensions: List[str],
-        time_dimensions: List[str],
-        non_time_dimensions: List[str],
+        tech_dimensions: List[DimensionInfo],
+        time_dimensions: List[DimensionInfo],
+        non_time_dimensions: List[DimensionInfo],
     ) -> ImplementationDecision:
         """
         Resolve percentage analysis.
@@ -295,7 +313,7 @@ class ImplementationResolver:
         if dim_count == 1:
             return ImplementationDecision(
                 impl_type=ImplementationType.TABLE_CALC,
-                addressing=tech_dimensions.copy(),
+                addressing=list(tech_dimensions),
                 reasoning="Single dimension percentage"
             )
         
@@ -306,30 +324,30 @@ class ImplementationResolver:
             if time_dimensions:
                 return ImplementationDecision(
                     impl_type=ImplementationType.TABLE_CALC,
-                    addressing=non_time_dimensions.copy() if non_time_dimensions else [tech_dimensions[0]],
-                    partitioning=time_dimensions.copy(),
+                    addressing=list(non_time_dimensions) if non_time_dimensions else [tech_dimensions[0]],
+                    partitioning=list(time_dimensions),
                     reasoning="Multi-dimension per_group percentage: within time periods"
                 )
             else:
                 return ImplementationDecision(
                     impl_type=ImplementationType.TABLE_CALC,
                     addressing=[tech_dimensions[-1]],
-                    partitioning=tech_dimensions[:-1],
+                    partitioning=list(tech_dimensions[:-1]),
                     reasoning="Multi-dimension per_group percentage: within groups"
                 )
         else:
             return ImplementationDecision(
                 impl_type=ImplementationType.TABLE_CALC,
-                addressing=tech_dimensions.copy(),
+                addressing=list(tech_dimensions),
                 reasoning="Multi-dimension across_all percentage"
             )
     
     def _resolve_moving(
         self,
         analysis: AnalysisSpec,
-        tech_dimensions: List[str],
-        time_dimensions: List[str],
-        non_time_dimensions: List[str],
+        tech_dimensions: List[DimensionInfo],
+        time_dimensions: List[DimensionInfo],
+        non_time_dimensions: List[DimensionInfo],
     ) -> ImplementationDecision:
         """
         Resolve moving calculation analysis.
@@ -348,11 +366,11 @@ class ImplementationResolver:
         
         # Moving calculations prefer time dimensions for addressing
         if time_dimensions:
-            addressing = time_dimensions.copy()
-            partitioning = non_time_dimensions.copy()
+            addressing = list(time_dimensions)
+            partitioning = list(non_time_dimensions)
         else:
             addressing = [tech_dimensions[0]]
-            partitioning = tech_dimensions[1:] if len(tech_dimensions) > 1 else []
+            partitioning = list(tech_dimensions[1:]) if len(tech_dimensions) > 1 else []
         
         scope = analysis.computation_scope or ComputationScope.PER_GROUP
         
@@ -370,9 +388,9 @@ class ImplementationResolver:
     def _resolve_period_compare(
         self,
         analysis: AnalysisSpec,
-        tech_dimensions: List[str],
-        time_dimensions: List[str],
-        non_time_dimensions: List[str],
+        tech_dimensions: List[DimensionInfo],
+        time_dimensions: List[DimensionInfo],
+        non_time_dimensions: List[DimensionInfo],
     ) -> ImplementationDecision:
         """
         Resolve period comparison analysis.
@@ -390,17 +408,17 @@ class ImplementationResolver:
         
         return ImplementationDecision(
             impl_type=ImplementationType.TABLE_CALC,
-            addressing=time_dimensions.copy(),
-            partitioning=non_time_dimensions.copy(),
+            addressing=list(time_dimensions),
+            partitioning=list(non_time_dimensions),
             reasoning="Period comparison: addressing by time dimension"
         )
     
     def _resolve_default(
         self,
         analysis: AnalysisSpec,
-        tech_dimensions: List[str],
-        time_dimensions: List[str],
-        non_time_dimensions: List[str],
+        tech_dimensions: List[DimensionInfo],
+        time_dimensions: List[DimensionInfo],
+        non_time_dimensions: List[DimensionInfo],
     ) -> ImplementationDecision:
         """Default resolution for unknown analysis types."""
         if not tech_dimensions:
@@ -411,6 +429,6 @@ class ImplementationResolver:
         
         return ImplementationDecision(
             impl_type=ImplementationType.TABLE_CALC,
-            addressing=tech_dimensions.copy(),
+            addressing=list(tech_dimensions),
             reasoning=f"Default resolution for {analysis.type}"
         )

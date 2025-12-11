@@ -90,63 +90,6 @@ class QueryResult(BaseModel):
         )
 
 
-class ProcessingResult(BaseModel):
-    """
-    Data Processing Result Model
-    
-    Encapsulates data processor return results
-    """
-    model_config = ConfigDict(
-        extra="forbid",
-        arbitrary_types_allowed=True  # Allow Pandas DataFrame
-    )
-    
-    task_id: str = Field(
-        description="Processing task ID (e.g., q3, q4)"
-    )
-    
-    data: pd.DataFrame = Field(
-        description="Processed data (Pandas DataFrame)"
-    )
-    
-    row_count: int = Field(
-        ge=0,
-        description="Row count"
-    )
-    
-    columns: List[str] = Field(
-        description="Column name list"
-    )
-    
-    processing_type: str = Field(
-        description="Processing type (yoy, mom, growth_rate, percentage, custom)"
-    )
-    
-    source_tasks: List[str] = Field(
-        description="Source task ID list"
-    )
-    
-    processing_time_ms: Optional[int] = Field(
-        default=None,
-        description="Processing time (milliseconds)"
-    )
-    
-    metadata: Optional[Dict[str, Any]] = Field(
-        default_factory=dict,
-        description="Additional metadata"
-    )
-    
-    def to_pandas(self):
-        """
-        Convert to Pandas DataFrame (for compatibility)
-        
-        Returns:
-            Pandas DataFrame
-        """
-        return self.data.to_pandas()
-
-
 __all__ = [
     "QueryResult",
-    "ProcessingResult",
 ]

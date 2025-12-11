@@ -21,7 +21,6 @@ from tableau_assistant.src.models.metadata.data_model import (
 from tableau_assistant.src.models.metadata.dimension_hierarchy import (
     DimensionHierarchyResult,
     DimensionAttributes,
-    HierarchyLevel,
 )
 
 __all__ = [
@@ -35,5 +34,4 @@ __all__ = [
     # Dimension Hierarchy
     "DimensionHierarchyResult",
     "DimensionAttributes",
-    "HierarchyLevel",
 ]

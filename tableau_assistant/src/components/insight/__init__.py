@@ -14,9 +14,17 @@ Requirements:
 - R8.5: Insight accumulation and deduplication
 - R8.6: Insight synthesis
 - R8.7: Streaming output support
+
+Import Order Note:
+为避免循环导入，导入顺序很重要：
+1. models（无依赖）
+2. 无 LLM 依赖的组件（profiler, anomaly_detector, chunker, accumulator, synthesizer, statistical_analyzer）
+3. analyzer（依赖 agents/insight/prompt.py）
+4. coordinator（依赖 analyzer）
 """
 
-from .models import (
+# 1. Import models from centralized models package
+from tableau_assistant.src.models.insight import (
     DataProfile,
     ColumnStats,
     SemanticGroup,
@@ -35,14 +43,20 @@ from .models import (
     NextBiteDecision,
     InsightQuality,
 )
+
+# 2. Import components without LLM dependencies
 from .profiler import DataProfiler
 from .anomaly_detector import AnomalyDetector
 from .chunker import SemanticChunker
-from .analyzer import ChunkAnalyzer
 from .accumulator import InsightAccumulator
 from .synthesizer import InsightSynthesizer
-from .coordinator import AnalysisCoordinator
 from .statistical_analyzer import StatisticalAnalyzer
+
+# 3. Import analyzer (depends on agents/insight/prompt.py)
+from .analyzer import ChunkAnalyzer
+
+# 4. Import coordinator (depends on analyzer)
+from .coordinator import AnalysisCoordinator
 
 __all__ = [
     # Models (per data-models.md spec)

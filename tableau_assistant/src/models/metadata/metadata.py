@@ -137,7 +137,7 @@ class Metadata(BaseModel):
     dimension_hierarchy: Optional[Dict[str, Any]] = Field(None, description="维度层级推断结果")
     
     # 数据模型（可选）- 包含逻辑表和关系
-    data_model: Optional[Any] = Field(None, description="数据模型（逻辑表和关系）")
+    data_model: Optional["DataModel"] = Field(None, description="数据模型（逻辑表和关系）")
     
     # 原始响应（调试用）
     raw_response: Optional[Dict[str, Any]] = Field(None, description="原始GraphQL响应")

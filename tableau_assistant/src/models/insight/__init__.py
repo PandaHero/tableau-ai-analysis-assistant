@@ -1,38 +1,8 @@
 """
 Insight Models Package
 
-Contains insight analysis related models.
+Contains insight analysis related models for progressive insight analysis.
 """
-
-# From result.py (legacy insight models)
-from tableau_assistant.src.models.insight.result import (
-    # Enums
-    InsightType,
-    Importance,
-    AnomalyType,
-    TrendDirection,
-    
-    # Query results
-    SubtaskResult,
-    MergedData,
-    
-    # Statistical analysis
-    DescriptiveStatistics,
-    AnomalyDetection,
-    TrendAnalysis,
-    StatisticsResult,
-    
-    # Insights
-    Insight as LegacyInsight,
-    InsightCollection,
-    
-    # Final report
-    FinalReport,
-    
-    # Helper functions
-    create_insight,
-    create_anomaly_detection,
-)
 
 # From models.py (progressive insight models)
 from tableau_assistant.src.models.insight.models import (
@@ -54,6 +24,7 @@ from tableau_assistant.src.models.insight.models import (
     PriorityChunk,
     
     # Insight models
+    InsightEvidence,
     Insight,
     InsightQuality,
     InsightResult,
@@ -67,23 +38,6 @@ from tableau_assistant.src.models.insight.models import (
 )
 
 __all__ = [
-    # Legacy (from result.py)
-    "InsightType",
-    "Importance",
-    "AnomalyType",
-    "TrendDirection",
-    "SubtaskResult",
-    "MergedData",
-    "DescriptiveStatistics",
-    "AnomalyDetection",
-    "TrendAnalysis",
-    "StatisticsResult",
-    "LegacyInsight",
-    "InsightCollection",
-    "FinalReport",
-    "create_insight",
-    "create_anomaly_detection",
-    
     # Progressive insight (from models.py)
     "ChunkPriority",
     "ColumnStats",
@@ -94,6 +48,7 @@ __all__ = [
     "DataChunk",
     "TailDataSummary",
     "PriorityChunk",
+    "InsightEvidence",
     "Insight",
     "InsightQuality",
     "InsightResult",

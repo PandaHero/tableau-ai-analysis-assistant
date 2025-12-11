@@ -8,7 +8,7 @@ Tool Registry - 工具注册表
 - FieldMapper 是独立节点（RAG + LLM 混合），不是工具
 
 工具分组：
-- understanding: 语义理解工具（get_data_model, get_schema_module, parse_date, detect_date_format）
+- understanding: 语义理解工具（get_data_model, get_schema_module, process_time_filter, calculate_relative_dates, detect_date_format）
 - insight: 洞察分析工具（暂无）
 - replanner: 重规划工具（由 TodoListMiddleware 注入 write_todos）
 """
@@ -263,12 +263,18 @@ class ToolRegistry:
             logger.warning(f"Failed to import get_schema_module: {e}")
         
         try:
-            from tableau_assistant.src.tools.date_tool import parse_date, detect_date_format
+            from tableau_assistant.src.tools.date_tool import process_time_filter, calculate_relative_dates, detect_date_format
             self.register(
                 NodeType.UNDERSTANDING,
-                parse_date,
+                process_time_filter,
                 dependencies=["date_manager"],
                 tags=["date", "parsing"]
+            )
+            self.register(
+                NodeType.UNDERSTANDING,
+                calculate_relative_dates,
+                dependencies=["date_manager"],
+                tags=["date", "calculation"]
             )
             self.register(
                 NodeType.UNDERSTANDING,
@@ -276,7 +282,7 @@ class ToolRegistry:
                 dependencies=["date_manager"],
                 tags=["date", "detection"]
             )
-            count += 2
+            count += 3
         except ImportError as e:
             logger.warning(f"Failed to import date tools: {e}")
         

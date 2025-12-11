@@ -27,7 +27,7 @@ from langgraph.types import RunnableConfig
 
 from tableau_assistant.src.models.semantic.query import SemanticQuery
 from tableau_assistant.src.tools.metadata_tool import get_metadata
-from tableau_assistant.src.tools.date_tool import parse_date, detect_date_format
+from tableau_assistant.src.tools.date_tool import process_time_filter, calculate_relative_dates, detect_date_format
 from tableau_assistant.src.tools.schema_tool import get_schema_module
 from tableau_assistant.src.agents.base import (
     get_llm,
@@ -206,7 +206,7 @@ async def understanding_node(
     # Step 3: 调用 LLM（带工具）
     # 使用 base 包的 get_llm 和 call_llm_with_tools
     llm = get_llm(agent_name="understanding")
-    tools = [get_metadata, get_schema_module, parse_date, detect_date_format]
+    tools = [get_metadata, get_schema_module, process_time_filter, calculate_relative_dates, detect_date_format]
     
     try:
         response_content = await call_llm_with_tools(llm, messages, tools)

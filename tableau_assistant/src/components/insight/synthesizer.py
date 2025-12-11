@@ -10,7 +10,7 @@ Requirements:
 import logging
 from typing import Dict, List, Any, Optional
 
-from .models import Insight, InsightResult
+from tableau_assistant.src.models.insight import Insight, InsightResult
 
 logger = logging.getLogger(__name__)
 
