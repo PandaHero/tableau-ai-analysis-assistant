@@ -1,90 +1,111 @@
-"""
-字段映射相关数据模型
+﻿"""
+Field Mapper Models
 
-这些模型用于 FieldMapper Agent 的 LLM 结构化输出。
+Models for FieldMapper Node:
+- SingleSelectionResult / BatchSelectionResult: LLM candidate selection output
+- FieldMapping / MappedQuery: FieldMapper Node final output
 """
 
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import List, Dict, Optional, TYPE_CHECKING
+from typing_extensions import TypedDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+
+from tableau_assistant.src.models.semantic.enums import (
+    MappingSource,
+    DimensionCategory,
+    DimensionLevel,
+)
+
+if TYPE_CHECKING:
+    from tableau_assistant.src.models.semantic.query import SemanticQuery
 
 
 class SingleSelectionResult(BaseModel):
-    """
-    LLM 字段选择输出模型
-    
-    <decision_tree>
-    START
-      ├─► 分析 business_term 语义
-      │   ├─► 找到高匹配候选 → selected_field = 候选名, confidence >= 0.7
-      │   └─► 无合适候选 → selected_field = null, confidence < 0.5
-      └─► 填写 reasoning 解释选择原因
-    END
-    </decision_tree>
-    
-    <fill_order>
-    1. business_term (ALWAYS - 复制输入)
-    2. selected_field (ALWAYS - 选择或 null)
-    3. confidence (ALWAYS - 0.0-1.0)
-    4. reasoning (ALWAYS - 解释)
-    </fill_order>
-    """
-    
-    business_term: str = Field(
-        description="""业务术语
+    """LLM field selection output model"""
 
-<what>正在映射的业务术语</what>
-<how>直接复制输入的业务术语</how>"""
-    )
-    
-    selected_field: Optional[str] = Field(
-        default=None,
-        description="""选中的字段名
-
-<what>最佳匹配的技术字段名</what>
-<when>找到合适匹配时填写，否则为 null</when>
-<how>从候选列表中选择语义最匹配的字段名</how>
-<decision_rule>
-- 语义高度匹配 → 填写字段名
-- 无合适匹配 → null
-</decision_rule>
-<anti_patterns>
-❌ 发明不在候选列表中的字段名
-❌ 仅因关键词部分匹配就选择
-</anti_patterns>"""
-    )
-    
-    confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="""置信度
-
-<what>选择的置信度分数</what>
-<how>基于语义匹配程度评估</how>
-<values>
-- 0.9-1.0: 完全匹配（字段名/标题与术语相同）
-- 0.7-0.9: 高度匹配（语义相近）
-- 0.5-0.7: 中等匹配（可能正确）
-- 0.0-0.5: 低匹配（不确定或无匹配）
-</values>"""
-    )
-    
-    reasoning: str = Field(
-        description="""选择理由
-
-<what>解释为什么选择该字段或为什么无匹配</what>
-<how>简要说明语义匹配的依据</how>
-<examples>
-- "字段标题'销售额'与业务术语'销售'语义一致"
-- "无候选字段与'客户满意度'语义相关"
-</examples>"""
-    )
+    business_term: str = Field(description="Business term being mapped")
+    selected_field: Optional[str] = Field(default=None, description="Best matching technical field name")
+    confidence: float = Field(ge=0.0, le=1.0, description="Selection confidence score")
+    reasoning: str = Field(description="Selection reasoning")
 
 
 class BatchSelectionResult(BaseModel):
-    """
-    批量字段选择结果
-    
-    用于 LLM 批量处理多个业务术语到技术字段的映射。
-    """
-    mappings: List[SingleSelectionResult] = Field(
-        description="每个业务术语的映射结果"
-    )
+    """Batch field selection result"""
+
+    mappings: List[SingleSelectionResult] = Field(description="Mapping results for each business term")
+
+
+class AlternativeMapping(TypedDict, total=False):
+    """Alternative mapping structure"""
+
+    technical_field: str
+    confidence: float
+    reason: str
+
+
+class FieldMapping(BaseModel):
+    """Single field mapping result"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    business_term: str = Field(min_length=1, description="Business term from SemanticQuery")
+    technical_field: str = Field(min_length=1, description="Technical field name in datasource")
+    confidence: float = Field(ge=0.0, le=1.0, description="Mapping confidence (0-1)")
+    mapping_source: MappingSource = Field(description="Mapping source")
+    data_type: Optional[str] = Field(default=None, description="Field data type from metadata")
+    date_format: Optional[str] = Field(default=None, description="Date format for STRING date fields")
+    category: Optional[DimensionCategory] = Field(default=None, description="Dimension category")
+    level: Optional[DimensionLevel] = Field(default=None, description="Hierarchy level")
+    granularity: Optional[str] = Field(default=None, description="Granularity description")
+    alternatives: Optional[List[AlternativeMapping]] = Field(default=None, description="Alternative mappings")
+
+
+class MappedQuery(BaseModel):
+    """Mapped query - FieldMapper Node output"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    semantic_query: "SemanticQuery" = Field(description="Original semantic query")
+    field_mappings: Dict[str, FieldMapping] = Field(description="Field mappings dictionary")
+    overall_confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Overall confidence")
+    low_confidence_fields: List[str] = Field(default_factory=list, description="Low confidence field list")
+
+    @model_validator(mode="after")
+    def compute_overall_confidence(self) -> "MappedQuery":
+        if self.field_mappings:
+            confidences = [m.confidence for m in self.field_mappings.values()]
+            if self.overall_confidence is None:
+                self.overall_confidence = min(confidences) if confidences else 1.0
+            if not self.low_confidence_fields:
+                self.low_confidence_fields = [
+                    term for term, m in self.field_mappings.items() if m.confidence < 0.7
+                ]
+        elif self.overall_confidence is None:
+            self.overall_confidence = 1.0
+        return self
+
+    def get_technical_field(self, business_term: str) -> Optional[str]:
+        mapping = self.field_mappings.get(business_term)
+        return mapping.technical_field if mapping else None
+
+    def get_confidence(self, business_term: str) -> Optional[float]:
+        mapping = self.field_mappings.get(business_term)
+        return mapping.confidence if mapping else None
+
+
+__all__ = [
+    "SingleSelectionResult",
+    "BatchSelectionResult",
+    "AlternativeMapping",
+    "FieldMapping",
+    "MappedQuery",
+]
+
+
+# 解析前向引用 - MappedQuery 引用了 SemanticQuery
+def _rebuild_models():
+    """重建 Pydantic 模型以解析前向引用"""
+    from tableau_assistant.src.models.semantic.query import SemanticQuery  # noqa: F401
+    MappedQuery.model_rebuild()
+
+_rebuild_models()

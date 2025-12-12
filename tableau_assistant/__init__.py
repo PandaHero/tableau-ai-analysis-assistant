@@ -36,8 +36,9 @@ def _auto_setup_certificates():
         
         logger = logging.getLogger(__name__)
         
-        # 读取 Tableau 域名
-        tableau_domain = os.getenv("TABLEAU_DOMAIN")
+        # 从 settings 读取 Tableau 域名
+        from tableau_assistant.src.config.settings import settings
+        tableau_domain = settings.tableau_domain
         if not tableau_domain:
             logger.debug("TABLEAU_DOMAIN 未设置，跳过证书自动配置")
             return

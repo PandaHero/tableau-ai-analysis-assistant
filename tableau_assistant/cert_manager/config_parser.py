@@ -91,6 +91,8 @@ class ConfigurationParser:
         Substitute environment variables in text
         
         Supports ${VAR_NAME} syntax. If variable is not set, keeps the original text.
+        Special handling for TABLEAU_HOSTNAME and TABLEAU_PORT:
+        - If not set, automatically parse from TABLEAU_DOMAIN
         
         Args:
             text: Text with environment variable placeholders
@@ -98,6 +100,9 @@ class ConfigurationParser:
         Returns:
             Text with substituted values
         """
+        # 自动从 TABLEAU_DOMAIN 解析 TABLEAU_HOSTNAME 和 TABLEAU_PORT
+        self._ensure_tableau_env_vars()
+        
         def replace_var(match):
             var_name = match.group(1)
             var_value = os.environ.get(var_name)
@@ -110,6 +115,43 @@ class ConfigurationParser:
             return var_value
         
         return self._env_var_pattern.sub(replace_var, text)
+    
+    def _ensure_tableau_env_vars(self) -> None:
+        """
+        确保 TABLEAU_HOSTNAME 和 TABLEAU_PORT 环境变量存在
+        
+        如果没有设置，从 TABLEAU_DOMAIN 自动解析
+        例如: https://cpse.cpgroup.cn:11080 -> hostname=cpse.cpgroup.cn, port=11080
+        """
+        from urllib.parse import urlparse
+        
+        # 如果已经设置了，直接返回
+        if os.environ.get('TABLEAU_HOSTNAME') and os.environ.get('TABLEAU_PORT'):
+            return
+        
+        tableau_domain = os.environ.get('TABLEAU_DOMAIN')
+        if not tableau_domain:
+            return
+        
+        try:
+            parsed = urlparse(tableau_domain)
+            hostname = parsed.hostname
+            port = parsed.port
+            
+            # 如果没有端口，根据协议设置默认端口
+            if port is None:
+                port = 443 if parsed.scheme == 'https' else 80
+            
+            if hostname and not os.environ.get('TABLEAU_HOSTNAME'):
+                os.environ['TABLEAU_HOSTNAME'] = hostname
+                logger.debug(f"Auto-set TABLEAU_HOSTNAME={hostname} from TABLEAU_DOMAIN")
+            
+            if port and not os.environ.get('TABLEAU_PORT'):
+                os.environ['TABLEAU_PORT'] = str(port)
+                logger.debug(f"Auto-set TABLEAU_PORT={port} from TABLEAU_DOMAIN")
+                
+        except Exception as e:
+            logger.warning(f"Failed to parse TABLEAU_DOMAIN: {e}")
     
     def validate_config(
         self,

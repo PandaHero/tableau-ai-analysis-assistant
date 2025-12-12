@@ -23,6 +23,10 @@ from tableau_assistant.src.models.metadata.dimension_hierarchy import (
     DimensionAttributes,
 )
 
+# 解析前向引用（Metadata 引用了 DataModel）
+# 必须在所有模型导入后调用
+Metadata.model_rebuild()
+
 __all__ = [
     # Metadata
     "FieldMetadata",

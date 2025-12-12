@@ -98,7 +98,12 @@ def get_data_dictionary(
         
         # 获取维度样例数据
         if include_samples:
-            dimension_names = [f['name'] for f in simplified_fields if f.get('role', '').upper() == 'DIMENSION']
+            # 过滤掉 BIN 和 GROUP 类型的字段，这些字段不支持 TOP 过滤和计算
+            dimension_names = [
+                f['name'] for f in simplified_fields 
+                if f.get('role', '').upper() == 'DIMENSION'
+                and f.get('columnClass', '').upper() not in ('BIN', 'GROUP')
+            ]
             measure_field = next((f['name'] for f in simplified_fields if f.get('role', '').upper() == 'MEASURE'), None)
             
             if dimension_names and measure_field:
@@ -190,7 +195,12 @@ async def get_data_dictionary_async(
         
         # 异步并发获取维度样例数据
         if include_samples:
-            dimension_names = [f['name'] for f in simplified_fields if f.get('role', '').upper() == 'DIMENSION']
+            # 过滤掉 BIN 和 GROUP 类型的字段，这些字段不支持 TOP 过滤和计算
+            dimension_names = [
+                f['name'] for f in simplified_fields 
+                if f.get('role', '').upper() == 'DIMENSION'
+                and f.get('columnClass', '').upper() not in ('BIN', 'GROUP')
+            ]
             measure_field = next((f['name'] for f in simplified_fields if f.get('role', '').upper() == 'MEASURE'), None)
             
             if dimension_names and measure_field:
@@ -230,7 +240,7 @@ async def _fetch_dimension_samples_async(
     api_key: str,
     site: Optional[str] = None,
     sample_size: int = 5,
-    max_concurrent: int = 10
+    max_concurrent: int = 3
 ) -> Dict[str, Dict[str, Any]]:
     """
     异步并发获取所有维度的样例数据
@@ -246,23 +256,23 @@ async def _fetch_dimension_samples_async(
     
     async def fetch_one(session: aiohttp.ClientSession, dim: str) -> tuple:
         """获取单个维度的样例"""
-        async with semaphore:  # 限制并发数
-            query = {
-                "fields": [
-                    {"fieldCaption": dim},
-                    {"fieldCaption": f"countd_{dim}", "calculation": f"{{FIXED : COUNTD([{dim}])}}"}
-                ],
-                "filters": [{
-                    "filterType": "TOP",
-                    "field": {"fieldCaption": dim},
-                    "fieldToMeasure": {"fieldCaption": measure_field, "function": "SUM"},
-                    "howMany": sample_size,
-                    "direction": "TOP"
-                }]
-            }
-            
-            result = {"sample_values": [], "unique_count": 0}
-            try:
+        result = {"sample_values": [], "unique_count": 0}
+        try:
+            async with semaphore:  # 限制并发数
+                query = {
+                    "fields": [
+                        {"fieldCaption": dim},
+                        {"fieldCaption": f"countd_{dim}", "calculation": f"{{FIXED : COUNTD([{dim}])}}"}
+                    ],
+                    "filters": [{
+                        "filterType": "TOP",
+                        "field": {"fieldCaption": dim},
+                        "fieldToMeasure": {"fieldCaption": measure_field, "function": "SUM"},
+                        "howMany": sample_size,
+                        "direction": "TOP"
+                    }]
+                }
+                
                 # 使用 VizQLClient 的异步方法
                 data = await client.query_datasource_async(
                     datasource_luid=datasource_luid,
@@ -286,10 +296,13 @@ async def _fetch_dimension_samples_async(
                                     result["unique_count"] = int(countd)
                                 except (ValueError, TypeError):
                                     pass
-            except Exception as e:
-                print(f"    [ERROR] 获取 {dim} 样例失败: {e}")
-            
-            return (dim, result)
+        except asyncio.CancelledError:
+            # 协程被取消时，重新抛出让调用方处理
+            raise
+        except Exception as e:
+            print(f"    [ERROR] 获取 {dim} 样例失败: {e}")
+        
+        return (dim, result)
     
     # 使用单个 session 并发所有请求
     timeout = aiohttp.ClientTimeout(total=30)

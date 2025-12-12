@@ -46,10 +46,10 @@ app = FastAPI(
 )
 
 # 配置CORS
-origins = os.getenv("CORS_ORIGINS",).split(",")
+from tableau_assistant.src.config.settings import settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,9 +58,11 @@ app.add_middleware(
 # 注册路由
 from tableau_assistant.src.api.streaming import router as streaming_router
 from tableau_assistant.src.api.chat import router as chat_router
+from tableau_assistant.src.api.preload import router as preload_router
 
 app.include_router(streaming_router)
 app.include_router(chat_router)
+app.include_router(preload_router)
 
 
 @app.get("/")
@@ -82,30 +84,26 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.getenv("HOST", os.getenv("API_HOST", "127.0.0.1"))
-    port = int(os.getenv("PORT", os.getenv("API_PORT", "8000")))
-    reload = os.getenv("API_RELOAD", "true").lower() == "true"
-    
-    # HTTPS配置
-    ssl_cert_file = os.getenv("SSL_CERT_FILE")
-    ssl_key_file = os.getenv("SSL_KEY_FILE")
-    
     # 构建uvicorn配置
     uvicorn_config = {
         "app": "main:app",
-        "host": host,
-        "port": port,
-        "reload": reload,
-        "log_level": os.getenv("API_LOG_LEVEL", "info"),
+        "host": settings.api_host,
+        "port": settings.api_port,
+        "reload": settings.api_reload,
+        "log_level": settings.api_log_level,
     }
+    
+    # HTTPS配置
+    ssl_cert_file = settings.ssl_cert_file
+    ssl_key_file = settings.ssl_key_file
     
     # 如果配置了SSL证书，启用HTTPS
     if ssl_cert_file and ssl_key_file:
-        import os.path
-        if os.path.exists(ssl_cert_file) and os.path.exists(ssl_key_file):
+        from pathlib import Path
+        if Path(ssl_cert_file).exists() and Path(ssl_key_file).exists():
             uvicorn_config["ssl_certfile"] = ssl_cert_file
             uvicorn_config["ssl_keyfile"] = ssl_key_file
-            print(f"🔒 HTTPS enabled: https://{host}:{port}")
+            print(f"🔒 HTTPS enabled: https://{settings.api_host}:{settings.api_port}")
         else:
             print(f"⚠️  SSL证书文件不存在，使用HTTP模式")
             print(f"   证书: {ssl_cert_file}")

@@ -21,11 +21,15 @@ Middleware stack (7 middleware):
 - PatchToolCallsMiddleware (custom)
 """
 
-from typing import Dict, Any, Optional, List, Sequence
+from typing import Dict, Optional, List, Union, TYPE_CHECKING
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.store.base import BaseStore
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+    from tableau_assistant.src.models.workflow.state import VizQLState
 
 # LangChain middleware imports
 from langchain.agents.middleware import (
@@ -54,9 +58,10 @@ from tableau_assistant.src.nodes.execute import execute_node as _execute_node
 
 # Import Agent implementations
 from tableau_assistant.src.agents.understanding import understanding_node as _understanding_node
+from tableau_assistant.src.agents.insight.node import insight_node as _insight_node
 
 
-def get_default_config() -> Dict[str, Any]:
+def get_default_config() -> Dict[str, Union[int, float, List[str], None]]:
     """
     Get default configuration from settings.
     
@@ -100,8 +105,8 @@ def get_default_config() -> Dict[str, Any]:
 
 def create_middleware_stack(
     model_name: Optional[str] = None,
-    config: Optional[Dict[str, Any]] = None,
-    chat_model: Optional[Any] = None,
+    config: Optional[Dict[str, Union[int, float, List[str], None]]] = None,
+    chat_model: Optional["BaseChatModel"] = None,
 ) -> List[AgentMiddleware]:
     """
     Create the middleware stack for the workflow.
@@ -207,11 +212,11 @@ def create_middleware_stack(
 def create_tableau_workflow(
     model_name: Optional[str] = None,
     store: Optional[BaseStore] = None,
-    config: Optional[Dict[str, Any]] = None,
+    config: Optional[Dict[str, Union[int, float, List[str], None]]] = None,
     use_memory_checkpointer: bool = True,
     use_sqlite_checkpointer: bool = False,
     sqlite_db_path: Optional[str] = None,
-    chat_model: Optional[Any] = None,
+    chat_model: Optional["BaseChatModel"] = None,
 ) -> StateGraph:
     """
     Create the Tableau Assistant workflow.
@@ -281,21 +286,9 @@ def create_tableau_workflow(
     # QueryBuilder and Execute nodes use actual implementations
     # imported from tableau_assistant.src.nodes
     
-    async def insight_node(state: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Insight Agent node (LLM)
-        
-        - Call AnalysisCoordinator for progressive analysis
-        - Generate final insight report
-        
-        Output: accumulated_insights
-        """
-        # TODO: Implement in task 18.1
-        return {
-            "current_stage": "insight",
-        }
+    # insight_node 使用实际实现（从 tableau_assistant.src.agents.insight.node 导入）
     
-    async def replanner_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    async def replanner_node(state: "VizQLState") -> Dict[str, object]:
         """
         Replanner Agent node (LLM)
         
@@ -360,20 +353,44 @@ def create_tableau_workflow(
             "questions_count": len(decision.exploration_questions),
         })
         
-        # 返回 ReplanDecision Pydantic 对象
-        return {
+        # 构建返回结果
+        result = {
             "replan_decision": decision,
             "replan_count": replan_count + 1,
             "replan_history": replan_history,
             "current_stage": "replanner",
         }
+        
+        # 如果需要重规划，将探索问题添加到待处理队列
+        # TodoListMiddleware 会管理这些问题的执行
+        if decision.should_replan and decision.exploration_questions:
+            # 将探索问题转换为待处理问题列表
+            pending_questions = []
+            for q in decision.exploration_questions:
+                if hasattr(q, "question"):
+                    pending_questions.append({
+                        "question": q.question,
+                        "priority": getattr(q, "priority", 5),
+                        "exploration_type": getattr(q, "exploration_type", "drill_down"),
+                        "target_dimension": getattr(q, "target_dimension", ""),
+                    })
+                elif isinstance(q, dict):
+                    pending_questions.append(q)
+            
+            # 更新 question 为第一个探索问题（当前轮次处理）
+            if pending_questions:
+                result["question"] = pending_questions[0]["question"]
+                # 剩余问题存入队列，供后续轮次处理
+                result["pending_questions"] = pending_questions[1:] if len(pending_questions) > 1 else []
+        
+        return result
     
     # ========== Add nodes to graph (6 nodes) ==========
     graph.add_node("understanding", _understanding_node)  # Use actual implementation
     graph.add_node("field_mapper", _field_mapper_node)  # Use actual implementation
     graph.add_node("query_builder", _query_builder_node)  # Use actual implementation
     graph.add_node("execute", _execute_node)  # Use actual implementation
-    graph.add_node("insight", insight_node)
+    graph.add_node("insight", _insight_node)  # Use actual implementation
     graph.add_node("replanner", replanner_node)
     
     # ========== Add edges ==========
@@ -450,7 +467,7 @@ def create_tableau_workflow(
     return compiled_graph
 
 
-def get_workflow_info(workflow) -> Dict[str, Any]:
+def get_workflow_info(workflow: StateGraph) -> Dict[str, object]:
     """
     Get information about the workflow configuration.
     
@@ -523,7 +540,7 @@ def create_sqlite_checkpointer(db_path: str = "data/workflow_checkpoints.db") ->
 def get_session_history(
     checkpointer: SqliteSaver,
     thread_id: str,
-) -> List[Dict[str, Any]]:
+) -> List[Dict[str, object]]:
     """
     Get session history from SQLite checkpointer.
     

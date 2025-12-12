@@ -44,11 +44,10 @@ from .query import (
     AnalysisSpec,
     OutputControl,
     SemanticQuery,
-    
-    # MappedQuery 组件
-    FieldMapping,
-    MappedQuery,
 )
+
+# 注意: FieldMapping 和 MappedQuery 已移至 models/field_mapper/models.py
+# 请从 tableau_assistant.src.models.field_mapper 导入
 
 __all__ = [
     # ========== Enums ==========
@@ -73,7 +72,4 @@ __all__ = [
     "OutputControl",
     "SemanticQuery",
     
-    # ========== MappedQuery ==========
-    "FieldMapping",
-    "MappedQuery",
 ]

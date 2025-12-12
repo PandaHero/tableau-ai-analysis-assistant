@@ -28,8 +28,8 @@ class VizQLContext:
         max_subtasks_per_round: Maximum subtasks per round (from config)
     
     Note:
-        - tableau_token, tableau_site, tableau_domain are managed through StoreManager
-        - Use get_tableau_config() to get Tableau config from Store
+        - tableau_token, tableau_site, tableau_domain are managed through WorkflowContext.auth
+        - Use get_context(config).auth to get Tableau auth from RunnableConfig
     """
     datasource_luid: str
     user_id: str
@@ -87,68 +87,7 @@ class VizQLContext:
         )
 
 
-def get_tableau_config(store_manager) -> dict:
-    """
-    Get Tableau config from StoreManager
-    
-    Args:
-        store_manager: StoreManager instance
-    
-    Returns:
-        Tableau config dict containing token, site, domain
-    """
-    # 兼容两种模式：store_manager 本身就是 StoreManager，或者有 .store 属性
-    store = getattr(store_manager, 'store', store_manager)
-    
-    config = store.get(
-        namespace=("tableau_config",),
-        key="current"
-    )
-    
-    if config and config.value:
-        return config.value
-    
-    # Fallback to config file
-    from tableau_assistant.src.config.settings import settings
-    return {
-        "tableau_token": settings.tableau_token,
-        "tableau_site": settings.tableau_site,
-        "tableau_domain": settings.tableau_domain
-    }
 
 
-def set_tableau_config(
-    store_manager,
-    tableau_token: str,
-    tableau_site: str,
-    tableau_domain: str
-) -> bool:
-    """
-    Save Tableau config to StoreManager
-    
-    Args:
-        store_manager: StoreManager instance
-        tableau_token: Tableau auth token
-        tableau_site: Tableau site
-        tableau_domain: Tableau domain
-    
-    Returns:
-        Whether save was successful
-    """
-    try:
-        # 兼容两种模式：store_manager 本身就是 StoreManager，或者有 .store 属性
-        store = getattr(store_manager, 'store', store_manager)
-        
-        store.put(
-            namespace=("tableau_config",),
-            key="current",
-            value={
-                "tableau_token": tableau_token,
-                "tableau_site": tableau_site,
-                "tableau_domain": tableau_domain
-            }
-        )
-        return True
-    except Exception as e:
-        logger.error(f"Failed to save Tableau config: {e}")
-        return False
+
+

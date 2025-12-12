@@ -12,10 +12,14 @@ Design Specification: insight-design.md
 
 import logging
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 from tableau_assistant.src.models.replanner import ReplanDecision, ExplorationQuestion
+from tableau_assistant.src.agents.base import clean_json_output
 from .prompt import REPLANNER_PROMPT
+
+if TYPE_CHECKING:
+    from tableau_assistant.src.models.insight.models import Insight
 
 logger = logging.getLogger(__name__)
 
@@ -162,17 +166,22 @@ class ReplannerAgent:
                 confidence=0.3,
             )
     
-    def _format_insights_summary(self, insights: List[Dict[str, Any]]) -> str:
-        """格式化洞察摘要"""
+    def _format_insights_summary(self, insights: List["Insight"]) -> str:
+        """格式化洞察摘要
+        
+        Args:
+            insights: Insight Pydantic 对象列表
+        """
         if not insights:
             return "（无洞察）"
         
         lines = []
-        for i, insight in enumerate(insights[:10]):  # 最多显示 10 个
-            insight_type = insight.get("type", "unknown")
-            title = insight.get("title", "未命名")
-            description = insight.get("description", "")[:100]
-            importance = insight.get("importance", 0.5)
+        for i, insight in enumerate(insights):
+            # 使用 Pydantic 对象属性访问
+            insight_type = insight.type
+            title = insight.title
+            description = insight.description or ""
+            importance = insight.importance
             
             lines.append(
                 f"{i+1}. [{insight_type}] {title} (重要性: {importance:.1f})\n"
@@ -206,7 +215,7 @@ class ReplannerAgent:
         clusters = profile.get("clusters", [])
         if clusters:
             cluster_parts = []
-            for i, c in enumerate(clusters[:3]):
+            for i, c in enumerate(clusters):
                 label = c.get('label') or f"聚类{c.get('cluster_id', i)}"
                 size = c.get('size', 0)
                 cluster_parts.append(f"{label}({size}行)")
@@ -248,13 +257,9 @@ class ReplannerAgent:
     def _parse_response(self, content: str) -> ReplanDecision:
         """解析 LLM 响应"""
         try:
-            # 提取 JSON
-            json_str = self._extract_json(content)
-            if not json_str:
-                logger.warning("无法从响应中提取 JSON")
-                return self._default_decision()
-            
-            data = json.loads(json_str)
+            # 使用 clean_json_output 清理和修复 JSON
+            cleaned_json = clean_json_output(content)
+            data = json.loads(cleaned_json)
             
             # 解析探索问题
             exploration_questions = []
@@ -284,37 +289,11 @@ class ReplannerAgent:
             )
             
         except json.JSONDecodeError as e:
-            logger.warning(f"JSON 解析失败: {e}")
+            logger.warning(f"JSON 解析失败: {e}, 原始内容: {content[:200]}...")
             return self._default_decision()
         except Exception as e:
             logger.error(f"响应解析失败: {e}")
             return self._default_decision()
-    
-    def _extract_json(self, content: str) -> Optional[str]:
-        """从 LLM 响应中提取 JSON"""
-        import re
-        
-        # 尝试原始 JSON
-        content_stripped = content.strip()
-        if content_stripped.startswith('{') and content_stripped.endswith('}'):
-            return content_stripped
-        
-        # 尝试 ```json ... ``` 块
-        match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
-        if match:
-            return match.group(1)
-        
-        # 尝试 ``` ... ``` 块
-        match = re.search(r'```\s*([\s\S]*?)\s*```', content)
-        if match:
-            return match.group(1)
-        
-        # 尝试提取 JSON 对象
-        match = re.search(r'\{[\s\S]*\}', content)
-        if match:
-            return match.group(0)
-        
-        return None
     
     def _default_decision(self) -> ReplanDecision:
         """返回默认决策"""

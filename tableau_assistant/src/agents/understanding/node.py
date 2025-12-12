@@ -113,16 +113,12 @@ def _format_metadata_summary(metadata: Any) -> str:
         
         lines = []
         lines.append(f"Dimensions ({len(dimensions)}): " + ", ".join(
-            getattr(f, 'fieldCaption', getattr(f, 'name', str(f))) for f in dimensions[:10]
+            getattr(f, 'fieldCaption', getattr(f, 'name', str(f))) for f in dimensions
         ))
-        if len(dimensions) > 10:
-            lines.append(f"  ... and {len(dimensions) - 10} more")
         
         lines.append(f"Measures ({len(measures)}): " + ", ".join(
-            getattr(f, 'fieldCaption', getattr(f, 'name', str(f))) for f in measures[:10]
+            getattr(f, 'fieldCaption', getattr(f, 'name', str(f))) for f in measures
         ))
-        if len(measures) > 10:
-            lines.append(f"  ... and {len(measures) - 10} more")
         
         return "\n".join(lines)
     

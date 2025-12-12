@@ -104,12 +104,12 @@ class ChunkAnalyzer:
         # 格式化已有洞察
         existing_text = "\n".join([
             f"- {ins.type}: {ins.title}"
-            for ins in existing_insights[:5]
+            for ins in existing_insights
         ]) if existing_insights else "（无）"
         
         # 格式化 Top N 摘要
         top_n_summary = json.dumps(
-            insight_profile.top_n_summary[:5] if insight_profile.top_n_summary else [],
+            insight_profile.top_n_summary if insight_profile.top_n_summary else [],
             ensure_ascii=False,
             indent=2
         )
@@ -174,8 +174,8 @@ class ChunkAnalyzer:
         """
         # 格式化已有洞察
         insights_text = "\n".join([
-            f"- 洞察 {i+1} ({ins.type}): {ins.title}\n  描述: {ins.description[:100]}..."
-            for i, ins in enumerate(accumulated_insights[:5])
+            f"- 洞察 {i+1} ({ins.type}): {ins.title}\n  描述: {ins.description}"
+            for i, ins in enumerate(accumulated_insights)
         ]) if accumulated_insights else "（还没有洞察）"
         
         # 格式化剩余数据块

@@ -12,7 +12,7 @@ Tool Registry - 工具注册表
 - insight: 洞察分析工具（暂无）
 - replanner: 重规划工具（由 TodoListMiddleware 注入 write_todos）
 """
-from typing import Dict, List, Optional, Callable, Any, Type
+from typing import Dict, List, Optional, Union
 from dataclasses import dataclass, field
 import logging
 from enum import Enum
@@ -78,7 +78,7 @@ class ToolRegistry:
             NodeType.REPLANNER: [],
         }
         self._tool_map: Dict[str, ToolMetadata] = {}
-        self._dependencies: Dict[str, Any] = {}
+        self._dependencies: Dict[str, object] = {}
         self._initialized = True
         
         logger.info("ToolRegistry initialized")
@@ -206,7 +206,7 @@ class ToolRegistry:
             return [m.name for m in self._tools.get(node_type, [])]
         return list(self._tool_map.keys())
     
-    def set_dependency(self, name: str, instance: Any) -> None:
+    def set_dependency(self, name: str, instance: object) -> None:
         """
         设置依赖实例
         
@@ -217,7 +217,7 @@ class ToolRegistry:
         self._dependencies[name] = instance
         logger.debug(f"Set dependency '{name}'")
     
-    def get_dependency(self, name: str) -> Optional[Any]:
+    def get_dependency(self, name: str) -> Optional[object]:
         """
         获取依赖实例
         
@@ -238,7 +238,7 @@ class ToolRegistry:
         """
         count = 0
         
-        # 延迟导入，避免循环依赖
+        # 动态导入工具模块，支持可选依赖（工具模块不存在时优雅降级）
         try:
             from tableau_assistant.src.tools.data_model_tool import get_data_model
             self.register(
@@ -297,7 +297,7 @@ class ToolRegistry:
         self._dependencies.clear()
         logger.info("ToolRegistry cleared")
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> Dict[str, Union[int, Dict[str, int], List[str]]]:
         """
         获取注册表统计信息
         

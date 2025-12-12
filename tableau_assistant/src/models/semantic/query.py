@@ -16,7 +16,7 @@ Semantic Query Models (按规范文档重构)
 - `<decision_rule>` 桥梁：将 Prompt 中的抽象思考转化为具体填写动作
 """
 from pydantic import BaseModel, Field, ConfigDict, model_validator
-from typing import List, Dict, Any, Optional, Literal, TYPE_CHECKING
+from typing import List, Dict, Optional, Literal, TYPE_CHECKING, TypedDict, Union
 from .enums import (
     AnalysisType,
     ComputationScope,
@@ -1210,183 +1210,6 @@ Prompt Step 5 (检测分析类型) → 填写 analyses
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MappedQuery 组件 (FieldMapper Node 输出)
-# ═══════════════════════════════════════════════════════════════════════════
-
-class FieldMapping(BaseModel):
-    """
-    单个字段的映射结果
-    
-    <what>业务术语到技术字段的映射</what>
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    business_term: str = Field(
-        min_length=1,
-        description="业务术语（来自 SemanticQuery）"
-    )
-    
-    technical_field: str = Field(
-        min_length=1,
-        description="技术字段名（数据源中的实际字段名）"
-    )
-    
-    confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="映射置信度（0-1）"
-    )
-    
-    mapping_source: MappingSource = Field(
-        description="""映射来源
-        
-<values>
-- rag_high_confidence: RAG 高置信度直接返回（>= 0.9）
-- rag_llm_fallback: RAG 低置信度 + LLM 判断（< 0.9）
-- cache_hit: 缓存命中
-- exact_match: 精确匹配
-</values>"""
-    )
-    
-    # 字段数据类型（用于日期筛选策略选择）
-    data_type: Optional[str] = Field(
-        default=None,
-        description="""字段数据类型（来自元数据）
-
-<what>字段在数据源中的数据类型</what>
-<values>DATE, DATETIME, STRING, INTEGER, REAL, BOOLEAN</values>
-
-<usage>
-QueryBuilder 根据 data_type 选择日期筛选策略：
-- DATE/DATETIME: 使用 QUANTITATIVE_DATE 或 DATE (RelativeDateFilter)
-- STRING: 使用 DATEPARSE + QUANTITATIVE_DATE，或 SET/MATCH
-</usage>"""
-    )
-    
-    # 字段日期格式（STRING 类型日期字段）
-    date_format: Optional[str] = Field(
-        default=None,
-        description="""日期格式（仅 STRING 类型日期字段）
-
-<what>STRING 类型字段的日期格式模式</what>
-<format>Tableau DATEPARSE 格式，如 'yyyy-MM-dd', 'MM/dd/yyyy'</format>
-
-<usage>
-QueryBuilder 使用此格式生成 DATEPARSE 表达式：
-DATEPARSE('yyyy-MM-dd', [field_name])
-</usage>"""
-    )
-    
-    # 维度层级信息（可选）
-    category: Optional[DimensionCategory] = Field(
-        default=None,
-        description="维度类别（time、geography、product 等）"
-    )
-    
-    level: Optional[DimensionLevel] = Field(
-        default=None,
-        description="层级级别（top、high、medium、low、detail）"
-    )
-    
-    granularity: Optional[str] = Field(
-        default=None,
-        description="粒度描述（country、province、city 等）"
-    )
-    
-    # 低置信度备选项
-    alternatives: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="备选映射（置信度 < 0.7 时提供）"
-    )
-
-
-class MappedQuery(BaseModel):
-    """
-    映射后的查询 - FieldMapper Node 输出
-    
-    <what>SemanticQuery 中的业务术语已映射为技术字段名</what>
-    
-    <design_principles>
-    - 保留 SemanticQuery 的语义结构
-    - 添加字段映射信息
-    - 包含映射置信度和来源
-    </design_principles>
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    # 原始 SemanticQuery（保留语义结构）
-    semantic_query: SemanticQuery = Field(
-        description="原始语义查询"
-    )
-    
-    # 字段映射结果
-    field_mappings: Dict[str, FieldMapping] = Field(
-        description="""字段映射字典
-        
-<what>业务术语 → 技术字段的映射</what>
-<how>key 是业务术语，value 是 FieldMapping</how>
-
-<examples>
-{
-    "销售额": FieldMapping(
-        business_term="销售额",
-        technical_field="Sales",
-        confidence=0.95,
-        mapping_source="rag_high_confidence"
-    ),
-    "省份": FieldMapping(
-        business_term="省份",
-        technical_field="Province",
-        confidence=0.85,
-        mapping_source="rag_llm_fallback",
-        category="geography",
-        level="medium"
-    )
-}
-</examples>"""
-    )
-    
-    # 聚合置信度（可选，默认自动计算）
-    overall_confidence: Optional[float] = Field(
-        default=None,
-        ge=0.0, le=1.0,
-        description="整体映射置信度（所有映射的最小值），如果不提供则自动计算"
-    )
-    
-    # 低置信度警告
-    low_confidence_fields: List[str] = Field(
-        default_factory=list,
-        description="置信度 < 0.7 的字段列表"
-    )
-    
-    @model_validator(mode='after')
-    def compute_overall_confidence(self) -> 'MappedQuery':
-        """自动计算 overall_confidence 和 low_confidence_fields"""
-        if self.field_mappings:
-            confidences = [m.confidence for m in self.field_mappings.values()]
-            if self.overall_confidence is None:
-                self.overall_confidence = min(confidences) if confidences else 1.0
-            # 自动填充低置信度字段
-            if not self.low_confidence_fields:
-                self.low_confidence_fields = [
-                    term for term, mapping in self.field_mappings.items()
-                    if mapping.confidence < 0.7
-                ]
-        elif self.overall_confidence is None:
-            self.overall_confidence = 1.0
-        return self
-    
-    def get_technical_field(self, business_term: str) -> Optional[str]:
-        """获取业务术语对应的技术字段名"""
-        mapping = self.field_mappings.get(business_term)
-        return mapping.technical_field if mapping else None
-    
-    def get_confidence(self, business_term: str) -> Optional[float]:
-        """获取业务术语映射的置信度"""
-        mapping = self.field_mappings.get(business_term)
-        return mapping.confidence if mapping else None
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # 导出
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1395,12 +1218,8 @@ __all__ = [
     "MeasureSpec",
     "DimensionSpec",
     "FilterSpec",
-    "TimeFilterSpec",     # 与 VizQL API 对齐
+    "TimeFilterSpec",
     "AnalysisSpec",
     "OutputControl",
     "SemanticQuery",
-    
-    # MappedQuery 组件
-    "FieldMapping",
-    "MappedQuery",
 ]

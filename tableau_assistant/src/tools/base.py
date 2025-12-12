@@ -7,7 +7,7 @@ Tool Base - 工具基础结构
 - 工具装饰器增强
 - 通用工具响应模型
 """
-from typing import Any, Dict, Optional, TypeVar, Generic, Union
+from typing import Dict, Optional, TypeVar, Generic, Union, List
 from pydantic import BaseModel, Field
 from enum import Enum
 import logging
@@ -32,7 +32,7 @@ class ToolError(BaseModel):
     """工具错误响应"""
     code: ToolErrorCode = Field(description="错误代码")
     message: str = Field(description="错误消息")
-    details: Optional[Dict[str, Any]] = Field(default=None, description="错误详情")
+    details: Optional[Dict[str, str]] = Field(default=None, description="错误详情")
     recoverable: bool = Field(default=True, description="是否可恢复")
     suggestion: Optional[str] = Field(default=None, description="建议操作")
 
@@ -52,11 +52,11 @@ class ToolResponse(BaseModel, Generic[T]):
         error: 失败时的错误信息
     """
     success: bool = Field(description="是否成功")
-    data: Optional[Any] = Field(default=None, description="成功时的数据")
+    data: Optional[T] = Field(default=None, description="成功时的数据")
     error: Optional[ToolError] = Field(default=None, description="失败时的错误信息")
     
     @classmethod
-    def ok(cls, data: Any) -> "ToolResponse":
+    def ok(cls, data: T) -> "ToolResponse[T]":
         """创建成功响应"""
         return cls(success=True, data=data)
     
@@ -65,10 +65,10 @@ class ToolResponse(BaseModel, Generic[T]):
         cls,
         code: ToolErrorCode,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
+        details: Optional[Dict[str, str]] = None,
         recoverable: bool = True,
         suggestion: Optional[str] = None
-    ) -> "ToolResponse":
+    ) -> "ToolResponse[T]":
         """创建失败响应"""
         return cls(
             success=False,
@@ -113,7 +113,7 @@ def format_tool_response(response: ToolResponse) -> str:
         return "\n".join(parts)
 
 
-def _format_dict_for_llm(data: Dict[str, Any], indent: int = 0) -> str:
+def _format_dict_for_llm(data: Dict[str, object], indent: int = 0) -> str:
     """格式化字典为 LLM 友好格式"""
     lines = []
     prefix = "  " * indent
@@ -129,7 +129,7 @@ def _format_dict_for_llm(data: Dict[str, Any], indent: int = 0) -> str:
     return "\n".join(lines)
 
 
-def _format_list_for_llm(data: list, indent: int = 0) -> str:
+def _format_list_for_llm(data: List[object], indent: int = 0) -> str:
     """格式化列表为 LLM 友好格式"""
     lines = []
     prefix = "  " * indent

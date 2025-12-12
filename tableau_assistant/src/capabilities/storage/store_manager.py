@@ -67,10 +67,11 @@ class StoreManager:
         item = store.get(("custom",), "key1")
     """
     
-    # 缓存过期时间（秒）- 从环境变量读取，提供默认值
-    METADATA_TTL = int(os.getenv('METADATA_CACHE_TTL', '3600'))  # 1小时
-    DIMENSION_HIERARCHY_TTL = int(os.getenv('DIMENSION_HIERARCHY_CACHE_TTL', '86400'))  # 24小时
-    DATA_MODEL_TTL = int(os.getenv('DATA_MODEL_CACHE_TTL', '86400'))  # 24小时
+    # 缓存过期时间（秒）- 默认值，可通过 .env 配置
+    # 注意：这些是类变量默认值，实际值在 __init__ 中从 settings 读取
+    METADATA_TTL = 86400  # 24小时
+    DIMENSION_HIERARCHY_TTL = 86400  # 24小时
+    DATA_MODEL_TTL = 86400  # 24小时
     
     # 默认搜索限制
     DEFAULT_SEARCH_LIMIT = 1000
@@ -100,15 +101,16 @@ class StoreManager:
         self.cache_size = cache_size
         self.timeout = timeout
         
-        # 搜索限制
-        if max_search_limit is not None:
-            self.max_search_limit = max_search_limit
-        else:
-            try:
-                from tableau_assistant.src.config.settings import settings
-                self.max_search_limit = getattr(settings, 'store_max_search_limit', self.DEFAULT_SEARCH_LIMIT)
-            except Exception:
-                self.max_search_limit = self.DEFAULT_SEARCH_LIMIT
+        # 从 settings 读取配置
+        try:
+            from tableau_assistant.src.config.settings import settings
+            self.max_search_limit = max_search_limit or settings.store_max_search_limit
+            # 更新 TTL 配置
+            self.METADATA_TTL = settings.metadata_cache_ttl
+            self.DIMENSION_HIERARCHY_TTL = settings.dimension_hierarchy_cache_ttl
+            self.DATA_MODEL_TTL = settings.data_model_cache_ttl
+        except Exception:
+            self.max_search_limit = max_search_limit or self.DEFAULT_SEARCH_LIMIT
         
         # 线程锁
         self._lock = threading.RLock()

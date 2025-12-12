@@ -32,6 +32,7 @@ from tableau_assistant.src.models.metadata import (
 if TYPE_CHECKING:
     from tableau_assistant.src.capabilities.date_processing.manager import DateManager
     from tableau_assistant.src.capabilities.date_processing.format_detector import DateFormatType
+    from tableau_assistant.src.bi_platforms.tableau import TableauAuthContext
 
 logger = logging.getLogger(__name__)
 
@@ -153,12 +154,14 @@ class DataModelManager:
     数据模型包含字段元数据、逻辑表、表关系和维度层级。
     
     使用 Runtime 访问 Store 和 Context。
+    认证信息必须通过构造函数传入 auth_context。
     """
     
     def __init__(
         self,
         runtime: Runtime[VizQLContext],
-        date_manager: Optional['DateManager'] = None
+        date_manager: Optional['DateManager'] = None,
+        auth_context: Optional['TableauAuthContext'] = None
     ):
         """
         初始化数据模型管理器
@@ -166,6 +169,7 @@ class DataModelManager:
         Args:
             runtime: LangGraph 运行时（包含 context 和 store）
             date_manager: 日期管理器（可选，用于检测 STRING 类型日期字段格式）
+            auth_context: Tableau 认证上下文（必需，用于调用 Tableau API）
         """
         self.runtime = runtime
         # 如果 runtime.store 已经是 StoreManager 实例，直接使用
@@ -175,6 +179,28 @@ class DataModelManager:
         else:
             self.store_manager = StoreManager(runtime.store)
         self.date_manager = date_manager
+        self._auth_context = auth_context
+    
+    def _get_tableau_auth(self) -> Dict[str, str]:
+        """
+        获取 Tableau 认证信息
+        
+        Returns:
+            包含 tableau_token, tableau_site, tableau_domain 的字典
+        
+        Raises:
+            ValueError: 如果 auth_context 未设置
+        """
+        if self._auth_context is None:
+            raise ValueError(
+                "auth_context 未设置。请在创建 DataModelManager 时传入 auth_context 参数。"
+            )
+        
+        return {
+            "tableau_token": self._auth_context.api_key,
+            "tableau_site": self._auth_context.site,
+            "tableau_domain": self._auth_context.domain,
+        }
     
     def _convert_to_metadata_model(self, raw_metadata: Dict[str, Any]) -> Metadata:
         """
@@ -268,9 +294,8 @@ class DataModelManager:
         # 从 runtime.context 获取 datasource_luid
         datasource_luid = self.runtime.context.datasource_luid
         
-        # 从 Store 获取 Tableau 配置
-        from tableau_assistant.src.models.workflow.context import get_tableau_config
-        tableau_config = get_tableau_config(self.store_manager)
+        # 获取 Tableau 认证信息
+        tableau_config = self._get_tableau_auth()
         tableau_token = tableau_config["tableau_token"]
         tableau_site = tableau_config["tableau_site"]
         tableau_domain = tableau_config["tableau_domain"]
@@ -594,10 +619,9 @@ class DataModelManager:
         logger.info(f"从 VizQL API 获取逻辑表: {datasource_luid}")
         try:
             from tableau_assistant.src.bi_platforms.tableau.metadata_service import TableauMetadataService
-            from tableau_assistant.src.models.workflow.context import get_tableau_config
             
-            # 获取 Tableau 配置
-            tableau_config = get_tableau_config(self.store_manager)
+            # 获取 Tableau 认证信息
+            tableau_config = self._get_tableau_auth()
             
             # 创建元数据服务
             service = TableauMetadataService(

@@ -135,11 +135,28 @@ class LLMCandidateSelector:
             if hasattr(self.llm, 'with_structured_output'):
                 structured_llm = self.llm.with_structured_output(SingleSelectionResult)
                 result = await structured_llm.ainvoke(messages)
-                return result
             else:
                 # Fallback to parsing JSON from response
                 response = await invoke_llm(self.llm, messages)
-                return parse_json_response(response, SingleSelectionResult)
+                result = parse_json_response(response, SingleSelectionResult)
+            
+            # 验证 LLM 选择的字段是否在候选列表中
+            # 如果不在，回退到 RAG 的第一个候选
+            if result.selected_field:
+                valid_fields = {c.field_name for c in candidates}
+                if result.selected_field not in valid_fields:
+                    logger.warning(
+                        f"LLM selected invalid field '{result.selected_field}' for '{term}', "
+                        f"falling back to top RAG candidate '{candidates[0].field_name}'"
+                    )
+                    return SingleSelectionResult(
+                        business_term=term,
+                        selected_field=candidates[0].field_name,
+                        confidence=candidates[0].score * 0.9,
+                        reasoning=f"LLM selected invalid field, using top RAG result: {candidates[0].field_name}"
+                    )
+            
+            return result
         except Exception as e:
             logger.error(f"LLM selection failed for '{term}': {e}")
             # Fallback: return top candidate with reduced confidence

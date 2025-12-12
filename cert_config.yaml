@@ -31,8 +31,10 @@ services:
     auto_fetch: true
   
   # Tableau Server（从环境变量读取）
+  # 主机名和端口从 TABLEAU_DOMAIN 解析
+  # 例如: https://cpse.cpgroup.cn:11080 -> hostname=cpse.cpgroup.cn, port=11080
   tableau:
-    hostname: "${TABLEAU_DOMAIN}"
-    port: 443
-    ca_bundle: "tableau_cpse_cpgroup_cn_cert.pem"
+    hostname: "${TABLEAU_HOSTNAME}"
+    port: "${TABLEAU_PORT}"
+    ca_bundle: "tableau_cert.pem"
     auto_fetch: false

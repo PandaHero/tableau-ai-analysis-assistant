@@ -12,12 +12,20 @@ Routing decisions:
 """
 
 import logging
-from typing import Dict, Any, Literal
+from typing import Dict, List, Literal, Optional, Union, TYPE_CHECKING
+
+# VizQLState 必须在运行时导入，因为 LangGraph 的 add_conditional_edges
+# 会调用 get_type_hints() 来推断输入 schema
+from tableau_assistant.src.models.workflow.state import VizQLState
+
+if TYPE_CHECKING:
+    from tableau_assistant.src.models.workflow.state import ErrorRecord
+    from tableau_assistant.src.models.replanner.replan_decision import ReplanDecision
 
 logger = logging.getLogger(__name__)
 
 
-def route_after_understanding(state: Dict[str, Any]) -> Literal["field_mapper", "end"]:
+def route_after_understanding(state: VizQLState) -> Literal["field_mapper", "end"]:
     """
     Route after Understanding node.
     
@@ -48,7 +56,7 @@ def route_after_understanding(state: Dict[str, Any]) -> Literal["field_mapper", 
 
 
 def route_after_replanner(
-    state: Dict[str, Any],
+    state: VizQLState,
     max_replan_rounds: int = 3
 ) -> Literal["understanding", "end"]:
     """
@@ -135,8 +143,8 @@ def route_after_replanner(
 
 
 def calculate_completeness_score(
-    state: Dict[str, Any],
-    replan_decision: Dict[str, Any]
+    state: VizQLState,
+    replan_decision: "ReplanDecision",
 ) -> float:
     """
     Calculate completeness score.
@@ -162,7 +170,11 @@ def calculate_completeness_score(
         Score between 0.0 and 1.0
     """
     # LLM-evaluated score is the primary indicator (80% weight)
-    llm_score = replan_decision.get("completeness_score", 0.5)
+    # Handle both Pydantic object and dict
+    if hasattr(replan_decision, "completeness_score"):
+        llm_score = replan_decision.completeness_score
+    else:
+        llm_score = getattr(replan_decision, "completeness_score", 0.5)
     
     # Auxiliary score: sanity check for extreme cases (20% weight)
     # Starts at 1.0, only reduced when something is clearly wrong

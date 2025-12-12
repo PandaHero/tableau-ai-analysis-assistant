@@ -1,5 +1,7 @@
+# -*- coding: utf-8 -*-
 """
-Integration Tests Package
+Integration tests for Tableau Assistant workflow.
 
-集成测试使用真实的 Tableau 环境和 LLM 进行完整功能测试。
+This package contains end-to-end tests that verify the complete workflow
+from user question to final insights, using real Tableau environment and LLM services.
 """

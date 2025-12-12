@@ -74,8 +74,8 @@ class InsightAccumulator:
             return ""
         
         summaries = []
-        for insight in self._insights[:5]:  # Top 5 insights
-            summaries.append(f"- {insight.title}: {insight.description[:100]}...")
+        for insight in self._insights:
+            summaries.append(f"- {insight.title}: {insight.description}")
         
         return "\n".join(summaries)
     

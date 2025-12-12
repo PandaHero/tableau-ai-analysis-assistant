@@ -90,9 +90,10 @@ def select_model(
     if not model_name:
         raise ValueError("model_name is required")
     
-    # 从环境变量获取通用配置
-    llm_api_base = os.environ.get("LLM_API_BASE")
-    llm_api_key = os.environ.get("LLM_API_KEY")
+    # 从 settings 获取通用配置
+    from tableau_assistant.src.config.settings import settings
+    llm_api_base = settings.llm_api_base
+    llm_api_key = settings.llm_api_key
     
     # 获取 SSL 配置
     ssl_kwargs = get_httpx_client_kwargs()
@@ -188,21 +189,24 @@ def _create_openai_model(
             http_async_client=http_async_client
         )
     else:
-        # OpenAI 官方 API
-        openai_api_key = os.environ.get("OPENAI_API_KEY")
-        if not openai_api_key:
-            raise ValueError("OPENAI_API_KEY must be set for OpenAI official API")
+        # OpenAI 官方 API - 使用 LLM_API_KEY 作为 OpenAI key
+        if not api_key:
+            raise ValueError("LLM_API_KEY must be set for OpenAI official API")
         return ChatOpenAI(
             model_name=model_name,
             temperature=temperature,
-            openai_api_key=openai_api_key,
+            openai_api_key=api_key,
             http_client=http_client,
             http_async_client=http_async_client
         )
 
 
 def _create_azure_model(model_name: str, temperature: float) -> AzureChatOpenAI:
-    """创建 Azure OpenAI 模型"""
+    """创建 Azure OpenAI 模型
+    
+    注意：Azure 配置暂时保留使用 os.environ，因为这些是 Azure 特定的配置，
+    如果需要使用 Azure，请在 .env 中配置相关环境变量。
+    """
     azure_deployment = os.environ.get("AZURE_OPENAI_AGENT_DEPLOYMENT_NAME")
     azure_api_version = os.environ.get("AZURE_OPENAI_API_VERSION")
     azure_instance = os.environ.get("AZURE_OPENAI_API_INSTANCE_NAME")
@@ -210,7 +214,7 @@ def _create_azure_model(model_name: str, temperature: float) -> AzureChatOpenAI:
     
     if not all([azure_deployment, azure_api_version, azure_instance, azure_api_key]):
         raise ValueError(
-            "Azure OpenAI configuration incomplete. Required: "
+            "Azure OpenAI configuration incomplete. Required in .env: "
             "AZURE_OPENAI_AGENT_DEPLOYMENT_NAME, AZURE_OPENAI_API_VERSION, "
             "AZURE_OPENAI_API_INSTANCE_NAME, AZURE_OPENAI_API_KEY"
         )
@@ -226,7 +230,11 @@ def _create_azure_model(model_name: str, temperature: float) -> AzureChatOpenAI:
 
 
 def _create_claude_model(model_name: str, temperature: float):
-    """创建 Claude 模型"""
+    """创建 Claude 模型
+    
+    注意：Anthropic 配置暂时保留使用 os.environ，因为这是 Anthropic 特定的配置，
+    如果需要使用 Claude，请在 .env 中配置 ANTHROPIC_API_KEY。
+    """
     if not ANTHROPIC_AVAILABLE:
         raise ImportError(
             "langchain-anthropic is required for Claude models. "
@@ -235,7 +243,7 @@ def _create_claude_model(model_name: str, temperature: float):
     
     anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not anthropic_api_key:
-        raise ValueError("ANTHROPIC_API_KEY must be set for Claude provider")
+        raise ValueError("ANTHROPIC_API_KEY must be set in .env for Claude provider")
     
     return ChatAnthropic(
         model=model_name,
@@ -257,12 +265,13 @@ def _create_deepseek_model(
     http_async_client
 ) -> ChatOpenAI:
     """创建 DeepSeek 模型"""
-    deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY") or llm_api_key
-    deepseek_base_url = os.environ.get("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+    from tableau_assistant.src.config.settings import settings
+    deepseek_api_key = settings.deepseek_api_key or llm_api_key
+    deepseek_base_url = settings.deepseek_api_base
     
     if not deepseek_api_key:
         raise ValueError(
-            "DEEPSEEK_API_KEY or LLM_API_KEY must be set for DeepSeek provider"
+            "DEEPSEEK_API_KEY or LLM_API_KEY must be set in .env for DeepSeek provider"
         )
     
     return ChatOpenAI(
@@ -283,17 +292,20 @@ def _create_qwen_model(
     http_client,
     http_async_client
 ) -> ChatOpenAI:
-    """创建通义千问模型"""
-    qwen_api_key = os.environ.get("QWEN_API_KEY") or llm_api_key
-    qwen_base_url = os.environ.get("QWEN_API_BASE") or llm_api_base
+    """创建通义千问模型
+    
+    使用 LLM_API_BASE 和 LLM_API_KEY 作为 Qwen 的配置。
+    """
+    qwen_api_key = llm_api_key
+    qwen_base_url = llm_api_base
     
     if not qwen_api_key:
         raise ValueError(
-            "QWEN_API_KEY or LLM_API_KEY must be set for Qwen provider"
+            "LLM_API_KEY must be set in .env for Qwen provider"
         )
     if not qwen_base_url:
         raise ValueError(
-            "QWEN_API_BASE or LLM_API_BASE must be set for Qwen provider"
+            "LLM_API_BASE must be set in .env for Qwen provider"
         )
     
     return ChatOpenAI(
@@ -314,12 +326,13 @@ def _create_zhipu_model(
     http_async_client
 ) -> ChatOpenAI:
     """创建智谱 AI 模型"""
-    zhipu_api_key = os.environ.get("ZHIPUAI_API_KEY") or os.environ.get("ZHIPU_API_KEY") or llm_api_key
-    zhipu_base_url = os.environ.get("ZHIPU_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
+    from tableau_assistant.src.config.settings import settings
+    zhipu_api_key = settings.zhipuai_api_key or llm_api_key
+    zhipu_base_url = settings.zhipu_api_base
     
     if not zhipu_api_key:
         raise ValueError(
-            "ZHIPUAI_API_KEY, ZHIPU_API_KEY or LLM_API_KEY must be set for Zhipu provider"
+            "ZHIPUAI_API_KEY must be set in .env for Zhipu provider"
         )
     
     return ChatOpenAI(
@@ -370,13 +383,10 @@ def get_llm(
         # 完全自定义
         llm = get_llm(temperature=0.3, model_name="gpt-4o", provider="openai")
     """
-    _provider = provider or os.environ.get("LLM_MODEL_PROVIDER", "local")
-    _model_name = (
-        model_name
-        or os.environ.get("TOOLING_LLM_MODEL")
-        or os.environ.get("LLM_MODEL_NAME", "qwen2.5-72b")
-    )
-    _temperature = temperature if temperature is not None else float(os.environ.get("LLM_TEMPERATURE", "0.2"))
+    from tableau_assistant.src.config.settings import settings
+    _provider = provider or settings.llm_model_provider
+    _model_name = model_name or settings.tooling_llm_model or "qwen2.5-72b"
+    _temperature = temperature if temperature is not None else settings.llm_temperature
     
     return select_model(
         provider=_provider,

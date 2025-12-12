@@ -7,7 +7,7 @@ Architecture (refactored):
 - Understanding Agent → SemanticQuery (pure semantic, no VizQL concepts)
 - FieldMapper Node → MappedQuery (business terms mapped to technical fields)
 - QueryBuilder Node → VizQLQuery (technical query)
-- Execute Node → QueryResult
+- Execute Node → ExecuteResult
 - Insight Agent → insights
 - Replanner Agent → ReplanDecision
 
@@ -15,13 +15,60 @@ Note: Boost Agent has been REMOVED, its functionality merged into Understanding 
 """
 from __future__ import annotations
 
-from typing import TypedDict, Annotated, List, Dict, Any, Optional
+from typing import TypedDict, Annotated, List, Dict, Optional, Any
 import operator
 
 # 运行时导入类型（LangGraph StateGraph 需要在运行时解析类型）
-from tableau_assistant.src.models.semantic.query import SemanticQuery, MappedQuery
+from tableau_assistant.src.models.semantic.query import SemanticQuery
+from tableau_assistant.src.models.field_mapper.models import MappedQuery
 from tableau_assistant.src.models.vizql.types import VizQLQuery
+from tableau_assistant.src.models.vizql.execute_result import ExecuteResult
 from tableau_assistant.src.models.replanner.replan_decision import ReplanDecision
+from tableau_assistant.src.models.insight.models import Insight
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Type Definitions for State Fields
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ErrorRecord(TypedDict):
+    """Error record structure"""
+    node: str
+    error: str
+    type: str
+
+
+class WarningRecord(TypedDict):
+    """Warning record structure"""
+    node: str
+    message: str
+    type: str
+
+
+class ReplanHistoryRecord(TypedDict):
+    """Replan history record structure"""
+    round: int
+    decision: str
+    reason: str
+    questions: List[str]
+
+
+class PerformanceMetrics(TypedDict, total=False):
+    """Performance metrics structure"""
+    start_time: float
+    end_time: float
+    token_count: int
+    llm_calls: int
+    vds_calls: int
+    total_duration: float
+
+
+class VisualizationData(TypedDict, total=False):
+    """Visualization data structure"""
+    type: str
+    title: str
+    data: List[Dict[str, str]]
+    config: Dict[str, str]
 
 
 class VizQLState(TypedDict):
@@ -35,7 +82,7 @@ class VizQLState(TypedDict):
     - Understanding Agent outputs SemanticQuery (pure semantic)
     - FieldMapper Node outputs MappedQuery (technical field mapping)
     - QueryBuilder Node outputs VizQLQuery (technical query)
-    - Execute Node outputs QueryResult
+    - Execute Node outputs ExecuteResult
     
     Note:
     - Context information (datasource_luid, user_id, etc.) is passed through Runtime
@@ -67,14 +114,14 @@ class VizQLState(TypedDict):
     vizql_query: Optional[VizQLQuery]        # VizQLQuery Pydantic object
     
     # Execute Node output
-    query_result: Optional[Dict[str, Any]]   # QueryResult dict
+    query_result: Optional[ExecuteResult]   # ExecuteResult Pydantic object
     
     # ═══════════════════════════════════════════════════════════════════════
     # Insight Agent Output (progressive accumulation)
     # All insights are Pydantic objects
     # ═══════════════════════════════════════════════════════════════════════
-    insights: Annotated[List[Any], operator.add]      # Current round insights (Pydantic objects)
-    all_insights: Annotated[List[Any], operator.add]  # All accumulated insights (Pydantic objects)
+    insights: Annotated[List[Insight], operator.add]      # Current round insights
+    all_insights: Annotated[List[Insight], operator.add]  # All accumulated insights
     
     # ═══════════════════════════════════════════════════════════════════════
     # Replanner Agent Output (smart replanning)
@@ -82,10 +129,10 @@ class VizQLState(TypedDict):
     replan_decision: Optional[ReplanDecision]  # ReplanDecision Pydantic object
     replan_count: int                          # Current replan count
     max_replan_rounds: int                     # Maximum replan rounds (default: 3)
-    replan_history: Annotated[List[Dict[str, Any]], operator.add]  # Replan history
+    replan_history: Annotated[List[ReplanHistoryRecord], operator.add]  # Replan history
     
     # Final report
-    final_report: Optional[Dict[str, Any]]
+    final_report: Optional[Dict[str, str]]
     
     # ═══════════════════════════════════════════════════════════════════════
     # Control Flow
@@ -102,27 +149,32 @@ class VizQLState(TypedDict):
     replanner_complete: bool
     
     # ═══════════════════════════════════════════════════════════════════════
-    # Metadata
+    # Metadata (数据模型，在工作流启动时加载)
     # ═══════════════════════════════════════════════════════════════════════
     datasource: Optional[str]                  # Datasource name/LUID
-    metadata: Optional[Dict[str, Any]]         # Datasource metadata
-    dimension_hierarchy: Optional[Dict[str, Any]]  # Dimension hierarchy
+    metadata: Optional[Dict[str, str]]         # 完整数据模型（Metadata 对象序列化）
+    dimension_hierarchy: Optional[Dict[str, Dict[str, str]]]  # 维度层级结构
+    
+    # Replanner 需要的额外数据（由 Insight 节点填充）
+    data_insight_profile: Optional[Dict[str, Any]]  # 数据洞察画像（DataInsightProfile.model_dump()）
+    current_dimensions: List[str]              # 当前已分析的维度列表
+    pending_questions: List[Dict[str, Any]]    # 待处理的探索问题队列（由 Replanner 填充）
     
     # ═══════════════════════════════════════════════════════════════════════
     # Error Handling
     # ═══════════════════════════════════════════════════════════════════════
-    errors: Annotated[List[Dict[str, Any]], operator.add]    # Error records
-    warnings: Annotated[List[Dict[str, Any]], operator.add]  # Warning records
+    errors: Annotated[List[ErrorRecord], operator.add]    # Error records
+    warnings: Annotated[List[WarningRecord], operator.add]  # Warning records
     
     # ═══════════════════════════════════════════════════════════════════════
     # Performance Monitoring
     # ═══════════════════════════════════════════════════════════════════════
-    performance: Optional[Dict[str, Any]]      # Performance metrics
+    performance: Optional[PerformanceMetrics]      # Performance metrics
     
     # ═══════════════════════════════════════════════════════════════════════
     # Visualization Data
     # ═══════════════════════════════════════════════════════════════════════
-    visualizations: Annotated[List[Dict[str, Any]], operator.add]
+    visualizations: Annotated[List[VisualizationData], operator.add]
 
 
 class VizQLInput(TypedDict):
@@ -134,18 +186,26 @@ class VizQLInput(TypedDict):
     question: str  # User question
 
 
+class AnalysisPathStep(TypedDict):
+    """Analysis path step structure"""
+    step: int
+    node: str
+    action: str
+    result: str
+
+
 class VizQLOutput(TypedDict):
     """
     VizQL workflow output
     
     Defined using output_schema, provides type checking
     """
-    final_report: Dict[str, Any]       # Final report
+    final_report: Dict[str, str]       # Final report
     executive_summary: str             # Executive summary
     key_findings: List[str]            # Key findings
-    analysis_path: List[Dict[str, Any]]  # Analysis path
+    analysis_path: List[AnalysisPathStep]  # Analysis path
     recommendations: List[str]         # Follow-up recommendations
-    visualizations: List[Dict[str, Any]]  # Visualization data
+    visualizations: List[VisualizationData]  # Visualization data
 
 
 def create_initial_state(
@@ -202,10 +262,12 @@ def create_initial_state(
         insight_complete=False,
         replanner_complete=False,
         
-        # Metadata
+        # Metadata (数据模型)
         datasource=datasource,
         metadata=None,
         dimension_hierarchy=None,
+        data_insight_profile=None,
+        current_dimensions=[],
         
         # Error handling
         errors=[],

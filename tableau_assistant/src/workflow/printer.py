@@ -21,7 +21,15 @@
 """
 
 import sys
-from typing import Any, Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tableau_assistant.src.models.semantic.query import SemanticQuery
+    from tableau_assistant.src.models.field_mapper.models import MappedQuery
+    from tableau_assistant.src.models.vizql.types import VizQLQuery
+    from tableau_assistant.src.models.vizql.execute_result import ExecuteResult
+    from tableau_assistant.src.models.replanner.replan_decision import ReplanDecision
+    from tableau_assistant.src.workflow.executor import NodeOutput, WorkflowEvent, WorkflowResult
 
 # Windows 终端编码修复
 if sys.platform == 'win32':
@@ -72,8 +80,9 @@ class WorkflowPrinter:
         elif event.type == EventType.NODE_COMPLETE:
             self._flush_tokens()
             print(f"{Fore.GREEN}✓ [{event.node_name}] 完成{Style.RESET_ALL}")
-            if self.verbose and event.data:
-                self._print_node_output(event.node_name, event.data)
+            # 使用 output (NodeOutput Pydantic 对象)
+            if self.verbose and event.output:
+                self._print_node_output(event.node_name, event.output)
         
         elif event.type == EventType.ERROR:
             self._flush_tokens()
@@ -109,30 +118,27 @@ class WorkflowPrinter:
             print()  # 换行
             self._token_buffer = []
     
-    def _print_node_output(self, node_name: str, data: dict):
-        """打印节点输出"""
+    def _print_node_output(self, node_name: str, output: "NodeOutput"):
+        """打印节点输出 (NodeOutput Pydantic 对象)"""
+        from tableau_assistant.src.workflow.executor import NodeOutput
+        
         if node_name == "understanding":
-            sq = data.get("semantic_query")
-            if sq:
-                self._print_semantic_query(sq)
+            if output.semantic_query:
+                self._print_semantic_query(output.semantic_query)
         elif node_name == "field_mapper":
-            mq = data.get("mapped_query")
-            if mq:
-                self._print_mapped_query(mq)
+            if output.mapped_query:
+                self._print_mapped_query(output.mapped_query)
         elif node_name == "query_builder":
-            vq = data.get("vizql_query")
-            if vq:
-                self._print_vizql_query(vq)
+            if output.vizql_query:
+                self._print_vizql_query(output.vizql_query)
         elif node_name == "execute":
-            qr = data.get("query_result")
-            if qr:
-                self._print_query_result(qr)
+            if output.query_result:
+                self._print_query_result(output.query_result)
         elif node_name == "replanner":
-            rd = data.get("replan_decision")
-            if rd:
-                self._print_replan_decision(rd)
+            if output.replan_decision:
+                self._print_replan_decision(output.replan_decision)
     
-    def _print_semantic_query(self, sq: Any):
+    def _print_semantic_query(self, sq: "SemanticQuery"):
         """打印 SemanticQuery"""
         try:
             measures = [m.name for m in (sq.measures or [])]
@@ -144,7 +150,7 @@ class WorkflowPrinter:
         except Exception as e:
             print(f"  {Fore.BLUE}└─ (解析错误: {e})")
     
-    def _print_mapped_query(self, mq: Any):
+    def _print_mapped_query(self, mq: "MappedQuery"):
         """打印 MappedQuery"""
         try:
             mappings = mq.field_mappings or {}
@@ -154,7 +160,7 @@ class WorkflowPrinter:
         except Exception as e:
             print(f"  {Fore.BLUE}└─ (解析错误: {e})")
     
-    def _print_vizql_query(self, vq: Any):
+    def _print_vizql_query(self, vq: "VizQLQuery"):
         """打印 VizQLQuery"""
         try:
             fields = vq.fields or []
@@ -164,8 +170,8 @@ class WorkflowPrinter:
         except Exception as e:
             print(f"  {Fore.BLUE}└─ (解析错误: {e})")
     
-    def _print_query_result(self, qr: Any):
-        """打印 QueryResult"""
+    def _print_query_result(self, qr: "ExecuteResult"):
+        """打印 ExecuteResult"""
         try:
             data = qr.data if hasattr(qr, 'data') else []
             print(f"  {Fore.BLUE}├─ rows: {len(data)} 行")
@@ -177,7 +183,7 @@ class WorkflowPrinter:
         except Exception as e:
             print(f"  {Fore.BLUE}└─ (解析错误: {e})")
     
-    def _print_replan_decision(self, rd: Any):
+    def _print_replan_decision(self, rd: "ReplanDecision"):
         """打印 ReplanDecision"""
         try:
             print(f"  {Fore.BLUE}├─ should_replan: {rd.should_replan}")

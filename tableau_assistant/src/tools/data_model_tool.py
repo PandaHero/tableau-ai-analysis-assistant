@@ -1,7 +1,7 @@
 """
 Data Model Tool - 数据模型获取工具
 
-薄封装 DataModelManager，提供 LLM 友好的数据模型获取接口。
+提供 LLM 友好的数据模型获取接口。
 
 数据模型包含：
 - 字段元数据（名称、类型、角色、维度层级等）
@@ -12,17 +12,18 @@ Data Model Tool - 数据模型获取工具
 - 支持按角色过滤（dimension/measure）
 - 支持按类别过滤
 - 返回全量字段，大结果由 FilesystemMiddleware 处理
+- 从 WorkflowContext 获取数据模型
 """
-from typing import Optional, List, Any
+from typing import Optional, List, Annotated
 from pydantic import BaseModel, Field
-from langchain_core.tools import tool
+from langchain_core.tools import tool, InjectedToolArg
+from langchain_core.runnables import RunnableConfig
 import logging
 
 from tableau_assistant.src.tools.base import (
     ToolResponse,
     ToolErrorCode,
     format_tool_response,
-    safe_async_tool_execution,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,14 +31,6 @@ logger = logging.getLogger(__name__)
 
 class GetDataModelInput(BaseModel):
     """get_data_model 工具输入参数"""
-    use_cache: bool = Field(
-        default=True,
-        description="是否使用缓存（默认 True）"
-    )
-    enhance: bool = Field(
-        default=True,
-        description="是否增强数据模型，包括维度层级推断（默认 True）"
-    )
     filter_role: Optional[str] = Field(
         default=None,
         description="按角色过滤：'dimension' 或 'measure'"
@@ -48,19 +41,18 @@ class GetDataModelInput(BaseModel):
     )
 
 
-
-
-
-def _format_field_for_llm(field: Any) -> str:
+def _format_field_for_llm(field: object) -> str:
     """格式化单个字段为 LLM 友好格式"""
     lines = []
     
     # 基本信息
     name = getattr(field, 'name', str(field))
+    caption = getattr(field, 'fieldCaption', name)
     role = getattr(field, 'role', 'unknown')
     data_type = getattr(field, 'dataType', 'unknown')
     
-    lines.append(f"- {name}")
+    lines.append(f"- {caption}")
+    lines.append(f"    name: {name}")
     lines.append(f"    role: {role}")
     lines.append(f"    dataType: {data_type}")
     
@@ -94,7 +86,7 @@ def _format_field_for_llm(field: Any) -> str:
     return "\n".join(lines)
 
 
-def _format_data_model_for_llm(data_model: Any) -> str:
+def _format_data_model_for_llm(data_model: object) -> str:
     """
     格式化数据模型为 LLM 友好格式
     
@@ -139,7 +131,11 @@ def _format_data_model_for_llm(data_model: Any) -> str:
     return "\n".join(lines)
 
 
-def _format_data_model_output(fields: List[Any], datasource_name: str = "", data_model: Any = None) -> str:
+def _format_data_model_output(
+    fields: List[object],
+    datasource_name: str = "",
+    data_model: Optional[object] = None
+) -> str:
     """
     格式化数据模型输出为 LLM 友好格式
     
@@ -188,31 +184,11 @@ def _format_data_model_output(fields: List[Any], datasource_name: str = "", data
     return "\n".join(lines)
 
 
-# 全局 DataModelManager 引用（由依赖注入设置）
-_data_model_manager = None
-
-
-def set_data_model_manager(manager: Any) -> None:
-    """设置 DataModelManager 实例（依赖注入）"""
-    global _data_model_manager
-    _data_model_manager = manager
-    logger.info("DataModelManager injected into data_model_tool")
-
-
-def get_data_model_manager() -> Any:
-    """获取 DataModelManager 实例"""
-    return _data_model_manager
-
-
-
-
-
 @tool
 async def get_data_model(
-    use_cache: bool = True,
-    enhance: bool = True,
     filter_role: Optional[str] = None,
-    filter_category: Optional[str] = None
+    filter_category: Optional[str] = None,
+    config: Annotated[RunnableConfig, InjectedToolArg] = None,  # type: ignore[assignment]
 ) -> str:
     """
     获取数据源数据模型
@@ -225,8 +201,6 @@ async def get_data_model(
     这是理解数据结构的第一步，在构建查询之前应该先调用此工具。
     
     Args:
-        use_cache: 是否使用缓存（默认 True，建议保持）
-        enhance: 是否增强数据模型，包括维度层级推断（默认 True）
         filter_role: 按角色过滤，可选值：'dimension'（维度）或 'measure'（度量）
         filter_category: 按类别过滤，如 'time'（时间）, 'geography'（地理）, 'product'（产品）等
     
@@ -244,18 +218,6 @@ async def get_data_model(
         只获取时间类别字段：
         >>> get_data_model(filter_category="time")
     """
-    global _data_model_manager
-    
-    # 检查依赖
-    if _data_model_manager is None:
-        response = ToolResponse.fail(
-            code=ToolErrorCode.DEPENDENCY_ERROR,
-            message="DataModelManager 未初始化",
-            recoverable=False,
-            suggestion="请确保在调用工具前已正确初始化 DataModelManager"
-        )
-        return format_tool_response(response)
-    
     try:
         # 验证 filter_role 参数
         if filter_role and filter_role.lower() not in ['dimension', 'measure']:
@@ -268,11 +230,25 @@ async def get_data_model(
             )
             return format_tool_response(response)
         
-        # 获取数据模型
-        metadata = await _data_model_manager.get_data_model_async(
-            use_cache=use_cache,
-            enhance=enhance
-        )
+        # 从 WorkflowContext 获取数据模型
+        metadata = None
+        
+        if config is not None:
+            from tableau_assistant.src.workflow.context import get_context
+            ctx = get_context(config)
+            if ctx is not None and ctx.metadata is not None:
+                metadata = ctx.metadata
+                logger.debug("get_data_model: using metadata from WorkflowContext")
+        
+        # 检查是否获取到数据模型
+        if metadata is None:
+            response = ToolResponse.fail(
+                code=ToolErrorCode.DEPENDENCY_ERROR,
+                message="无法获取数据模型：WorkflowContext 中没有 metadata",
+                recoverable=False,
+                suggestion="请确保工作流已正确初始化，并调用了 ensure_metadata_loaded()"
+            )
+            return format_tool_response(response)
         
         # 应用过滤
         fields = metadata.fields
@@ -311,7 +287,5 @@ async def get_data_model(
 
 __all__ = [
     "get_data_model",
-    "set_data_model_manager",
-    "get_data_model_manager",
     "GetDataModelInput",
 ]

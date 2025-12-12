@@ -16,18 +16,22 @@ Requirements:
 """
 
 import logging
-from typing import Dict, Any, Optional, List, TYPE_CHECKING
+from typing import Dict, Optional, List, Union, TYPE_CHECKING
 
 from langgraph.types import RunnableConfig
 
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+    from tableau_assistant.src.models.workflow.state import VizQLState
+
 from tableau_assistant.src.models.semantic.query import (
     SemanticQuery,
-    MappedQuery,
     MeasureSpec,
     DimensionSpec,
     FilterSpec,
     AnalysisSpec,
 )
+from tableau_assistant.src.models.field_mapper.models import MappedQuery
 from tableau_assistant.src.models.semantic.enums import (
     AnalysisType,
     AggregationType,
@@ -84,15 +88,15 @@ class VizQLQueryBuilder:
     """
     
     def __init__(self):
-        self._fields: List[Any] = []
-        self._filters: List[Any] = []
+        self._fields: List[Union[BasicField, FunctionField, CalculationField, TableCalcField]] = []
+        self._filters: List[Dict[str, object]] = []
         self._limit: Optional[int] = None
     
-    def add_field(self, field: Any):
+    def add_field(self, field: Union[BasicField, FunctionField, CalculationField, TableCalcField]) -> None:
         """Add a field to the query."""
         self._fields.append(field)
     
-    def add_filter(self, filter_spec: Any):
+    def add_filter(self, filter_spec: Dict[str, object]) -> None:
         """Add a filter to the query."""
         self._filters.append(filter_spec)
     
@@ -130,7 +134,7 @@ class QueryBuilderNode:
     5. Assemble VizQLQuery
     """
     
-    def __init__(self, llm: Optional[Any] = None):
+    def __init__(self, llm: Optional["BaseChatModel"] = None):
         """
         Initialize QueryBuilder.
         
@@ -204,7 +208,7 @@ class QueryBuilderNode:
         self,
         dim: DimensionSpec,
         field_mappings: Dict[str, str],
-    ) -> Any:
+    ) -> Union[BasicField, FunctionField]:
         """
         Build dimension field.
         
@@ -235,7 +239,7 @@ class QueryBuilderNode:
         self,
         measure: MeasureSpec,
         field_mappings: Dict[str, str],
-    ) -> Any:
+    ) -> Union[FunctionField, CalculationField]:
         """
         Build measure field.
         
@@ -265,7 +269,7 @@ class QueryBuilderNode:
         analysis: AnalysisSpec,
         dimensions: List[DimensionSpec],
         field_mappings: Dict[str, str],
-    ) -> Optional[Any]:
+    ) -> Optional[Union[CalculationField, TableCalcField, FunctionField]]:
         """
         Build analysis field (table calc or LOD).
         
@@ -298,11 +302,15 @@ class QueryBuilderNode:
         if analysis.compare_type:
             kwargs["compare_period"] = analysis.compare_type
         
+        # 使用 analysis.aggregation 而不是硬编码的 SUM
+        # 修复 COUNTD 等非 SUM 聚合在表计算中的问题
+        agg_type = AggregationType(analysis.aggregation) if analysis.aggregation else AggregationType.SUM
+        
         expression = self.generator.generate(
             analysis.type,
             decision,
             target_field,
-            aggregation=AggregationType.SUM,  # Default, could be from analysis
+            aggregation=agg_type,
             **kwargs,
         )
         
@@ -334,8 +342,8 @@ class QueryBuilderNode:
     def _build_filter(
         self,
         filter_spec: FilterSpec,
-        field_mappings: Dict[str, Any],
-    ) -> Optional[Dict[str, Any]]:
+        field_mappings: Dict[str, object],
+    ) -> Optional[Dict[str, object]]:
         """
         Build VizQL filter specification.
         
@@ -425,7 +433,7 @@ class QueryBuilderNode:
         tech_field: str,
         data_type: Optional[str],
         date_format: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[Dict[str, object]]:
         """
         Build time range filter based on field data type.
         
@@ -520,11 +528,11 @@ class QueryBuilderNode:
     
     def _build_string_date_filter(
         self,
-        parser_result: Dict[str, Any],
+        parser_result: Dict[str, object],
         tech_field: str,
         date_format: Optional[str],
-        time_filter_spec: Any,
-    ) -> Optional[Dict[str, Any]]:
+        time_filter_spec: object,
+    ) -> Optional[Dict[str, object]]:
         """
         Build date filter for STRING type date fields.
         
@@ -671,7 +679,7 @@ class QueryBuilderNode:
 
 
 
-async def query_builder_node(state: Dict[str, Any], config: RunnableConfig | None = None) -> Dict[str, Any]:
+async def query_builder_node(state: "VizQLState", config: RunnableConfig | None = None) -> Dict[str, object]:
     """
     QueryBuilder node entry point for LangGraph.
     

@@ -73,12 +73,14 @@ class MappingSource(str, Enum):
     
     Indicates how a field mapping was determined.
     
+    - rag_direct: RAG retrieval direct match (high confidence, no LLM needed)
     - rag_high_confidence: RAG retrieval with confidence >= 0.9 (fast path)
     - rag_llm_fallback: RAG retrieval with LLM selection (confidence < 0.9)
     - cache_hit: Retrieved from cache
     - exact_match: Exact string match
     - llm_only: LLM direct matching (when RAG is not available)
     """
+    RAG_DIRECT = "rag_direct"
     RAG_HIGH_CONFIDENCE = "rag_high_confidence"
     RAG_LLM_FALLBACK = "rag_llm_fallback"
     CACHE_HIT = "cache_hit"

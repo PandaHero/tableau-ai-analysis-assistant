@@ -3,9 +3,15 @@
 from .models import (
     SingleSelectionResult,
     BatchSelectionResult,
+    AlternativeMapping,
+    FieldMapping,
+    MappedQuery,
 )
 
 __all__ = [
     "SingleSelectionResult",
     "BatchSelectionResult",
+    "AlternativeMapping",
+    "FieldMapping",
+    "MappedQuery",
 ]

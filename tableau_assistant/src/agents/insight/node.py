@@ -4,7 +4,7 @@ Insight Agent Node
 LLM Agent that analyzes query results and generates insights.
 
 Architecture:
-- Receives QueryResult from Execute Node
+- Receives ExecuteResult from Execute Node
 - Calls AnalysisCoordinator for progressive analysis
 - Returns accumulated insights
 
@@ -14,7 +14,7 @@ Requirements:
 """
 
 import logging
-from typing import Dict, Any, Optional, List, AsyncGenerator, TYPE_CHECKING
+from typing import Dict, Optional, List, AsyncGenerator, TYPE_CHECKING
 
 from langgraph.types import RunnableConfig
 
@@ -24,6 +24,10 @@ from langgraph.types import RunnableConfig
 # 如果这里从 components/insight 包导入，会触发循环
 from tableau_assistant.src.components.insight.coordinator import AnalysisCoordinator
 from tableau_assistant.src.models.insight import InsightResult
+
+if TYPE_CHECKING:
+    from tableau_assistant.src.models.workflow.state import VizQLState
+    from tableau_assistant.src.models.vizql.execute_result import ExecuteResult
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,7 @@ class InsightAgent:
     def __init__(
         self,
         coordinator: Optional[AnalysisCoordinator] = None,
-        dimension_hierarchy: Optional[Dict[str, Any]] = None
+        dimension_hierarchy: Optional[Dict[str, List[str]]] = None
     ):
         """
         Initialize Insight Agent.
@@ -57,27 +61,27 @@ class InsightAgent:
             dimension_hierarchy=self._dimension_hierarchy
         )
     
-    def set_dimension_hierarchy(self, hierarchy: Dict[str, Any]):
+    def set_dimension_hierarchy(self, hierarchy: Dict[str, List[str]]) -> None:
         """Set dimension hierarchy for analysis."""
         self._dimension_hierarchy = hierarchy or {}
         self.coordinator.set_dimension_hierarchy(self._dimension_hierarchy)
     
     async def analyze(
         self,
-        query_result: Any,
-        context: Dict[str, Any]
+        query_result: "ExecuteResult",
+        context: Dict[str, object]
     ) -> InsightResult:
         """
         Analyze query result and generate insights.
         
         Args:
-            query_result: QueryResult from Execute Node
+            query_result: ExecuteResult from Execute Node
             context: Analysis context (question, dimensions, measures)
             
         Returns:
             InsightResult with findings
         """
-        # Extract data from QueryResult
+        # Extract data from ExecuteResult
         if hasattr(query_result, 'data'):
             data = query_result.data
         elif isinstance(query_result, dict):
@@ -102,14 +106,14 @@ class InsightAgent:
     
     async def analyze_streaming(
         self,
-        query_result: Any,
-        context: Dict[str, Any]
-    ) -> AsyncGenerator[Dict[str, Any], None]:
+        query_result: "ExecuteResult",
+        context: Dict[str, object]
+    ) -> AsyncGenerator[Dict[str, object], None]:
         """
         Analyze with streaming progress updates.
         
         Args:
-            query_result: QueryResult from Execute Node
+            query_result: ExecuteResult from Execute Node
             context: Analysis context
             
         Yields:
@@ -135,7 +139,7 @@ class InsightAgent:
             yield event
 
 
-async def insight_node(state: Dict[str, Any], config: RunnableConfig | None = None) -> Dict[str, Any]:
+async def insight_node(state: "VizQLState", config: RunnableConfig | None = None) -> Dict[str, object]:
     """
     Insight node entry point for LangGraph.
     
@@ -201,12 +205,28 @@ async def insight_node(state: Dict[str, Any], config: RunnableConfig | None = No
         # findings 保持为 Pydantic 对象列表
         findings = result.findings if result.findings else []
         
-        logger.info(f"Insight node completed: {len(findings)} insights")
+        # 提取当前分析的维度列表
+        current_dimensions = state.get("current_dimensions", [])
+        if context.get("dimensions"):
+            new_dims = [d.get("name") for d in context["dimensions"] if d.get("name")]
+            # 合并去重
+            current_dimensions = list(set(current_dimensions + new_dims))
+        
+        # 提取 data_insight_profile（用于 Replanner）
+        # DataInsightProfile 是 Pydantic 模型，转换为字典以便在 State 中传递
+        # Replanner._format_data_insight_profile() 使用 .get() 方法访问字段
+        data_insight_profile = None
+        if result.data_insight_profile:
+            data_insight_profile = result.data_insight_profile.model_dump()
+        
+        logger.info(f"Insight node completed: {len(findings)} insights, {len(current_dimensions)} dimensions analyzed")
         
         return {
             "insights": findings,
             "insight_result": result,
             "all_insights": state.get("all_insights", []) + findings,
+            "data_insight_profile": data_insight_profile,
+            "current_dimensions": current_dimensions,
             "insight_complete": True,
         }
     
@@ -223,9 +243,9 @@ async def insight_node(state: Dict[str, Any], config: RunnableConfig | None = No
 
 
 async def insight_node_streaming(
-    state: Dict[str, Any],
+    state: "VizQLState",
     config: RunnableConfig | None = None
-) -> AsyncGenerator[Dict[str, Any], None]:
+) -> AsyncGenerator[Dict[str, object], None]:
     """
     Streaming version of insight node.
     
@@ -256,7 +276,9 @@ async def insight_node_streaming(
         context["measures"] = [{"name": m.name} for m in (semantic_query.measures or [])]
     
     try:
-        agent = InsightAgent()
+        # Get dimension_hierarchy from state
+        dimension_hierarchy = state.get("dimension_hierarchy", {})
+        agent = InsightAgent(dimension_hierarchy=dimension_hierarchy)
         
         async for event in agent.analyze_streaming(query_result, context):
             yield event
@@ -267,12 +289,26 @@ async def insight_node_streaming(
                 if result:
                     # findings 保持为 Pydantic 对象列表
                     findings = result.findings if result.findings else []
+                    
+                    # 提取当前分析的维度列表
+                    current_dimensions = state.get("current_dimensions", [])
+                    if context.get("dimensions"):
+                        new_dims = [d.get("name") for d in context["dimensions"] if d.get("name")]
+                        current_dimensions = list(set(current_dimensions + new_dims))
+                    
+                    # 提取 data_insight_profile（Pydantic -> dict）
+                    data_insight_profile = None
+                    if result.data_insight_profile:
+                        data_insight_profile = result.data_insight_profile.model_dump()
+                    
                     yield {
                         "event": "state_update",
                         "state": {
                             "insights": findings,
                             "insight_result": result,
                             "all_insights": state.get("all_insights", []) + findings,
+                            "data_insight_profile": data_insight_profile,
+                            "current_dimensions": current_dimensions,
                             "insight_complete": True,
                         }
                     }

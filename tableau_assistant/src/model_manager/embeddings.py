@@ -67,13 +67,15 @@ def select_embeddings(
     Examples:
         >>> embeddings = select_embeddings("openai", "text-embedding-3-small")
     """
+    from tableau_assistant.src.config.settings import settings
+    
     if not provider:
         raise ValueError("provider is required")
     if not model_name:
         raise ValueError("model_name is required")
     
-    llm_api_base = os.environ.get("LLM_API_BASE")
-    llm_api_key = os.environ.get("LLM_API_KEY")
+    llm_api_base = settings.llm_api_base
+    llm_api_key = settings.llm_api_key
     
     ssl_kwargs = get_httpx_client_kwargs()
     http_client = httpx.Client(**ssl_kwargs) if ssl_kwargs.get("verify") is not True else None
@@ -94,6 +96,7 @@ def select_embeddings(
         )
     
     elif provider == "azure":
+        # Azure 配置暂时保留使用 os.environ，因为这些是 Azure 特定的配置
         azure_deployment = os.environ.get("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME")
         azure_api_version = os.environ.get("AZURE_OPENAI_API_VERSION")
         azure_instance = os.environ.get("AZURE_OPENAI_API_INSTANCE_NAME")
@@ -101,7 +104,7 @@ def select_embeddings(
         
         if not all([azure_deployment, azure_api_version, azure_instance, azure_api_key]):
             raise ValueError(
-                "Azure OpenAI configuration incomplete. Required: "
+                "Azure OpenAI configuration incomplete. Required in .env: "
                 "AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME, AZURE_OPENAI_API_VERSION, "
                 "AZURE_OPENAI_API_INSTANCE_NAME, AZURE_OPENAI_API_KEY"
             )
@@ -115,13 +118,13 @@ def select_embeddings(
         )
     
     elif provider == "openai":
-        openai_api_key = os.environ.get("OPENAI_API_KEY")
-        if not openai_api_key:
-            raise ValueError("OPENAI_API_KEY must be set for OpenAI embeddings")
+        # 使用 LLM_API_KEY 作为 OpenAI key
+        if not llm_api_key:
+            raise ValueError("LLM_API_KEY must be set in .env for OpenAI embeddings")
         
         return OpenAIEmbeddings(
             model=model_name,
-            openai_api_key=openai_api_key
+            openai_api_key=llm_api_key
         )
     
     else:
@@ -280,12 +283,13 @@ class ZhipuEmbedding(EmbeddingProvider):
         )
         
         if api_key is None:
-            api_key = os.getenv("ZHIPUAI_API_KEY") or os.getenv("ZHIPU_API_KEY")
+            from tableau_assistant.src.config.settings import settings
+            api_key = settings.zhipuai_api_key
         
         if not api_key:
             raise ValueError(
                 "智谱 AI API Key 未提供。"
-                "请设置 ZHIPUAI_API_KEY 或 ZHIPU_API_KEY 环境变量。"
+                "请在 .env 中设置 ZHIPUAI_API_KEY。"
             )
         
         self.api_key = api_key
@@ -489,13 +493,17 @@ class OpenAIEmbedding(EmbeddingProvider):
         )
         
         if api_key is None:
-            api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
+            from tableau_assistant.src.config.settings import settings
+            api_key = settings.llm_api_key
         
         if not api_key:
-            raise ValueError("OpenAI API Key 未提供。请设置 OPENAI_API_KEY 环境变量。")
+            raise ValueError("OpenAI API Key 未提供。请在 .env 中设置 LLM_API_KEY。")
         
         self.api_key = api_key
-        self.base_url = base_url or os.getenv("OPENAI_API_BASE")
+        if base_url is None:
+            from tableau_assistant.src.config.settings import settings
+            base_url = settings.llm_api_base if settings.llm_api_base else None
+        self.base_url = base_url
         self._client = None
         self._async_client = None
     
@@ -682,9 +690,10 @@ class EmbeddingProviderFactory:
             if provider:
                 vector = provider.embed_query("hello")
         """
+        from tableau_assistant.src.config.settings import settings
+        
         # 1. 尝试智谱 AI
-        zhipu_key = os.environ.get("ZHIPUAI_API_KEY") or os.environ.get("ZHIPU_API_KEY")
-        if zhipu_key:
+        if settings.zhipuai_api_key:
             try:
                 provider = cls.create("zhipu", **kwargs)
                 logger.debug("使用智谱 AI Embedding 提供者")
@@ -693,8 +702,7 @@ class EmbeddingProviderFactory:
                 logger.warning(f"初始化智谱 AI Embedding 失败: {e}")
         
         # 2. 尝试 OpenAI
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        if openai_key:
+        if settings.llm_api_key:
             try:
                 provider = cls.create("openai", **kwargs)
                 logger.debug("使用 OpenAI Embedding 提供者")
@@ -704,7 +712,7 @@ class EmbeddingProviderFactory:
         
         # 3. 没有可用的提供者
         logger.warning(
-            "未配置 Embedding API Key (ZHIPUAI_API_KEY 或 OPENAI_API_KEY)，"
+            "未配置 Embedding API Key (ZHIPUAI_API_KEY 或 LLM_API_KEY)，"
             "Embedding 功能不可用"
         )
         return None

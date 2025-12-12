@@ -29,23 +29,38 @@ class Settings(BaseSettings):
 
     # Tableau配置
     tableau_domain: str = os.getenv("TABLEAU_DOMAIN", "")
-    tableau_base_url: str = os.getenv("TABLEAU_BASE_URL", "")
     tableau_site: str = os.getenv("TABLEAU_SITE", "")
-    tableau_api_version: str = os.getenv("TABLEAU_API_VERSION", "3.21")
+    tableau_api_version: str = os.getenv("TABLEAU_API_VERSION", "3.24")
     tableau_user: str = os.getenv("TABLEAU_USER", "")
+    # JWT 认证
     tableau_jwt_client_id: str = os.getenv("TABLEAU_JWT_CLIENT_ID", "")
     tableau_jwt_secret_id: str = os.getenv("TABLEAU_JWT_SECRET_ID", "")
     tableau_jwt_secret: str = os.getenv("TABLEAU_JWT_SECRET", "")
+    # PAT 认证（备用）
+    tableau_pat_name: str = os.getenv("TABLEAU_PAT_NAME", "")
+    tableau_pat_secret: str = os.getenv("TABLEAU_PAT_SECRET", "")
+    # 数据源
     datasource_luid: str = os.getenv("DATASOURCE_LUID", "")
+    # 数值精度
+    decimal_precision: int = int(os.getenv("DECIMAL_PRECISION", "2"))
 
     # LLM配置
     llm_api_base: str = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
-    llm_model_provider: str = os.getenv("LLM_MODEL_PROVIDER", "qwen3")
+    llm_model_provider: str = os.getenv("LLM_MODEL_PROVIDER", "local")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
     llm_api_timeout: int = int(os.getenv("LLM_API_TIMEOUT", "30"))
     llm_api_max_tokens: int = int(os.getenv("LLM_API_MAX_TOKENS", "40000"))
-    tooling_llm_model: str = os.getenv("TOOLING_LLM_MODEL", "")  # 具体的模型名称，必须配置
+    llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+    tooling_llm_model: str = os.getenv("TOOLING_LLM_MODEL", "")  # 具体的模型名称
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+    
+    # DeepSeek 配置
+    deepseek_api_base: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
+    
+    # 智谱 AI 配置
+    zhipuai_api_key: str = os.getenv("ZHIPUAI_API_KEY", "")
+    zhipu_api_base: str = os.getenv("ZHIPU_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
 
     # LangChain配置
     langchain_tracing_v2: str = os.getenv("LANGCHAIN_TRACING_V2", "false")
@@ -57,6 +72,11 @@ class Settings(BaseSettings):
     store_max_search_limit: int = int(os.getenv("STORE_MAX_SEARCH_LIMIT", "4000"))
     store_db_path: str = os.getenv("STORE_DB_PATH", "data/langgraph_store.db")
     store_metadata_ttl: int = int(os.getenv("STORE_METADATA_TTL", "3600"))  # 元数据缓存 TTL（秒）
+    
+    # 缓存 TTL 配置（秒）
+    metadata_cache_ttl: int = int(os.getenv("METADATA_CACHE_TTL", "86400"))  # 24小时
+    dimension_hierarchy_cache_ttl: int = int(os.getenv("DIMENSION_HIERARCHY_CACHE_TTL", "86400"))  # 24小时
+    data_model_cache_ttl: int = int(os.getenv("DATA_MODEL_CACHE_TTL", "86400"))  # 24小时
 
     # 任务调度配置
     parallel_upper_limit: int = int(os.getenv("Parallel_Upper_Limit", "3"))
@@ -115,9 +135,10 @@ class Settings(BaseSettings):
     vizql_return_format: str = os.getenv("VIZQL_RETURN_FORMAT", "OBJECTS")
     vizql_debug: bool = os.getenv("VIZQL_DEBUG", "false").lower() == "true"
     vizql_disaggregate: bool = os.getenv("VIZQL_DISAGGREGATE", "false").lower() == "true"
-
-    # 功能开关
-    feature_boost_validate_enabled: bool = os.getenv("FEATURE_BOOST_VALIDATE_ENABLED", "false").lower() == "true"
+    vizql_verify_ssl: bool = os.getenv("VIZQL_VERIFY_SSL", "true").lower() == "true"
+    vizql_ca_bundle: str = os.getenv("VIZQL_CA_BUNDLE", "")
+    vizql_timeout: int = int(os.getenv("VIZQL_TIMEOUT", "30"))
+    vizql_max_retries: int = int(os.getenv("VIZQL_MAX_RETRIES", "3"))
 
     # 开发配置
     debug: bool = os.getenv("DEBUG", "0") == "1"

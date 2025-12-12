@@ -4,10 +4,11 @@ Tools module for Tableau Assistant
 This module provides the tool system for Agent nodes.
 
 Tool categories:
-- Business tools: get_data_model, process_time_filter, detect_date_format, get_schema_module
+- Business tools: get_data_model, get_metadata, process_time_filter, detect_date_format, get_schema_module
 - Middleware tools: write_todos (from TodoListMiddleware), read_file (from FilesystemMiddleware)
 
 Note:
+- All tools that need data model/metadata should use WorkflowContext
 - FieldMapper is an independent node (RAG + LLM hybrid), not a tool
 - Boost Agent has been removed, its functionality merged into Understanding Agent
 """
@@ -33,8 +34,6 @@ from tableau_assistant.src.tools.base import (
 
 from tableau_assistant.src.tools.data_model_tool import (
     get_data_model,
-    set_data_model_manager,
-    get_data_model_manager,
     GetDataModelInput,
 )
 
@@ -42,19 +41,16 @@ from tableau_assistant.src.tools.date_tool import (
     process_time_filter,
     calculate_relative_dates,
     detect_date_format,
-    set_date_manager,
-    get_date_manager,
+    ProcessTimeFilterInput,
+    DetectDateFormatInput,
 )
 
 from tableau_assistant.src.tools.schema_tool import (
     get_schema_module,
-    SchemaModuleRegistry,
 )
 
 from tableau_assistant.src.tools.metadata_tool import (
     get_metadata,
-    set_metadata_manager,
-    get_metadata_manager,
     GetMetadataInput,
 )
 
@@ -76,21 +72,16 @@ __all__ = [
     "safe_async_tool_execution",
     # Data model tool
     "get_data_model",
-    "set_data_model_manager",
-    "get_data_model_manager",
     "GetDataModelInput",
     # Date tools
     "process_time_filter",
     "calculate_relative_dates",
     "detect_date_format",
-    "set_date_manager",
-    "get_date_manager",
+    "ProcessTimeFilterInput",
+    "DetectDateFormatInput",
     # Schema tool
     "get_schema_module",
-    "SchemaModuleRegistry",
     # Metadata tool
     "get_metadata",
-    "set_metadata_manager",
-    "get_metadata_manager",
     "GetMetadataInput",
 ]

@@ -16,8 +16,11 @@ Requirements:
 """
 
 import logging
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Optional, List, Union, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from tableau_assistant.src.models.vizql.types import TableCalcSpecification
 
 from tableau_assistant.src.models.semantic.enums import (
     AnalysisType,
@@ -72,7 +75,7 @@ class GeneratedExpression:
     - field_alias: Suggested alias for the field
     """
     calculation: Optional[str] = None
-    table_calc_spec: Optional[Any] = None
+    table_calc_spec: Optional["TableCalcSpecification"] = None
     function: Optional[FunctionEnum] = None
     field_alias: Optional[str] = None
 

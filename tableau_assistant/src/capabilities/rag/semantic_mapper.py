@@ -417,8 +417,8 @@ class SemanticMapper:
         
         # 5. 分数判断逻辑：
         # - 高置信度 (>= 0.9): 直接返回，不需要 Rerank
-        # - 中等置信度 (>= 0.5): 走 Rerank，找最合适的字段
-        # - 低置信度 (< 0.5): 直接返回，让 FieldMapperNode 触发 LLM Fallback
+        # - 中低置信度 (< 0.9): 走 Rerank，找最合适的字段
+        #   - Rerank 后如果置信度仍然低于阈值，FieldMapperNode 会触发 LLM Fallback
         
         # 5.1 高置信度快速路径
         if original_score >= self.config.high_confidence_threshold:
@@ -442,35 +442,8 @@ class SemanticMapper:
                 retrieval_results=retrieval_results
             )
         
-        # 5.2 低置信度：直接返回，让上层触发 LLM Fallback
-        if original_score < self.config.confidence_threshold:
-            retrieval_results = retrieval_results[:self.config.top_k]
-            total_ms = int((time.time() - start_time) * 1000)
-            latency.total_ms = total_ms
-            
-            # 返回备选字段
-            alternatives = [
-                r.field_chunk.field_name 
-                for r in retrieval_results[1:self.config.max_alternatives + 1]
-            ]
-            
-            logger.debug(
-                f"字段映射完成(低置信度): term='{term}', "
-                f"score={original_score:.4f}, 将触发 LLM Fallback"
-            )
-            
-            return FieldMappingResult(
-                term=term,
-                matched_field=top_result.field_chunk.field_name,
-                confidence=original_score,
-                alternatives=alternatives,
-                source=MappingSource.VECTOR,
-                latency_ms=total_ms,
-                latency_breakdown=latency,
-                retrieval_results=retrieval_results
-            )
-        
-        # 5.3 中等置信度：走 Rerank，找最合适的字段
+        # 5.2 中低置信度：走 Rerank，找最合适的字段
+        # 注意：即使是低置信度也要走 Rerank，因为正确的字段可能在候选列表中但排名靠后
         reranked = False
         if self.config.use_two_stage and self.reranker is not None:
             rerank_start = time.time()

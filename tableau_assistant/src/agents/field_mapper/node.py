@@ -273,8 +273,7 @@ class FieldMapperNode:
         try:
             assembler_config = AssemblerConfig(
                 chunk_strategy=ChunkStrategy.BY_FIELD,
-                include_sample_values=True,
-                max_sample_values=5,
+                max_samples=5,
             )
             
             self._assembler = KnowledgeAssembler(
@@ -372,7 +371,7 @@ class FieldMapperNode:
                     business_term=term,
                     technical_field=cached.technical_field,
                     confidence=cached.confidence,
-                    mapping_source="cache",
+                    mapping_source="cache_hit",
                     category=cached.category,
                     level=cached.level,
                     granularity=cached.granularity,
@@ -468,7 +467,7 @@ class FieldMapperNode:
         alternatives = []
         if rag_result.confidence < self.config.low_confidence_threshold:
             alternatives = [
-                {"field": alt, "confidence": 0.0}
+                {"technical_field": alt, "confidence": 0.0}
                 for alt in rag_result.alternatives[:self.config.max_alternatives]
             ]
         
@@ -517,18 +516,6 @@ class FieldMapperNode:
             level = selected_candidate.level if selected_candidate else None
             granularity = selected_candidate.granularity if selected_candidate else None
             
-            alternatives = []
-            if selection.confidence < self.config.low_confidence_threshold:
-                alternatives = [
-                    {
-                        "field": c.field_name,
-                        "confidence": c.score,
-                        "caption": c.field_caption
-                    }
-                    for c in candidates[:self.config.max_alternatives]
-                    if c.field_name != selection.selected_field
-                ]
-            
             if self.config.enable_cache and selection.selected_field:
                 self._put_to_cache(
                     term=term,
@@ -542,6 +529,17 @@ class FieldMapperNode:
             
             latency_breakdown = self._extract_latency_breakdown(rag_result, latency)
             
+            # 转换 alternatives 格式以匹配 AlternativeMapping
+            formatted_alternatives = [
+                {
+                    "technical_field": c.field_name,
+                    "confidence": c.score,
+                    "reason": c.field_caption or ""
+                }
+                for c in candidates[:self.config.max_alternatives]
+                if c.field_name != selection.selected_field
+            ] if selection.confidence < self.config.low_confidence_threshold else []
+            
             logger.debug(
                 f"LLM fallback: {term} -> {selection.selected_field} "
                 f"(confidence={selection.confidence:.2f})"
@@ -553,7 +551,7 @@ class FieldMapperNode:
                 confidence=selection.confidence,
                 mapping_source="rag_llm_fallback",
                 reasoning=selection.reasoning,
-                alternatives=alternatives,
+                alternatives=formatted_alternatives,
                 category=category,
                 level=level,
                 granularity=granularity,
@@ -650,17 +648,16 @@ class FieldMapperNode:
             level = selected_candidate.level if selected_candidate else None
             granularity = selected_candidate.granularity if selected_candidate else None
             
-            alternatives = []
-            if selection.confidence < self.config.low_confidence_threshold:
-                alternatives = [
-                    {
-                        "field": c.field_name,
-                        "confidence": c.score,
-                        "caption": c.field_caption
-                    }
-                    for c in candidates[:self.config.max_alternatives]
-                    if c.field_name != selection.selected_field
-                ]
+            # 转换 alternatives 格式以匹配 AlternativeMapping
+            alternatives = [
+                {
+                    "technical_field": c.field_name,
+                    "confidence": c.score,
+                    "reason": c.field_caption or ""
+                }
+                for c in candidates[:self.config.max_alternatives]
+                if c.field_name != selection.selected_field
+            ] if selection.confidence < self.config.low_confidence_threshold else []
             
             if self.config.enable_cache and selection.selected_field:
                 self._put_to_cache(
@@ -823,7 +820,7 @@ async def field_mapper_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         State update with mapped_query (MappedQuery Pydantic object)
     """
-    from tableau_assistant.src.models.semantic.query import MappedQuery, FieldMapping
+    from tableau_assistant.src.models.field_mapper.models import MappedQuery, FieldMapping
     
     start_time = time.time()
     
@@ -928,13 +925,24 @@ def _extract_terms_from_semantic_query(
         
     Returns:
         Dict mapping business term to role (measure/dimension/None)
+        
+    Note:
+        对于 COUNT/COUNTD 聚合，不设置 role_filter，因为被计数的字段
+        在数据源中通常是 dimension（如 Order ID），而不是 measure。
     """
     terms = {}
     
     # 直接访问 Pydantic 对象属性
     for measure in semantic_query.measures or []:
         if measure.name:
-            terms[measure.name] = "measure"
+            # COUNT/COUNTD 聚合通常作用于 dimension 字段（如 Order ID）
+            # 不应该限制为 measure，否则会过滤掉正确的字段
+            aggregation = getattr(measure, 'aggregation', 'sum')
+            if aggregation in ('count', 'countd'):
+                # 不设置 role_filter，允许匹配 dimension 和 measure
+                terms[measure.name] = None
+            else:
+                terms[measure.name] = "measure"
     
     for dimension in semantic_query.dimensions or []:
         if dimension.name:

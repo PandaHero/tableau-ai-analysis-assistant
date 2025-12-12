@@ -79,12 +79,13 @@ class VizQLClient:
             config: Client configuration. If None, reads from environment variables.
         """
         if config is None:
+            from tableau_assistant.src.config.settings import settings
             config = VizQLClientConfig(
-                base_url=os.getenv("TABLEAU_DOMAIN", ""),
-                verify_ssl=os.getenv("VIZQL_VERIFY_SSL", "true").lower() == "true",
-                ca_bundle=os.getenv("VIZQL_CA_BUNDLE"),
-                timeout=int(os.getenv("VIZQL_TIMEOUT", "30")),
-                max_retries=int(os.getenv("VIZQL_MAX_RETRIES", "3")),
+                base_url=settings.tableau_domain,
+                verify_ssl=settings.vizql_verify_ssl,
+                ca_bundle=settings.vizql_ca_bundle or None,
+                timeout=settings.vizql_timeout,
+                max_retries=settings.vizql_max_retries,
             )
         
         self.config = config

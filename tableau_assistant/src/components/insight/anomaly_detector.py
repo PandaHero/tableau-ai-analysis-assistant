@@ -187,7 +187,7 @@ class AnomalyDetector:
             return "Unknown anomaly"
         
         explanations = []
-        for col in outlier_columns[:3]:  # Limit to 3 columns
+        for col in outlier_columns:
             info = column_outliers.get(col, {})
             value = row.get(col)
             

@@ -7,6 +7,12 @@ from typing import Dict, Any
 import os
 
 
+def _get_tableau_hostname() -> str:
+    """从 settings 获取 Tableau 域名"""
+    from tableau_assistant.src.config.settings import settings
+    return settings.tableau_domain or "tableau.company.com"
+
+
 # Pre-configured service definitions
 PRECONFIGURED_SERVICES = {
     "deepseek": {
@@ -24,7 +30,7 @@ PRECONFIGURED_SERVICES = {
         "description": "Zhipu AI (智谱 AI) API"
     },
     "tableau": {
-        "hostname": os.getenv("TABLEAU_DOMAIN", "tableau.company.com"),
+        "hostname": None,  # 动态获取
         "port": 443,
         "ca_bundle": "tableau_cert.pem",
         "auto_fetch": False,  # Manually managed
@@ -47,14 +53,14 @@ def register_preconfigured_services(certificate_manager) -> Dict[str, Any]:
     
     for service_id, config in PRECONFIGURED_SERVICES.items():
         try:
-            # Handle environment variable substitution for hostname
+            # Handle dynamic hostname for tableau
             hostname = config["hostname"]
-            if service_id == "tableau" and "${" in hostname:
-                # Skip if environment variable not set
-                if not os.getenv("TABLEAU_DOMAIN"):
+            if service_id == "tableau":
+                hostname = _get_tableau_hostname()
+                if not hostname or hostname == "tableau.company.com":
                     results[service_id] = {
                         "status": "skipped",
-                        "reason": "TABLEAU_DOMAIN environment variable not set"
+                        "reason": "TABLEAU_DOMAIN not configured"
                     }
                     continue
             
@@ -140,8 +146,7 @@ def register_tableau_service(
         ValueError: If hostname is not provided and TABLEAU_DOMAIN is not set
         
     Example:
-        # Using environment variable
-        os.environ['TABLEAU_DOMAIN'] = 'tableau.company.com'
+        # Using settings (recommended)
         result = register_tableau_service(manager)
         
         # Using explicit hostname
@@ -149,11 +154,11 @@ def register_tableau_service(
     """
     # Determine hostname
     if hostname is None:
-        hostname = os.getenv("TABLEAU_DOMAIN")
-        if not hostname:
+        hostname = _get_tableau_hostname()
+        if not hostname or hostname == "tableau.company.com":
             raise ValueError(
                 "Tableau hostname not provided. "
-                "Either pass 'hostname' parameter or set TABLEAU_DOMAIN environment variable"
+                "Either pass 'hostname' parameter or configure TABLEAU_DOMAIN in .env"
             )
     
     # Parse hostname if it's a full URL

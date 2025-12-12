@@ -4,7 +4,7 @@ Data models module
 Organized into subpackages:
 - workflow/: LangGraph state and context models
 - semantic/: Pure semantic layer models (SemanticQuery, MappedQuery)
-- vizql/: VizQL technical models (VizQLQuery, QueryResult)
+- vizql/: VizQL technical models (VizQLQuery, ExecuteResult)
 - common/: Shared error models
 - api/: API request/response models
 - metadata/: Metadata related models
@@ -21,7 +21,7 @@ from .workflow import (
     VizQLContext,
     create_initial_state,
 )
-from .workflow.context import get_tableau_config, set_tableau_config
+
 
 # ========== Semantic Models ==========
 from .semantic import (
@@ -41,9 +41,6 @@ from .semantic import (
     AnalysisSpec,
     OutputControl,
     SemanticQuery,
-    # Field mapping
-    FieldMapping,
-    MappedQuery,
 )
 
 # ========== VizQL Models ==========
@@ -78,7 +75,7 @@ from .vizql import (
     VizQLFieldMetadata,
     VizQLMetadataOutput,
     # Result
-    QueryResult,
+    ExecuteResult,
     # Helper functions
     create_basic_field,
     create_function_field,
@@ -153,6 +150,9 @@ from .replanner import (
 from .field_mapper import (
     SingleSelectionResult,
     BatchSelectionResult,
+    AlternativeMapping,
+    FieldMapping,
+    MappedQuery,
 )
 
 
@@ -163,8 +163,6 @@ __all__ = [
     "VizQLOutput",
     "VizQLContext",
     "create_initial_state",
-    "get_tableau_config",
-    "set_tableau_config",
     
     # Semantic
     "AnalysisType",
@@ -209,7 +207,7 @@ __all__ = [
     "QueryOutput",
     "VizQLFieldMetadata",
     "VizQLMetadataOutput",
-    "QueryResult",
+    "ExecuteResult",
     "create_basic_field",
     "create_function_field",
     "create_set_filter",
@@ -270,4 +268,7 @@ __all__ = [
     # Field Mapper
     "SingleSelectionResult",
     "BatchSelectionResult",
+    "AlternativeMapping",
+    "FieldMapping",
+    "MappedQuery",
 ]

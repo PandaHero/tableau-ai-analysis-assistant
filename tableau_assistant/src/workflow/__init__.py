@@ -36,6 +36,13 @@ from tableau_assistant.src.workflow.executor import (
     EventType,
 )
 from tableau_assistant.src.workflow.printer import WorkflowPrinter
+from tableau_assistant.src.workflow.context import (
+    WorkflowContext,
+    MetadataLoadStatus,
+    create_workflow_config,
+    get_context,
+    get_context_or_raise,
+)
 
 __all__ = [
     # Executor (主要对外接口)
@@ -54,4 +61,10 @@ __all__ = [
     "route_after_replanner",
     "route_after_understanding",
     "calculate_completeness_score",
+    # Context management
+    "WorkflowContext",
+    "MetadataLoadStatus",
+    "create_workflow_config",
+    "get_context",
+    "get_context_or_raise",
 ]

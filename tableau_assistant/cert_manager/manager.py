@@ -146,10 +146,10 @@ class CertificateManager:
             证书文件路径字典
         """
         if tableau_domain is None:
-            import os
-            tableau_domain = os.getenv("TABLEAU_DOMAIN")
+            from tableau_assistant.src.config.settings import settings
+            tableau_domain = settings.tableau_domain
             if not tableau_domain:
-                raise ValueError("未指定tableau_domain且环境变量TABLEAU_DOMAIN未设置")
+                raise ValueError("未指定tableau_domain且 .env 中 TABLEAU_DOMAIN 未配置")
         
         # 解析域名
         from urllib.parse import urlparse

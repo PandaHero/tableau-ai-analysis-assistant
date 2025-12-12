@@ -41,17 +41,33 @@ class SSLConfig:
             ca_bundle: 证书文件路径,None则从环境变量读取
             cert_dir: 证书目录,用于自动查找证书文件
         """
-        # 从环境变量或参数获取配置
-        self.verify_ssl = (
-            verify if verify is not None 
-            else os.getenv("LLM_VERIFY_SSL", "true").lower() == "true"
-        )
+        # 从 settings 或参数获取配置
+        if verify is not None:
+            self.verify_ssl = verify
+        else:
+            try:
+                from tableau_assistant.src.config.settings import settings
+                self.verify_ssl = settings.vizql_verify_ssl
+            except ImportError:
+                self.verify_ssl = True
         
-        self.ca_bundle = ca_bundle or os.getenv("LLM_CA_BUNDLE", "")
-        self.cert_dir = cert_dir or os.getenv("CERT_MANAGER_DIR", "tableau_assistant/certs")
+        if ca_bundle:
+            self.ca_bundle = ca_bundle
+        else:
+            try:
+                from tableau_assistant.src.config.settings import settings
+                self.ca_bundle = settings.vizql_ca_bundle or ""
+            except ImportError:
+                self.ca_bundle = ""
+        
+        self.cert_dir = cert_dir or "tableau_assistant/certs"
         
         # 调试模式
-        self.debug = os.getenv("CERT_MANAGER_DEBUG", "false").lower() == "true"
+        try:
+            from tableau_assistant.src.config.settings import settings
+            self.debug = settings.debug
+        except ImportError:
+            self.debug = False
         
         # 自动检测证书路径
         if not self.ca_bundle:

@@ -3,7 +3,7 @@ VizQL models - Technical query and result types
 
 Contains:
 - types.py: VizQL field types, filter types, query structure
-- result.py: QueryResult model
+- execute_result.py: ExecuteResult model (Execute Node output)
 """
 
 from .types import (
@@ -48,7 +48,7 @@ from .types import (
     create_relative_date_filter,
 )
 
-from .result import QueryResult
+from .execute_result import ExecuteResult
 
 __all__ = [
     # Enums
@@ -86,7 +86,7 @@ __all__ = [
     "VizQLMetadataOutput",
     
     # Result
-    "QueryResult",
+    "ExecuteResult",
     
     # Helper functions
     "create_basic_field",

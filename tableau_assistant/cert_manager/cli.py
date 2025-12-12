@@ -8,6 +8,9 @@ import argparse
 import logging
 from pathlib import Path
 
+# 导入 settings 以确保 .env 被加载
+from tableau_assistant.src.config.settings import settings
+
 from .manager import CertificateManager
 from .config import get_ssl_config
 
@@ -35,14 +38,11 @@ def cmd_fetch(args):
     
     elif args.hostname == "tableau":
         print("正在获取Tableau Server证书...")
-        tableau_domain = args.tableau_domain
+        tableau_domain = args.tableau_domain or settings.tableau_domain
         if not tableau_domain:
-            import os
-            tableau_domain = os.getenv("TABLEAU_DOMAIN")
-            if not tableau_domain:
-                print("✗ 错误: 请使用 --tableau-domain 指定Tableau服务器地址")
-                print("   或设置环境变量 TABLEAU_DOMAIN")
-                sys.exit(1)
+            print("✗ 错误: 请使用 --tableau-domain 指定Tableau服务器地址")
+            print("   或在 .env 中设置 TABLEAU_DOMAIN")
+            sys.exit(1)
         
         result = manager.fetch_tableau_certificates(
             tableau_domain=tableau_domain,

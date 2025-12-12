@@ -16,16 +16,19 @@ Requirements:
 """
 
 import logging
-from typing import Dict, Any, Optional, List, Literal
+from typing import Dict, Optional, List, TYPE_CHECKING
 from dataclasses import dataclass
 from enum import Enum
 
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+
 from tableau_assistant.src.models.semantic.query import (
     SemanticQuery,
-    MappedQuery,
     AnalysisSpec,
     DimensionSpec,
 )
+from tableau_assistant.src.models.field_mapper.models import MappedQuery
 from tableau_assistant.src.models.semantic.enums import (
     AnalysisType,
     ComputationScope,
@@ -92,7 +95,7 @@ class ImplementationResolver:
     - Multiple dimensions + across_all: addressing = [all dimensions]
     """
     
-    def __init__(self, llm: Optional[Any] = None):
+    def __init__(self, llm: Optional["BaseChatModel"] = None):
         """
         Initialize resolver.
         

@@ -6,7 +6,7 @@ Pure code node that executes VizQL queries against VizQL Data Service.
 Architecture:
 - Receives VizQLQuery from QueryBuilder
 - Uses VizQLClient from bi_platforms.tableau for API calls
-- Parses response into QueryResult
+- Parses response into ExecuteResult
 
 Requirements:
 - R7.1: Execute VizQL API call
@@ -18,45 +18,19 @@ Requirements:
 import logging
 import os
 import time
-from typing import Dict, Any, Optional, List
-from datetime import datetime
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from langgraph.types import RunnableConfig
 
 from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient
-from tableau_assistant.src.models.workflow.context import get_tableau_config
+from tableau_assistant.src.models.vizql.execute_result import ExecuteResult
 from tableau_assistant.src.exceptions import VizQLError
 
+if TYPE_CHECKING:
+    from tableau_assistant.src.models.workflow.state import VizQLState
+    from tableau_assistant.src.models.vizql.types import VizQLQuery
+
 logger = logging.getLogger(__name__)
-
-
-from pydantic import BaseModel, Field, ConfigDict
-
-
-class QueryResult(BaseModel):
-    """
-    Query execution result - Pydantic model
-    
-    Contains:
-    - data: List of row dictionaries
-    - columns: Column metadata
-    - row_count: Number of rows returned
-    - execution_time: Query execution time in seconds
-    - error: Error message if query failed
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    data: List[Dict[str, Any]] = Field(default_factory=list)
-    columns: List[Dict[str, Any]] = Field(default_factory=list)
-    row_count: int = Field(default=0)
-    execution_time: float = Field(default=0.0)
-    error: Optional[str] = Field(default=None)
-    query_id: Optional[str] = Field(default=None)
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
-    
-    def is_success(self) -> bool:
-        """Check if query was successful."""
-        return self.error is None
 
 
 class ExecuteNode:
@@ -86,12 +60,37 @@ class ExecuteNode:
             self._owns_client = True
         return self._client
     
+    def _round_numeric_values(self, data: List[Dict[str, Any]], precision: int) -> List[Dict[str, Any]]:
+        """
+        对数据中的浮点数进行四舍五入。
+        
+        Args:
+            data: 原始数据行列表
+            precision: 小数位数
+            
+        Returns:
+            处理后的数据
+        """
+        if precision < 0:
+            return data
+        
+        rounded_data = []
+        for row in data:
+            rounded_row = {}
+            for key, value in row.items():
+                if isinstance(value, float):
+                    rounded_row[key] = round(value, precision)
+                else:
+                    rounded_row[key] = value
+            rounded_data.append(rounded_row)
+        return rounded_data
+    
     def _parse_response(
         self,
-        response_data: Dict[str, Any],
+        response_data: Dict[str, object],
         execution_time: float,
-    ) -> QueryResult:
-        """Parse VizQL API response into QueryResult."""
+    ) -> ExecuteResult:
+        """Parse VizQL API response into ExecuteResult."""
         try:
             # Extract data from response
             data = response_data.get("data", [])
@@ -108,7 +107,11 @@ class ExecuteNode:
                     rows = [dict(zip(col_names, row)) for row in data["values"]]
                 data = rows
             
-            return QueryResult(
+            # 对浮点数进行四舍五入（根据配置）
+            from tableau_assistant.src.config.settings import settings
+            data = self._round_numeric_values(data, settings.decimal_precision)
+            
+            return ExecuteResult(
                 data=data,
                 columns=columns,
                 row_count=len(data),
@@ -118,18 +121,18 @@ class ExecuteNode:
         
         except Exception as e:
             logger.exception(f"Failed to parse response: {e}")
-            return QueryResult(
+            return ExecuteResult(
                 error=f"Response parsing error: {e}",
                 execution_time=execution_time,
             )
     
     async def execute(
         self,
-        vizql_query: Any,
+        vizql_query: "VizQLQuery",
         datasource_luid: str,
         api_key: str,
         site: Optional[str] = None,
-    ) -> QueryResult:
+    ) -> ExecuteResult:
         """
         Execute a VizQL query.
         
@@ -140,15 +143,19 @@ class ExecuteNode:
             site: Tableau site (optional)
             
         Returns:
-            QueryResult with data or error
+            ExecuteResult with data or error
         """
         # Convert query to dict if needed
-        if hasattr(vizql_query, "to_dict"):
+        if hasattr(vizql_query, "model_dump"):
+            # Pydantic v2 model
+            query_dict = vizql_query.model_dump(exclude_none=True)
+        elif hasattr(vizql_query, "to_dict"):
+            # Legacy or custom to_dict method
             query_dict = vizql_query.to_dict()
         elif isinstance(vizql_query, dict):
             query_dict = vizql_query
         else:
-            return QueryResult(error="Invalid query format")
+            return ExecuteResult(error="Invalid query format")
         
         logger.info(f"Executing query against datasource: {datasource_luid}")
         logger.debug(f"Query: {query_dict}")
@@ -170,14 +177,14 @@ class ExecuteNode:
         except VizQLError as e:
             execution_time = time.time() - start_time
             logger.error(f"VizQL API error: {e}")
-            return QueryResult(
+            return ExecuteResult(
                 error=str(e),
                 execution_time=execution_time,
             )
         except Exception as e:
             execution_time = time.time() - start_time
             logger.exception(f"Query execution failed: {e}")
-            return QueryResult(
+            return ExecuteResult(
                 error=str(e),
                 execution_time=execution_time,
             )
@@ -189,17 +196,20 @@ class ExecuteNode:
             self._client = None
 
 
-async def execute_node(state: Dict[str, Any], config: RunnableConfig | None = None) -> Dict[str, Any]:
+async def execute_node(state: "VizQLState", config: RunnableConfig | None = None) -> Dict[str, object]:
     """
     Execute node entry point for LangGraph.
+    
+    认证机制：
+    - 优先从 config["configurable"]["tableau_auth"] 获取认证信息
+    - 如果 config 中没有或已过期，则调用 ensure_valid_auth() 获取新 token
     
     Args:
         state: VizQLState containing:
             - vizql_query: VizQLQuery object or dict (required)
             - datasource_luid: Datasource LUID (required, or from metadata)
-            - api_key: Tableau auth token (optional, from config if not provided)
-            - site: Tableau site (optional, from config if not provided)
-        config: Optional configuration
+        config: RunnableConfig containing:
+            - configurable.tableau_auth: TableauAuthContext (from executor)
         
     Returns:
         Updated state with query_result
@@ -226,8 +236,9 @@ async def execute_node(state: Dict[str, Any], config: RunnableConfig | None = No
             datasource_luid = metadata.datasource_luid
     
     if not datasource_luid:
-        # Fallback to environment variable
-        datasource_luid = os.getenv("DATASOURCE_LUID", "")
+        # Fallback to settings
+        from tableau_assistant.src.config.settings import settings
+        datasource_luid = settings.datasource_luid
     
     if not datasource_luid:
         logger.error("No datasource_luid provided")
@@ -240,33 +251,23 @@ async def execute_node(state: Dict[str, Any], config: RunnableConfig | None = No
             "execute_complete": True,
         }
     
-    # Get Tableau credentials from state or global config
-    api_key = state.get("api_key")
-    site = state.get("site")
+    # 从 RunnableConfig 获取 Tableau 认证（由 executor 在工作流启动时设置）
+    from tableau_assistant.src.bi_platforms.tableau import (
+        ensure_valid_auth_async,
+        TableauAuthError,
+    )
     
-    if not api_key:
-        # Try to get from global config via store_manager
-        store_manager = state.get("store_manager")
-        if store_manager:
-            try:
-                tableau_config = get_tableau_config(store_manager)
-                if tableau_config:
-                    api_key = tableau_config.get("tableau_token", "")
-                    site = site or tableau_config.get("tableau_site", "")
-            except Exception:
-                pass
-    
-    if not api_key:
-        # Fallback to environment variables
-        api_key = os.getenv("TABLEAU_API_KEY", "") or os.getenv("TABLEAU_PAT_SECRET", "")
-        site = site or os.getenv("TABLEAU_SITE", "")
-    
-    if not api_key:
-        logger.error("No Tableau API key provided")
+    try:
+        auth_ctx = await ensure_valid_auth_async(config)
+        api_key = auth_ctx.api_key
+        site = auth_ctx.site
+        logger.debug(f"使用 Tableau 认证 (method={auth_ctx.auth_method}, remaining={auth_ctx.remaining_seconds:.0f}s)")
+    except TableauAuthError as e:
+        logger.error(f"Tableau 认证失败: {e}")
         return {
             "errors": state.get("errors", []) + [{
                 "node": "execute",
-                "error": "No Tableau API key provided",
+                "error": str(e),
                 "type": "auth_error",
             }],
             "execute_complete": True,

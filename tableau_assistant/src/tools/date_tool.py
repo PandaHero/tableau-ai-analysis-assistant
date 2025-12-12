@@ -1,7 +1,7 @@
 """
 Date Tools - 日期处理工具
 
-薄封装 DateManager，提供日期计算和格式检测功能。
+提供日期计算和格式检测功能。
 
 设计原则（与 VizQL API 对齐）：
 - LLM 负责：理解自然语言，输出 TimeFilterSpec 格式
@@ -13,30 +13,23 @@ Date Tools - 日期处理工具
 - process_time_filter: 处理 TimeFilterSpec，返回 VizQL 兼容的筛选参数
 - calculate_relative_dates: 计算相对日期的具体日期范围
 - detect_date_format: 检测日期格式
+
+注意：这些工具是纯计算工具，不依赖 WorkflowContext。
 """
-from typing import Optional, List, Any
+from typing import Optional, List
 from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 import logging
 import json
+import re
 
 logger = logging.getLogger(__name__)
 
 
-# 全局 DateManager 引用（由依赖注入设置）
-_date_manager = None
-
-
-def set_date_manager(manager: Any) -> None:
-    """设置 DateManager 实例（依赖注入）"""
-    global _date_manager
-    _date_manager = manager
-    logger.info("DateManager injected into date_tool")
-
-
-def get_date_manager() -> Any:
-    """获取 DateManager 实例"""
-    return _date_manager
+def _get_date_manager():
+    """获取 DateManager 实例（按需创建）"""
+    from tableau_assistant.src.capabilities.date_processing import DateManager
+    return DateManager()
 
 
 class ProcessTimeFilterInput(BaseModel):
@@ -59,6 +52,23 @@ class DetectDateFormatInput(BaseModel):
     sample_values: List[str] = Field(
         description="日期样本值列表，至少提供 2 个样本"
     )
+
+
+def _expand_date_values(date_values: List[str]) -> List[str]:
+    """展开日期值（将季度展开为月份）"""
+    expanded = []
+    for value in date_values:
+        # 季度格式: 2024-Q1 → 展开为月份
+        quarter_match = re.match(r'^(\d{4})-Q([1-4])$', value, re.IGNORECASE)
+        if quarter_match:
+            year = int(quarter_match.group(1))
+            quarter = int(quarter_match.group(2))
+            start_month = (quarter - 1) * 3 + 1
+            for m in range(start_month, start_month + 3):
+                expanded.append(f"{year}-{m:02d}")
+        else:
+            expanded.append(value)
+    return expanded
 
 
 @tool
@@ -141,24 +151,6 @@ def process_time_filter(
         return json.dumps({"error": str(e)})
 
 
-def _expand_date_values(date_values: List[str]) -> List[str]:
-    """展开日期值（将季度展开为月份）"""
-    import re
-    expanded = []
-    for value in date_values:
-        # 季度格式: 2024-Q1 → 展开为月份
-        quarter_match = re.match(r'^(\d{4})-Q([1-4])$', value, re.IGNORECASE)
-        if quarter_match:
-            year = int(quarter_match.group(1))
-            quarter = int(quarter_match.group(2))
-            start_month = (quarter - 1) * 3 + 1
-            for m in range(start_month, start_month + 3):
-                expanded.append(f"{year}-{m:02d}")
-        else:
-            expanded.append(value)
-    return expanded
-
-
 @tool
 def calculate_relative_dates(
     time_filter_json: str,
@@ -180,11 +172,6 @@ def calculate_relative_dates(
         >>> calculate_relative_dates('{"mode": "relative", "period_type": "MONTHS", "date_range_type": "LASTN", "range_n": 3}')
         {"start_date": "2024-10-01", "end_date": "2024-12-11"}
     """
-    global _date_manager
-    
-    if _date_manager is None:
-        return '{"error": "DateManager 未初始化"}'
-    
     try:
         from tableau_assistant.src.models.semantic.query import TimeFilterSpec
         from tableau_assistant.src.models.semantic.enums import TimeFilterMode
@@ -203,7 +190,8 @@ def calculate_relative_dates(
             ref_date = datetime.strptime(reference_date, "%Y-%m-%d")
         
         # 使用 DateManager 计算日期范围
-        start_date, end_date = _date_manager.calculate_relative_dates(
+        date_manager = _get_date_manager()
+        start_date, end_date = date_manager.calculate_relative_dates(
             time_filter=time_filter,
             reference_date=ref_date
         )
@@ -231,22 +219,18 @@ def detect_date_format(sample_values: List[str]) -> str:
     Returns:
         JSON 格式: {"format_type": "ISO_DATE", "pattern": "YYYY-MM-DD"}
     """
-    global _date_manager
-    
-    if _date_manager is None:
-        return '{"format_type": null, "error": "DateManager 未初始化"}'
-    
     if not sample_values or len(sample_values) < 2:
         return '{"format_type": null, "error": "至少需要 2 个样本值"}'
     
     try:
-        format_type = _date_manager.detect_field_date_format(
+        date_manager = _get_date_manager()
+        format_type = date_manager.detect_field_date_format(
             sample_values=sample_values,
             confidence_threshold=0.7
         )
         
         if format_type:
-            info = _date_manager.get_format_info(format_type)
+            info = date_manager.get_format_info(format_type)
             return json.dumps({
                 "format_type": format_type.value,
                 "pattern": info.get("pattern", ""),
@@ -264,9 +248,6 @@ __all__ = [
     "process_time_filter",
     "calculate_relative_dates",
     "detect_date_format",
-    # 依赖注入
-    "set_date_manager",
-    "get_date_manager",
     # 输入模型
     "ProcessTimeFilterInput",
     "DetectDateFormatInput",
