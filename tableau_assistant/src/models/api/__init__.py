@@ -7,13 +7,9 @@ Contains API request/response models.
 from tableau_assistant.src.models.api.models import (
     # Request models
     VizQLQueryRequest,
-    QuestionBoostRequest,
-    MetadataInitRequest,
     
     # Response models
     VizQLQueryResponse,
-    QuestionBoostResponse,
-    MetadataInitResponse,
     KeyFinding,
     AnalysisStep,
     Recommendation,
@@ -29,11 +25,7 @@ from tableau_assistant.src.models.api.models import (
 
 __all__ = [
     "VizQLQueryRequest",
-    "QuestionBoostRequest",
-    "MetadataInitRequest",
     "VizQLQueryResponse",
-    "QuestionBoostResponse",
-    "MetadataInitResponse",
     "KeyFinding",
     "AnalysisStep",
     "Recommendation",

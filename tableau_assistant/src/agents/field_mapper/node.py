@@ -8,6 +8,11 @@ Strategy:
 2. Fast path: confidence >= 0.9, return directly (no LLM)
 3. LLM fallback: confidence < 0.9, use LLM to select from top-k candidates
 
+Middleware 集成：
+- 从 config 获取 middleware 栈
+- LLM fallback 时传递 middleware
+- 支持历史消息上下文
+
 Input: SemanticQuery (business terms)
 Output: MappedQuery (technical fields)
 """
@@ -16,8 +21,11 @@ import asyncio
 import hashlib
 import logging
 import time
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
+
+if TYPE_CHECKING:
+    from langgraph.types import RunnableConfig
 
 from .llm_selector import (
     LLMCandidateSelector,
@@ -808,19 +816,31 @@ class FieldMapperNode:
 
 # ========== Node Function ==========
 
-async def field_mapper_node(state: Dict[str, Any]) -> Dict[str, Any]:
+async def field_mapper_node(
+    state: Dict[str, Any],
+    config: Optional["RunnableConfig"] = None,
+) -> Dict[str, Any]:
     """
     FieldMapper Node function for StateGraph.
     
     Extracts business terms from SemanticQuery and maps them to technical fields.
     
+    Middleware 集成：
+    - 从 config 获取 middleware 栈
+    - LLM fallback 时传递 middleware
+    - 使用 state.messages 作为历史上下文
+    
     Args:
         state: VizQLState containing semantic_query (SemanticQuery Pydantic object)
+        config: 运行时配置（包含 middleware）
     
     Returns:
         State update with mapped_query (MappedQuery Pydantic object)
+    
+    **Validates: Requirements 9.3**
     """
     from tableau_assistant.src.models.field_mapper.models import MappedQuery, FieldMapping
+    from tableau_assistant.src.agents.base.middleware_runner import get_middleware_from_config
     
     start_time = time.time()
     

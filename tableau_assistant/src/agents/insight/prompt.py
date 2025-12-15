@@ -167,43 +167,52 @@ class AnalystPrompt(VizQLPrompt):
     def get_task(self) -> str:
         return """Analyze the current data chunk and extract meaningful insights.
 
+**IMPORTANT: Focus primarily on the actual data sample provided below. The data profile is supplementary context only.**
+
 Process:
-1. Understand chunk context → What type of data is this?
-2. Compare with overall profile → How does this chunk differ?
-3. Compare with Top N data → Any notable comparisons?
-4. Extract insights → Generate 2-5 structured insights"""
+1. **Analyze data sample first** → Examine actual values, patterns, and relationships in the data
+2. Understand chunk context → What type of data is this?
+3. Use profile as reference → Compare findings with overall statistics
+4. Extract insights → Generate 2-5 structured insights based on data evidence"""
     
     def get_specific_domain_knowledge(self) -> str:
         return """**Think step by step:**
 
-Step 1: Understand chunk context
+Step 1: **Analyze the actual data sample (PRIMARY FOCUS)**
+- Read through the data rows carefully
+- Identify specific values, entities, and their relationships
+- Look for patterns, outliers, and notable data points
+- **Your insights MUST cite specific values from the data sample**
+
+Step 2: Understand chunk context
 - What type of data chunk is this? (anomalies, top_data, cluster, etc.)
 - What is the business meaning of this data?
 
-Step 2: Compare with overall profile
+Step 3: Use profile as reference (SECONDARY)
 - How does this chunk differ from overall statistics?
 - Use max, q75, median from statistics as comparison baseline
 - Calculate ratios: value / median, value / q75
 
-Step 3: Compare with Top N data
+Step 4: Compare with Top N data
 - How does this data compare to top performers?
 - Calculate ranking gaps (e.g., "5x of second place")
 - Use pareto_ratio to explain concentration
 
-Step 4: Extract insights
+Step 5: Extract insights
 - Identify patterns: trend, anomaly, comparison, pattern
-- Each insight must have concrete evidence with numbers
+- **Each insight MUST reference specific data points from the sample**
 - Avoid repeating existing insights
 
 **Insight Quality Criteria:**
-- Specific: Include actual numbers, not vague descriptions
-- Evidenced: Every claim backed by data
+- **Data-driven: Insights must come from actual data sample, not just profile statistics**
+- Specific: Include actual numbers and entity names from the data
+- Evidenced: Every claim backed by data rows you can point to
 - Actionable: Provide business-relevant findings
 - Non-redundant: Check existing insights before adding"""
     
     def get_constraints(self) -> str:
-        return """MUST: Write insights in Chinese, provide evidence with specific numbers
-MUST NOT: Repeat existing insights, invent data not in sample"""
+        return """MUST: Write insights in Chinese, cite specific data points from the sample, provide evidence with actual values from data rows
+MUST NOT: Repeat existing insights, invent data not in sample, rely solely on profile statistics without referencing actual data"""
     
     def get_user_template(self) -> str:
         return """## 原始问题

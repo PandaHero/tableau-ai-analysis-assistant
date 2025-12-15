@@ -221,6 +221,68 @@ async def insight_node(state: "VizQLState", config: RunnableConfig | None = None
         
         logger.info(f"Insight node completed: {len(findings)} insights, {len(current_dimensions)} dimensions analyzed")
         
+        # Generate structured summary message for conversation history
+        # This enables LLM to see previous Q&A context and SummarizationMiddleware to work
+        from langchain_core.messages import HumanMessage, AIMessage
+        
+        question = state.get("question", "")
+        
+        # Build structured summary
+        summary_parts = [
+            "【分析完成】",
+            f"原始问题：{question}",
+        ]
+        
+        # Add dimensions
+        dim_names = [d.get("name") for d in context.get("dimensions", []) if d.get("name")]
+        if dim_names:
+            summary_parts.append(f"分析维度：{', '.join(dim_names)}")
+        else:
+            summary_parts.append("分析维度：无")
+        
+        # Add measures
+        measure_names = [m.get("name") for m in context.get("measures", []) if m.get("name")]
+        if measure_names:
+            summary_parts.append(f"分析指标：{', '.join(measure_names)}")
+        else:
+            summary_parts.append("分析指标：无")
+        
+        # Add query result summary (first few rows)
+        if query_result and hasattr(query_result, 'data') and query_result.data:
+            data = query_result.data
+            row_count = len(data)
+            if row_count <= 3:
+                summary_parts.append(f"查询结果摘要：共 {row_count} 行数据")
+            else:
+                summary_parts.append(f"查询结果摘要：共 {row_count} 行数据（显示前3行）")
+            # Show first 3 rows as summary
+            for i, row in enumerate(data[:3]):
+                row_str = ", ".join(f"{k}={v}" for k, v in row.items())
+                summary_parts.append(f"  - {row_str}")
+        
+        # Add insight summary
+        if result.summary:
+            summary_parts.append(f"\n回答：{result.summary}")
+        elif findings:
+            # Use first finding as summary
+            first_finding = findings[0]
+            summary_parts.append(f"\n回答：{first_finding.title} - {first_finding.description or ''}")
+        
+        summary_content = "\n".join(summary_parts)
+        
+        # Create messages for conversation history
+        # Add source marking via additional_kwargs for message tracking
+        new_messages = [
+            HumanMessage(
+                content=question,
+                additional_kwargs={"source": "insight_input"}
+            ),
+            AIMessage(
+                content=summary_content,
+                additional_kwargs={"source": "insight"}
+            ),
+        ]
+        
         return {
             "insights": findings,
             "insight_result": result,
@@ -228,6 +290,11 @@ async def insight_node(state: "VizQLState", config: RunnableConfig | None = None
             "data_insight_profile": data_insight_profile,
             "current_dimensions": current_dimensions,
             "insight_complete": True,
+            # Add to conversation history
+            "messages": new_messages,
+            # Record answered question for Replanner deduplication
+            # Note: trim_answered_questions is applied at Replanner to limit list length
+            "answered_questions": [question],
         }
     
     except Exception as e:
@@ -301,6 +368,39 @@ async def insight_node_streaming(
                     if result.data_insight_profile:
                         data_insight_profile = result.data_insight_profile.model_dump()
                     
+                    # Generate structured summary message for conversation history
+                    from langchain_core.messages import HumanMessage, AIMessage
+                    
+                    question = state.get("question", "")
+                    
+                    # Build structured summary
+                    summary_parts = [
+                        "【分析完成】",
+                        f"原始问题：{question}",
+                    ]
+                    
+                    dim_names = [d.get("name") for d in context.get("dimensions", []) if d.get("name")]
+                    summary_parts.append(f"分析维度：{', '.join(dim_names) if dim_names else '无'}")
+                    
+                    measure_names = [m.get("name") for m in context.get("measures", []) if m.get("name")]
+                    summary_parts.append(f"分析指标：{', '.join(measure_names) if measure_names else '无'}")
+                    
+                    if result.summary:
+                        summary_parts.append(f"\n回答：{result.summary}")
+                    
+                    summary_content = "\n".join(summary_parts)
+                    
+                    new_messages = [
+                        HumanMessage(
+                            content=question,
+                            additional_kwargs={"source": "insight_input"}
+                        ),
+                        AIMessage(
+                            content=summary_content,
+                            additional_kwargs={"source": "insight"}
+                        ),
+                    ]
+                    
                     yield {
                         "event": "state_update",
                         "state": {
@@ -310,6 +410,8 @@ async def insight_node_streaming(
                             "data_insight_profile": data_insight_profile,
                             "current_dimensions": current_dimensions,
                             "insight_complete": True,
+                            "messages": new_messages,
+                            "answered_questions": [question],
                         }
                     }
     

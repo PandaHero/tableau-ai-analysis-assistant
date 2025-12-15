@@ -36,6 +36,20 @@ from .prompt import (
     VizQLPrompt,
 )
 
+from .middleware_runner import (
+    # Middleware 运行器
+    MiddlewareRunner,
+    MiddlewareError,
+    MiddlewareValidationError,
+    MiddlewareChainError,
+    ModelRequest,
+    ModelResponse,
+    ToolCallRequest,
+    Runtime,
+    get_middleware_from_config,
+    LANGCHAIN_MIDDLEWARE_AVAILABLE,
+)
+
 __all__ = [
     # LLM 获取
     "get_llm",
@@ -63,4 +77,16 @@ __all__ = [
     "StructuredPrompt",
     "DataAnalysisPrompt",
     "VizQLPrompt",
+    
+    # Middleware 运行器
+    "MiddlewareRunner",
+    "MiddlewareError",
+    "MiddlewareValidationError",
+    "MiddlewareChainError",
+    "ModelRequest",
+    "ModelResponse",
+    "ToolCallRequest",
+    "Runtime",
+    "get_middleware_from_config",
+    "LANGCHAIN_MIDDLEWARE_AVAILABLE",
 ]

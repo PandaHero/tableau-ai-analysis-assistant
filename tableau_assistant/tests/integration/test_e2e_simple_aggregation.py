@@ -247,7 +247,7 @@ class TestAggregationProperties:
         **Feature: workflow-e2e-testing, Property 1: 简单聚合查询成功执行**
         **Validates: Requirements 1.1, 1.2**
         """
-        executor = WorkflowExecutor(max_replan_rounds=1, use_memory_checkpointer=True)
+        executor = WorkflowExecutor(max_replan_rounds=3, use_memory_checkpointer=True)
         question = f"各{dimension}的{measure}是多少"
         
         result = await executor.run(question)
@@ -283,7 +283,7 @@ class TestAggregationProperties:
         **Validates: Requirements 1.4, 1.5**
         """
         keyword, expected_type = agg_keyword
-        executor = WorkflowExecutor(max_replan_rounds=1, use_memory_checkpointer=True)
+        executor = WorkflowExecutor(max_replan_rounds=3, use_memory_checkpointer=True)
         
         if expected_type == "AVG":
             question = f"各地区的{keyword}销售额"

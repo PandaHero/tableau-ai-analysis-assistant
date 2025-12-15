@@ -15,16 +15,16 @@
 - 提供流畅的用户体验
 
 ### 🔍 RAG 语义字段映射
-- 两阶段检索：向量检索 top-K + Rerank
+- 两阶段检索：向量检索 top-K + LLM Rerank
 - 高置信度快速路径（≥0.9 直接返回，无需 LLM）
 - 低置信度 LLM 回退选择
-- 字段映射缓存（24小时 TTL）
+- 字段映射缓存（24小时 TTL，基于 StoreManager）
 
-### 📊 智能洞察分析
-- **渐进式分析**：AI 驱动的"宝宝吃饭"模式
-- **Phase 1 统计分析**：分布检测、异常检测、聚类分析
-- **Phase 2 LLM 分析**：语义理解、洞察生成
+### 📊 渐进式洞察分析（AI 宝宝吃饭模式）
+- **Phase 1 统计分析**：分布检测、异常检测、聚类分析、帕累托分析
+- **Phase 2 LLM 分析**：双 LLM 协作（分析师 + 主持人）
 - **智能分块**：基于维度层级的优先级分块
+- **AI 驱动早停**：主持人 LLM 决定何时停止分析
 
 ### 🔄 智能重规划
 - 评估分析完成度（completeness_score）
@@ -37,6 +37,15 @@
 - VizQL 转换由确定性代码完成（100% 语法正确）
 - 支持表计算（累计、排名、占比、移动平均、同比环比）
 - 支持 LOD 表达式（FIXED、INCLUDE、EXCLUDE）
+
+### 🛡️ 企业级中间件栈
+- **SummarizationMiddleware**：对话历史自动总结（防止上下文溢出）
+- **ModelRetryMiddleware**：LLM 调用指数退避重试
+- **ToolRetryMiddleware**：工具调用重试
+- **OutputValidationMiddleware**：LLM 输出 JSON/Schema 校验
+- **FilesystemMiddleware**：大结果自动转存到文件
+- **PatchToolCallsMiddleware**：修复悬空工具调用
+- **HumanInTheLoopMiddleware**：人工确认（可选）
 
 ## 🏗️ 系统架构
 
@@ -51,49 +60,43 @@
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
 │  │                    LangGraph Workflow (6 节点)                        │   │
 │  │                                                                       │   │
-│  │         ┌──────────────────────────────────────────────────────┐      │   │
-│  │         │                                                      │      │   │
-│  │         ▼                                                      │      │   │
-│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐        │      │   │
-│  │  │Understanding│───►│FieldMapper │───►│QueryBuilder │        │      │   │
-│  │  │   (LLM)     │    │ (RAG+LLM)  │    │   (Code)    │        │      │   │
-│  │  └──────┬──────┘    └─────────────┘    └──────┬──────┘        │      │   │
-│  │         │                                     │               │      │   │
-│  │         │ (非分析问题)                         ▼               │      │   │
-│  │         │                             ┌─────────────┐         │      │   │
-│  │         ▼                             │   Execute   │         │      │   │
-│  │       [END]                           │   (Code)    │         │      │   │
-│  │                                       └──────┬──────┘         │      │   │
-│  │                                              │                │      │   │
-│  │                                              ▼                │      │   │
-│  │                                       ┌─────────────┐         │      │   │
-│  │                                       │   Insight   │         │      │   │
-│  │                                       │   (LLM)     │         │      │   │
-│  │                                       └──────┬──────┘         │      │   │
-│  │                                              │                │      │   │
-│  │                                              ▼                │      │   │
-│  │                                       ┌─────────────┐         │      │   │
-│  │                                       │  Replanner  │─────────┘      │   │
-│  │                                       │   (LLM)     │ (重规划)       │   │
-│  │                                       └──────┬──────┘                │   │
-│  │                                              │                       │   │
-│  │                                              ▼ (完成)                │   │
-│  │                                            [END]                     │   │
+│  │  ┌─────────────────────────────────────────────────────────────┐     │   │
+│  │  │                    Middleware Stack (8 层)                   │     │   │
+│  │  │  TodoList → Summarization → ModelRetry → ToolRetry →        │     │   │
+│  │  │  Filesystem → PatchToolCalls → OutputValidation → HITL      │     │   │
+│  │  └─────────────────────────────────────────────────────────────┘     │   │
+│  │                                                                       │   │
+│  │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐              │   │
+│  │  │Understanding│───►│FieldMapper │───►│QueryBuilder │              │   │
+│  │  │   (LLM)     │    │ (RAG+LLM)  │    │   (Code)    │              │   │
+│  │  └──────┬──────┘    └─────────────┘    └──────┬──────┘              │   │
+│  │         │                                     │                     │   │
+│  │         │ (非分析问题)                         ▼                     │   │
+│  │         │                             ┌─────────────┐               │   │
+│  │         ▼                             │   Execute   │               │   │
+│  │       [END]                           │   (Code)    │               │   │
+│  │                                       └──────┬──────┘               │   │
+│  │                                              │                      │   │
+│  │                                              ▼                      │   │
+│  │                                       ┌─────────────┐               │   │
+│  │                                       │   Insight   │               │   │
+│  │                                       │ (双LLM协作) │               │   │
+│  │                                       └──────┬──────┘               │   │
+│  │                                              │                      │   │
+│  │                                              ▼                      │   │
+│  │                                       ┌─────────────┐               │   │
+│  │                                       │  Replanner  │───────────────┘   │
+│  │                                       │   (LLM)     │ (重规划)          │
+│  │                                       └──────┬──────┘                   │
+│  │                                              │                          │
+│  │                                              ▼ (完成)                   │
+│  │                                            [END]                        │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                    │                                                         │
 │                    ▼                                                         │
 │  Token 流式输出 ◄── on_chat_model_stream 事件                                │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
-
-工作流边：
-  START ──► Understanding ──► FieldMapper ──► QueryBuilder ──► Execute ──► Insight ──► Replanner
-                 │                                                                        │
-                 ▼                                                                        │
-                END (非分析问题)                                                           │
-                 ▲                                                                        │
-                 │ (完成)                              (重规划，回到 Understanding)        │
-                 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 📁 项目结构
@@ -103,40 +106,51 @@ tableau-ai-analysis-assistant/
 ├── tableau_assistant/              # 后端服务
 │   ├── src/
 │   │   ├── agents/                 # Agent 节点实现
-│   │   │   ├── base/               # 基础工具（LLM调用、流式输出、Prompt模板）
+│   │   │   ├── base/               # 基础工具（LLM调用、流式输出、Middleware Runner）
 │   │   │   ├── understanding/      # 问题理解 Agent（含问题分类）
 │   │   │   ├── field_mapper/       # 字段映射 Agent (RAG+LLM 混合)
 │   │   │   ├── insight/            # 洞察分析 Agent
 │   │   │   ├── replanner/          # 重规划 Agent
-│   │   │   └── dimension_hierarchy/# 维度层级 Agent
+│   │   │   └── dimension_hierarchy/# 维度层级推断 Agent
 │   │   │
 │   │   ├── nodes/                  # 纯代码节点（无 LLM）
 │   │   │   ├── query_builder/      # VizQL 查询构建
-│   │   │   │   ├── implementation_resolver.py  # 表计算 vs LOD 决策
-│   │   │   │   └── expression_generator.py     # VizQL 表达式生成
 │   │   │   └── execute/            # 查询执行
 │   │   │
 │   │   ├── components/             # 功能组件
-│   │   │   └── insight/            # 渐进式洞察分析
+│   │   │   └── insight/            # 渐进式洞察分析（AI 宝宝吃饭）
 │   │   │       ├── coordinator.py  # 分析协调器（主循环）
 │   │   │       ├── profiler.py     # 数据画像
-│   │   │       ├── statistical_analyzer.py  # 统计/ML 分析
+│   │   │       ├── statistical_analyzer.py  # Phase 1 统计/ML 分析
 │   │   │       ├── anomaly_detector.py      # 异常检测
 │   │   │       ├── chunker.py      # 智能分块
-│   │   │       ├── analyzer.py     # LLM 分析
+│   │   │       ├── analyzer.py     # Phase 2 双 LLM 分析
 │   │   │       ├── accumulator.py  # 洞察累积
 │   │   │       └── synthesizer.py  # 洞察合成
 │   │   │
 │   │   ├── capabilities/           # 能力模块
 │   │   │   ├── rag/                # RAG 语义映射
-│   │   │   │   ├── semantic_mapper.py   # 语义映射器
+│   │   │   │   ├── semantic_mapper.py   # 语义映射器（两阶段检索）
 │   │   │   │   ├── field_indexer.py     # 字段索引
 │   │   │   │   ├── retriever.py         # 检索器（向量+BM25）
-│   │   │   │   ├── reranker.py          # 重排序器
+│   │   │   │   ├── reranker.py          # LLM 重排序器
+│   │   │   │   ├── assembler.py         # 知识组装器
 │   │   │   │   └── embeddings.py        # 向量化
-│   │   │   ├── storage/            # 持久化存储（SQLite）
+│   │   │   ├── storage/            # 持久化存储（SQLite + StoreManager）
 │   │   │   ├── date_processing/    # 日期处理
 │   │   │   └── data_model/         # 数据模型管理
+│   │   │
+│   │   ├── middleware/             # 自定义中间件
+│   │   │   ├── filesystem.py       # 大结果自动转存
+│   │   │   ├── output_validation.py# LLM 输出校验
+│   │   │   ├── patch_tool_calls.py # 工具调用修复
+│   │   │   └── backends/           # 中间件后端（State Backend）
+│   │   │
+│   │   ├── workflow/               # 工作流编排
+│   │   │   ├── factory.py          # 工作流创建（含中间件配置）
+│   │   │   ├── executor.py         # 执行器（支持流式）
+│   │   │   ├── context.py          # WorkflowContext 上下文管理
+│   │   │   └── routes.py           # 路由逻辑
 │   │   │
 │   │   ├── bi_platforms/           # BI 平台集成
 │   │   │   └── tableau/
@@ -144,27 +158,18 @@ tableau-ai-analysis-assistant/
 │   │   │       ├── metadata.py     # 元数据 API
 │   │   │       └── vizql_client.py # VizQL Data Service 客户端
 │   │   │
-│   │   ├── workflow/               # 工作流编排
-│   │   │   ├── factory.py          # 工作流创建（含中间件配置）
-│   │   │   ├── executor.py         # 执行器（支持流式）
-│   │   │   ├── context.py          # 工作流上下文
-│   │   │   └── routes.py           # 路由逻辑
-│   │   │
-│   │   ├── middleware/             # 中间件
-│   │   │   ├── filesystem.py       # 大结果自动转存
-│   │   │   └── patch_tool_calls.py # 工具调用修复
-│   │   │
 │   │   ├── model_manager/          # 模型管理
 │   │   │   ├── llm.py              # LLM 选择器（支持多提供商）
 │   │   │   ├── embeddings.py       # Embedding 提供者
-│   │   │   └── reranker.py         # 重排序器
+│   │   │   └── reranker.py         # 重排序器选择器
 │   │   │
 │   │   ├── models/                 # Pydantic 数据模型
 │   │   │   ├── semantic/           # 语义层模型（SemanticQuery）
-│   │   │   ├── vizql/              # VizQL 模型（VizQLQuery）
+│   │   │   ├── vizql/              # VizQL 模型
 │   │   │   ├── field_mapper/       # 字段映射模型
 │   │   │   ├── insight/            # 洞察模型
 │   │   │   ├── replanner/          # 重规划模型
+│   │   │   ├── metadata/           # 元数据模型
 │   │   │   ├── workflow/           # 工作流状态
 │   │   │   └── api/                # API 模型
 │   │   │
@@ -174,37 +179,46 @@ tableau-ai-analysis-assistant/
 │   │   │   ├── schema_tool.py      # Schema 获取
 │   │   │   └── data_model_tool.py  # 数据模型工具
 │   │   │
+│   │   ├── services/               # 服务层
+│   │   │   └── preload_service.py  # 预热服务（维度层级推断）
+│   │   │
 │   │   ├── api/                    # FastAPI 端点
 │   │   │   ├── chat.py             # 聊天 API（含 SSE 流式）
-│   │   │   └── preload.py          # 预加载 API
-│   │   │
-│   │   ├── services/               # 服务层
-│   │   │   └── preload_service.py  # 预加载服务
+│   │   │   └── preload.py          # 预热 API
 │   │   │
 │   │   └── config/                 # 配置
 │   │       ├── settings.py         # 应用配置
 │   │       └── model_config.py     # 模型配置
 │   │
+│   ├── cert_manager/               # SSL 证书管理
+│   │   ├── manager.py              # 证书管理器
+│   │   ├── fetcher.py              # 证书获取
+│   │   ├── validator.py            # 证书验证
+│   │   └── cli.py                  # 命令行工具
+│   │
 │   └── tests/                      # 测试
 │       ├── unit/                   # 单元测试
-│       ├── integration/            # 集成测试
-│       └── property/               # 属性测试（Hypothesis）
+│       └── integration/            # 集成测试（E2E）
 │
-├── tableau_extension/              # 前端扩展（Vue 3 + TypeScript）
-│   ├── src/
-│   │   ├── components/             # Vue 组件
-│   │   ├── views/                  # 页面
-│   │   ├── stores/                 # Pinia 状态管理
-│   │   ├── api/                    # API 调用
-│   │   └── types/                  # TypeScript 类型
-│   └── public/                     # 静态资源
+│   ├── frontend/                   # 前端扩展（Vue 3 + TypeScript）
+│   │   ├── src/
+│   │   │   ├── components/         # Vue 组件
+│   │   │   ├── views/              # 页面
+│   │   │   ├── stores/             # Pinia 状态管理
+│   │   │   ├── api/                # API 调用
+│   │   │   └── types/              # TypeScript 类型
+│   │   └── public/                 # 静态资源（含 Tableau 扩展清单）
+│   │
+│   └── docs/                       # 文档
+│       ├── ARCHITECTURE.md         # 架构文档
+│       ├── PRODUCT_MANUAL.md       # 产品手册
+│       └── API_REFERENCE.md        # API 参考
 │
 ├── .kiro/specs/                    # 功能规格文档
 ├── data/                           # 数据目录（缓存、索引）
 ├── start.py                        # 一键启动脚本
 └── .env                            # 环境配置
 ```
-
 
 ## 🚀 快速开始
 
@@ -287,12 +301,6 @@ python start.py
 python -m tableau_assistant.src.main
 ```
 
-### 4. 测试流式输出
-
-```bash
-python -m tableau_assistant.tests.test_streaming
-```
-
 ## 📡 API 端点
 
 ### 流式查询 (推荐)
@@ -315,6 +323,17 @@ data: {"event_type": "token", "data": {"content": "measures"}, ...}
 ...
 data: {"event_type": "node_complete", "data": {"node": "understanding"}, ...}
 data: {"event_type": "complete", ...}
+```
+
+### 预热 API
+
+```
+POST /api/preload/dimension-hierarchy
+Content-Type: application/json
+
+{
+    "datasource_luid": "your-datasource-luid"
+}
 ```
 
 ### 前端使用示例
@@ -361,7 +380,7 @@ while (true) {
 | API 框架 | FastAPI |
 | 数据验证 | Pydantic v2 |
 | 向量检索 | Sentence Transformers |
-| 缓存存储 | SQLite (LangGraph Store) |
+| 缓存存储 | SQLite (StoreManager) |
 | BI 平台 | Tableau VizQL Data Service |
 | 前端框架 | Vue 3 + TypeScript + Vite |
 | 状态管理 | Pinia |
@@ -374,19 +393,21 @@ while (true) {
 | FieldMapper | RAG+LLM | 业务术语 → 技术字段 | SemanticQuery | MappedQuery |
 | QueryBuilder | Code | 语义 → VizQL 转换 | MappedQuery | VizQLQuery |
 | Execute | Code | 执行 VizQL 查询 | VizQLQuery | ExecuteResult |
-| Insight | LLM | 渐进式洞察分析 | ExecuteResult | Insights |
+| Insight | 双LLM | 渐进式洞察分析 | ExecuteResult | Insights |
 | Replanner | LLM | 完成度评估、探索问题生成 | Insights | ReplanDecision |
 
-## 🔧 中间件
+## 🔧 中间件栈
 
-| 中间件 | 功能 |
-|--------|------|
-| SummarizationMiddleware | 对话历史自动总结（防止上下文溢出） |
-| ModelRetryMiddleware | LLM 调用指数退避重试 |
-| ToolRetryMiddleware | 工具调用重试 |
-| FilesystemMiddleware | 大结果自动转存到文件 |
-| PatchToolCallsMiddleware | 修复悬空工具调用 |
-| HumanInTheLoopMiddleware | 人工确认（可选） |
+| 中间件 | 功能 | 来源 |
+|--------|------|------|
+| TodoListMiddleware | 任务队列管理 | LangChain |
+| SummarizationMiddleware | 对话历史自动总结 | LangChain |
+| ModelRetryMiddleware | LLM 调用指数退避重试 | LangChain |
+| ToolRetryMiddleware | 工具调用重试 | LangChain |
+| FilesystemMiddleware | 大结果自动转存到文件 | 自定义 |
+| PatchToolCallsMiddleware | 修复悬空工具调用 | 自定义 |
+| OutputValidationMiddleware | LLM 输出 JSON/Schema 校验 | 自定义 |
+| HumanInTheLoopMiddleware | 人工确认（可选） | LangChain |
 
 ## 📈 设计原则
 
@@ -399,8 +420,9 @@ while (true) {
 
 ### 架构设计
 - **纯语义中间层**：LLM 只输出语义，VizQL 转换由代码完成
-- **两阶段字段映射**：向量检索 + LLM 回退
-- **渐进式洞察**：AI 驱动的分块分析
+- **两阶段字段映射**：向量检索 + LLM Rerank + LLM Fallback
+- **渐进式洞察**：AI 驱动的分块分析（双 LLM 协作）
+- **统一上下文管理**：WorkflowContext 消除全局变量
 
 ### 代码质量
 - **Pydantic Validator**：确保 100% 数据验证
@@ -428,5 +450,5 @@ while (true) {
 
 ---
 
-**最后更新**: 2025-12-12
-**版本**: v2.1.0
+**最后更新**: 2025-12-14
+**版本**: v2.2.0

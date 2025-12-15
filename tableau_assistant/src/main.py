@@ -56,11 +56,9 @@ app.add_middleware(
 )
 
 # 注册路由
-from tableau_assistant.src.api.streaming import router as streaming_router
 from tableau_assistant.src.api.chat import router as chat_router
 from tableau_assistant.src.api.preload import router as preload_router
 
-app.include_router(streaming_router)
 app.include_router(chat_router)
 app.include_router(preload_router)
 

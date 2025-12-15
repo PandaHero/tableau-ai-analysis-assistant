@@ -21,7 +21,7 @@ Middleware stack (7 middleware):
 - PatchToolCallsMiddleware (custom)
 """
 
-from typing import Dict, Optional, List, Union, TYPE_CHECKING
+from typing import Dict, Optional, List, Union, Any, TYPE_CHECKING
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -45,6 +45,7 @@ from langchain.agents.middleware import (
 from tableau_assistant.src.middleware import (
     FilesystemMiddleware,
     PatchToolCallsMiddleware,
+    OutputValidationMiddleware,
 )
 from tableau_assistant.src.workflow.routes import (
     route_after_replanner,
@@ -206,6 +207,15 @@ def create_middleware_stack(
             interrupt_on=interrupt_on
         ))
     
+    # 8. OutputValidationMiddleware - Validate LLM output format (custom)
+    # **Validates: Requirements 15.1, 15.2, 15.3, 15.4, 15.5, 15.6**
+    # Note: expected_schema is set per-node, not globally
+    # This middleware validates JSON format and triggers retry on failure
+    middleware.append(OutputValidationMiddleware(
+        strict=False,  # Non-strict mode: log warnings instead of raising
+        retry_on_failure=True,  # Trigger ModelRetryMiddleware on validation failure
+    ))
+    
     return middleware
 
 
@@ -332,6 +342,14 @@ def create_tableau_workflow(
             max_questions_per_round=config.get("max_questions_per_round", 3),
         )
         
+        # 获取已回答问题列表（用于去重）
+        # **Validates: Requirements 14.3, 14.4, 14.5**
+        answered_questions = state.get("answered_questions", [])
+        
+        # 使用 trim_answered_questions 限制长度
+        from tableau_assistant.src.utils.conversation import trim_answered_questions
+        trimmed_questions = trim_answered_questions(answered_questions)
+        
         # 执行重规划决策 - insights 是 Pydantic 对象列表
         decision = await replanner.replan(
             original_question=state.get("question", ""),
@@ -340,6 +358,7 @@ def create_tableau_workflow(
             dimension_hierarchy=state.get("dimension_hierarchy"),
             current_dimensions=state.get("current_dimensions", []),
             current_round=replan_count + 1,
+            answered_questions=trimmed_questions,  # 传递已回答问题用于去重
         )
         
         # 记录重规划历史
@@ -364,6 +383,11 @@ def create_tableau_workflow(
         # 如果需要重规划，将探索问题添加到待处理队列
         # TodoListMiddleware 会管理这些问题的执行
         if decision.should_replan and decision.exploration_questions:
+            from langchain_core.messages import HumanMessage
+            
+            # 获取原始问题用于标记 parent_question
+            original_question = state.get("question", "")
+            
             # 将探索问题转换为待处理问题列表
             pending_questions = []
             for q in decision.exploration_questions:
@@ -379,7 +403,20 @@ def create_tableau_workflow(
             
             # 更新 question 为第一个探索问题（当前轮次处理）
             if pending_questions:
-                result["question"] = pending_questions[0]["question"]
+                next_question = pending_questions[0]["question"]
+                result["question"] = next_question
+                
+                # 创建带来源标记的消息，添加到对话历史
+                # 标记为 replanner 生成的问题，并关联原始问题
+                replanner_message = HumanMessage(
+                    content=next_question,
+                    additional_kwargs={
+                        "source": "replanner",
+                        "parent_question": original_question,
+                    }
+                )
+                result["messages"] = [replanner_message]
+                
                 # 剩余问题存入队列，供后续轮次处理
                 result["pending_questions"] = pending_questions[1:] if len(pending_questions) > 1 else []
         
@@ -561,3 +598,34 @@ def get_session_history(
         return []
     except Exception:
         return []
+
+
+def inject_middleware_to_config(
+    config: Optional[Dict[str, Any]],
+    middleware: List[AgentMiddleware],
+) -> Dict[str, Any]:
+    """
+    将 middleware 注入到 config 中
+    
+    用于在调用 workflow 时传递 middleware 给节点函数。
+    
+    Args:
+        config: 原始 config（可以为 None）
+        middleware: Middleware 列表
+    
+    Returns:
+        包含 middleware 的新 config
+    
+    Example:
+        workflow = create_tableau_workflow()
+        config = inject_middleware_to_config(
+            {"configurable": {"thread_id": "123"}},
+            workflow.middleware
+        )
+        result = await workflow.ainvoke(state, config)
+    """
+    config = config or {}
+    configurable = config.get('configurable', {})
+    configurable['middleware'] = middleware
+    config['configurable'] = configurable
+    return config

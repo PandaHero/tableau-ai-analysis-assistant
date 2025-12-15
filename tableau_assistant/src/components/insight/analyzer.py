@@ -45,13 +45,13 @@ class ChunkAnalyzer:
     2. 主持人 LLM：决定分析顺序、累积洞察、决定早停
     """
     
-    def __init__(self, llm=None, max_sample_rows: int = 50):
+    def __init__(self, llm=None, max_sample_rows: int = 150):
         """
         初始化分析器
         
         Args:
             llm: LangChain LLM 实例
-            max_sample_rows: Prompt 中包含的最大行数
+            max_sample_rows: Prompt 中包含的最大行数（默认 150 行，确保 LLM 有足够数据样本）
         """
         self._llm = llm
         self.max_sample_rows = max_sample_rows

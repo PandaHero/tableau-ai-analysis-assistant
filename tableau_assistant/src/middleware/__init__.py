@@ -29,6 +29,10 @@ from tableau_assistant.src.middleware.patch_tool_calls import (
     find_dangling_tool_calls,
     count_dangling_tool_calls,
 )
+from tableau_assistant.src.middleware.output_validation import (
+    OutputValidationMiddleware,
+    OutputValidationError,
+)
 from tableau_assistant.src.middleware.backends import (
     BackendProtocol,
     StateBackend,
@@ -46,6 +50,8 @@ __all__ = [
     "PatchToolCallsMiddleware",
     "find_dangling_tool_calls",
     "count_dangling_tool_calls",
+    "OutputValidationMiddleware",
+    "OutputValidationError",
     # Backends
     "BackendProtocol",
     "StateBackend",

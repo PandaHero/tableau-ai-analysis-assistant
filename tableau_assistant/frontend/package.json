@@ -1,0 +1,42 @@
+{
+  "name": "tableau-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tableau Extension for VizQL Multi-Agent System",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore",
+    "format": "prettier --write src/"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.2",
+    "axios": "^1.7.9",
+    "element-plus": "^2.12.0",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0",
+    "pinia": "^2.3.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.2",
+    "@typescript-eslint/eslint-plugin": "^8.19.1",
+    "@typescript-eslint/parser": "^8.19.1",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@vitest/ui": "^2.1.8",
+    "@vue/tsconfig": "^0.7.0",
+    "dotenv": "^17.2.3",
+    "eslint": "^9.17.0",
+    "eslint-plugin-vue": "^9.32.0",
+    "prettier": "^3.4.2",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8",
+    "vue-tsc": "^2.2.0"
+  }
+}

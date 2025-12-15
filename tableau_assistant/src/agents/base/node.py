@@ -158,12 +158,147 @@ def convert_messages(messages: List[Dict[str, str]]) -> List:
     return langchain_messages
 
 
+async def _call_llm_with_tools_and_middleware(
+    llm: BaseChatModel,
+    messages: List[Dict[str, str]],
+    tools: List[Any],
+    max_iterations: int,
+    streaming: bool,
+    middleware: List[Any],
+    state: Dict[str, Any],
+    config: Optional[Dict[str, Any]],
+) -> str:
+    """
+    带 middleware 支持的 LLM 调用（内部函数）
+    
+    执行顺序：
+    1. before_model hooks
+    2. wrap_model_call chain (包含实际 LLM 调用)
+    3. after_model hooks
+    4. 如果有 tool_calls，执行 wrap_tool_call chain
+    5. 循环直到没有 tool_calls 或达到 max_iterations
+    """
+    from tableau_assistant.src.agents.base.middleware_runner import (
+        MiddlewareRunner,
+        ModelRequest,
+        ModelResponse,
+    )
+    
+    # 创建 MiddlewareRunner
+    runner = MiddlewareRunner(middleware)
+    runtime = runner.build_runtime(config)
+    
+    # 转换消息格式
+    langchain_messages = convert_messages(messages)
+    
+    # 构建工具映射
+    tool_map = {tool.name: tool for tool in tools}
+    
+    # 迭代处理
+    for iteration in range(max_iterations):
+        logger.debug(f"LLM iteration {iteration + 1}/{max_iterations} (with middleware)")
+        
+        # 1. before_model hooks
+        state = await runner.run_before_model(state, runtime)
+        
+        # 2. wrap_model_call chain
+        async def base_model_handler(request: ModelRequest) -> ModelResponse:
+            """实际的 LLM 调用"""
+            _llm = request.model
+            _msgs = request.messages
+            
+            # 绑定工具
+            if request.tools:
+                _llm = _llm.bind_tools(request.tools)
+            
+            # 调用 LLM
+            if streaming:
+                response = await _stream_llm_call_internal(_llm, _msgs)
+            else:
+                response = await _llm.ainvoke(_msgs)
+            
+            return runner.build_model_response(
+                result=[response] if isinstance(response, AIMessage) else [response],
+            )
+        
+        # 构建 ModelRequest
+        request = runner.build_model_request(
+            model=llm,
+            messages=langchain_messages,
+            tools=tools,
+            state=state,
+            runtime=runtime,
+        )
+        
+        # 通过 wrap_model_call 链调用
+        model_response = await runner.wrap_model_call(request, base_model_handler)
+        
+        # 3. after_model hooks
+        state = await runner.run_after_model(
+            state, runtime,
+            response=model_response,
+            request=request,
+        )
+        
+        # 获取 LLM 响应
+        if not model_response.result:
+            return ""
+        
+        response = model_response.result[0]
+        langchain_messages.append(response)
+        
+        # 检查是否有工具调用
+        if not response.tool_calls:
+            logger.debug("No tool calls, returning response (with middleware)")
+            return response.content
+        
+        # 4. 处理工具调用（通过 wrap_tool_call 链）
+        for tool_call in response.tool_calls:
+            tool_name = tool_call["name"]
+            tool_args = tool_call["args"]
+            tool_id = tool_call["id"]
+            
+            logger.info(f"Tool call: {tool_name}({tool_args})")
+            
+            tool = tool_map.get(tool_name)
+            if tool is None:
+                tool_result = f"Error: Tool '{tool_name}' not found"
+                logger.warning(tool_result)
+            else:
+                # 通过 wrap_tool_call 链调用工具
+                tool_message = await runner.call_tool_with_middleware(
+                    tool=tool,
+                    tool_call=tool_call,
+                    state=state,
+                    runtime=runtime,
+                )
+                tool_result = tool_message.content if hasattr(tool_message, 'content') else str(tool_message)
+            
+            # 添加工具结果消息
+            langchain_messages.append(
+                ToolMessage(content=str(tool_result), tool_call_id=tool_id)
+            )
+    
+    # 达到最大迭代次数
+    logger.warning(f"Max iterations ({max_iterations}) reached (with middleware)")
+    
+    for msg in reversed(langchain_messages):
+        if hasattr(msg, 'content') and msg.content:
+            return msg.content
+    
+    return ""
+
+
 async def call_llm_with_tools(
     llm: BaseChatModel,
     messages: List[Dict[str, str]],
     tools: List[Any],
     max_iterations: int = 5,
     streaming: bool = True,
+    # Middleware 支持参数
+    middleware: Optional[List[Any]] = None,
+    state: Optional[Dict[str, Any]] = None,
+    config: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     调用 LLM 并处理工具调用
@@ -171,12 +306,17 @@ async def call_llm_with_tools(
     这是 Agent 节点的核心函数，处理 LLM 与工具的交互循环。
     默认使用流式调用，以便 LangGraph 的 astream_events 能捕获 token 事件。
     
+    支持 middleware 参数，当提供时会创建 MiddlewareRunner 并应用所有钩子。
+    
     Args:
         llm: LLM 实例
         messages: 消息列表 [{"role": "system", "content": "..."}, ...]
         tools: 可用工具列表（@tool 装饰的函数）
         max_iterations: 最大迭代次数（防止无限循环）
         streaming: 是否使用流式调用（默认 True，支持 token 级别流式输出）
+        middleware: 可选的 middleware 列表（AgentMiddleware 实例）
+        state: 可选的当前状态（用于 middleware）
+        config: 可选的 LangGraph RunnableConfig（用于 middleware）
     
     Returns:
         LLM 最终响应内容（字符串）
@@ -186,9 +326,31 @@ async def call_llm_with_tools(
         tools = [get_metadata, calculate_date_range]
         messages = MY_PROMPT.format_messages(question="各省份销售额")
         
+        # 不带 middleware
         response = await call_llm_with_tools(llm, messages, tools)
         result = parse_json_response(response, SemanticQuery)
+        
+        # 带 middleware
+        response = await call_llm_with_tools(
+            llm, messages, tools,
+            middleware=middleware_stack,
+            state=state,
+            config=config,
+        )
     """
+    # 如果提供了 middleware，使用 MiddlewareRunner
+    if middleware:
+        return await _call_llm_with_tools_and_middleware(
+            llm=llm,
+            messages=messages,
+            tools=tools,
+            max_iterations=max_iterations,
+            streaming=streaming,
+            middleware=middleware,
+            state=state or {},
+            config=config,
+        )
+    
     # 绑定工具到 LLM
     llm_with_tools = llm.bind_tools(tools)
     

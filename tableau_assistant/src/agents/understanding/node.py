@@ -12,18 +12,26 @@ Understanding Agent Node（含原 Boost 功能）
 - call_llm_with_tools(): 带工具调用的 LLM 调用
 - parse_json_response(): 解析 JSON 响应
 
+Middleware 集成：
+- 从 config 获取 middleware 栈
+- 传递 middleware 给 call_llm_with_tools
+- 支持 SummarizationMiddleware 自动总结历史消息
+- 支持 OutputValidationMiddleware 校验输出格式
+
 Requirements:
 - R2.9: Understanding Agent 调用 get_metadata 工具获取字段信息
 - R7.2.1: 输出 SemanticQuery（纯语义）
 - R7.2.2: 使用 XML 格式的字段描述
 - R7.2.3: 实现决策树和填写顺序
 - R7.2.4: 实现 model_validator 验证依赖关系
+- R9.3: 从 config 获取 middleware 并传递给 call_llm_with_tools
 """
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 from langgraph.types import RunnableConfig
+from langchain_core.messages import BaseMessage
 
 from tableau_assistant.src.models.semantic.query import SemanticQuery
 from tableau_assistant.src.tools.metadata_tool import get_metadata
@@ -34,6 +42,7 @@ from tableau_assistant.src.agents.base import (
     call_llm_with_tools,
     parse_json_response,
 )
+from tableau_assistant.src.agents.base.middleware_runner import get_middleware_from_config
 from .prompt import UNDERSTANDING_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -140,13 +149,18 @@ async def understanding_node(
     1. 调用 get_metadata 获取元数据（原 Boost 功能）
     2. 判断是否为分析类问题（is_analysis_question）
     3. 如果不是分析类问题，直接返回
-    4. 构建 Prompt（包含思考步骤）
+    4. 构建 Prompt（包含思考步骤 + 历史消息）
     5. LLM 分析问题，调用工具获取需要的信息
     6. LLM 根据 Schema 的 <decision_rule> 生成 SemanticQuery
     
+    Middleware 集成：
+    - 从 config 获取 middleware 栈
+    - 传递 middleware 给 call_llm_with_tools
+    - 使用 state.messages 作为历史上下文
+    
     Args:
-        state: 当前状态，包含 question 等字段
-        config: 运行时配置
+        state: 当前状态，包含 question, messages 等字段
+        config: 运行时配置（包含 middleware）
     
     Returns:
         状态更新，包含：
@@ -155,7 +169,7 @@ async def understanding_node(
         - understanding_complete: 理解是否完成
         - current_question: 当前问题
     
-    **Validates: Requirements 2.9, 7.2.1, 7.2.2, 7.2.3, 7.2.4**
+    **Validates: Requirements 2.9, 7.2.1, 7.2.2, 7.2.3, 7.2.4, 9.3**
     """
     logger.info("Understanding node started")
     
@@ -199,13 +213,40 @@ async def understanding_node(
         current_date=current_date,
     )
     
-    # Step 3: 调用 LLM（带工具）
+    # Step 2.1: 获取历史消息并添加到 prompt（用于多轮对话上下文）
+    # **Validates: Requirements 13.2, 13.5**
+    history_messages: List[BaseMessage] = state.get("messages", [])
+    if history_messages:
+        # 将历史消息转换为 dict 格式并插入到 messages 开头
+        # 注意：messages 是 [{"role": "system", ...}, {"role": "user", ...}] 格式
+        history_dicts = _convert_history_to_dicts(history_messages)
+        if history_dicts:
+            # 在 system message 之后、user message 之前插入历史
+            # 找到第一个 user message 的位置
+            insert_pos = 0
+            for i, msg in enumerate(messages):
+                if msg.get("role") == "system":
+                    insert_pos = i + 1
+                    break
+            messages = messages[:insert_pos] + history_dicts + messages[insert_pos:]
+            logger.debug(f"Added {len(history_dicts)} history messages to prompt")
+    
+    # Step 3: 调用 LLM（带工具和 middleware）
     # 使用 base 包的 get_llm 和 call_llm_with_tools
     llm = get_llm(agent_name="understanding")
     tools = [get_metadata, get_schema_module, process_time_filter, calculate_relative_dates, detect_date_format]
     
+    # 从 config 获取 middleware
+    # **Validates: Requirements 9.3**
+    middleware = get_middleware_from_config(config)
+    
     try:
-        response_content = await call_llm_with_tools(llm, messages, tools)
+        response_content = await call_llm_with_tools(
+            llm, messages, tools,
+            middleware=middleware,
+            state=state,
+            config=config,
+        )
         
         # Step 4: 解析 SemanticQuery
         # 使用 base 包的 parse_json_response
@@ -242,6 +283,30 @@ async def understanding_node(
             "current_question": current_question,
             "error": str(e),
         }
+
+
+def _convert_history_to_dicts(messages: List[BaseMessage]) -> List[Dict[str, str]]:
+    """
+    将 LangChain BaseMessage 列表转换为 dict 格式
+    
+    Args:
+        messages: LangChain 消息列表
+    
+    Returns:
+        [{"role": "user/assistant", "content": "..."}] 格式的列表
+    """
+    from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+    
+    result = []
+    for msg in messages:
+        if isinstance(msg, HumanMessage):
+            result.append({"role": "user", "content": msg.content})
+        elif isinstance(msg, AIMessage):
+            result.append({"role": "assistant", "content": msg.content})
+        elif isinstance(msg, SystemMessage):
+            # 跳过 system message，因为 prompt 已经有了
+            continue
+    return result
 
 
 __all__ = [

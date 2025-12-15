@@ -72,6 +72,7 @@ class ReplannerAgent:
         dimension_hierarchy: Optional[Dict[str, Any]] = None,
         current_dimensions: Optional[List[str]] = None,
         current_round: int = 1,
+        answered_questions: Optional[List[str]] = None,
     ) -> ReplanDecision:
         """
         执行重规划决策
@@ -83,9 +84,12 @@ class ReplannerAgent:
             dimension_hierarchy: 维度层级信息
             current_dimensions: 当前已分析的维度
             current_round: 当前重规划轮次
+            answered_questions: 已回答的问题列表（用于去重）
             
         Returns:
             ReplanDecision 包含是否重规划、探索问题等
+        
+        **Validates: Requirements 14.3, 14.4, 14.5**
         """
         # 检查是否达到最大轮数
         if current_round >= self.max_replan_rounds:
@@ -123,6 +127,10 @@ class ReplannerAgent:
         # 格式化当前维度
         dimensions_str = ", ".join(current_dimensions) if current_dimensions else "（无）"
         
+        # 格式化已回答问题（用于去重）
+        # **Validates: Requirements 14.3, 14.4**
+        answered_str = self._format_answered_questions(answered_questions)
+        
         try:
             # 使用 Prompt 格式化消息
             messages = REPLANNER_PROMPT.format_messages(
@@ -131,6 +139,7 @@ class ReplannerAgent:
                 data_insight_profile=profile_str,
                 dimension_hierarchy=hierarchy_str,
                 current_dimensions=dimensions_str,
+                answered_questions=answered_str,
                 current_round=current_round,
                 max_rounds=self.max_replan_rounds,
             )
@@ -253,6 +262,34 @@ class ReplannerAgent:
                 )
         
         return "\n".join(lines) if lines else "（无维度层级信息）"
+    
+    def _format_answered_questions(self, questions: Optional[List[str]]) -> str:
+        """
+        格式化已回答问题列表（用于去重）
+        
+        Args:
+            questions: 已回答的问题列表
+        
+        Returns:
+            格式化的字符串
+        
+        **Validates: Requirements 14.3, 14.4**
+        """
+        if not questions:
+            return "（无已回答问题）"
+        
+        # 使用 trim_answered_questions 限制长度
+        from tableau_assistant.src.utils.conversation import trim_answered_questions
+        trimmed = trim_answered_questions(questions)
+        
+        lines = []
+        for i, q in enumerate(trimmed, 1):
+            lines.append(f"{i}. {q}")
+        
+        if len(questions) > len(trimmed):
+            lines.append(f"... 共 {len(questions)} 个问题，显示最近 {len(trimmed)} 个")
+        
+        return "\n".join(lines)
     
     def _parse_response(self, content: str) -> ReplanDecision:
         """解析 LLM 响应"""

@@ -16,7 +16,11 @@ class VizQLQueryRequest(BaseModel):
     """
     VizQL查询请求
     
-    用于 POST /api/chat 端点
+    用于 POST /api/chat 和 POST /api/chat/stream 端点
+    
+    支持两种数据源指定方式：
+    1. datasource_luid: 直接指定 LUID（优先）
+    2. datasource_name: 指定名称，后端自动转换为 LUID
     """
     question: str = Field(
         ...,
@@ -26,16 +30,16 @@ class VizQLQueryRequest(BaseModel):
         examples=["2016年各地区的销售额是多少？"]
     )
     
-    datasource_luid: str = Field(
-        ...,
-        description="数据源LUID",
-        min_length=1,
+    datasource_luid: Optional[str] = Field(
+        default=None,
+        description="数据源LUID（优先使用）",
         examples=["abc123-def456-ghi789"]
     )
     
-    boost_question: bool = Field(
-        default=False,
-        description="是否使用问题Boost优化问题"
+    datasource_name: Optional[str] = Field(
+        default=None,
+        description="数据源名称（如果未提供 LUID，则使用名称查找）",
+        examples=["销售分析数据源"]
     )
     
     user_id: Optional[str] = Field(
@@ -48,79 +52,25 @@ class VizQLQueryRequest(BaseModel):
         description="会话ID（可选，用于对话历史）"
     )
     
+    analysis_depth: Optional[str] = Field(
+        default="detailed",
+        description="分析深度：detailed（标准）或 comprehensive（深入）"
+    )
+    
+    language: Optional[str] = Field(
+        default="zh",
+        description="响应语言：zh（中文）或 en（英文）"
+    )
+    
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "question": "2016年各地区的销售额是多少？",
-                "datasource_luid": "abc123-def456-ghi789",
-                "boost_question": False,
+                "datasource_name": "销售分析数据源",
                 "user_id": "user_456",
-                "session_id": "session_789"
-            }
-        }
-    )
-
-
-class QuestionBoostRequest(BaseModel):
-    """
-    问题Boost请求
-    
-    用于 POST /api/boost-question 端点
-    """
-    question: str = Field(
-        ...,
-        description="用户原始问题",
-        min_length=1,
-        max_length=1000,
-        examples=["最近的销售情况"]
-    )
-    
-    datasource_luid: str = Field(
-        ...,
-        description="数据源LUID",
-        min_length=1,
-        examples=["abc123-def456-ghi789"]
-    )
-    
-    user_id: Optional[str] = Field(
-        default=None,
-        description="用户ID（可选，用于个性化）"
-    )
-    
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "question": "最近的销售情况",
-                "datasource_luid": "abc123-def456-ghi789",
-                "user_id": "user_456"
-            }
-        }
-    )
-
-
-class MetadataInitRequest(BaseModel):
-    """
-    元数据初始化请求
-    
-    用于 POST /api/metadata/init-hierarchy 端点
-    """
-    datasource_luid: str = Field(
-        ...,
-        description="数据源LUID",
-        min_length=1,
-        examples=["abc123-def456-ghi789"]
-    )
-    
-    force_refresh: bool = Field(
-        default=False,
-        description="是否强制刷新（忽略缓存）"
-    )
-    
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "datasource_luid": "abc123-def456-ghi789",
-                "force_refresh": False
+                "session_id": "session_789",
+                "analysis_depth": "detailed",
+                "language": "zh"
             }
         }
     )
@@ -233,96 +183,6 @@ class VizQLQueryResponse(BaseModel):
                     "execution_time_ms": 8500,
                     "llm_calls": 5
                 }
-            }
-        }
-    )
-
-
-class QuestionBoostResponse(BaseModel):
-    """
-    问题Boost响应
-    
-    用于 POST /api/boost-question 端点
-    """
-    boosted_question: str = Field(
-        ...,
-        description="优化后的问题"
-    )
-    
-    suggestions: List[str] = Field(
-        default_factory=list,
-        description="相关问题建议（3-5个）"
-    )
-    
-    reasoning: str = Field(
-        ...,
-        description="优化理由"
-    )
-    
-    changes: List[str] = Field(
-        default_factory=list,
-        description="具体改动说明"
-    )
-    
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "boosted_question": "最近一个月各地区的销售额、订单量和客户数分别是多少？",
-                "suggestions": [
-                    "最近一个月销售额TOP10的门店是哪些？",
-                    "最近一个月各产品类别的销售额占比",
-                    "最近一个月的销售额趋势（按日统计）"
-                ],
-                "reasoning": "原问题过于宽泛，补充了时间范围、维度和度量",
-                "changes": [
-                    "补充时间范围：最近一个月",
-                    "明确维度：地区",
-                    "明确度量：销售额、订单量、客户数"
-                ]
-            }
-        }
-    )
-
-
-class MetadataInitResponse(BaseModel):
-    """
-    元数据初始化响应
-    
-    用于 POST /api/metadata/init-hierarchy 端点
-    """
-    status: str = Field(
-        ...,
-        description="状态（initializing/completed/cached）"
-    )
-    
-    datasource_luid: str = Field(
-        ...,
-        description="数据源LUID"
-    )
-    
-    message: str = Field(
-        ...,
-        description="状态消息"
-    )
-    
-    cached: bool = Field(
-        default=False,
-        description="是否使用缓存"
-    )
-    
-    duration_ms: Optional[int] = Field(
-        None,
-        description="执行时间（毫秒）"
-    )
-    
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "status": "initializing",
-                "datasource_luid": "abc123-def456-ghi789",
-                "message": "后台正在初始化维度层级，预计3-5秒完成",
-                "cached": False,
-                "duration_ms": None
             }
         }
     )

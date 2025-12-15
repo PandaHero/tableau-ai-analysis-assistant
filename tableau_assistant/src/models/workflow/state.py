@@ -18,6 +18,9 @@ from __future__ import annotations
 from typing import TypedDict, Annotated, List, Dict, Optional, Any
 import operator
 
+# LangChain message types for conversation history
+from langchain_core.messages import BaseMessage
+
 # 运行时导入类型（LangGraph StateGraph 需要在运行时解析类型）
 from tableau_assistant.src.models.semantic.query import SemanticQuery
 from tableau_assistant.src.models.field_mapper.models import MappedQuery
@@ -88,6 +91,17 @@ class VizQLState(TypedDict):
     - Context information (datasource_luid, user_id, etc.) is passed through Runtime
     - Boost Agent has been REMOVED, functionality merged into Understanding Agent
     """
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # Conversation History (for LLM context and SummarizationMiddleware)
+    # ═══════════════════════════════════════════════════════════════════════
+    # LangChain message list, auto-accumulates via operator.add
+    # Format: [HumanMessage(question), AIMessage(structured_summary), ...]
+    messages: Annotated[List[BaseMessage], operator.add]
+    
+    # List of answered questions (for Replanner deduplication)
+    # Used by Replanner to avoid generating duplicate exploration questions
+    answered_questions: Annotated[List[str], operator.add]
     
     # ═══════════════════════════════════════════════════════════════════════
     # User Input
@@ -225,8 +239,21 @@ def create_initial_state(
         Initialized VizQLState (contains all necessary fields)
     """
     import time
+    from langchain_core.messages import HumanMessage
+    
+    # Create initial user message with source marking
+    # This enables tracking message origin (user vs replanner vs insight)
+    initial_message = HumanMessage(
+        content=question,
+        additional_kwargs={"source": "user"}
+    )
     
     return VizQLState(
+        # Conversation history (for LLM context)
+        # Initialize with user's question marked with source
+        messages=[initial_message],
+        answered_questions=[],
+        
         # User input
         question=question,
         

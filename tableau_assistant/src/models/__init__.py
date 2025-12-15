@@ -95,11 +95,7 @@ from .common import (
 # ========== API Models ==========
 from .api import (
     VizQLQueryRequest,
-    QuestionBoostRequest,
-    MetadataInitRequest,
     VizQLQueryResponse,
-    QuestionBoostResponse,
-    MetadataInitResponse,
     KeyFinding,
     AnalysisStep,
     Recommendation,
@@ -222,11 +218,7 @@ __all__ = [
     
     # API
     "VizQLQueryRequest",
-    "QuestionBoostRequest",
-    "MetadataInitRequest",
     "VizQLQueryResponse",
-    "QuestionBoostResponse",
-    "MetadataInitResponse",
     "KeyFinding",
     "AnalysisStep",
     "Recommendation",

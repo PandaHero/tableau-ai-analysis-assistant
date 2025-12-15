@@ -689,6 +689,7 @@ class DimensionHierarchyRAG:
     def __init__(
         self,
         pattern_store: Optional[DimensionPatternStore] = None,
+        embedding_provider: Optional[EmbeddingProvider] = None,
         similarity_threshold: float = 0.8
     ):
         """
@@ -696,9 +697,15 @@ class DimensionHierarchyRAG:
         
         Args:
             pattern_store: 模式存储（可选，默认创建新的）
+            embedding_provider: Embedding 提供者（可选，传递给 DimensionPatternStore）
             similarity_threshold: 相似度阈值
         """
-        self.pattern_store = pattern_store or DimensionPatternStore()
+        if pattern_store is not None:
+            self.pattern_store = pattern_store
+        elif embedding_provider is not None:
+            self.pattern_store = DimensionPatternStore(embedding_provider=embedding_provider)
+        else:
+            self.pattern_store = DimensionPatternStore()
         self.similarity_threshold = similarity_threshold
         
         # 统计信息

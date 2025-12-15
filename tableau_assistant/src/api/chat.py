@@ -13,16 +13,105 @@ from typing import AsyncGenerator
 from tableau_assistant.src.models.api import (
     VizQLQueryRequest,
     VizQLQueryResponse,
-    QuestionBoostRequest,
-    QuestionBoostResponse,
-    MetadataInitRequest,
-    MetadataInitResponse,
     ErrorResponse,
     StreamEvent
 )
 from tableau_assistant.src.workflow.executor import WorkflowExecutor, EventType
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+
+async def resolve_datasource_luid(request: VizQLQueryRequest) -> str:
+    """
+    解析数据源 LUID
+    
+    优先使用 datasource_luid，如果未提供则通过 datasource_name 查找。
+    使用缓存减少 API 调用。
+    
+    Args:
+        request: 查询请求
+        
+    Returns:
+        数据源 LUID
+        
+    Raises:
+        HTTPException: 如果无法解析数据源
+    """
+    # 优先使用 LUID
+    if request.datasource_luid:
+        return request.datasource_luid
+    
+    # 通过名称查找
+    if request.datasource_name:
+        from tableau_assistant.src.bi_platforms.tableau import get_datasource_luid_by_name, get_tableau_auth_async
+        from tableau_assistant.src.capabilities.storage.store_manager import get_store_manager
+        from tableau_assistant.src.config.settings import settings
+        
+        # 尝试从缓存获取
+        store = get_store_manager()
+        cache_key = f"datasource_luid:{request.datasource_name}"
+        cached_luid = store.get("datasource_luid_cache", cache_key)
+        
+        if cached_luid:
+            return cached_luid
+        
+        # 获取认证信息
+        try:
+            auth_ctx = await get_tableau_auth_async()
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=ErrorResponse(
+                    error="AuthError",
+                    message=f"Tableau 认证失败: {str(e)}"
+                ).model_dump()
+            )
+        
+        # 调用 API 查找（同步函数，在线程池中执行）
+        import asyncio
+        try:
+            luid = await asyncio.to_thread(
+                get_datasource_luid_by_name,
+                api_key=auth_ctx.token,
+                domain=settings.tableau_server_url,
+                datasource_name=request.datasource_name,
+                site=settings.tableau_site_name
+            )
+            if luid:
+                # 缓存 1 小时
+                store.set("datasource_luid_cache", cache_key, luid, ttl=3600)
+                return luid
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=ErrorResponse(
+                        error="DatasourceNotFound",
+                        message=f"无法找到数据源: {request.datasource_name}"
+                    ).model_dump()
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error="DatasourceNotFound",
+                    message=f"无法找到数据源: {request.datasource_name}，错误: {str(e)}"
+                ).model_dump()
+            )
+    
+    # 都没有提供，使用环境变量默认值
+    from tableau_assistant.src.config.settings import settings
+    if settings.datasource_luid:
+        return settings.datasource_luid
+    
+    raise HTTPException(
+        status_code=400,
+        detail=ErrorResponse(
+            error="MissingDatasource",
+            message="请提供 datasource_luid 或 datasource_name"
+        ).model_dump()
+    )
 
 
 @router.post(
@@ -54,37 +143,81 @@ async def chat_query(request: VizQLQueryRequest) -> VizQLQueryResponse:
         HTTPException: 如果查询失败
     """
     try:
-        # TODO: 迁移到新的 workflow 模块
-        # from tableau_assistant.src.workflow.factory import create_tableau_workflow
-        raise HTTPException(
-            status_code=501,
-            detail=ErrorResponse(
-                error="NotImplemented",
-                message="同步查询功能正在迁移中，请使用流式查询 /api/chat/stream"
-            ).model_dump()
+        session_id = request.session_id or f"session_{int(time.time())}"
+        
+        # 解析数据源 LUID
+        datasource_luid = await resolve_datasource_luid(request)
+        
+        # 使用 WorkflowExecutor 执行同步查询
+        executor = WorkflowExecutor(datasource_luid=datasource_luid)
+        result = await executor.run(
+            question=request.question,
+            thread_id=session_id,
         )
         
-        # 将API请求转换为工作流输入（已验证，无需重复验证）
-        workflow_input = {"question": request.question, "boost_question": request.boost_question}
+        # 检查执行结果
+        if not result.success:
+            raise HTTPException(
+                status_code=500,
+                detail=ErrorResponse(
+                    error="WorkflowError",
+                    message=result.error or "工作流执行失败"
+                ).model_dump()
+            )
         
-        # 执行工作流
-        result = run_vizql_workflow_sync(
-            input_data=workflow_input,
-            datasource_luid=request.datasource_luid,
-            user_id=request.user_id or "default_user",
-            session_id=request.session_id or f"session_{int(time.time())}"
-        )
+        # 从 insights 提取关键发现
+        key_findings = []
+        recommendations = []
+        if result.insights:
+            for insight in result.insights:
+                if hasattr(insight, 'finding'):
+                    key_findings.append(insight.finding)
+                if hasattr(insight, 'recommendation') and insight.recommendation:
+                    recommendations.append(insight.recommendation)
         
-        # 转换为API响应格式
+        # 构建分析路径
+        analysis_path = []
+        if result.semantic_query:
+            analysis_path.append({
+                "step": "understanding",
+                "description": f"理解问题: {result.question}",
+                "output": result.semantic_query.model_dump() if hasattr(result.semantic_query, 'model_dump') else str(result.semantic_query)
+            })
+        if result.mapped_query:
+            analysis_path.append({
+                "step": "field_mapping",
+                "description": "字段映射完成",
+                "output": result.mapped_query.model_dump() if hasattr(result.mapped_query, 'model_dump') else str(result.mapped_query)
+            })
+        if result.vizql_query:
+            analysis_path.append({
+                "step": "query_building",
+                "description": "VizQL 查询构建完成",
+                "output": result.vizql_query.model_dump() if hasattr(result.vizql_query, 'model_dump') else str(result.vizql_query)
+            })
+        
+        # 生成执行摘要
+        executive_summary = ""
+        if result.replan_decision and hasattr(result.replan_decision, 'summary'):
+            executive_summary = result.replan_decision.summary or ""
+        elif key_findings:
+            executive_summary = "; ".join(key_findings[:3])
+        
         return VizQLQueryResponse(
-            executive_summary=result.get("executive_summary", ""),
-            key_findings=result.get("key_findings", []),
-            analysis_path=result.get("analysis_path", []),
-            recommendations=result.get("recommendations", []),
-            visualizations=result.get("visualizations", []),
-            metadata=result.get("metadata", {})
+            executive_summary=executive_summary,
+            key_findings=key_findings,
+            analysis_path=analysis_path,
+            recommendations=recommendations,
+            visualizations=[],
+            metadata={
+                "duration": result.duration,
+                "replan_count": result.replan_count,
+                "is_analysis_question": result.is_analysis_question,
+            }
         )
         
+    except HTTPException:
+        raise
     except ValidationError as e:
         raise HTTPException(
             status_code=400,
@@ -109,7 +242,8 @@ async def chat_query(request: VizQLQueryRequest) -> VizQLQueryResponse:
 
 async def generate_sse_events(
     question: str,
-    session_id: str
+    session_id: str,
+    datasource_luid: str,
 ) -> AsyncGenerator[str, None]:
     """
     生成SSE事件流
@@ -127,12 +261,13 @@ async def generate_sse_events(
     Args:
         question: 用户问题
         session_id: 会话ID
+        datasource_luid: 数据源LUID
     
     Yields:
         SSE格式的事件字符串
     """
     try:
-        executor = WorkflowExecutor()
+        executor = WorkflowExecutor(datasource_luid=datasource_luid)
         
         async for event in executor.stream(question, thread_id=session_id):
             # 转换为前端友好的格式
@@ -141,7 +276,7 @@ async def generate_sse_events(
                 data={
                     "node": event.node_name,
                     "content": event.content,
-                    "data": event.data,
+                    "output": event.output.model_dump() if event.output else None,
                 },
                 timestamp=event.timestamp
             )
@@ -183,10 +318,14 @@ async def chat_query_stream(request: VizQLQueryRequest):
     try:
         session_id = request.session_id or f"session_{int(time.time())}"
         
+        # 解析数据源 LUID
+        datasource_luid = await resolve_datasource_luid(request)
+        
         return StreamingResponse(
             generate_sse_events(
                 question=request.question,
-                session_id=session_id
+                session_id=session_id,
+                datasource_luid=datasource_luid,
             ),
             media_type="text/event-stream",
             headers={
@@ -209,187 +348,67 @@ async def chat_query_stream(request: VizQLQueryRequest):
         )
 
 
-@router.post(
-    "/boost-question",
-    response_model=QuestionBoostResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "请求参数错误"},
-        500: {"model": ErrorResponse, "description": "服务器内部错误"}
-    }
-)
-async def boost_question(request: QuestionBoostRequest) -> QuestionBoostResponse:
-    """
-    问题Boost API
-    
-    优化用户问题，提供相关建议
-    
-    Args:
-        request: 问题Boost请求
-    
-    Returns:
-        问题Boost响应
-    
-    Raises:
-        HTTPException: 如果优化失败
-    """
-    try:
-        # TODO: 实现问题Boost Agent
-        # from tableau_assistant.src.agents.question_boost import boost_question_agent
-        # result = boost_question_agent(
-        #     question=request.question,
-        #     datasource_luid=request.datasource_luid,
-        #     user_id=request.user_id
-        # )
-        
-        # 临时返回示例响应
-        return QuestionBoostResponse(
-            boosted_question=f"{request.question}（优化后）",
-            suggestions=[
-                "相关问题建议1",
-                "相关问题建议2",
-                "相关问题建议3"
-            ],
-            reasoning="问题优化理由",
-            changes=["改动1", "改动2"]
-        )
-        
-    except ValidationError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=ErrorResponse(
-                error="ValidationError",
-                message="输入验证失败",
-                details=[
-                    {"code": err["type"], "message": err["msg"], "field": err["loc"][0]}
-                    for err in e.errors()
-                ]
-            ).model_dump()
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                error="InternalError",
-                message=f"问题优化失败: {str(e)}"
-            ).model_dump()
-        )
-
-
-@router.post(
-    "/metadata/init-hierarchy",
-    response_model=MetadataInitResponse,
-    responses={
-        400: {"model": ErrorResponse, "description": "请求参数错误"},
-        500: {"model": ErrorResponse, "description": "服务器内部错误"}
-    }
-)
-async def init_metadata_hierarchy(request: MetadataInitRequest) -> MetadataInitResponse:
-    """
-    元数据初始化API
-    
-    后台异步初始化数据源的维度层级
-    
-    Args:
-        request: 元数据初始化请求
-    
-    Returns:
-        元数据初始化响应
-    
-    Raises:
-        HTTPException: 如果初始化失败
-    """
-    try:
-        # TODO: 实现后台任务
-        # from tableau_assistant.src.capabilities.metadata.manager import ensure_dimension_hierarchy
-        # background_tasks.add_task(
-        #     ensure_dimension_hierarchy,
-        #     datasource_luid=request.datasource_luid,
-        #     force_refresh=request.force_refresh
-        # )
-        
-        # 临时返回示例响应
-        return MetadataInitResponse(
-            status="initializing",
-            datasource_luid=request.datasource_luid,
-            message="后台正在初始化维度层级，预计3-5秒完成",
-            cached=False,
-            duration_ms=None
-        )
-        
-    except ValidationError as e:
-        raise HTTPException(
-            status_code=400,
-            detail=ErrorResponse(
-                error="ValidationError",
-                message="输入验证失败",
-                details=[
-                    {"code": err["type"], "message": err["msg"], "field": err["loc"][0]}
-                    for err in e.errors()
-                ]
-            ).model_dump()
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=ErrorResponse(
-                error="InternalError",
-                message=f"元数据初始化失败: {str(e)}"
-            ).model_dump()
-        )
-
-
 @router.get("/health")
 async def health_check():
-    """健康检查"""
-    return {"status": "ok", "timestamp": time.time()}
-
-
-# 示例：如何在前端使用API
-"""
-// 同步查询示例
-const response = await fetch('/api/chat', {
-    method: 'POST',
-    headers: {
-        'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-        question: '2016年各地区的销售额',
-        datasource_luid: 'abc123',
-        user_id: 'user_456',
-        boost_question: false
-    })
-});
-
-const result = await response.json();
-console.log('执行摘要:', result.executive_summary);
-console.log('关键发现:', result.key_findings);
-
-// 流式查询示例
-const eventSource = new EventSource('/api/chat/stream', {
-    method: 'POST',
-    headers: {
-        'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-        question: '2016年各地区的销售额',
-        datasource_luid: 'abc123',
-        user_id: 'user_456'
-    })
-});
-
-eventSource.onmessage = (event) => {
-    const data = JSON.parse(event.data);
+    """
+    健康检查
     
-    switch (data.event_type) {
-        case 'token':
-            appendToken(data.data.content);
-            break;
-        case 'agent_start':
-            showAgentProgress(data.data.agent, 'running');
-            break;
-        case 'done':
-            eventSource.close();
-            break;
+    检查服务各组件状态：
+    - LLM 连接
+    - Tableau API 连接
+    - 存储服务
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    checks = {
+        "llm": {"status": "unknown", "message": ""},
+        "tableau": {"status": "unknown", "message": ""},
+        "storage": {"status": "unknown", "message": ""},
     }
-};
-"""
+    
+    # 检查 LLM
+    try:
+        from tableau_assistant.src.model_manager import get_llm
+        llm = get_llm()
+        checks["llm"] = {"status": "ok", "message": "LLM 连接正常"}
+    except Exception as e:
+        checks["llm"] = {"status": "error", "message": str(e)}
+        logger.warning(f"LLM health check failed: {e}")
+    
+    # 检查 Tableau API
+    try:
+        from tableau_assistant.src.bi_platforms.tableau import get_tableau_auth_async
+        # 只检查配置是否存在，不实际调用 API
+        from tableau_assistant.src.config.settings import settings
+        if settings.tableau_server_url and settings.tableau_site_name:
+            checks["tableau"] = {"status": "ok", "message": "Tableau 配置正常"}
+        else:
+            checks["tableau"] = {"status": "warning", "message": "Tableau 配置不完整"}
+    except Exception as e:
+        checks["tableau"] = {"status": "error", "message": str(e)}
+        logger.warning(f"Tableau health check failed: {e}")
+    
+    # 检查存储
+    try:
+        from tableau_assistant.src.capabilities.storage.store_manager import get_store_manager
+        store = get_store_manager()
+        checks["storage"] = {"status": "ok", "message": "存储服务正常"}
+    except Exception as e:
+        checks["storage"] = {"status": "error", "message": str(e)}
+        logger.warning(f"Storage health check failed: {e}")
+    
+    # 计算总体状态
+    all_ok = all(c["status"] == "ok" for c in checks.values())
+    has_error = any(c["status"] == "error" for c in checks.values())
+    
+    overall_status = "healthy" if all_ok else ("degraded" if not has_error else "unhealthy")
+    
+    return {
+        "status": overall_status,
+        "timestamp": time.time(),
+        "checks": checks
+    }
+
+
+
