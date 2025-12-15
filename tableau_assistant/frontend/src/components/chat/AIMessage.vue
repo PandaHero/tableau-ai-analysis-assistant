@@ -23,7 +23,7 @@
           <div v-if="round.insights?.length" class="round-insights">
             <div v-for="insight in round.insights" :key="insight.id" class="insight-item">
               <span class="insight-icon">💡</span>
-              <span>{{ insight.content }}</span>
+              <span>{{ insight.description || insight.title }}</span>
             </div>
           </div>
           
@@ -74,7 +74,7 @@
 import type { AIMessage as AIMessageType } from '@/types'
 import MarkdownRenderer from '@/components/content/MarkdownRenderer.vue'
 
-const props = defineProps<{
+defineProps<{
   message: AIMessageType
 }>()
 

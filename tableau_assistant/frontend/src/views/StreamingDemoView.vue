@@ -43,9 +43,19 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useStreaming } from '@/composables/useStreaming'
+import { useChatStore } from '@/stores/chat'
 import StreamingProgress from '@/components/StreamingProgress.vue'
 
-const { state, isStreaming, currentMessage, startChat, stop, clear } = useStreaming()
+const { sendMessage, cancel, isConnected } = useStreaming()
+const chatStore = useChatStore()
+
+// 兼容旧模板的状态
+const state = computed(() => ({
+  currentNode: chatStore.processingStage,
+  error: chatStore.error
+}))
+const isStreaming = isConnected
+const currentMessage = computed(() => chatStore.currentResponse?.content || '')
 
 const question = ref('')
 const datasourceName = ref('')
@@ -56,19 +66,19 @@ const canSubmit = computed(() => {
 })
 
 async function handleStart() {
-  await startChat({
-    question: question.value,
-    datasource_name: datasourceName.value,
-    session_id: sessionId.value
-  })
+  // 先添加用户消息
+  chatStore.addUserMessage(question.value)
+  chatStore.setProcessing(true, 'understanding')
+  // 发送流式请求
+  await sendMessage(question.value)
 }
 
 function handleStop() {
-  stop()
+  cancel()
 }
 
 function handleClear() {
-  clear()
+  chatStore.clearMessages()
 }
 </script>
 
