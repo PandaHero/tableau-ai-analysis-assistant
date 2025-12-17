@@ -9,7 +9,14 @@ This script automates the setup and launch process:
 4. Validates environment configuration
 5. Checks Node.js and npm
 6. Installs frontend dependencies
-7. Starts both FastAPI server and Vue dev server
+7. Starts FastAPI server (production: serves static files, dev: starts Vue dev server)
+
+Usage:
+  python start.py                     # Development mode (hot reload, single worker)
+  python start.py --prod              # Production mode (multi-worker, auto-build frontend if needed)
+  python start.py --prod --rebuild    # Production mode + force rebuild frontend
+  python start.py --install-service   # Install systemd service (Linux only)
+  python start.py --uninstall-service # Uninstall systemd service (Linux only)
 """
 
 import os
@@ -18,8 +25,27 @@ import subprocess
 import platform
 import time
 import signal
+import argparse
+import getpass
 from pathlib import Path
 from threading import Thread
+
+# Parse command line arguments
+parser = argparse.ArgumentParser(description='Start Tableau Assistant')
+parser.add_argument('--prod', action='store_true', help='Production mode (multi-worker, no hot reload)')
+parser.add_argument('--rebuild', action='store_true', help='Force rebuild frontend (use with --prod)')
+parser.add_argument('--backend-only', action='store_true', help='Start backend only (no frontend)')
+parser.add_argument('--install-service', action='store_true', help='Install systemd service (Linux only)')
+parser.add_argument('--uninstall-service', action='store_true', help='Uninstall systemd service (Linux only)')
+parser.add_argument('--workers', type=int, default=4, help='Number of uvicorn workers in prod mode (default: 4)')
+args, _ = parser.parse_known_args()
+
+PRODUCTION_MODE = args.prod
+REBUILD_FRONTEND = args.rebuild
+BACKEND_ONLY = args.backend_only
+INSTALL_SERVICE = args.install_service
+UNINSTALL_SERVICE = args.uninstall_service
+WORKERS = args.workers
 
 
 def print_header(message):
@@ -112,9 +138,51 @@ def get_venv_pip():
         return Path("venv") / "bin" / "pip"
 
 
+def get_installed_packages():
+    """Get dict of installed packages and their versions."""
+    pip_path = get_venv_pip()
+    
+    try:
+        result = subprocess.run(
+            [str(pip_path), "list", "--format=freeze"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        installed = {}
+        for line in result.stdout.strip().split('\n'):
+            if '==' in line:
+                name, version = line.split('==', 1)
+                installed[name.lower().replace('-', '_')] = version
+        return installed
+    except:
+        return {}
+
+
+def parse_requirements(requirements_path):
+    """Parse requirements.txt and return list of package names."""
+    packages = []
+    try:
+        with open(requirements_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # Skip comments and empty lines
+                if not line or line.startswith('#'):
+                    continue
+                # Extract package name (remove version specifiers)
+                for sep in ['>=', '<=', '==', '!=', '~=', '>', '<', '[']:
+                    if sep in line:
+                        line = line.split(sep)[0]
+                        break
+                packages.append(line.lower().replace('-', '_'))
+    except:
+        pass
+    return packages
+
+
 def install_dependencies():
-    """Install dependencies from requirements.txt."""
-    print_header("Installing Dependencies")
+    """Install dependencies from requirements.txt (only missing ones)."""
+    print_header("Checking Dependencies")
     
     pip_path = get_venv_pip()
     requirements_path = Path("tableau_assistant") / "requirements.txt"
@@ -127,11 +195,22 @@ def install_dependencies():
         print_error(f"Requirements file not found at {requirements_path}")
         sys.exit(1)
     
+    # Get installed packages and required packages
+    installed = get_installed_packages()
+    required = parse_requirements(requirements_path)
+    
+    # Find missing packages
+    missing = [pkg for pkg in required if pkg not in installed]
+    
+    if not missing:
+        print_success(f"All {len(required)} dependencies already installed")
+        return True
+    
+    print_info(f"Found {len(missing)} missing packages: {', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}")
+    print_info("Installing missing dependencies...")
+    
     try:
-        print_info("Installing dependencies from requirements.txt...")
-        print_info("This may take a few minutes...")
-        
-        # Use absolute path to requirements.txt to avoid directory change issues
+        # Use pip install -r to install only missing (pip handles this efficiently)
         result = subprocess.run(
             [str(pip_path), "install", "-r", str(requirements_path)],
             check=True,
@@ -145,9 +224,9 @@ def install_dependencies():
         print_error(f"Failed to install dependencies")
         print_error(f"Exit code: {e.returncode}")
         if e.stdout:
-            print_info(f"Output: {e.stdout[:500]}")  # Show first 500 chars
+            print_info(f"Output: {e.stdout[:500]}")
         if e.stderr:
-            print_error(f"Error: {e.stderr[:500]}")  # Show first 500 chars
+            print_error(f"Error: {e.stderr[:500]}")
         print_info("\nPlease try manually:")
         print_info(f"  {pip_path} install -r {requirements_path}")
         sys.exit(1)
@@ -302,6 +381,187 @@ def verify_env_config():
     return True
 
 
+# ============================================
+# Systemd Service Management
+# ============================================
+
+SERVICE_NAME = "tableau-assistant"
+SERVICE_FILE = f"/etc/systemd/system/{SERVICE_NAME}.service"
+
+
+def generate_service_file():
+    """Generate systemd service file content."""
+    project_dir = Path.cwd().resolve()
+    env_vars = load_env_vars()
+    
+    host = env_vars.get('HOST', '0.0.0.0')
+    port = env_vars.get('PORT', '8000')
+    ssl_cert = env_vars.get('SSL_CERT_FILE', '')
+    ssl_key = env_vars.get('SSL_KEY_FILE', '')
+    
+    # Resolve SSL paths
+    if ssl_cert and not Path(ssl_cert).is_absolute():
+        ssl_cert = str((project_dir / ssl_cert).resolve())
+    if ssl_key and not Path(ssl_key).is_absolute():
+        ssl_key = str((project_dir / ssl_key).resolve())
+    
+    # Get current user
+    current_user = getpass.getuser()
+    
+    # Build ExecStart command
+    exec_start = f"{project_dir}/venv/bin/uvicorn tableau_assistant.src.main:app --host {host} --port {port} --workers {WORKERS}"
+    
+    if ssl_cert and ssl_key:
+        exec_start += f" --ssl-certfile {ssl_cert} --ssl-keyfile {ssl_key}"
+    
+    service_content = f"""[Unit]
+Description=Tableau AI Analysis Assistant
+After=network.target
+
+[Service]
+Type=simple
+User={current_user}
+Group={current_user}
+WorkingDirectory={project_dir}
+Environment="PATH={project_dir}/venv/bin"
+EnvironmentFile={project_dir}/.env
+ExecStart={exec_start}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+"""
+    return service_content
+
+
+def install_systemd_service():
+    """Install systemd service."""
+    print_header("Installing Systemd Service")
+    
+    # Check if running on Linux
+    if platform.system() != "Linux":
+        print_error("Systemd service installation is only supported on Linux")
+        print_info("On Windows, use Task Scheduler or run as a Windows Service")
+        return False
+    
+    # Check if running as root or with sudo
+    if os.geteuid() != 0:
+        print_error("Root privileges required to install systemd service")
+        print_info("Please run with sudo: sudo python start.py --install-service")
+        return False
+    
+    # Verify environment first
+    if not check_env_file():
+        return False
+    
+    # Generate service file
+    service_content = generate_service_file()
+    
+    print_info(f"Service file content:\n{'-'*40}")
+    print(service_content)
+    print('-'*40)
+    
+    # Write service file
+    try:
+        with open(SERVICE_FILE, 'w') as f:
+            f.write(service_content)
+        print_success(f"Service file created: {SERVICE_FILE}")
+    except Exception as e:
+        print_error(f"Failed to create service file: {e}")
+        return False
+    
+    # Reload systemd
+    try:
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        print_success("Systemd daemon reloaded")
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to reload systemd: {e}")
+        return False
+    
+    # Enable service
+    try:
+        subprocess.run(["systemctl", "enable", SERVICE_NAME], check=True)
+        print_success(f"Service enabled: {SERVICE_NAME}")
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to enable service: {e}")
+        return False
+    
+    print_success("Systemd service installed successfully!")
+    print_info("\nUseful commands:")
+    print(f"  Start:   sudo systemctl start {SERVICE_NAME}")
+    print(f"  Stop:    sudo systemctl stop {SERVICE_NAME}")
+    print(f"  Restart: sudo systemctl restart {SERVICE_NAME}")
+    print(f"  Status:  sudo systemctl status {SERVICE_NAME}")
+    print(f"  Logs:    sudo journalctl -u {SERVICE_NAME} -f")
+    
+    # Ask if user wants to start the service now
+    response = input("\nStart the service now? (y/n): ")
+    if response.lower() == 'y':
+        try:
+            subprocess.run(["systemctl", "start", SERVICE_NAME], check=True)
+            print_success(f"Service started: {SERVICE_NAME}")
+            subprocess.run(["systemctl", "status", SERVICE_NAME])
+        except subprocess.CalledProcessError as e:
+            print_error(f"Failed to start service: {e}")
+            print_info(f"Check logs: sudo journalctl -u {SERVICE_NAME} -n 50")
+    
+    return True
+
+
+def uninstall_systemd_service():
+    """Uninstall systemd service."""
+    print_header("Uninstalling Systemd Service")
+    
+    # Check if running on Linux
+    if platform.system() != "Linux":
+        print_error("Systemd service uninstallation is only supported on Linux")
+        return False
+    
+    # Check if running as root or with sudo
+    if os.geteuid() != 0:
+        print_error("Root privileges required to uninstall systemd service")
+        print_info("Please run with sudo: sudo python start.py --uninstall-service")
+        return False
+    
+    # Stop service if running
+    try:
+        subprocess.run(["systemctl", "stop", SERVICE_NAME], check=False)
+        print_success(f"Service stopped: {SERVICE_NAME}")
+    except:
+        pass
+    
+    # Disable service
+    try:
+        subprocess.run(["systemctl", "disable", SERVICE_NAME], check=False)
+        print_success(f"Service disabled: {SERVICE_NAME}")
+    except:
+        pass
+    
+    # Remove service file
+    if Path(SERVICE_FILE).exists():
+        try:
+            os.remove(SERVICE_FILE)
+            print_success(f"Service file removed: {SERVICE_FILE}")
+        except Exception as e:
+            print_error(f"Failed to remove service file: {e}")
+            return False
+    else:
+        print_info("Service file not found (already removed)")
+    
+    # Reload systemd
+    try:
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        print_success("Systemd daemon reloaded")
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to reload systemd: {e}")
+    
+    print_success("Systemd service uninstalled successfully!")
+    return True
+
+
 def check_node():
     """Check if Node.js is installed."""
     print_header("Checking Node.js")
@@ -358,7 +618,7 @@ def check_frontend_deps():
     """Check if frontend dependencies are installed."""
     print_header("Checking Frontend Dependencies")
     
-    node_modules = Path("tableau_extension") / "node_modules"
+    node_modules = Path("tableau_assistant") / "frontend" / "node_modules"
     
     if node_modules.exists():
         print_success("Frontend dependencies found")
@@ -372,7 +632,7 @@ def install_frontend_deps():
     """Install frontend dependencies."""
     print_header("Installing Frontend Dependencies")
     
-    frontend_path = Path("tableau_extension")
+    frontend_path = Path("tableau_assistant") / "frontend"
     npm_cmd = get_npm_command()
     
     if not frontend_path.exists():
@@ -400,9 +660,58 @@ def install_frontend_deps():
         if e.stderr:
             print_error(f"Error: {e.stderr[:500]}")
         print_info("\nPlease try manually:")
-        print_info(f"  cd tableau_extension")
+        print_info(f"  cd tableau_assistant/frontend")
         print_info(f"  npm install")
         return False
+
+
+def build_frontend():
+    """Build frontend for production."""
+    print_header("Building Frontend for Production")
+    
+    frontend_path = Path("tableau_assistant") / "frontend"
+    npm_cmd = get_npm_command()
+    
+    if not frontend_path.exists():
+        print_error(f"Frontend directory not found at {frontend_path}")
+        return False
+    
+    try:
+        print_info("Building frontend...")
+        print_info("This may take a minute...")
+        
+        result = subprocess.run(
+            [npm_cmd, "run", "build"],
+            cwd=str(frontend_path),
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=True
+        )
+        
+        # Check if dist folder exists
+        dist_path = frontend_path / "dist"
+        if dist_path.exists():
+            print_success("Frontend built successfully")
+            print_info(f"Build output: {dist_path}")
+            return True
+        else:
+            print_error("Build completed but dist folder not found")
+            return False
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to build frontend")
+        print_error(f"Exit code: {e.returncode}")
+        if e.stderr:
+            print_error(f"Error: {e.stderr[:1000]}")
+        if e.stdout:
+            print_info(f"Output: {e.stdout[:1000]}")
+        return False
+
+
+def check_frontend_build():
+    """Check if frontend is already built."""
+    dist_path = Path("tableau_assistant") / "frontend" / "dist" / "index.html"
+    return dist_path.exists()
 
 
 # Global process references
@@ -472,8 +781,16 @@ def start_backend():
         "tableau_assistant.src.main:app",
         "--host", host,
         "--port", port,
-        "--reload"
     ]
+    
+    # Production mode: use workers, no reload
+    # Development mode: use reload, single worker
+    if PRODUCTION_MODE:
+        cmd.extend(["--workers", str(WORKERS)])
+        print_info(f"Workers: {WORKERS}")
+    else:
+        cmd.append("--reload")
+        print_info("Hot reload enabled")
     
     # Add SSL if configured
     if protocol == "https":
@@ -503,7 +820,7 @@ def start_frontend():
     
     print_header("Starting Frontend Server")
     
-    frontend_path = Path("tableau_extension")
+    frontend_path = Path("tableau_assistant") / "frontend"
     npm_cmd = get_npm_command()
     
     if not frontend_path.exists():
@@ -603,25 +920,37 @@ def monitor_processes():
     ssl_key = env_vars.get('SSL_KEY_FILE', '')
     backend_protocol = "https" if (ssl_cert and ssl_key and Path(ssl_cert).exists() and Path(ssl_key).exists()) else "http"
     
-    # Frontend protocol
-    frontend_ssl_cert = env_vars.get('FRONTEND_SSL_CERT_FILE', '')
-    frontend_ssl_key = env_vars.get('FRONTEND_SSL_KEY_FILE', '')
-    frontend_protocol = "https" if (frontend_ssl_cert and frontend_ssl_key) else "http"
-    
     # Get host and port from env
     backend_host = env_vars.get('HOST', '127.0.0.1')
     backend_port = env_vars.get('PORT', '8000')
-    frontend_host = env_vars.get('VITE_APP_HOST', '127.0.0.1')
-    frontend_port = env_vars.get('VITE_APP_PORT', '5173')
     
-    print_header("Servers Running")
-    print_success("Both servers are running!")
-    print_info("\nAccess URLs:")
-    print(f"  Frontend:  {frontend_protocol}://{frontend_host}:{frontend_port}")
-    print(f"  Demo Page: {frontend_protocol}://{frontend_host}:{frontend_port}/streaming-demo")
-    print(f"  Backend:   {backend_protocol}://{backend_host}:{backend_port}")
-    print(f"  API Docs:  {backend_protocol}://{backend_host}:{backend_port}/docs")
-    print_info("\nPress Ctrl+C to stop all servers")
+    print_header("Server Running")
+    
+    if PRODUCTION_MODE or BACKEND_ONLY:
+        # Production mode - backend serves everything
+        print_success("Backend server is running!")
+        print_info("\nAccess URLs:")
+        print(f"  Application: {backend_protocol}://{backend_host}:{backend_port}")
+        print(f"  API Docs:    {backend_protocol}://{backend_host}:{backend_port}/docs")
+        print(f"  Health:      {backend_protocol}://{backend_host}:{backend_port}/api/health")
+        if PRODUCTION_MODE:
+            print_info("\n📦 Production mode: Frontend served from backend")
+    else:
+        # Development mode - separate frontend server
+        frontend_ssl_cert = env_vars.get('FRONTEND_SSL_CERT_FILE', '')
+        frontend_ssl_key = env_vars.get('FRONTEND_SSL_KEY_FILE', '')
+        frontend_protocol = "https" if (frontend_ssl_cert and frontend_ssl_key) else "http"
+        frontend_host = env_vars.get('VITE_APP_HOST', '127.0.0.1')
+        frontend_port = env_vars.get('VITE_APP_PORT', '5173')
+        
+        print_success("Both servers are running!")
+        print_info("\nAccess URLs:")
+        print(f"  Frontend:  {frontend_protocol}://{frontend_host}:{frontend_port}")
+        print(f"  Backend:   {backend_protocol}://{backend_host}:{backend_port}")
+        print(f"  API Docs:  {backend_protocol}://{backend_host}:{backend_port}/docs")
+        print_info("\n🔧 Development mode: Hot reload enabled")
+    
+    print_info("\nPress Ctrl+C to stop")
     print_info("Server logs will appear below:\n")
     print("=" * 60)
     
@@ -660,8 +989,25 @@ def monitor_processes():
 
 def main():
     """Main startup sequence."""
-    print_header("Tableau Assistant - One-Click Startup")
-    print_info("Starting Backend + Frontend servers...\n")
+    
+    global BACKEND_ONLY  # Allow modification in this function
+    
+    # Handle systemd service installation/uninstallation
+    if INSTALL_SERVICE:
+        install_systemd_service()
+        return
+    
+    if UNINSTALL_SERVICE:
+        uninstall_systemd_service()
+        return
+    
+    mode_str = "Production" if PRODUCTION_MODE else "Development"
+    print_header(f"Tableau Assistant - One-Click Startup ({mode_str} Mode)")
+    
+    if PRODUCTION_MODE:
+        print_info("Running in PRODUCTION mode - backend serves static files\n")
+    else:
+        print_info("Running in DEVELOPMENT mode - backend + frontend dev server\n")
     
     # ========== Backend Setup ==========
     # Step 1: Check Python version
@@ -686,25 +1032,36 @@ def main():
         sys.exit(1)
     
     # ========== Frontend Setup ==========
-    # Step 8: Check Node.js
-    if not check_node():
-        print_error("Node.js is required for frontend")
-        print_info("Please install Node.js and try again")
-        sys.exit(1)
-    
-    # Step 9: Check npm
-    if not check_npm():
-        print_error("npm is required for frontend")
-        sys.exit(1)
-    
-    # Step 10: Install frontend dependencies
-    if not check_frontend_deps():
-        if not install_frontend_deps():
-            print_error("Failed to install frontend dependencies")
-            print_info("You can still run backend only")
-            response = input("Continue with backend only? (y/n): ")
-            if response.lower() != 'y':
-                sys.exit(1)
+    if not BACKEND_ONLY:
+        # Check Node.js
+        if not check_node():
+            print_error("Node.js is required for frontend")
+            print_info("Please install Node.js and try again")
+            sys.exit(1)
+        
+        # Check npm
+        if not check_npm():
+            print_error("npm is required for frontend")
+            sys.exit(1)
+        
+        # Install frontend dependencies
+        if not check_frontend_deps():
+            if not install_frontend_deps():
+                print_error("Failed to install frontend dependencies")
+                print_info("You can still run backend only with --backend-only")
+                response = input("Continue with backend only? (y/n): ")
+                if response.lower() != 'y':
+                    sys.exit(1)
+                BACKEND_ONLY = True
+        
+        # Build frontend for production mode
+        if PRODUCTION_MODE and not BACKEND_ONLY:
+            if REBUILD_FRONTEND or not check_frontend_build():
+                if not build_frontend():
+                    print_error("Failed to build frontend")
+                    sys.exit(1)
+            else:
+                print_success("Frontend already built (use --rebuild to force rebuild)")
     
     # ========== Start Servers ==========
     print("\n")
@@ -718,16 +1075,17 @@ def main():
     # Wait a bit for backend to start
     time.sleep(2)
     
-    # Start frontend
-    frontend = start_frontend()
-    if not frontend:
-        print_error("Failed to start frontend server")
-        print_info("Backend is still running")
-        cleanup_processes()
-        sys.exit(1)
-    
-    # Wait a bit for frontend to start
-    time.sleep(3)
+    # Start frontend dev server (only in development mode)
+    if not PRODUCTION_MODE and not BACKEND_ONLY:
+        frontend = start_frontend()
+        if not frontend:
+            print_error("Failed to start frontend server")
+            print_info("Backend is still running")
+            cleanup_processes()
+            sys.exit(1)
+        
+        # Wait a bit for frontend to start
+        time.sleep(3)
     
     # Monitor processes
     monitor_processes()

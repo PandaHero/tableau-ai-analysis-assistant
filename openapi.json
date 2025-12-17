@@ -1,2226 +1,1828 @@
 {
-  "openapi": "3.0.4",
-  "info": {
-    "title": "VizQL Data Service",
-    "description": "An API to query Tableau published data sources",
-    "version": "1.0",
-    "x-llm-guide": {
-      "description": "Complete guide for LLM to generate correct VizQL Data Service API queries. This document provides field type selection rules, calculation syntax, and complete examples.",
-      
-      "field_type_decision_guide": {
-        "description": "IMPORTANT: Use this decision tree to select the correct field type",
-        "rules": [
-          {
-            "condition": "Simple grouping/categorization (no aggregation needed)",
-            "use": "DimensionField",
-            "example": {"fieldCaption": "Category"}
-          },
-          {
-            "condition": "Simple aggregation (SUM, AVG, COUNT, MIN, MAX, MEDIAN, STDEV, VAR)",
-            "use": "MeasureField with function property",
-            "example": {"fieldCaption": "Sales", "function": "SUM"}
-          },
-          {
-            "condition": "COUNTD (distinct count) or LOD expressions (FIXED, INCLUDE, EXCLUDE)",
-            "use": "CalculatedField with calculation property",
-            "example": {"fieldCaption": "unique_customers", "calculation": "COUNTD([Customer ID])"}
-          },
-          {
-            "condition": "Table calculations (WINDOW_*, RUNNING_*, RANK*, LOOKUP, INDEX, FIRST, LAST, SIZE, TOTAL)",
-            "use": "TableCalcField with tableCalculation object, set tableCalcType to CUSTOM",
-            "example": {
-              "fieldCaption": "running_total",
-              "calculation": "RUNNING_SUM(SUM([Sales]))",
-              "tableCalculation": {
-                "tableCalcType": "CUSTOM",
-                "dimensions": [{"fieldCaption": "Date"}]
-              }
-            }
-          }
-        ]
-      },
-      
-      "aggregation_functions": {
-        "description": "Basic aggregation functions - Use MeasureField with function property",
-        "supported_functions": ["SUM", "AVG", "COUNT", "MIN", "MAX", "MEDIAN", "STDEV", "VAR"],
-        "note": "COUNTD is NOT supported in MeasureField, use CalculatedField instead",
-        "examples": [
-          {"fieldCaption": "Sales", "function": "SUM"},
-          {"fieldCaption": "Profit", "function": "AVG"},
-          {"fieldCaption": "Order ID", "function": "COUNT"}
-        ]
-      },
-      
-      "lod_expressions": {
-        "description": "Level of Detail expressions - Use CalculatedField with calculation property",
-        "types": {
-          "FIXED": {
-            "syntax": "{FIXED [dim1], [dim2] : AGG([measure])}",
-            "description": "Compute at specified dimension level, ignoring view dimensions",
-            "examples": [
-              "{FIXED : COUNTD([Customer])} // Global distinct count",
-              "{FIXED [Category] : SUM([Sales])} // Sum per category regardless of view"
-            ]
-          },
-          "INCLUDE": {
-            "syntax": "{INCLUDE [dim] : AGG([measure])}",
-            "description": "Add extra dimensions to view level calculation (finer granularity)",
-            "example": "{INCLUDE [Product] : COUNTD([Customer])}"
-          },
-          "EXCLUDE": {
-            "syntax": "{EXCLUDE [dim] : AGG([measure])}",
-            "description": "Remove dimensions from view level calculation (coarser granularity)",
-            "example": "{EXCLUDE [Region] : AVG([Profit])}"
-          }
+    "openapi": "3.0.4",
+    "info": {
+        "title": "VizQL Data Service",
+        "description": "An API to query Tableau published data sources",
+        "version": "20261.0"
+    },
+    "servers": [
+        {
+        "url": "/vizql-data-service/v1"
         }
-      },
-      
-      "table_calculations": {
-        "description": "Table calculations - Use TableCalcField with tableCalculation object. MUST set tableCalcType to CUSTOM for window functions.",
-        "required_structure": {
-          "fieldCaption": "string - name for the calculated field",
-          "calculation": "string - the table calculation formula",
-          "tableCalculation": {
-            "tableCalcType": "CUSTOM",
-            "dimensions": [{"fieldCaption": "dimension_to_compute_along"}]
-          }
-        },
-        "position_functions": {
-          "FIRST()": "Returns rows from current to first row (<=0). First row=0, second=-1",
-          "LAST()": "Returns rows from current to last row (>=0). Last row=0, second-to-last=1",
-          "INDEX()": "Returns current row index starting from 1",
-          "SIZE()": "Returns total rows in partition (same for all rows)"
-        },
-        "lookup_functions": {
-          "LOOKUP(expr, offset)": "Returns value at offset rows. -1=previous, 1=next. Returns NULL if out of range",
-          "PREVIOUS_VALUE(expr)": "Returns previous row's calculation result. First row returns expr value"
-        },
-        "running_functions": {
-          "RUNNING_SUM(expr)": "Cumulative sum from first row to current",
-          "RUNNING_AVG(expr)": "Cumulative average from first row to current",
-          "RUNNING_MIN(expr)": "Cumulative minimum from first row to current",
-          "RUNNING_MAX(expr)": "Cumulative maximum from first row to current",
-          "RUNNING_COUNT(expr)": "Cumulative count from first row to current"
-        },
-        "window_functions": {
-          "description": "Window functions compute over a range of rows. start/end: negative=backward, positive=forward, 0=current, omit=entire partition",
-          "WINDOW_SUM(expr, [start, end])": "Sum within window",
-          "WINDOW_AVG(expr, [start, end])": "Average within window",
-          "WINDOW_MIN(expr, [start, end])": "Minimum within window",
-          "WINDOW_MAX(expr, [start, end])": "Maximum within window",
-          "WINDOW_COUNT(expr, [start, end])": "Count within window",
-          "WINDOW_MEDIAN(expr, [start, end])": "Median within window",
-          "WINDOW_STDEV(expr, [start, end])": "Sample standard deviation within window",
-          "WINDOW_PERCENTILE(expr, percentile, [start, end])": "Percentile within window (0-1)"
-        },
-        "rank_functions": {
-          "RANK(expr, ['asc'|'desc'])": "Competition rank. Ties get same rank, next skips. [100,80,80,60]->[1,2,2,4]",
-          "RANK_DENSE(expr, ['asc'|'desc'])": "Dense rank. Ties get same rank, next doesn't skip. [100,80,80,60]->[1,2,2,3]",
-          "RANK_MODIFIED(expr, ['asc'|'desc'])": "Modified competition. Ties get highest rank. [100,80,80,60]->[1,3,3,4]",
-          "RANK_UNIQUE(expr, ['asc'|'desc'])": "Unique rank. Even ties get different ranks. [100,80,80,60]->[1,2,3,4]",
-          "RANK_PERCENTILE(expr, ['asc'|'desc'])": "Percentile rank (0-1)"
-        },
-        "total_function": {
-          "TOTAL(expr)": "Returns partition total (same for all rows). Equivalent to WINDOW_SUM(expr)"
-        }
-      },
-      
-      "complete_query_examples": {
-        "description": "Complete API request examples for common use cases",
-        "simple_aggregation": {
-          "description": "Sum sales by category",
-          "request": {
-            "datasource": {"datasourceName": "Sample - Superstore"},
-            "query": {
-              "fields": [
-                {"fieldCaption": "Category"},
-                {"fieldCaption": "Sales", "function": "SUM"}
-              ]
-            }
-          }
-        },
-        "distinct_count": {
-          "description": "Count unique customers (COUNTD requires CalculatedField)",
-          "request": {
-            "datasource": {"datasourceName": "Sample - Superstore"},
-            "query": {
-              "fields": [
-                {"fieldCaption": "Category"},
-                {"fieldCaption": "unique_customers", "calculation": "COUNTD([Customer ID])"}
-              ]
-            }
-          }
-        },
-        "lod_fixed": {
-          "description": "Calculate category total regardless of other dimensions",
-          "request": {
-            "datasource": {"datasourceName": "Sample - Superstore"},
-            "query": {
-              "fields": [
-                {"fieldCaption": "Category"},
-                {"fieldCaption": "Sub-Category"},
-                {"fieldCaption": "Sales", "function": "SUM"},
-                {"fieldCaption": "category_total", "calculation": "{FIXED [Category] : SUM([Sales])}"}
-              ]
-            }
-          }
-        },
-        "running_total": {
-          "description": "Cumulative sales over time",
-          "request": {
-            "datasource": {"datasourceName": "Sample - Superstore"},
-            "query": {
-              "fields": [
-                {"fieldCaption": "Order Date"},
-                {"fieldCaption": "Sales", "function": "SUM"},
-                {
-                  "fieldCaption": "cumulative_sales",
-                  "calculation": "RUNNING_SUM(SUM([Sales]))",
-                  "tableCalculation": {
-                    "tableCalcType": "CUSTOM",
-                    "dimensions": [{"fieldCaption": "Order Date"}]
-                  }
-                }
-              ]
-            }
-          }
-        },
-        "moving_average": {
-          "description": "3-period moving average",
-          "request": {
-            "datasource": {"datasourceName": "Sample - Superstore"},
-            "query": {
-              "fields": [
-                {"fieldCaption": "Order Date"},
-                {"fieldCaption": "Sales", "function": "SUM"},
-                {
-                  "fieldCaption": "moving_avg_3",
-                  "calculation": "WINDOW_AVG(SUM([Sales]), -2, 0)",
-                  "tableCalculation": {
-                    "tableCalcType": "CUSTOM",
-                    "dimensions": [{"fieldCaption": "Order Date"}]
-                  }
-                }
-              ]
-            }
-          }
-        },
-        "percent_of_total": {
-          "description": "Each row as percentage of total",
-          "request": {
-            "datasource": {"datasourceName": "Sample - Superstore"},
-            "query": {
-              "fields": [
-                {"fieldCaption": "Category"},
-                {"fieldCaption": "Sales", "function": "SUM"},
-                {
-                  "fieldCaption": "pct_of_total",
-                  "calculation": "SUM([Sales]) / TOTAL(SUM([Sales]))",
-                  "tableCalculation": {
-                    "tableCalcType": "CUSTOM",
-                    "dimensions": [{"fieldCaption": "Category"}]
-                  }
-                }
-              ]
-            }
-          }
-        },
-        "rank_products": {
-          "description": "Rank products by sales",
-          "request": {
-            "datasource": {"datasourceName": "Sample - Superstore"},
-            "query": {
-              "fields": [
-                {"fieldCaption": "Product Name"},
-                {"fieldCaption": "Sales", "function": "SUM"},
-                {
-                  "fieldCaption": "sales_rank",
-                  "calculation": "RANK(SUM([Sales]), 'desc')",
-                  "tableCalculation": {
-                    "tableCalcType": "CUSTOM",
-                    "dimensions": [{"fieldCaption": "Product Name"}]
-                  }
-                }
-              ]
-            }
-          }
-        },
-        "year_over_year_growth": {
-          "description": "Compare to previous period (assuming monthly data)",
-          "request": {
-            "datasource": {"datasourceName": "Sample - Superstore"},
-            "query": {
-              "fields": [
-                {"fieldCaption": "Order Date"},
-                {"fieldCaption": "Sales", "function": "SUM"},
-                {
-                  "fieldCaption": "prev_period_sales",
-                  "calculation": "LOOKUP(SUM([Sales]), -1)",
-                  "tableCalculation": {
-                    "tableCalcType": "CUSTOM",
-                    "dimensions": [{"fieldCaption": "Order Date"}]
-                  }
+    ],
+    "paths": {
+        "/read-metadata": {
+            "post": {
+                "tags": ["HeadlessBI"],
+                "operationId": "ReadMetadata",
+                "summary": "Request data source metadata",
+                "description": "Requests metadata for a specific data source. The metadata provides information about the data fields, such as field names, data types, and descriptions.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ReadMetadataRequest"
+                            }
+                        }
+                    }
                 },
-                {
-                  "fieldCaption": "growth_rate",
-                  "calculation": "(SUM([Sales]) - LOOKUP(SUM([Sales]), -1)) / ABS(LOOKUP(SUM([Sales]), -1))",
-                  "tableCalculation": {
-                    "tableCalcType": "CUSTOM",
-                    "dimensions": [{"fieldCaption": "Order Date"}]
-                  }
+                "responses": {
+                    "200": {
+                        "description": "200 response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/MetadataOutput"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Unexpected error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TableauError"
+                                }
+                            }
+                        }
+                    }
                 }
-              ]
             }
-          }
-        }
-      }
-    }
-  },
-  "servers": [
-    {
-      "url": "/vizql-data-service/v1"
-    }
-  ],
-  "paths": {
-    "/read-metadata": {
-      "post": {
-        "tags": [
-          "HeadlessBI"
-        ],
-        "operationId": "ReadMetadata",
-        "summary": "Request data source metadata",
-        "description": "Requests metadata for a specific data source. The metadata provides information about the data fields, such as field names, data types, and descriptions.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReadMetadataRequest"
-              }
-            }
-          }
         },
-        "responses": {
-          "200": {
-            "description": "200 response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MetadataOutput"
+        "/query-datasource": {
+          "post": {
+            "tags": ["HeadlessBI"],
+            "operationId": "QueryDatasource",
+            "summary": "Query data source",
+            "description": "Queries a specific data source and returns the resulting data.",
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/QueryRequest"
+                        }
+                    }
                 }
-              }
-            }
-          },
-          "default": {
-            "description": "Unexpected error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TableauError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/query-datasource": {
-      "post": {
-        "tags": [
-          "HeadlessBI"
-        ],
-        "operationId": "QueryDatasource",
-        "summary": "Query data source",
-        "description": "Queries a specific data source and returns the resulting data.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/QueryRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "200 response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QueryOutput"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Unexpected error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TableauError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/simple-request": {
-      "get": {
-        "tags": [
-          "HeadlessBI"
-        ],
-        "operationId": "SimpleRequest",
-        "summary": "Send a simple request",
-        "description": "Sends a request that can be used for testing or doing a health check.",
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "200 response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/get-datasource-model": {
-      "post": {
-        "tags": [
-          "HeadlessBI"
-        ],
-        "operationId": "GetDatasourceModel",
-        "summary": "Request data source model",
-        "description": "Requests the data model for a specific data source. The data model provides information about the structure and relationships in the data source.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GetDatasourceModelRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "200 response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DatasourceModelOutput"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Unexpected error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TableauError"
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-  "components": {
-    "schemas": {
-      "TableauError": {
-        "type": "object",
-        "x-class-extra-annotation": "@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)",
-        "properties": {
-          "errorCode": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          },
-          "messages": {
-            "type": "array",
-            "items": {}
-          },
-          "datetime": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "debug": {
-            "type": "object"
-          },
-          "tab-error-code": {
-            "type": "string"
-          }
-        }
-      },
-      "FieldBase": {
-        "type": "object",
-        "description": "Common properties of a field. A field represents a column of data in a published data source.",
-        "required": [
-          "fieldCaption"
-        ],
-        "properties": {
-          "fieldCaption": {
-            "type": "string",
-            "description": "Either the name of a specific Field in the data source, or, in the case of a calculation, a user-supplied name for the calculation."
-          },
-          "fieldAlias": {
-            "type": "string",
-            "description": "An alternative name to give the field. Will only be used in object format output."
-          },
-          "maxDecimalPlaces": {
-            "type": "integer",
-            "description": "The maximum number of decimal places. Any trailing 0s will be dropped. The maxDecimalPlaces value must be greater or equal to 0."
-          },
-          "sortDirection": {
-            "$ref": "#/components/schemas/SortDirection"
-          },
-          "sortPriority": {
-            "type": "integer",
-            "description": "To enable sorting on a specific Field, provide a sortPriority for that field, and that field will be sorted. The sortPriority provides a ranking of how to sort fields when multiple fields are being sorted. The highest priority (lowest number) field is sorted first. If only one field is being sorted, then any value may be used for sortPriority. SortPriority should be an integer greater than 0."
-          }
-        }
-      },
-      "Field": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/DimensionField"
-          },
-          {
-            "$ref": "#/components/schemas/MeasureField"
-          },
-          {
-            "$ref": "#/components/schemas/CalculatedField"
-          },
-          {
-            "$ref": "#/components/schemas/BinField"
-          },
-          {
-            "$ref": "#/components/schemas/TableCalcField"
-          }
-        ]
-      },
-      "DimensionField": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/FieldBase"
-          }
-        ],
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "fieldCaption": {},
-          "fieldAlias": {},
-          "maxDecimalPlaces": {},
-          "sortDirection": {},
-          "sortPriority": {}
-        }
-      },
-      "MeasureField": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/FieldBase"
-          }
-        ],
-        "type": "object",
-        "required": [
-          "function"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "function": {
-            "$ref": "#/components/schemas/Function"
-          },
-          "fieldCaption": {},
-          "fieldAlias": {},
-          "maxDecimalPlaces": {},
-          "sortDirection": {},
-          "sortPriority": {}
-        }
-      },
-      "CalculatedField": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/FieldBase"
-          }
-        ],
-        "type": "object",
-        "required": [
-          "calculation"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "calculation": {
-            "type": "string",
-            "description": "A Tableau calculation expression. Supports aggregation functions (SUM, AVG, COUNT, COUNTD, MIN, MAX, MEDIAN, STDEV, VAR) and LOD expressions (FIXED, INCLUDE, EXCLUDE). Examples: 'SUM([Sales])', '{FIXED [Category] : SUM([Sales])}', '{INCLUDE [Product] : COUNTD([Customer])}', '{EXCLUDE [Region] : AVG([Profit])}'."
-          },
-          "fieldCaption": {},
-          "fieldAlias": {},
-          "maxDecimalPlaces": {},
-          "sortDirection": {},
-          "sortPriority": {}
-        }
-      },
-      "BinField": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/FieldBase"
-          }
-        ],
-        "type": "object",
-        "required": [
-          "binSize"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "binSize": {
-            "type": "number",
-            "description": "The size of the bin to be applied."
-          },
-          "fieldCaption": {},
-          "fieldAlias": {},
-          "maxDecimalPlaces": {},
-          "sortDirection": {},
-          "sortPriority": {}
-        }
-      },
-      "TableCalcField": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/FieldBase"
-          }
-        ],
-        "type": "object",
-        "description": "A field with table calculation. Use tableCalcType 'CUSTOM' with calculation string for window functions like WINDOW_SUM, WINDOW_AVG, RANK, INDEX, LOOKUP, FIRST, LAST, SIZE, RUNNING_SUM. Example: {fieldCaption: 'window_sum', calculation: 'WINDOW_SUM(SUM([Sales]))', tableCalculation: {tableCalcType: 'CUSTOM', dimensions: [{fieldCaption: 'Category'}]}}",
-        "required": [
-          "tableCalculation"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "function": {
-            "$ref": "#/components/schemas/Function"
-          },
-          "calculation": {
-            "type": "string",
-            "description": "For CUSTOM tableCalcType, use Tableau window functions: WINDOW_SUM(expr), WINDOW_AVG(expr, start, end), RANK(expr), INDEX(), LOOKUP(expr, offset), FIRST(), LAST(), SIZE(), RUNNING_SUM(expr), RUNNING_AVG(expr)."
-          },
-          "tableCalculation": {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          },
-          "nestedTableCalculations": {
-            "type": "array",
-            "nullable": true,
-            "items": {
-              "$ref": "#/components/schemas/TableCalcSpecification"
-            }
-          },
-          "fieldCaption": {},
-          "fieldAlias": {},
-          "maxDecimalPlaces": {},
-          "sortDirection": {},
-          "sortPriority": {}
-        }
-      },
-      "TableCalcSpecification": {
-        "type": "object",
-        "description": "Table calculation specification. Use CUSTOM type for window functions (WINDOW_SUM, RANK, INDEX, etc.) with calculation string. Use predefined types (RUNNING_TOTAL, PERCENT_OF_TOTAL, etc.) for built-in calculations.",
-        "required": [
-          "tableCalcType",
-          "dimensions"
-        ],
-        "properties": {
-          "tableCalcType": {
-            "type": "string",
-            "description": "CUSTOM: Use with calculation string for window functions. RUNNING_TOTAL: Running sum/avg/min/max. PERCENT_OF_TOTAL: Percentage of total. DIFFERENCE_FROM/PERCENT_DIFFERENCE_FROM: Compare to previous/next/first/last. RANK: Ranking. PERCENTILE: Percentile ranking. MOVING_CALCULATION: Moving average/sum.",
-            "enum": [
-              "CUSTOM",
-              "NESTED",
-              "DIFFERENCE_FROM",
-              "PERCENT_DIFFERENCE_FROM",
-              "PERCENT_FROM",
-              "PERCENT_OF_TOTAL",
-              "RANK",
-              "PERCENTILE",
-              "RUNNING_TOTAL",
-              "MOVING_CALCULATION"
-            ]
-          },
-          "dimensions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TableCalcFieldReference"
-            }
-          }
-        },
-        "discriminator": {
-          "propertyName": "tableCalcType",
-          "mapping": {
-            "CUSTOM": "#/components/schemas/CustomTableCalcSpecification",
-            "NESTED": "#/components/schemas/NestedTableCalcSpecification",
-            "DIFFERENCE_FROM": "#/components/schemas/DifferenceTableCalcSpecification",
-            "PERCENT_DIFFERENCE_FROM": "#/components/schemas/DifferenceTableCalcSpecification",
-            "PERCENT_FROM": "#/components/schemas/DifferenceTableCalcSpecification",
-            "PERCENT_OF_TOTAL": "#/components/schemas/PercentOfTotalTableCalcSpecification",
-            "RANK": "#/components/schemas/RankTableCalcSpecification",
-            "PERCENTILE": "#/components/schemas/PercentileTableCalcSpecification",
-            "RUNNING_TOTAL": "#/components/schemas/RunningTotalTableCalcSpecification",
-            "MOVING_CALCULATION": "#/components/schemas/MovingTableCalcSpecification"
-          }
-        }
-      },
-      "CustomTableCalcSpecification": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        ],
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "levelAddress": {
-            "$ref": "#/components/schemas/TableCalcFieldReference"
-          },
-          "restartEvery": {
-            "$ref": "#/components/schemas/TableCalcFieldReference"
-          },
-          "customSort": {
-            "$ref": "#/components/schemas/TableCalcCustomSort"
-          }
-        }
-      },
-      "NestedTableCalcSpecification": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        ],
-        "type": "object",
-        "required": [
-          "fieldCaption"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "fieldCaption": {
-            "type": "string"
-          },
-          "levelAddress": {
-            "$ref": "#/components/schemas/TableCalcFieldReference"
-          },
-          "restartEvery": {
-            "$ref": "#/components/schemas/TableCalcFieldReference"
-          },
-          "customSort": {
-            "$ref": "#/components/schemas/TableCalcCustomSort"
-          }
-        }
-      },
-      "DifferenceTableCalcSpecification": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        ],
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "levelAddress": {
-            "$ref": "#/components/schemas/TableCalcFieldReference"
-          },
-          "relativeTo": {
-            "type": "string",
-            "default": "PREVIOUS",
-            "enum": [
-              "PREVIOUS",
-              "NEXT",
-              "FIRST",
-              "LAST"
-            ]
-          },
-          "customSort": {
-            "$ref": "#/components/schemas/TableCalcCustomSort"
-          }
-        }
-      },
-      "PercentOfTotalTableCalcSpecification": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        ],
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "levelAddress": {
-            "$ref": "#/components/schemas/TableCalcFieldReference"
-          },
-          "customSort": {
-            "$ref": "#/components/schemas/TableCalcCustomSort"
-          }
-        }
-      },
-      "RankTableCalcSpecification": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        ],
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "rankType": {
-            "type": "string",
-            "default": "COMPETITION",
-            "enum": [
-              "COMPETITION",
-              "MODIFIED COMPETITION",
-              "DENSE",
-              "UNIQUE"
-            ]
-          },
-          "direction": {
-            "$ref": "#/components/schemas/SortDirection"
-          }
-        }
-      },
-      "PercentileTableCalcSpecification": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        ],
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "direction": {
-            "$ref": "#/components/schemas/SortDirection"
-          }
-        }
-      },
-      "RunningTotalTableCalcSpecification": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        ],
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "aggregation": {
-            "$ref": "#/components/schemas/TableCalcComputedAggregation"
-          },
-          "restartEvery": {
-            "$ref": "#/components/schemas/TableCalcFieldReference"
-          },
-          "customSort": {
-            "$ref": "#/components/schemas/TableCalcCustomSort"
-          },
-          "secondaryTableCalculation": {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        }
-      },
-      "MovingTableCalcSpecification": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        ],
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "aggregation": {
-            "$ref": "#/components/schemas/TableCalcComputedAggregation"
-          },
-          "previous": {
-            "type": "integer",
-            "default": -2
-          },
-          "next": {
-            "type": "integer",
-            "default": 0
-          },
-          "includeCurrent": {
-            "type": "boolean",
-            "default": true
-          },
-          "fillInNull": {
-            "type": "boolean",
-            "default": false
-          },
-          "customSort": {
-            "$ref": "#/components/schemas/TableCalcCustomSort"
-          },
-          "secondaryTableCalculation": {
-            "$ref": "#/components/schemas/TableCalcSpecification"
-          }
-        }
-      },
-      "TableCalcComputedAggregation": {
-        "type": "string",
-        "default": "SUM",
-        "enum": [
-          "SUM",
-          "AVG",
-          "MIN",
-          "MAX"
-        ]
-      },
-      "TableCalcFieldReference": {
-        "type": "object",
-        "required": [
-          "fieldCaption"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "fieldCaption": {
-            "type": "string"
-          },
-          "function": {
-            "$ref": "#/components/schemas/Function"
-          }
-        }
-      },
-      "TableCalcCustomSort": {
-        "type": "object",
-        "required": [
-          "fieldCaption",
-          "function",
-          "direction"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "fieldCaption": {
-            "type": "string"
-          },
-          "function": {
-            "$ref": "#/components/schemas/Function"
-          },
-          "direction": {
-            "$ref": "#/components/schemas/SortDirection"
-          }
-        }
-      },
-      "FieldMetadata": {
-        "type": "object",
-        "description": "Describes a field in the data source that can be used to create queries.",
-        "properties": {
-          "fieldName": {
-            "type": "string",
-            "description": "The underlying database column name for the field."
-          },
-          "fieldCaption": {
-            "type": "string",
-            "description": "The caption of the field saved in the PDS."
-          },
-          "dataType": {
-            "$ref": "#/components/schemas/DataType",
-            "description": "Data type of the column, i.e., \"STRING\", \"BOOLEAN\", etc."
-          },
-          "defaultAggregation": {
-            "$ref": "#/components/schemas/Function",
-            "description": "The default aggregation applied to the field."
-          },
-          "columnClass": {
-            "enum": [
-              "COLUMN",
-              "BIN",
-              "GROUP",
-              "CALCULATION",
-              "TABLE_CALCULATION"
-            ],
-            "description": "The type of field, i.e., \"COLUMN\", \"GROUP\", BIN\" etc."
-          },
-          "formula": {
-            "type": "string",
-            "description": "The formula for this field if it is a calculation."
-          },
-          "logicalTableId": {
-            "type": "string",
-            "description": "An internal unique identifier for the logical table that this field originates from."
-          }
-        }
-      },
-      "DataType": {
-        "type": "string",
-        "enum": [
-          "INTEGER",
-          "REAL",
-          "STRING",
-          "DATETIME",
-          "BOOLEAN",
-          "DATE",
-          "SPATIAL",
-          "UNKNOWN"
-        ]
-      },
-      "Connection": {
-        "type": "object",
-        "required": [
-          "connectionUsername",
-          "connectionPassword"
-        ],
-        "properties": {
-          "connectionLuid": {
-            "type": "string"
-          },
-          "connectionUsername": {
-            "type": "string"
-          },
-          "connectionPassword": {
-            "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "Datasource": {
-        "type": "object",
-        "required": [
-          "datasourceLuid"
-        ],
-        "properties": {
-          "datasourceLuid": {
-            "type": "string",
-            "description": "The LUID of the data source to be queried."
-          },
-          "connections": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Connection"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
-      "Filter": {
-        "type": "object",
-        "description": "A filter to be used in the query to filter on the data source.",
-        "required": [
-          "field",
-          "filterType"
-        ],
-        "properties": {
-          "field": {
-            "$ref": "#/components/schemas/FilterField"
-          },
-          "filterType": {
-            "type": "string",
-            "enum": [
-              "QUANTITATIVE_DATE",
-              "QUANTITATIVE_NUMERICAL",
-              "SET",
-              "MATCH",
-              "DATE",
-              "TOP"
-            ]
-          },
-          "context": {
-            "type": "boolean",
-            "description": "Make the given filter a context filter, meaning that it's an independent filter. Any other filters that you set are defined as dependent filters because they process only the data that passes through the context filter.",
-            "default": false
-          }
-        },
-        "discriminator": {
-          "propertyName": "filterType",
-          "mapping": {
-            "QUANTITATIVE_DATE": "#/components/schemas/QuantitativeDateFilter",
-            "QUANTITATIVE_NUMERICAL": "#/components/schemas/QuantitativeNumericalFilter",
-            "SET": "#/components/schemas/SetFilter",
-            "MATCH": "#/components/schemas/MatchFilter",
-            "DATE": "#/components/schemas/RelativeDateFilter",
-            "TOP": "#/components/schemas/TopNFilter"
-          }
-        }
-      },
-      "FilterField": {
-        "oneOf": [
-          {
-            "$ref": "#/components/schemas/DimensionFilterField"
-          },
-          {
-            "$ref": "#/components/schemas/MeasureFilterField"
-          },
-          {
-            "$ref": "#/components/schemas/CalculatedFilterField"
-          }
-        ]
-      },
-      "DimensionFilterField": {
-        "required": [
-          "fieldCaption"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "fieldCaption": {
-            "type": "string",
-            "description": "The caption of the field to filter on."
-          }
-        }
-      },
-      "MeasureFilterField": {
-        "required": [
-          "fieldCaption",
-          "function"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "fieldCaption": {
-            "type": "string",
-            "description": "The caption of the field to filter on."
-          },
-          "function": {
-            "$ref": "#/components/schemas/Function"
-          }
-        }
-      },
-      "CalculatedFilterField": {
-        "required": [
-          "calculation"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "calculation": {
-            "type": "string",
-            "description": "A Tableau calculation that will be used to filter on."
-          }
-        }
-      },
-      "Function": {
-        "type": "string",
-        "description": "The standard set of Tableau aggregations which can be applied to a field.",
-        "enum": [
-          "SUM",
-          "AVG",
-          "MEDIAN",
-          "COUNT",
-          "COUNTD",
-          "MIN",
-          "MAX",
-          "STDEV",
-          "VAR",
-          "COLLECT",
-          "YEAR",
-          "QUARTER",
-          "MONTH",
-          "WEEK",
-          "DAY",
-          "TRUNC_YEAR",
-          "TRUNC_QUARTER",
-          "TRUNC_MONTH",
-          "TRUNC_WEEK",
-          "TRUNC_DAY",
-          "AGG",
-          "NONE",
-          "UNSPECIFIED"
-        ]
-      },
-      "MatchFilter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Filter"
-          },
-          {
-            "type": "object",
-            "description": "A filter that can be used to match against string fields.",
-            "properties": {
-              "contains": {
-                "type": "string",
-                "description": "Matches when a field contains this value."
-              },
-              "startsWith": {
-                "type": "string",
-                "description": "Matches when a field starts with this value."
-              },
-              "endsWith": {
-                "type": "string",
-                "description": "Matches when a field ends with this value."
-              },
-              "exclude": {
-                "type": "boolean",
-                "description": "When true, the inverse of the matching logic will be used.",
-                "default": false
-              }
-            }
-          }
-        ]
-      },
-      "MetadataOutput": {
-        "type": "object",
-        "properties": {
-          "data": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/FieldMetadata"
-            }
-          },
-          "extraData": {
-            "type": "object",
-            "properties": {
-              "parameters": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/ParameterRecord"
-                }
-              }
-            }
-          }
-        }
-      },
-      "QuantitativeFilterBase": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Filter"
-          },
-          {
-            "type": "object",
-            "required": [
-              "quantitativeFilterType"
-            ],
-            "properties": {
-              "quantitativeFilterType": {
-                "type": "string",
-                "enum": [
-                  "RANGE",
-                  "MIN",
-                  "MAX",
-                  "ONLY_NULL",
-                  "ONLY_NON_NULL"
-                ]
-              },
-              "includeNulls": {
-                "type": "boolean",
-                "description": "Should nulls be returned or not. Only applies to RANGE, MIN, and MAX filters. If not provided, the default is to not include null values."
-              }
-            }
-          }
-        ]
-      },
-      "QuantitativeNumericalFilter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/QuantitativeFilterBase"
-          }
-        ],
-        "type": "object",
-        "description": "A filter that can be used to find the minimum, maximum, or range of numerical values of a field.",
-        "properties": {
-          "min": {
-            "type": "number",
-            "description": "A numerical value, either integer or floating point, indicating the minimum value to filter upon. Required if using quantitativeFilterType RANGE or if using quantitativeFilterType MIN."
-          },
-          "max": {
-            "type": "number",
-            "description": "A numerical value, either integer or floating point, indicating the maximum value to filter upon. Required if using quantitativeFilterType RANGE or if using quantitativeFilterType MIN."
-          }
-        }
-      },
-      "QuantitativeDateFilter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/QuantitativeFilterBase"
-          }
-        ],
-        "type": "object",
-        "description": "A filter that can be used to find the minimum, maximum, or range of date values of a field.",
-        "properties": {
-          "minDate": {
-            "type": "string",
-            "format": "date",
-            "description": "An RFC 3339 date indicating the earliest date to filter upon. Required if using quantitativeFilterType RANGE or if using quantitativeFilterType MIN."
-          },
-          "maxDate": {
-            "type": "string",
-            "format": "date",
-            "description": "An RFC 3339 date indicating the latest date to filter on. Required if using quantitativeFilterType RANGE or if using quantitativeFilterType MIN."
-          }
-        }
-      },
-      "Query": {
-        "description": "The query is the fundamental interface to the VizQL Data Service. It holds the specific semantics to perform against the data source. A query consists of an array of fields to query against, and an optional array of filters to apply to the query.",
-        "required": [
-          "fields"
-        ],
-        "type": "object",
-        "properties": {
-          "fields": {
-            "description": "An array of fields that define the query.",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Field"
-            }
-          },
-          "filters": {
-            "description": "An optional array of filters to apply to the query.",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Filter"
-            }
-          },
-          "parameters": {
-            "description": "An optional array of parameters to apply to the query.",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Parameter"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
-      "QueryDatasourceOptions": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/QueryOptions"
-          },
-          {
-            "type": "object",
-            "description": "Some optional metadata that can be used to adjust the behavior of a data source query.",
-            "properties": {
-              "disaggregate": {
-                "type": "boolean",
-                "default": false
-              },
-              "returnFormat": {
-                "$ref": "#/components/schemas/ReturnFormat"
-              }
-            }
-          }
-        ]
-      },
-      "QueryOptions": {
-        "type": "object",
-        "description": "Some optional metadata that can be used to adjust the behavior of an endpoint.",
-        "properties": {
-          "debug": {
-            "type": "boolean",
-            "default": false
-          },
-          "bypassMetadataCache": {
-            "type": "boolean",
-            "default": false
-          },
-          "interpretFieldCaptionsAsFieldNames": {
-            "type": "boolean",
-            "default": false,
-            "description": "When true, user will pass in the Field's fieldName instead of the Field's fieldCaption in every place that fieldCaption appears (in Fields, Filters, and Calculation formulas). See FieldMetadata of the read-metadata endpoint."
-          }
-        }
-      },
-      "QueryOutput": {
-        "type": "object",
-        "properties": {
-          "data": {
-            "type": "array",
-            "items": {}
-          }
-        }
-      },
-      "QueryRequest": {
-        "type": "object",
-        "required": [
-          "datasource",
-          "query"
-        ],
-        "properties": {
-          "datasource": {
-            "$ref": "#/components/schemas/Datasource"
-          },
-          "query": {
-            "$ref": "#/components/schemas/Query"
-          },
-          "options": {
-            "$ref": "#/components/schemas/QueryDatasourceOptions"
-          }
-        }
-      },
-      "ReadMetadataRequest": {
-        "type": "object",
-        "required": [
-          "datasource"
-        ],
-        "properties": {
-          "datasource": {
-            "$ref": "#/components/schemas/Datasource"
-          },
-          "options": {
-            "$ref": "#/components/schemas/QueryOptions"
-          }
-        }
-      },
-      "ReturnFormat": {
-        "type": "string",
-        "enum": [
-          "OBJECTS",
-          "ARRAYS"
-        ]
-      },
-      "SetFilter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Filter"
-          }
-        ],
-        "type": "object",
-        "description": "A filter that can be used to filter on a specific set of values of a field.",
-        "required": [
-          "values"
-        ],
-        "properties": {
-          "values": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NullableAny"
             },
-            "description": "An array of values to filter on."
-          },
-          "exclude": {
-            "type": "boolean",
-            "default": false
-          }
-        }
-      },
-      "SortDirection": {
-        "type": "string",
-        "description": "The direction of the sort, either ascending or descending. If not supplied, the default is ascending.",
-        "enum": [
-          "ASC",
-          "DESC"
-        ]
-      },
-      "PeriodType": {
-        "type": "string",
-        "description": "The units of time in the date range.",
-        "enum": [
-          "MINUTES",
-          "HOURS",
-          "DAYS",
-          "WEEKS",
-          "MONTHS",
-          "QUARTERS",
-          "YEARS"
-        ]
-      },
-      "RelativeDateFilter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Filter"
-          },
-          {
-            "type": "object",
-            "description": "A filter that can be used to filter on dates using a specific anchor and fields that specify a relative date range to that anchor.",
-            "required": [
-              "periodType",
-              "dateRangeType"
-            ],
-            "properties": {
-              "periodType": {
-                "$ref": "#/components/schemas/PeriodType"
-              },
-              "dateRangeType": {
-                "type": "string",
-                "description": "The direction in the relative date range.",
-                "enum": [
-                  "CURRENT",
-                  "LAST",
-                  "LASTN",
-                  "NEXT",
-                  "NEXTN",
-                  "TODATE"
-                ]
-              },
-              "rangeN": {
-                "type": "integer",
-                "description": "When dateRangeType is LASTN or NEXTN, this is the N value (how many years, months, etc.)."
-              },
-              "anchorDate": {
-                "type": "string",
-                "format": "date",
-                "description": "If a value for this field isn't provided, the value defaults to today."
-              },
-              "includeNulls": {
-                "type": "boolean",
-                "description": "Should nulls be returned or not. If a value isn't provided, the default is to not include null values."
-              }
+            "responses": {
+                "200": {
+                    "description": "200 response",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/QueryOutput"
+                            }
+                        },
+                        "text/event-stream": {
+                            "schema": {
+                                "$ref": "#/components/schemas/SseResultStream"
+                            }
+                        }
+                    }
+                },
+                "default": {
+                    "description": "Unexpected error",
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/TableauError"
+                            }
+                        }
+                    }
+                }
             }
-          }
-        ]
-      },
-      "TopNFilter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Filter"
-          },
-          {
-            "type": "object",
-            "description": "A filter that can be used to find the top or bottom number of fields relative to the values in the fieldToMeasure",
-            "required": [
-              "howMany",
-              "fieldToMeasure"
-            ],
-            "properties": {
-              "direction": {
-                "type": "string",
-                "enum": [
-                  "TOP",
-                  "BOTTOM"
-                ],
-                "default": "TOP",
-                "description": "Top (ascending) or Bottom (descending) N."
-              },
-              "howMany": {
-                "type": "integer",
-                "description": "The number of values from the top or the bottom of the given fieldToMeasure."
-              },
-              "fieldToMeasure": {
-                "$ref": "#/components/schemas/FilterField"
-              }
-            }
-          }
-        ]
-      },
-      "Parameter": {
-        "type": "object",
-        "description": "Use Parameters to override the default value of an existing parameter on the published datasource.",
-        "required": [
-          "parameterCaption",
-          "value"
-        ],
-        "properties": {
-          "parameterCaption": {
-            "type": "string",
-            "description": "The caption of the parameter to set."
-          },
-          "value": {
-            "description": "The value to set for the parameter. The type of the value must match the type of the parameter."
-          }
-        }
-      },
-      "NullableAny": {
-        "nullable": true
-      },
-      "AnyValueParameter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/ParameterRecord"
-          }
-        ],
-        "type": "object",
-        "description": "A parameter that accepts any value of the specified data type.",
-        "additionalProperties": false
-      },
-      "ListParameter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/ParameterRecord"
-          }
-        ],
-        "type": "object",
-        "description": "A parameter constrained to a predefined list of allowable values.",
-        "additionalProperties": false,
-        "properties": {
-          "members": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/NullableAny"
-            }
-          }
-        }
-      },
-      "QuantitativeRangeParameter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/ParameterRecord"
-          }
-        ],
-        "type": "object",
-        "description": "A parameter with minimum and maximum numeric value constraints.",
-        "additionalProperties": false,
-        "properties": {
-          "min": {
-            "type": "number",
-            "description": "The minimum allowable value for this range parameter. Parameter values must be greater than or equal to this value."
-          },
-          "max": {
-            "type": "number",
-            "description": "The maximum allowable value for this range parameter. Parameter values must be less than or equal to this value."
-          },
-          "step": {
-            "type": "number",
-            "description": "The increment step size for values within the numeric range. Defines the granularity of allowed values between min and max."
-          }
-        }
-      },
-      "QuantitativeDateParameter": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/ParameterRecord"
-          }
-        ],
-        "type": "object",
-        "description": "A parameter with minimum and maximum date value constraints.",
-        "additionalProperties": false,
-        "properties": {
-          "minDate": {
-            "type": "string",
-            "description": "An RFC 3339 date indicating the earliest allowable date for this parameter."
-          },
-          "maxDate": {
-            "type": "string",
-            "description": "An RFC 3339 date indicating the latest allowable date for this parameter."
-          },
-          "periodType": {
-            "$ref": "#/components/schemas/PeriodType"
-          },
-          "periodValue": {
-            "type": "number",
-            "description": "The numeric value associated with the period type for date granularity."
-          }
-        }
-      },
-      "ParameterRecord": {
-        "type": "object",
-        "description": "Common properties of a parameter. A parameter is a workbook variable such as a number, date, or string that can replace a constant value in a calculation, filter, or reference line.",
-        "required": [
-          "parameterType",
-          "parameterCaption",
-          "value",
-          "dataType"
-        ],
-        "properties": {
-          "parameterType": {
-            "type": "string",
-            "enum": [
-              "ANY_VALUE",
-              "LIST",
-              "QUANTITATIVE_RANGE",
-              "QUANTITATIVE_DATE"
-            ]
-          },
-          "parameterName": {
-            "type": "string",
-            "description": "The tableau internal name of the parameter to identify and reference the parameter."
-          },
-          "parameterCaption": {
-            "type": "string",
-            "description": "The user defined name of the parameter to identify and reference the parameter."
-          },
-          "dataType": {
-            "$ref": "#/components/schemas/DataType"
-          },
-          "value": {
-            "description": "The value to set for the parameter. The type of the value must match the type of the parameter."
           }
         },
-        "discriminator": {
-          "propertyName": "parameterType",
-          "mapping": {
-            "ANY_VALUE": "#/components/schemas/AnyValueParameter",
-            "LIST": "#/components/schemas/ListParameter",
-            "QUANTITATIVE_RANGE": "#/components/schemas/QuantitativeRangeParameter",
-            "QUANTITATIVE_DATE": "#/components/schemas/QuantitativeDateParameter"
-          }
+        "/simple-request": {
+            "get": {
+                "tags": ["HeadlessBI"],
+                "operationId": "SimpleRequest",
+                "summary": "Send a simple request",
+                "description": "Sends a request that can be used for testing or doing a health check.",
+                "security": [],
+                "responses": {
+                    "200": {
+                        "description": "200 response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/get-datasource-model": {
+            "post": {
+                "tags": ["HeadlessBI"],
+                "operationId": "GetDatasourceModel",
+                "summary": "Request data source model",
+                "description": "Requests the data model for a specific data source. The data model provides information about the structure and relationships in the data source.",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/GetDatasourceModelRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "200 response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/DatasourceModelOutput"
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Unexpected error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TableauError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/list-supported-functions": {
+            "post": {
+                "tags": ["HeadlessBI"],
+                "operationId": "ListSupportedFunctions",
+                "summary": "List supported Tableau functions for a datasource",
+                "description": "Returns the list of Tableau function names supported for the specified datasource. The 200 response is an array of strings. Example response: [\"SUM\", \"AVG\", \"MIN\", \"MAX\"].",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/ListSupportedFunctionRequest"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "List of supported function object for the datasource",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/SupportedFunction"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "default": {
+                        "description": "Unexpected error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/TableauError"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
-      },
-      "GetDatasourceModelRequest": {
-        "type": "object",
-        "required": [
-          "datasource"
-        ],
-        "properties": {
-          "datasource": {
-            "$ref": "#/components/schemas/Datasource"
-          },
-          "options": {
-            "$ref": "#/components/schemas/QueryOptions"
-          }
-        }
-      },
-      "DatasourceModelOutput": {
-        "type": "object",
-        "properties": {
-          "logicalTables": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LogicalTable"
-            }
-          },
-          "logicalTableRelationships": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/LogicalTableRelationship"
-            }
-          }
-        }
-      },
-      "LogicalTable": {
-        "type": "object",
-        "required": [
-          "logicalTableId",
-          "caption"
-        ],
-        "properties": {
-          "logicalTableId": {
-            "type": "string"
-          },
-          "caption": {
-            "type": "string"
-          }
-        }
-      },
-      "LogicalTableRelationship": {
-        "type": "object",
-        "required": [
-          "fromLogicalTable",
-          "toLogicalTable"
-        ],
-        "properties": {
-          "fromLogicalTable": {
-            "$ref": "#/components/schemas/LogicalTableRelationshipEndpoint"
-          },
-          "toLogicalTable": {
-            "$ref": "#/components/schemas/LogicalTableRelationshipEndpoint"
-          }
-        }
-      },
-      "LogicalTableRelationshipEndpoint": {
-        "type": "object",
-        "required": [
-          "logicalTableId"
-        ],
-        "properties": {
-          "logicalTableId": {
-            "type": "string"
-          }
-        }
-      },
-      "TableCalculationFunctionReference": {
-        "type": "object",
-        "description": "Complete Tableau table calculation function reference. All functions must be used in TableCalcField with tableCalcType set to CUSTOM.",
-        "properties": {
-          "position_functions": {
-            "$ref": "#/components/schemas/PositionFunctions"
-          },
-          "lookup_functions": {
-            "$ref": "#/components/schemas/LookupFunctions"
-          },
-          "running_functions": {
-            "$ref": "#/components/schemas/RunningFunctions"
-          },
-          "window_functions": {
-            "$ref": "#/components/schemas/WindowFunctions"
-          },
-          "rank_functions": {
-            "$ref": "#/components/schemas/RankFunctions"
-          },
-          "total_function": {
-            "$ref": "#/components/schemas/TotalFunction"
-          }
-        }
-      },
-      "PositionFunctions": {
-        "type": "object",
-        "description": "Position functions - Return row position information within partition, no parameters required",
-        "properties": {
-          "FIRST": {
-            "type": "object",
-            "description": "Returns rows from current to first row in partition. First row=0, second=-1, always<=0",
-            "properties": {
-              "syntax": { "type": "string", "const": "FIRST()" },
-              "parameters": { "type": "array", "maxItems": 0 },
-              "returns": { "type": "string", "const": "integer" },
-              "example": { "type": "string", "example": "IF FIRST() = 0 THEN 'First' ELSE 'Other' END" }
-            }
-          },
-          "LAST": {
-            "type": "object",
-            "description": "Returns rows from current to last row in partition. Last row=0, second-to-last=1, always>=0",
-            "properties": {
-              "syntax": { "type": "string", "const": "LAST()" },
-              "parameters": { "type": "array", "maxItems": 0 },
-              "returns": { "type": "string", "const": "integer" },
-              "example": { "type": "string", "example": "IF LAST() = 0 THEN 'Last' ELSE 'Other' END" }
-            }
-          },
-          "INDEX": {
-            "type": "object",
-            "description": "Returns current row index in partition, starting from 1. First row=1, second=2",
-            "properties": {
-              "syntax": { "type": "string", "const": "INDEX()" },
-              "parameters": { "type": "array", "maxItems": 0 },
-              "returns": { "type": "string", "const": "integer" },
-              "example": { "type": "string", "example": "IF INDEX() <= 10 THEN 'Top 10' ELSE 'Other' END" }
-            }
-          },
-          "SIZE": {
-            "type": "object",
-            "description": "Returns total rows in partition, same value for all rows",
-            "properties": {
-              "syntax": { "type": "string", "const": "SIZE()" },
-              "parameters": { "type": "array", "maxItems": 0 },
-              "returns": { "type": "string", "const": "integer" },
-              "example": { "type": "string", "example": "INDEX() & ' / ' & SIZE()" }
-            }
-          }
-        }
-      },
-      "LookupFunctions": {
-        "type": "object",
-        "description": "Lookup functions - Get values from other rows",
-        "properties": {
-          "LOOKUP": {
-            "type": "object",
-            "description": "Returns expression value at specified row offset from current row. Returns NULL if target row does not exist",
-            "properties": {
-              "syntax": { "type": "string", "const": "LOOKUP(expression, offset)" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression to lookup, e.g. SUM([Sales])" },
-                  { "name": "offset", "type": "integer", "required": true, "description": "Relative offset: -1=previous row, 1=next row, 0=current row" }
-                ]
-              },
-              "returns": { "type": "string", "const": "Same type as expression" },
-              "null_handling": { "type": "string", "const": "Returns NULL if target row does not exist" },
-              "examples": {
-                "type": "array",
-                "items": [
-                  { "code": "LOOKUP(SUM([Sales]), -1)", "description": "Get previous row sales" },
-                  { "code": "LOOKUP(SUM([Sales]), 1)", "description": "Get next row sales" },
-                  { "code": "LOOKUP(SUM([Sales]), FIRST())", "description": "Get first row sales" },
-                  { "code": "SUM([Sales]) - LOOKUP(SUM([Sales]), -1)", "description": "Period-over-period difference" }
-                ]
-              }
-            }
-          },
-          "PREVIOUS_VALUE": {
-            "type": "object",
-            "description": "Returns previous row calculation result for recursive calculations. First row returns parameter value",
-            "properties": {
-              "syntax": { "type": "string", "const": "PREVIOUS_VALUE(expression)" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression", "type": "any", "required": true, "description": "Initial value for first row, subsequent rows use previous row calculation result" }
-                ]
-              },
-              "returns": { "type": "string", "const": "Same type as expression" },
-              "examples": {
-                "type": "array",
-                "items": [
-                  { "code": "PREVIOUS_VALUE(0) + SUM([Sales])", "description": "Recursive cumulative sum" },
-                  { "code": "PREVIOUS_VALUE(1) * (1 + [Growth Rate])", "description": "Compound growth calculation" }
-                ]
-              }
-            }
-          }
-        }
-      },
-      "RunningFunctions": {
-        "type": "object",
-        "description": "Running functions - Cumulative calculations from first row to current row",
-        "properties": {
-          "RUNNING_SUM": {
-            "type": "object",
-            "description": "Returns cumulative sum from first row to current row",
-            "properties": {
-              "syntax": { "type": "string", "const": "RUNNING_SUM(expression)" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression for cumulative sum" }
-                ]
-              },
-              "returns": { "type": "string", "const": "number" },
-              "example": { "type": "string", "example": "RUNNING_SUM(SUM([Sales]))" },
-              "sample_output": { "input": [100, 200, 150], "output": [100, 300, 450] }
-            }
-          },
-          "RUNNING_AVG": {
-            "type": "object",
-            "description": "Returns cumulative average from first row to current row",
-            "properties": {
-              "syntax": { "type": "string", "const": "RUNNING_AVG(expression)" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression", "type": "aggregate", "required": true }
-                ]
-              },
-              "returns": { "type": "string", "const": "number" },
-              "example": { "type": "string", "example": "RUNNING_AVG(SUM([Sales]))" },
-              "sample_output": { "input": [100, 200, 150], "output": [100, 150, 150] }
-            }
-          },
-          "RUNNING_MIN": {
-            "type": "object",
-            "description": "Returns cumulative minimum from first row to current row",
-            "properties": {
-              "syntax": { "type": "string", "const": "RUNNING_MIN(expression)" },
-              "returns": { "type": "string", "const": "number" },
-              "example": { "type": "string", "example": "RUNNING_MIN(SUM([Sales]))" }
-            }
-          },
-          "RUNNING_MAX": {
-            "type": "object",
-            "description": "Returns cumulative maximum from first row to current row",
-            "properties": {
-              "syntax": { "type": "string", "const": "RUNNING_MAX(expression)" },
-              "returns": { "type": "string", "const": "number" },
-              "example": { "type": "string", "example": "RUNNING_MAX(SUM([Sales]))" }
-            }
-          },
-          "RUNNING_COUNT": {
-            "type": "object",
-            "description": "Returns cumulative count from first row to current row (non-null values)",
-            "properties": {
-              "syntax": { "type": "string", "const": "RUNNING_COUNT(expression)" },
-              "returns": { "type": "string", "const": "integer" },
-              "example": { "type": "string", "example": "RUNNING_COUNT(SUM([Sales]))" }
-            }
-          }
-        }
-      },
-      "WindowFunctions": {
-        "type": "object",
-        "description": "Window functions - Aggregate calculations within specified row range. start/end: negative=backward, positive=forward, 0=current, omit=entire partition",
-        "properties": {
-          "WINDOW_SUM": {
-            "type": "object",
-            "description": "Returns sum of expression values within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_SUM(expression, [start, end])" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression to sum" },
-                  { "name": "start", "type": "integer", "required": false, "default": "FIRST()", "description": "Window start offset" },
-                  { "name": "end", "type": "integer", "required": false, "default": "LAST()", "description": "Window end offset" }
-                ]
-              },
-              "returns": { "type": "string", "const": "number" },
-              "examples": {
-                "type": "array",
-                "items": [
-                  { "code": "WINDOW_SUM(SUM([Sales]))", "description": "Sum of entire partition" },
-                  { "code": "WINDOW_SUM(SUM([Sales]), -2, 0)", "description": "3-period moving sum (previous 2 rows + current)" },
-                  { "code": "WINDOW_SUM(SUM([Sales]), 0, 2)", "description": "Sum from current row to next 2 rows" }
-                ]
-              },
-              "edge_cases": { "type": "string", "const": "Window automatically truncates to partition boundary when exceeding" }
-            }
-          },
-          "WINDOW_AVG": {
-            "type": "object",
-            "description": "Returns average of expression values within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_AVG(expression, [start, end])" },
-              "returns": { "type": "string", "const": "number" },
-              "example": { "type": "string", "example": "WINDOW_AVG(SUM([Sales]), -2, 0) // 3-period moving average" }
-            }
-          },
-          "WINDOW_MIN": {
-            "type": "object",
-            "description": "Returns minimum of expression values within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_MIN(expression, [start, end])" },
-              "returns": { "type": "string", "const": "number" }
-            }
-          },
-          "WINDOW_MAX": {
-            "type": "object",
-            "description": "Returns maximum of expression values within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_MAX(expression, [start, end])" },
-              "returns": { "type": "string", "const": "number" }
-            }
-          },
-          "WINDOW_COUNT": {
-            "type": "object",
-            "description": "Returns count of non-null values within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_COUNT(expression, [start, end])" },
-              "returns": { "type": "string", "const": "integer" }
-            }
-          },
-          "WINDOW_MEDIAN": {
-            "type": "object",
-            "description": "Returns median of expression values within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_MEDIAN(expression, [start, end])" },
-              "returns": { "type": "string", "const": "number" }
-            }
-          },
-          "WINDOW_STDEV": {
-            "type": "object",
-            "description": "Returns sample standard deviation within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_STDEV(expression, [start, end])" },
-              "returns": { "type": "string", "const": "number" }
-            }
-          },
-          "WINDOW_STDEVP": {
-            "type": "object",
-            "description": "Returns population standard deviation within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_STDEVP(expression, [start, end])" },
-              "returns": { "type": "string", "const": "number" }
-            }
-          },
-          "WINDOW_VAR": {
-            "type": "object",
-            "description": "Returns sample variance within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_VAR(expression, [start, end])" },
-              "returns": { "type": "string", "const": "number" }
-            }
-          },
-          "WINDOW_VARP": {
-            "type": "object",
-            "description": "Returns population variance within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_VARP(expression, [start, end])" },
-              "returns": { "type": "string", "const": "number" }
-            }
-          },
-          "WINDOW_PERCENTILE": {
-            "type": "object",
-            "description": "Returns specified percentile within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_PERCENTILE(expression, percentile, [start, end])" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression", "type": "aggregate", "required": true },
-                  { "name": "percentile", "type": "number", "required": true, "description": "Percentile value 0-1, e.g. 0.5 for median" },
-                  { "name": "start", "type": "integer", "required": false },
-                  { "name": "end", "type": "integer", "required": false }
-                ]
-              },
-              "returns": { "type": "string", "const": "number" },
-              "example": { "type": "string", "example": "WINDOW_PERCENTILE(SUM([Sales]), 0.75) // 75th percentile" }
-            }
-          },
-          "WINDOW_COVAR": {
-            "type": "object",
-            "description": "Returns sample covariance of two expressions within window",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_COVAR(expression1, expression2, [start, end])" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression1", "type": "aggregate", "required": true },
-                  { "name": "expression2", "type": "aggregate", "required": true },
-                  { "name": "start", "type": "integer", "required": false },
-                  { "name": "end", "type": "integer", "required": false }
-                ]
-              },
-              "returns": { "type": "string", "const": "number" }
-            }
-          },
-          "WINDOW_CORR": {
-            "type": "object",
-            "description": "Returns Pearson correlation coefficient of two expressions within window (-1 to 1)",
-            "properties": {
-              "syntax": { "type": "string", "const": "WINDOW_CORR(expression1, expression2, [start, end])" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression1", "type": "aggregate", "required": true },
-                  { "name": "expression2", "type": "aggregate", "required": true },
-                  { "name": "start", "type": "integer", "required": false },
-                  { "name": "end", "type": "integer", "required": false }
-                ]
-              },
-              "returns": { "type": "string", "const": "number (-1 to 1)" },
-              "interpretation": { "1": "Perfect positive correlation", "0": "No correlation", "-1": "Perfect negative correlation" }
-            }
-          }
-        }
-      },
-      "RankFunctions": {
-        "type": "object",
-        "description": "Rank functions - Rank values within partition",
-        "properties": {
-          "RANK": {
-            "type": "object",
-            "description": "Competition rank - Ties get same rank, next rank skips。如 [100,80,80,60] -> [1,2,2,4]",
-            "properties": {
-              "syntax": { "type": "string", "const": "RANK(expression, ['asc'|'desc'])" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression for ranking" },
-                  { "name": "order", "type": "string", "required": false, "default": "desc", "enum": ["asc", "desc"] }
-                ]
-              },
-              "returns": { "type": "string", "const": "integer" },
-              "example": { "type": "string", "example": "RANK(SUM([Sales]), 'desc')" }
-            }
-          },
-          "RANK_DENSE": {
-            "type": "object",
-            "description": "Dense rank - Ties get same rank, next rank does not skip。如 [100,80,80,60] -> [1,2,2,3]",
-            "properties": {
-              "syntax": { "type": "string", "const": "RANK_DENSE(expression, ['asc'|'desc'])" },
-              "returns": { "type": "string", "const": "integer" },
-              "example": { "type": "string", "example": "RANK_DENSE(SUM([Sales]), 'desc')" }
-            }
-          },
-          "RANK_MODIFIED": {
-            "type": "object",
-            "description": "Modified competition rank - Ties get highest rank。如 [100,80,80,60] -> [1,3,3,4]",
-            "properties": {
-              "syntax": { "type": "string", "const": "RANK_MODIFIED(expression, ['asc'|'desc'])" },
-              "returns": { "type": "string", "const": "integer" }
-            }
-          },
-          "RANK_UNIQUE": {
-            "type": "object",
-            "description": "Unique rank - Different ranks even for ties。如 [100,80,80,60] -> [1,2,3,4]",
-            "properties": {
-              "syntax": { "type": "string", "const": "RANK_UNIQUE(expression, ['asc'|'desc'])" },
-              "returns": { "type": "string", "const": "integer" }
-            }
-          },
-          "RANK_PERCENTILE": {
-            "type": "object",
-            "description": "Percentile rank - Returns 0-1 value indicating relative position in partition",
-            "properties": {
-              "syntax": { "type": "string", "const": "RANK_PERCENTILE(expression, ['asc'|'desc'])" },
-              "returns": { "type": "string", "const": "number (0-1)" }
-            }
-          }
-        }
-      },
-      "TotalFunction": {
-        "type": "object",
-        "description": "Total function",
-        "properties": {
-          "TOTAL": {
-            "type": "object",
-            "description": "Returns total of expression for entire partition, same value for all rows. Equivalent to WINDOW_SUM(expression)",
-            "properties": {
-              "syntax": { "type": "string", "const": "TOTAL(expression)" },
-              "parameters": {
-                "type": "array",
-                "items": [
-                  { "name": "expression", "type": "aggregate", "required": true, "description": "Aggregate expression for total" }
-                ]
-              },
-              "returns": { "type": "string", "const": "number" },
-              "examples": {
-                "type": "array",
-                "items": [
-                  { "code": "SUM([Sales]) / TOTAL(SUM([Sales]))", "description": "Calculate each row as percentage of total" },
-                  { "code": "SUM([Sales]) - TOTAL(SUM([Sales])) / SIZE()", "description": "Difference from average" }
-                ]
-              }
-            }
-          }
-        }
-      },
-      "TableCalculationUsageExamples": {
-        "type": "object",
-        "description": "Table calculation usage examples - Shows how to use table calculation functions in API requests",
-        "properties": {
-          "custom_window_sum": {
-            "description": "CUSTOM type - Window sum",
-            "value": {
-              "fieldCaption": "window_sum",
-              "calculation": "WINDOW_SUM(SUM([Sales]))",
-              "tableCalculation": {
-                "tableCalcType": "CUSTOM",
-                "dimensions": [{"fieldCaption": "Category"}]
-              }
-            }
-          },
-          "custom_moving_avg": {
-            "description": "CUSTOM 类型 - 3-period moving average",
-            "value": {
-              "fieldCaption": "moving_avg_3",
-              "calculation": "WINDOW_AVG(SUM([Sales]), -2, 0)",
-              "tableCalculation": {
-                "tableCalcType": "CUSTOM",
-                "dimensions": [{"fieldCaption": "Date"}]
-              }
-            }
-          },
-          "custom_rank": {
-            "description": "CUSTOM type - Ranking",
-            "value": {
-              "fieldCaption": "sales_rank",
-              "calculation": "RANK(SUM([Sales]), 'desc')",
-              "tableCalculation": {
-                "tableCalcType": "CUSTOM",
-                "dimensions": [{"fieldCaption": "Product"}]
-              }
-            }
-          },
-          "custom_yoy_growth": {
-            "description": "CUSTOM type - Year-over-year growth rate",
-            "value": {
-              "fieldCaption": "yoy_growth",
-              "calculation": "(SUM([Sales]) - LOOKUP(SUM([Sales]), -12)) / ABS(LOOKUP(SUM([Sales]), -12))",
-              "tableCalculation": {
-                "tableCalcType": "CUSTOM",
-                "dimensions": [{"fieldCaption": "Month"}]
-              }
-            }
-          },
-          "custom_percent_of_total": {
-            "description": "CUSTOM type - Percentage calculation",
-            "value": {
-              "fieldCaption": "pct_of_total",
-              "calculation": "SUM([Sales]) / TOTAL(SUM([Sales]))",
-              "tableCalculation": {
-                "tableCalcType": "CUSTOM",
-                "dimensions": [{"fieldCaption": "Category"}]
-              }
-            }
-          },
-          "running_total_predefined": {
-            "description": "RUNNING_TOTAL predefined type",
-            "value": {
-              "fieldCaption": "cumulative_sales",
-              "calculation": "SUM([Sales])",
-              "tableCalculation": {
-                "tableCalcType": "RUNNING_TOTAL",
-                "dimensions": [{"fieldCaption": "Date"}],
-                "aggregation": "SUM"
-              }
-            }
-          },
-          "percent_of_total_predefined": {
-            "description": "PERCENT_OF_TOTAL predefined type",
-            "value": {
-              "fieldCaption": "pct_of_total",
-              "calculation": "SUM([Sales])",
-              "tableCalculation": {
-                "tableCalcType": "PERCENT_OF_TOTAL",
-                "dimensions": [{"fieldCaption": "Category"}]
-              }
-            }
-          }
-        }
-      }
     },
-    "securitySchemes": {
-      "XTableauAuth": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-Tableau-Auth"
-      }
+    "components": {
+        "schemas": {
+            "TableauError": {
+                "type": "object",
+                "x-class-extra-annotation": "@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)",
+                "properties": {
+                    "errorCode": {
+                        "type": "string"
+                    },
+                    "message": {
+                        "type": "string"
+                    },
+                    "messages": {
+                        "type": "array",
+                        "items": {
+                        }
+                    },
+                    "datetime": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "debug": {
+                        "type": "object"
+                    },
+                    "tab-error-code": {
+                        "type": "string"
+                    }
+                }
+            },
+            "FieldBase": {
+                "type": "object",
+                "description": "Common properties of a field. A field represents a column of data in a published data source.",
+                "required": [ "fieldCaption" ],
+                "properties": {
+                    "fieldCaption": {
+                        "type": "string",
+                        "description": "Either the name of a specific Field in the data source, or, in the case of a calculation, a user-supplied name for the calculation."
+                    },
+                    "fieldAlias": {
+                        "type": "string",
+                        "description": "An alternative name to give the field. Will only be used in object format output."
+                    },
+                    "maxDecimalPlaces": {
+                        "type": "integer",
+                        "description": "The maximum number of decimal places. Any trailing 0s will be dropped. The maxDecimalPlaces value must be greater or equal to 0."
+                    },
+                    "sortDirection": {
+                        "$ref": "#/components/schemas/SortDirection"
+                    },
+                    "sortPriority": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "To enable sorting on a specific Field, provide a sortPriority for that field, and that field will be sorted. The sortPriority provides a ranking of how to sort fields when multiple fields are being sorted. The highest priority (lowest number) field is sorted first. If only one field is being sorted, then any value may be used for sortPriority. SortPriority should be an integer greater than 0."
+                    }
+                }
+            },
+            "Field": {
+                "oneOf": [
+                    {
+                        "$ref": "#/components/schemas/DimensionField"
+                    },
+                    {
+                        "$ref": "#/components/schemas/MeasureField"
+                    },
+                    {
+                        "$ref": "#/components/schemas/CalculatedField"
+                    },
+                    {
+                        "$ref": "#/components/schemas/BinField"
+                    },
+                    {
+                        "$ref": "#/components/schemas/TableCalcField"
+                    }
+                ]
+            },
+            "DimensionField": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/FieldBase"
+                    }
+                ],
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "fieldCaption": {},
+                    "fieldAlias": {},
+                    "maxDecimalPlaces": {},
+                    "sortDirection": {},
+                    "sortPriority": {}
+                }
+            },
+            "MeasureField": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/FieldBase"
+                    }
+                ],
+                "type": "object",
+                "required": [
+                    "function"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "function": {
+                        "$ref": "#/components/schemas/Function"
+                    },
+                    "fieldCaption": {},
+                    "fieldAlias": {},
+                    "maxDecimalPlaces": {},
+                    "sortDirection": {},
+                    "sortPriority": {}
+                }
+            },
+            "CalculatedField": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/FieldBase"
+                    }
+                ],
+                "type": "object",
+                "required": [
+                    "calculation"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "calculation": {
+                        "type": "string",
+                        "description": "A Tableau calculation that will be returned as a Field in the query."
+                    },
+                    "fieldCaption": {},
+                    "fieldAlias": {},
+                    "maxDecimalPlaces": {},
+                    "sortDirection": {},
+                    "sortPriority": {}
+                }
+            },
+            "BinField": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/FieldBase"
+                    }
+                ],
+                "type": "object",
+                "required": [
+                    "binSize"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "binSize": {
+                        "type": "number",
+                        "minimum": 1,
+                        "description": "The size of the bin to be applied. The binSize value must be greater than 0."
+                    },
+                    "fieldCaption": {},
+                    "fieldAlias": {},
+                    "maxDecimalPlaces": {},
+                    "sortDirection": {},
+                    "sortPriority": {}
+                }
+            },
+            "TableCalcField": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/FieldBase"
+                    }
+                ],
+                "type": "object",
+                "required": [
+                    "tableCalculation"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "function": {
+                        "$ref": "#/components/schemas/Function"
+                    },
+                    "calculation": {
+                        "type": "string"
+                    },
+                    "tableCalculation": {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    },
+                    "nestedTableCalculations": {
+                        "type": "array",
+                        "nullable": true,
+                        "items": {
+                            "$ref": "#/components/schemas/TableCalcSpecification"
+                        }
+                    },
+                    "fieldCaption": {},
+                    "fieldAlias": {},
+                    "maxDecimalPlaces": {},
+                    "sortDirection": {},
+                    "sortPriority": {}
+                }
+            },
+            "TableCalcSpecification": {
+                "type": "object",
+                "required": [
+                    "tableCalcType",
+                    "dimensions"
+                ],
+                "properties": {
+                    "tableCalcType": {
+                        "type": "string",
+                        "enum": [
+                            "CUSTOM",
+                            "NESTED",
+                            "DIFFERENCE_FROM",
+                            "PERCENT_DIFFERENCE_FROM",
+                            "PERCENT_FROM",
+                            "PERCENT_OF_TOTAL",
+                            "RANK",
+                            "PERCENTILE",
+                            "RUNNING_TOTAL",
+                            "MOVING_CALCULATION"
+                        ]
+                    },
+                    "dimensions": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/TableCalcFieldReference"
+                        }
+                    }
+                },
+                "discriminator": {
+                    "propertyName": "tableCalcType",
+                    "mapping": {
+                        "CUSTOM": "#/components/schemas/CustomTableCalcSpecification",
+                        "NESTED": "#/components/schemas/NestedTableCalcSpecification",
+                        "DIFFERENCE_FROM": "#/components/schemas/DifferenceTableCalcSpecification",
+                        "PERCENT_DIFFERENCE_FROM": "#/components/schemas/DifferenceTableCalcSpecification",
+                        "PERCENT_FROM": "#/components/schemas/DifferenceTableCalcSpecification",
+                        "PERCENT_OF_TOTAL": "#/components/schemas/PercentOfTotalTableCalcSpecification",
+                        "RANK": "#/components/schemas/RankTableCalcSpecification",
+                        "PERCENTILE": "#/components/schemas/PercentileTableCalcSpecification",
+                        "RUNNING_TOTAL": "#/components/schemas/RunningTotalTableCalcSpecification",
+                        "MOVING_CALCULATION": "#/components/schemas/MovingTableCalcSpecification"
+                    }
+                }
+            },
+            "CustomTableCalcSpecification": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                ],
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "levelAddress": {
+                        "$ref": "#/components/schemas/TableCalcFieldReference"
+                    },
+                    "restartEvery": {
+                        "$ref": "#/components/schemas/TableCalcFieldReference"
+                    },
+                    "customSort": {
+                        "$ref": "#/components/schemas/TableCalcCustomSort"
+                    }
+                }
+            },
+            "NestedTableCalcSpecification": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                ],
+                "type": "object",
+                "required": [
+                    "fieldCaption"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "fieldCaption": {
+                        "type": "string"
+                    },
+                    "levelAddress": {
+                        "$ref": "#/components/schemas/TableCalcFieldReference"
+                    },
+                    "restartEvery": {
+                        "$ref": "#/components/schemas/TableCalcFieldReference"
+                    },
+                    "customSort": {
+                        "$ref": "#/components/schemas/TableCalcCustomSort"
+                    }
+                }
+            },
+            "DifferenceTableCalcSpecification": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                ],
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "levelAddress": {
+                        "$ref": "#/components/schemas/TableCalcFieldReference"
+                    },
+                    "relativeTo": {
+                        "type": "string",
+                        "default": "PREVIOUS",
+                        "enum": [
+                            "PREVIOUS",
+                            "NEXT",
+                            "FIRST",
+                            "LAST"
+                        ]
+                    },
+                    "customSort": {
+                        "$ref": "#/components/schemas/TableCalcCustomSort"
+                    }
+                }
+            },
+            "PercentOfTotalTableCalcSpecification": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                ],
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "levelAddress": {
+                        "$ref": "#/components/schemas/TableCalcFieldReference"
+                    },
+                    "customSort": {
+                        "$ref": "#/components/schemas/TableCalcCustomSort"
+                    }
+                }
+            },
+            "RankTableCalcSpecification": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                ],
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "rankType": {
+                        "type": "string",
+                        "default": "COMPETITION",
+                        "enum": [
+                            "COMPETITION",
+                            "MODIFIED COMPETITION",
+                            "DENSE",
+                            "UNIQUE"
+                        ]
+                    },
+                    "direction": {
+                        "$ref": "#/components/schemas/SortDirection"
+                    }
+                }
+            },
+            "PercentileTableCalcSpecification": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                ],
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "direction": {
+                        "$ref": "#/components/schemas/SortDirection"
+                    }
+                }
+            },
+            "RunningTotalTableCalcSpecification": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                ],
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "aggregation": {
+                        "$ref": "#/components/schemas/TableCalcComputedAggregation"
+                    },
+                    "restartEvery": {
+                        "$ref": "#/components/schemas/TableCalcFieldReference"
+                    },
+                    "customSort": {
+                        "$ref": "#/components/schemas/TableCalcCustomSort"
+                    },
+                    "secondaryTableCalculation": {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                }
+            },
+            "MovingTableCalcSpecification": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                ],
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "aggregation": {
+                        "$ref": "#/components/schemas/TableCalcComputedAggregation"
+                    },
+                    "previous": {
+                        "type": "integer",
+                        "default": 2
+                    },
+                    "next": {
+                        "type": "integer",
+                        "default": 0
+                    },
+                    "includeCurrent": {
+                        "type": "boolean",
+                        "default": true
+                    },
+                    "fillInNull": {
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "customSort": {
+                        "$ref": "#/components/schemas/TableCalcCustomSort"
+                    },
+                    "secondaryTableCalculation": {
+                        "$ref": "#/components/schemas/TableCalcSpecification"
+                    }
+                }
+            },
+            "TableCalcComputedAggregation": {
+                "type": "string",
+                "default": "SUM",
+                "enum": [
+                    "SUM",
+                    "AVG",
+                    "MIN",
+                    "MAX"
+                ]
+            },
+            "TableCalcFieldReference": {
+                "type": "object",
+                "required": [
+                    "fieldCaption"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "fieldCaption": {
+                        "type": "string"
+                    },
+                    "function": {
+                        "$ref": "#/components/schemas/Function"
+                    }
+                }
+            },
+            "TableCalcCustomSort": {
+                "type": "object",
+                "required": [
+                    "fieldCaption",
+                    "function",
+                    "direction"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "fieldCaption": {
+                        "type": "string"
+                    },
+                    "function": {
+                        "$ref": "#/components/schemas/Function"
+                    },
+                    "direction": {
+                        "$ref": "#/components/schemas/SortDirection"
+                    }
+                }
+            },
+            "FieldMetadata": {
+                "type": "object",
+                "description": "Describes a field in the data source that can be used to create queries.",
+                "properties": {
+                    "fieldName": {
+                        "type": "string",
+                        "description": "The underlying database column name for the field."
+                    },
+                    "fieldCaption": {
+                        "type": "string",
+                        "description": "The caption of the field saved in the PDS."
+                    },
+                    "dataType": {
+                        "$ref": "#/components/schemas/DataType",
+                        "description": "Data type of the column, i.e., \"STRING\", \"BOOLEAN\", etc."
+                    },
+                    "fieldRole": {
+                        "$ref": "#/components/schemas/FieldRole",
+                        "description": "Field role of the column, i.e., \"MEASURE\", \"DIMENSION\"."
+                    },
+                    "fieldType": {
+                        "$ref": "#/components/schemas/FieldType",
+                        "description": "Field role of the column, i.e., \"CONTINUOUS\", \"NOMINAL\", \"ORDINAL\"."
+                    },
+                    "defaultAggregation": {
+                        "$ref": "#/components/schemas/Function",
+                        "description": "The default aggregation applied to the field."
+                    },
+                    "columnClass": {
+                        "enum": [
+                            "COLUMN",
+                            "BIN",
+                            "GROUP",
+                            "CALCULATION",
+                            "TABLE_CALCULATION"
+                        ],
+                        "description": "The type of field, i.e., \"COLUMN\", \"GROUP\", BIN\" etc."
+                    },
+                    "formula": {
+                        "type": "string",
+                        "description": "The formula for this field if it is a calculation."
+                    },
+                    "groupFormula": {
+                        "$ref": "#/components/schemas/GroupFormula",
+                        "description": "The group formula for this field if it is a group calculation."
+                    },
+                    "logicalTableId": {
+                        "type": "string",
+                        "description": "An internal unique identifier for the logical table that this field originates from."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Optional description for the field."
+                    },
+
+                    "imageRole": {
+                      "$ref": "#/components/schemas/ImageRole",
+                      "description": "Optional image role for this field."
+                    },
+                    "hidden": {
+                        "type": "boolean",
+                        "description": "Indicates whether the field is hidden in the data source."
+                    },
+                    "defaultFormatting": {
+                        "$ref": "#/components/schemas/Formatting",
+                        "description": "Describing the default formatting for this field."
+                    },
+                    "isLODCalc": {
+                        "type": "boolean",
+                        "description": "Indicates whether the field is an LOD calculation."
+                    },
+                    "aliases": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/FieldAlias"
+                        },
+                        "description": "A list of aliases mapping original member values to alias values."
+                    }
+                }
+            },
+            "DataType": {
+                "type": "string",
+                "enum": [
+                    "INTEGER",
+                    "REAL",
+                    "STRING",
+                    "DATETIME",
+                    "BOOLEAN",
+                    "DATE",
+                    "SPATIAL",
+                    "UNKNOWN"
+                ]
+            },
+            "FieldRole": {
+                "type": "string",
+                "enum": [
+                    "MEASURE",
+                    "DIMENSION",
+                    "UNKNOWN"
+                ]
+            },
+            "FieldType": {
+                "type": "string",
+                "enum": [
+                    "CONTINUOUS",
+                    "NOMINAL",
+                    "ORDINAL",
+                    "UNKNOWN"
+                ]
+            },
+            "ImageRole": {
+              "type": "string",
+              "enum": [
+                "URL"
+              ]
+            },
+            "Formatting": {
+                "type": "object",
+                "description": "Describing the default formatting for this field.",
+                "properties": {
+                    "decimalPlaces": {
+                        "type": "string",
+                        "description": "Number of places after decimal for a real valued field - Optional."
+                    }
+                }
+            },
+            "Connection": {
+                "type": "object",
+                "required": ["connectionUsername", "connectionPassword"],
+                "properties": {
+                    "connectionLuid": {
+                        "type": "string"
+                    },
+                    "connectionUsername": {
+                        "type": "string"
+                    },
+                    "connectionPassword": {
+                        "type": "string"
+                    }
+                },
+                "additionalProperties": false
+            },
+            "Datasource": {
+                "type": "object",
+                "required": ["datasourceLuid"],
+                "properties": {
+                    "datasourceLuid": {
+                        "type": "string",
+                        "description": "The LUID of the data source to be queried."
+                    },
+                    "connections": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Connection"
+                        }
+                    }
+                },
+                "additionalProperties": false
+            },
+            "Filter": {
+                "type": "object",
+                "description": "A filter to be used in the query to filter on the data source.",
+                "required": ["field", "filterType"],
+                "properties": {
+                    "field": {
+                        "$ref": "#/components/schemas/FilterField"
+                    },
+                    "filterType": {
+                        "type": "string",
+                        "enum": [
+                            "QUANTITATIVE_DATE",
+                            "QUANTITATIVE_NUMERICAL",
+                            "SET",
+                            "MATCH",
+                            "CONDITION",
+                            "DATE",
+                            "TOP"
+                        ]
+                    },
+                    "context": {
+                        "type": "boolean",
+                        "description": "Make the given filter a context filter, meaning that it's an independent filter. Any other filters that you set are defined as dependent filters because they process only the data that passes through the context filter.",
+                        "default": false
+                    }
+                },
+                "discriminator": {
+                    "propertyName": "filterType",
+                    "mapping": {
+                        "QUANTITATIVE_DATE": "#/components/schemas/QuantitativeDateFilter",
+                        "QUANTITATIVE_NUMERICAL": "#/components/schemas/QuantitativeNumericalFilter",
+                        "SET": "#/components/schemas/SetFilter",
+                        "MATCH": "#/components/schemas/MatchFilter",
+                        "CONDITION": "#/components/schemas/ConditionFilter",
+                        "DATE": "#/components/schemas/RelativeDateFilter",
+                        "TOP": "#/components/schemas/TopNFilter"
+                    }
+                }
+            },
+            "FilterField": {
+                "x-class-extra-annotation": "@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)",
+                "oneOf": [
+                    {
+                        "$ref": "#/components/schemas/DimensionFilterField"
+                    },
+                    {
+                        "$ref": "#/components/schemas/MeasureFilterField"
+                    },
+                    {
+                        "$ref": "#/components/schemas/CalculatedFilterField"
+                    }
+                ]
+            },
+            "DimensionFilterField": {
+                "required": ["fieldCaption"],
+                "additionalProperties": false,
+                "properties": {
+                    "fieldCaption": {
+                        "type": "string",
+                        "description": "The caption of the field to filter on."
+                    }
+                }
+            },
+            "MeasureFilterField": {
+                "required": ["fieldCaption", "function"],
+                "additionalProperties": false,
+                "properties": {
+                    "fieldCaption": {
+                        "type": "string",
+                        "description": "The caption of the field to filter on."
+                    },
+                    "function": {
+                        "$ref": "#/components/schemas/Function"
+                    }
+                }
+            },
+            "CalculatedFilterField": {
+                "required": ["calculation"],
+                "additionalProperties": false,
+                "properties": {
+                    "calculation": {
+                        "type": "string",
+                        "description": "A Tableau calculation that will be used to filter on."
+                    }
+                }
+            },
+            "Function": {
+                "type": "string",
+                "description": "The standard set of Tableau aggregations which can be applied to a field.",
+                "enum": [
+                    "SUM",
+                    "AVG",
+                    "MEDIAN",
+                    "COUNT",
+                    "COUNTD",
+                    "MIN",
+                    "MAX",
+                    "STDEV",
+                    "VAR",
+                    "COLLECT",
+                    "YEAR",
+                    "QUARTER",
+                    "MONTH",
+                    "WEEK",
+                    "DAY",
+                    "TRUNC_YEAR",
+                    "TRUNC_QUARTER",
+                    "TRUNC_MONTH",
+                    "TRUNC_WEEK",
+                    "TRUNC_DAY",
+                    "AGG",
+                    "NONE",
+                    "UNSPECIFIED"
+                ]
+            },
+            "MatchFilter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Filter"
+                    },
+                    {
+                        "type": "object",
+                        "description": "A filter that can be used to match against string fields.",
+                        "properties": {
+                            "contains": {
+                                "type": "string",
+                                "description": "Matches when a field contains this value."
+                            },
+                            "startsWith": {
+                                "type": "string",
+                                "description": "Matches when a field starts with this value."
+                            },
+                            "endsWith": {
+                                "type": "string",
+                                "description": "Matches when a field ends with this value."
+                            },
+                            "exclude": {
+                                "type": "boolean",
+                                "description": "When true, the inverse of the matching logic will be used.",
+                                "default": false
+                            }
+                        }
+                    }
+                ]
+            },
+            "ConditionFilter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Filter"
+                    },
+                    {
+                        "type": "object",
+                        "description": "A filter that filters based on the condition of another field.",
+                        "properties": {
+                            "condition": {
+                                "$ref": "#/components/schemas/ConditionalFilterCondition"
+                            },
+                            "calculation": {
+                                "type": "string",
+                                "description": "A alternate conditional calculation to filter upon."
+                            }
+                        }
+                    }
+                ]
+            },
+            "ConditionalFilterCondition": {
+                "type": "object",
+                "required": ["fieldCaption", "function", "comparison", "value"],
+                "properties": {
+                    "fieldCaption": {
+                        "type": "string",
+                        "description": "A Field that provide the condition for filtering."
+                    },
+                    "function": {
+                        "$ref": "#/components/schemas/Function"
+                    },
+                    "comparison": {
+                        "type": "string",
+                        "description": "The comparison operator.",
+                        "enum": [ "=", "<>", "<", "<=", ">", ">=" ]
+                    },
+                    "value": {
+                        "description": "The value of the condition. Must be a number or date or date/time string."
+                    }
+                }
+            },
+            "MetadataOutput": {
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/FieldMetadata"
+                        }
+                    },
+                    "extraData": {
+                        "type": "object",
+                        "properties": {
+                            "parameters": {
+                                "type": "array",
+                                "items": {
+                                    "$ref": "#/components/schemas/ParameterRecord"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "QuantitativeFilterBase": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Filter"
+                    },
+                    {
+                        "type": "object",
+                        "required": ["quantitativeFilterType"],
+                        "properties": {
+                            "quantitativeFilterType": {
+                                "type": "string",
+                                "enum": [ "RANGE", "MIN", "MAX", "ONLY_NULL", "ONLY_NON_NULL" ]
+                            },
+                            "includeNulls": {
+                                "type": "boolean",
+                                "description": "Should nulls be returned or not. Only applies to RANGE, MIN, and MAX filters. If not provided, the default is to not include null values."
+                            }
+                        }
+                    }
+                ]
+            },
+            "QuantitativeNumericalFilter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/QuantitativeFilterBase"
+                    }
+                ],
+                "type": "object",
+                "description": "A filter that can be used to find the minimum, maximum, or range of numerical values of a field.",
+                "properties": {
+                    "min": {
+                        "type": "number",
+                        "description": "A numerical value, either integer or floating point, indicating the minimum value to filter upon. Required if using quantitativeFilterType RANGE or if using quantitativeFilterType MIN."
+                    },
+                    "max": {
+                        "type": "number",
+                        "description": "A numerical value, either integer or floating point, indicating the maximum value to filter upon. Required if using quantitativeFilterType RANGE or if using quantitativeFilterType MIN."
+                    }
+                }
+            },
+            "QuantitativeDateFilter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/QuantitativeFilterBase"
+                    }
+                ],
+                "type": "object",
+                "description": "A filter that can be used to find the minimum, maximum, or range of date values of a field.",
+                "properties": {
+                    "minDate": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "An RFC 3339 date indicating the earliest date to filter upon. Required if using quantitativeFilterType RANGE or if using quantitativeFilterType MIN."
+                    },
+                    "maxDate": {
+                        "type": "string",
+                        "format": "date",
+                        "description": "An RFC 3339 date indicating the latest date to filter on. Required if using quantitativeFilterType RANGE or if using quantitativeFilterType MIN."
+                    }
+                }
+            },
+            "Query": {
+                "description": "The query is the fundamental interface to the VizQL Data Service. It holds the specific semantics to perform against the data source. A query consists of an array of fields to query against, and an optional array of filters to apply to the query.",
+                "required": [
+                    "fields"
+                ],
+                "type": "object",
+                "properties": {
+                    "fields": {
+                        "description": "An array of fields that define the query.",
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Field"
+                        }
+                    },
+                    "filters": {
+                        "description": "An optional array of filters to apply to the query.",
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Filter"
+                        }
+                    },
+                    "parameters": {
+                        "description": "An optional array of parameters to apply to the query.",
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Parameter"
+                        }
+                    }
+                },
+                "additionalProperties": false
+            },
+            "QueryDatasourceOptions": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/QueryOptions"
+                    },
+                    {
+                        "type": "object",
+                        "description": "Some optional metadata that can be used to adjust the behavior of a data source query.",
+                        "properties": {
+                            "disaggregate": {
+                                "type": "boolean",
+                                "default": false
+                            },
+                            "returnFormat": {
+                                "$ref": "#/components/schemas/ReturnFormat"
+                            },
+                            "rowLimit": {
+                                "type": "integer",
+                                "format": "int32",
+                                "minimum": 1
+                            },
+                            "returnServerSentEvents": {
+                                "type": "boolean",
+                                "default": false
+                            }
+                        }
+                    }
+                ]
+            },
+            "QueryOptions": {
+                "type": "object",
+                "description": "Some optional metadata that can be used to adjust the behavior of an endpoint.",
+                "properties": {
+                    "debug": {
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "bypassMetadataCache": {
+                        "type": "boolean",
+                        "default": false
+                    },
+                    "interpretFieldCaptionsAsFieldNames": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, user will pass in the Field's fieldName instead of the Field's fieldCaption in every place that fieldCaption appears (in Fields, Filters, and Calculation formulas). See FieldMetadata of the read-metadata endpoint."
+                    },
+                    "includeHiddenFields": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, hidden fields will be included in the response of read-metadata endpoint."
+                    },
+                    "includeGroupFormulas": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, group formula information will be included in the response of read-metadata endpoint for fields that have categorical bin data."
+                    }
+                }
+            },
+            "SseResultStream": {
+                "oneOf": [
+                    {
+                        "$ref": "#/components/schemas/SseMetadataEvent"
+                    },
+                    {
+                        "$ref": "#/components/schemas/SseDataEvent"
+                    },
+                    {
+                        "$ref": "#/components/schemas/SseErrorEvent"
+                    }
+                ],
+                "discriminator": {
+                    "propertyName": "event",
+                    "mapping": {
+                        "METADATA": "#/components/schemas/SseMetadataEvent",
+                        "DATA": "#/components/schemas/SseDataEvent",
+                        "ERROR": "#/components/schemas/SseErrorEvent"
+                    }
+                }
+            },
+            "SseMetadataEvent": {
+                "type": "object",
+                "required": [ "event", "data" ],
+                "properties": {
+                    "event": {
+                        "type": "string",
+                        "enum": ["METADATA"]
+                    },
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "rowCount": {
+                                "type": "integer"
+                            }
+                        }
+                    }
+                }
+            },
+            "SseDataEvent": {
+                "type": "object",
+                "required": [ "event", "data" ],
+                "properties": {
+                    "event": {
+                        "type": "string",
+                        "enum": ["DATA"]
+                    },
+                    "data": {
+                        "type": "array",
+                        "items": {
+                        }
+                    }
+                }
+            },
+            "SseErrorEvent": {
+                "type": "object",
+                "required": [ "event", "data" ],
+                "properties": {
+                    "event": {
+                        "type": "string",
+                        "enum": ["ERROR"]
+                    },
+                    "data": {
+                        "$ref": "#/components/schemas/TableauError"
+                    }
+                }
+            },
+            "QueryOutput": {
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {
+                        }
+                    },
+                    "error": {
+                        "type": "object"
+                    }
+                }
+            },
+            "QueryRequest": {
+                "type": "object",
+                "required": [
+                    "datasource", "query"
+                ],
+                "properties": {
+                    "datasource": {
+                        "$ref": "#/components/schemas/Datasource"
+                    },
+                    "query": {
+                        "$ref": "#/components/schemas/Query"
+                    },
+                    "options": {
+                        "$ref": "#/components/schemas/QueryDatasourceOptions"
+                    }
+                }
+            },
+            "ReadMetadataRequest": {
+                "type": "object",
+                "required": [
+                    "datasource"
+                ],
+                "properties": {
+                    "datasource": {
+                        "$ref": "#/components/schemas/Datasource"
+                    },
+                    "options": {
+                        "$ref": "#/components/schemas/QueryOptions"
+                    }
+                }
+            },
+            "ReturnFormat": {
+                "type": "string",
+                "enum": [
+                    "OBJECTS",
+                    "ARRAYS"
+                ]
+            },
+            "SetFilter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Filter"
+                    }
+                ],
+                "type": "object",
+                "description": "A filter that can be used to filter on a specific set of values of a field.",
+                "required": [
+                    "values"
+                ],
+                "properties": {
+                    "values": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/NullableAny"
+                        },
+                        "description": "An array of values to filter on."
+                    },
+                    "exclude": {
+                        "type": "boolean",
+                        "default": false
+                    }
+                }
+            },
+            "SortDirection": {
+                "type": "string",
+                "description": "The direction of the sort, either ascending or descending. If not supplied, the default is ascending.",
+                "enum": [
+                    "ASC",
+                    "DESC"
+                ]
+            },
+            "PeriodType": {
+                "type": "string",
+                "description": "The units of time in the date range.",
+                "enum": [
+                    "MINUTES",
+                    "HOURS",
+                    "DAYS",
+                    "WEEKS",
+                    "MONTHS",
+                    "QUARTERS",
+                    "YEARS"
+                ]
+            },
+            "RelativeDateFilter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Filter"
+                    },
+                    {
+                        "type": "object",
+                        "description": "A filter that can be used to filter on dates using a specific anchor and fields that specify a relative date range to that anchor.",
+                        "required": ["periodType", "dateRangeType"],
+                        "properties": {
+                            "periodType": {
+                                "$ref": "#/components/schemas/PeriodType"
+                            },
+                            "dateRangeType": {
+                                "type": "string",
+                                "description": "The direction in the relative date range.",
+                                "enum": [
+                                    "CURRENT",
+                                    "LAST",
+                                    "LASTN",
+                                    "NEXT",
+                                    "NEXTN",
+                                    "TODATE"
+                                ]
+                            },
+                            "rangeN": {
+                                "type": "integer",
+                                "description": "When dateRangeType is LASTN or NEXTN, this is the N value (how many years, months, etc.)."
+                            },
+                            "anchorDate": {
+                                "type": "string",
+                                "format": "date",
+                                "description": "If a value for this field isn't provided, the value defaults to today."
+                            },
+                            "includeNulls": {
+                                "type": "boolean",
+                                "description": "Should nulls be returned or not. If a value isn't provided, the default is to not include null values."
+                            }
+                        }
+                    }
+                ]
+            },
+            "TopNFilter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/Filter"
+                    },
+                    {
+                        "type": "object",
+                        "description": "A filter that can be used to find the top or bottom number of fields relative to the values in the fieldToMeasure",
+                        "required": ["howMany", "fieldToMeasure"],
+                        "properties": {
+                            "direction": {
+                                "type": "string",
+                                "enum": [
+                                        "TOP",
+                                        "BOTTOM"
+                                    ],
+                                "default": "TOP",
+                                "description": "Top (ascending) or Bottom (descending) N."
+                            },
+                            "howMany": {
+                                "type": "integer",
+                                "description": "The number of values from the top or the bottom of the given fieldToMeasure."
+                            },
+                            "fieldToMeasure": {
+                                "$ref": "#/components/schemas/FilterField"
+                            }
+                        }
+                    }
+                ]
+            },
+            "Parameter": {
+                "type": "object",
+                "description": "Use Parameters to override the default value of an existing parameter on the published datasource.",
+                "required": ["parameterCaption", "value"],
+                "properties": {
+                    "parameterCaption": {
+                        "type": "string",
+                        "description": "The caption of the parameter to set."
+                    },
+                    "value": {
+                        "description": "The value to set for the parameter. The type of the value must match the type of the parameter."
+                    }
+                }
+            },
+            "NullableAny": {
+                "nullable": true
+            },
+            "FieldAlias": {
+                "type": "object",
+                "description": "A field alias mapping an original member value to an alias value.",
+                "required": ["member", "value"],
+                "properties": {
+                    "member": {
+                        "description": "The original member value that will be replaced."
+                    },
+                    "value": {
+                        "description": "The alias value to replace the original member with."
+                    }
+                },
+                "additionalProperties": false
+            },
+            "AliasedDataValue": {
+                "type": "object",
+                "description": "Parameter data value with alias.",
+                "x-class-extra-annotation": "@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)" ,
+                "required": ["alias", "value"],
+                "properties": {
+                    "alias": {
+                        "type": "string",
+                        "description": "The alias of the data value."
+                    },
+                    "value": {
+                        "description": "The data value of the parameter."
+                    }
+                }
+            },
+            "AnyValueParameter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/ParameterRecord"
+                    }
+                ],
+                "type": "object",
+                "description": "A parameter that accepts any value of the specified data type.",
+                "additionalProperties": false
+            },
+            "ListParameter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/ParameterRecord"
+                    }
+                ],
+                "type": "object",
+                "description": "A parameter constrained to a predefined list of allowable values.",
+                "additionalProperties": false,
+                "properties": {
+                    "members": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/AliasedDataValue"
+                        }
+                    }
+                }
+            },
+            "QuantitativeRangeParameter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/ParameterRecord"
+                    }
+                ],
+                "type": "object",
+                "description": "A parameter with minimum and maximum numeric value constraints.",
+                "additionalProperties": false,
+                "properties": {
+                    "min": {
+                        "type": "number",
+                        "description": "The minimum allowable value for this range parameter. Parameter values must be greater than or equal to this value."
+                    },
+                    "max": {
+                        "type": "number",
+                        "description": "The maximum allowable value for this range parameter. Parameter values must be less than or equal to this value."
+                    },
+                    "step": {
+                        "type": "number",
+                        "description": "The increment step size for values within the numeric range. Defines the granularity of allowed values between min and max."
+                    }
+                }
+            },
+            "QuantitativeDateParameter": {
+                "allOf": [
+                    {
+                        "$ref": "#/components/schemas/ParameterRecord"
+                    }
+                ],
+                "type": "object",
+                "description": "A parameter with minimum and maximum date value constraints.",
+                "additionalProperties": false,
+                "properties": {
+                    "minDate": {
+                        "type": "string",
+                        "description": "An RFC 3339 date indicating the earliest allowable date for this parameter."
+                    },
+                    "maxDate": {
+                        "type": "string",
+                        "description": "An RFC 3339 date indicating the latest allowable date for this parameter."
+                    },
+                    "periodType": {
+                        "$ref": "#/components/schemas/PeriodType"
+                    },
+                    "periodValue": {
+                        "type": "number",
+                        "description": "The numeric value associated with the period type for date granularity."
+                    }
+                }
+            },
+            "ParameterRecord": {
+                "type": "object",
+                "description": "Common properties of a parameter. A parameter is a workbook variable such as a number, date, or string that can replace a constant value in a calculation, filter, or reference line.",
+                "required": ["parameterType", "parameterCaption", "value", "dataType"],
+                "properties": {
+                    "parameterType": {
+                        "type": "string",
+                        "enum": [
+                            "ANY_VALUE",
+                            "LIST",
+                            "QUANTITATIVE_RANGE",
+                            "QUANTITATIVE_DATE"
+                        ]
+                    },
+                    "parameterName": {
+                        "type": "string",
+                        "description": "The tableau internal name of the parameter to identify and reference the parameter."
+                    },
+                    "parameterCaption": {
+                        "type": "string",
+                        "description": "The user defined name of the parameter to identify and reference the parameter."
+                    },
+                    "dataType": {
+                        "$ref": "#/components/schemas/DataType"
+                    },
+                    "value": {
+                        "description": "The value to set for the parameter. The type of the value must match the type of the parameter."
+                    }
+                },
+                "discriminator": {
+                    "propertyName": "parameterType",
+                    "mapping": {
+                        "ANY_VALUE": "#/components/schemas/AnyValueParameter",
+                        "LIST": "#/components/schemas/ListParameter",
+                        "QUANTITATIVE_RANGE": "#/components/schemas/QuantitativeRangeParameter",
+                        "QUANTITATIVE_DATE": "#/components/schemas/QuantitativeDateParameter"
+                    }
+                }
+            },
+            "GetDatasourceModelRequest": {
+                "type": "object",
+                "required": [
+                    "datasource"
+                ],
+                "properties": {
+                    "datasource": {
+                        "$ref": "#/components/schemas/Datasource"
+                    },
+                    "options": {
+                        "$ref": "#/components/schemas/QueryOptions"
+                    }
+                }
+            },
+            "DatasourceModelOutput": {
+                "type": "object",
+                "properties": {
+                    "logicalTables": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/LogicalTable"
+                        }
+                    },
+                    "logicalTableRelationships": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/LogicalTableRelationship"
+                        }
+                    }
+                }
+            },
+            "LogicalTable": {
+                "type": "object",
+                "x-class-extra-annotation": "@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)" ,
+                "required": ["logicalTableId", "caption"],
+                "properties": {
+                    "logicalTableId": {
+                        "type": "string"
+                    },
+                    "caption": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    }
+                }
+            },
+            "LogicalTableRelationship": {
+                "type": "object",
+                "required": ["fromLogicalTable", "toLogicalTable"],
+                "properties": {
+                    "fromLogicalTable": {
+                        "$ref": "#/components/schemas/LogicalTableRelationshipEndpoint"
+                    },
+                    "toLogicalTable": {
+                        "$ref": "#/components/schemas/LogicalTableRelationshipEndpoint"
+                    },
+                    "expression": {
+                        "$ref": "#/components/schemas/FieldRelationshipExpression",
+                        "description": "The expression associated with the relationship, representing how the tables are related."
+                    }
+                }
+            },
+            "LogicalTableRelationshipEndpoint": {
+                "type": "object",
+                "required": ["logicalTableId"],
+                "properties": {
+                    "logicalTableId": {
+                        "type": "string"
+                    }
+                }
+            },
+            "ListSupportedFunctionRequest": {
+                "type": "object",
+                "required": [
+                    "datasource"
+                ],
+                "properties": {
+                    "datasource": {
+                        "$ref": "#/components/schemas/Datasource"
+                    },
+                    "options": {
+                        "$ref": "#/components/schemas/QueryOptions"
+                    }
+                }
+            },
+            "FunctionType": {
+                "type": "string",
+                "enum": [
+                    "UNSPECIFIED",
+                    "BOOL",
+                    "REAL",
+                    "INT",
+                    "STR",
+                    "DATETIME",
+                    "DATE",
+                    "LOCALSTR",
+                    "NULL",
+                    "ANY",
+                    "BIN",
+                    "TUPLE",
+                    "LOCALREAL",
+                    "LOCALINT",
+                    "SPATIAL",
+                    "TABLE",
+                    "ERROR"
+                ]
+            },
+            "SupportedFunctionOverload": {
+                "type": "object",
+                "description": "Describes a supported function overload for a data source.",
+                "required": ["arg_types", "return_type"],
+                "properties": {
+                    "arg_types": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/FunctionType"
+                        }
+                    },
+                    "return_type": {
+                        "$ref": "#/components/schemas/FunctionType"
+                    }
+                }
+            },
+            "SupportedFunction": {
+                "type": "object",
+                "description": "Describes a supported function for a data source.",
+                "required": ["name", "overloads"],
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "overloads": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/SupportedFunctionOverload"
+                        }
+                    }
+                }
+            },
+            "GroupFormula": {
+                "type": "object",
+                "description": "For a Group aka Categorical Bin field, defines how domain values are grouped together",
+                "required": ["groupings", "baseFieldName", "hasIncludeOther"],
+                "properties": {
+                  "baseFieldName": {
+                    "type": "string",
+                    "description": "The field name of the column the group is on."
+                  },
+                  "groupings": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/Grouping"
+                        },
+                        "description": "A list of groupings in the group formula."
+                    },
+                    "hasIncludeOther": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "If true, all domain values not specified in a grouping will be grouped together."
+                    }
+                  }
+            },
+            "Grouping": {
+                "type": "object",
+                "description": "A grouping object that defines a group within a group formula.",
+                "required": ["members"],
+                "properties": {
+                    "alias": {
+                        "type": "string",
+                        "description": "The name of the grouping."
+                    },
+                    "members": {
+                        "type": "array",
+                        "items": {},
+                        "description": "A list of members that belong to this grouping. Members can be of any type."
+                    }
+                }
+            },
+            "FieldRelationshipExpression": {
+                "type": "object",
+                "description": "Represents a relationship expression structure with an operator and an array of relationships. This format is used to represent logical table relationships where multiple field pairs are related using a common operator.",
+                "x-class-extra-annotation": "@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)",
+                "required": [ "relationships"],
+                "additionalProperties": false,
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "description": "The logical operator that combines all relationships (e.g., AND, OR)."
+                    },
+                    "relationships": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/RelationshipExpressionItem"
+                        },
+                        "description": "An array of relationship items, each representing a single field-to-field relationship."
+                    }
+                }
+            },
+            "RelationshipExpressionItem": {
+                "type": "object",
+                "description": "Represents a single relationship item within a RelationshipExpression. Defines a relationship between two fields using an operator.",
+                "required": ["operator", "fromField", "toField"],
+                "additionalProperties": false,
+                "properties": {
+                    "operator": {
+                        "type": "string",
+                        "description": "The comparison operator used in this relationship (e.g., =, <>, >, <, >=, <=).",
+                        "enum": ["=", "<>", ">", "<", ">=", "<="]
+                    },
+                    "fromField": {
+                        "type": "string",
+                        "description": "The field reference from which the relationship originates (e.g., [Order ID]). Field references are typically enclosed in square brackets."
+                    },
+                    "toField": {
+                        "type": "string",
+                        "description": "The field reference to which the relationship targets (e.g., [Order ID (Returns)]). Field references are typically enclosed in square brackets."
+                    }
+                }
+            }
+        },
+        "securitySchemes": {
+            "XTableauAuth": {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-Tableau-Auth"
+            }
+        },
+        "headers": {},
+        "responses": {},
+        "parameters": {}
     },
-    "headers": {},
-    "responses": {},
-    "parameters": {}
-  },
-  "tags": [],
-  "security": [
-    {
-      "XTableauAuth": []
-    }
-  ]
+    "tags": [],
+    "security": [
+        {
+            "XTableauAuth": []
+        }
+    ]
 }
