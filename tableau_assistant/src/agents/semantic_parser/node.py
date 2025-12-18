@@ -1,7 +1,7 @@
 """Semantic Parser Node - LangGraph workflow node.
 
 This node wraps SemanticParserAgent for use in LangGraph workflows.
-Replaces the old UnderstandingAgent with LLM combination architecture.
+Implements the LLM combination architecture (Step1 + Step2 + Observer).
 """
 
 import logging
@@ -23,7 +23,7 @@ async def semantic_parser_node(
     """
     Semantic Parser Agent node (LLM combination: Step1 + Step2 + Observer).
     
-    Replaces the old UnderstandingAgent with new architecture:
+    Implements the LLM combination architecture:
     - Step 1: Semantic understanding + question restatement + intent classification
     - Step 2: Computation reasoning + self-validation (only for complex queries)
     - Observer: Consistency check (only when validation fails)
@@ -41,7 +41,7 @@ async def semantic_parser_node(
             - semantic_query: SemanticQuery (for DATA_QUERY intent)
             - restated_question: Restated question from Step 1
             - is_analysis_question: True if DATA_QUERY intent
-            - understanding_complete: Always True after completion
+            - semantic_parser_complete: Always True after completion
             - clarification: Clarification question (for CLARIFICATION intent)
             - general_response: General response (for GENERAL intent)
     """
@@ -55,7 +55,7 @@ async def semantic_parser_node(
             "semantic_parse_result": None,
             "semantic_query": None,
             "is_analysis_question": False,
-            "understanding_complete": True,
+            "semantic_parser_complete": True,
             "error": "No question provided",
         }
     
@@ -75,8 +75,8 @@ async def semantic_parser_node(
         return_state: Dict[str, Any] = {
             "semantic_parse_result": result,
             "restated_question": result.restated_question,
-            "understanding_complete": True,
-            "current_stage": "understanding",
+            "semantic_parser_complete": True,
+            "current_stage": "semantic_parser",
         }
         
         # Route based on intent type
@@ -123,7 +123,7 @@ async def semantic_parser_node(
             "semantic_parse_result": None,
             "semantic_query": None,
             "is_analysis_question": False,
-            "understanding_complete": False,
+            "semantic_parser_complete": False,
             "error": str(e),
         }
 

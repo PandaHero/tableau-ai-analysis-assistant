@@ -179,8 +179,8 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
         analysis_path = []
         if result.semantic_query:
             analysis_path.append({
-                "step": "understanding",
-                "description": f"理解问题: {result.question}",
+                "step": "semantic_parser",
+                "description": f"语义解析: {result.question}",
                 "output": result.semantic_query.model_dump() if hasattr(result.semantic_query, 'model_dump') else str(result.semantic_query)
             })
         if result.mapped_query:

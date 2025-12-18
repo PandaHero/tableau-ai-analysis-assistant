@@ -3,15 +3,13 @@ VizQL workflow state definition
 
 Uses LangGraph 1.0 state_schema feature
 
-Architecture (refactored):
-- Understanding Agent → SemanticQuery (pure semantic, no VizQL concepts)
+Architecture:
+- SemanticParser Agent → SemanticParseResult, SemanticQuery (pure semantic)
 - FieldMapper Node → MappedQuery (business terms mapped to technical fields)
 - QueryBuilder Node → VizQLQuery (technical query)
 - Execute Node → ExecuteResult
 - Insight Agent → insights
 - Replanner Agent → ReplanDecision
-
-Note: Boost Agent has been REMOVED, its functionality merged into Understanding Agent.
 """
 from __future__ import annotations
 
@@ -82,14 +80,13 @@ class VizQLState(TypedDict):
     Uses Annotated + operator.add for automatic accumulation.
     
     Architecture:
-    - Understanding Agent outputs SemanticQuery (pure semantic)
+    - SemanticParser Agent outputs SemanticParseResult, SemanticQuery (pure semantic)
     - FieldMapper Node outputs MappedQuery (technical field mapping)
     - QueryBuilder Node outputs VizQLQuery (technical query)
     - Execute Node outputs ExecuteResult
     
     Note:
     - Context information (datasource_luid, user_id, etc.) is passed through Runtime
-    - Boost Agent has been REMOVED, functionality merged into Understanding Agent
     """
     
     # ═══════════════════════════════════════════════════════════════════════
@@ -109,10 +106,10 @@ class VizQLState(TypedDict):
     question: str                          # User's original question
     
     # ═══════════════════════════════════════════════════════════════════════
-    # Question Classification (Understanding Agent output)
-    # Used for routing decision: is_analysis_question=False → END
+    # Intent Classification (SemanticParser Agent output)
+    # Used for routing: intent.type == DATA_QUERY → field_mapper, else → END
     # ═══════════════════════════════════════════════════════════════════════
-    is_analysis_question: bool             # Whether this is an analysis question (for routing)
+    is_analysis_question: bool             # intent.type == DATA_QUERY (for routing)
     
     # ═══════════════════════════════════════════════════════════════════════
     # Pure Semantic Layer (new architecture - using core/models)
@@ -157,7 +154,7 @@ class VizQLState(TypedDict):
     execution_path: Annotated[List[str], operator.add]  # Execution path
     
     # Node completion flags
-    understanding_complete: bool
+    semantic_parser_complete: bool
     field_mapper_complete: bool
     query_builder_complete: bool
     execute_complete: bool
@@ -259,8 +256,8 @@ def create_initial_state(
         # User input
         question=question,
         
-        # Question classification (for routing)
-        is_analysis_question=True,  # Default to True, Understanding Agent will update
+        # Intent classification (for routing)
+        is_analysis_question=True,  # Default to True, SemanticParser will update based on intent.type
         
         # Pure semantic layer (using core/models)
         semantic_parse_result=None,  # SemanticParserAgent output
@@ -282,11 +279,11 @@ def create_initial_state(
         final_report=None,
         
         # Control flow
-        current_stage="understanding",
+        current_stage="semantic_parser",
         execution_path=[],
         
         # Node completion flags
-        understanding_complete=False,
+        semantic_parser_complete=False,
         field_mapper_complete=False,
         query_builder_complete=False,
         execute_complete=False,

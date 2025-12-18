@@ -8,7 +8,7 @@ Tool Registry - 工具注册表
 - FieldMapper 是独立节点（RAG + LLM 混合），不是工具
 
 工具分组：
-- understanding: 语义理解工具（get_data_model, get_schema_module, process_time_filter, calculate_relative_dates, detect_date_format）
+- semantic_parser: 语义解析工具（get_data_model, get_schema_module, process_time_filter, calculate_relative_dates, detect_date_format）
 - insight: 洞察分析工具（暂无）
 - replanner: 重规划工具（由 TodoListMiddleware 注入 write_todos）
 """
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 class NodeType(str, Enum):
     """节点类型枚举"""
-    UNDERSTANDING = "understanding"
+    SEMANTIC_PARSER = "semantic_parser"
     INSIGHT = "insight"
     REPLANNER = "replanner"
 
@@ -55,7 +55,7 @@ class ToolRegistry:
     使用示例：
         >>> registry = ToolRegistry()
         >>> registry.auto_discover()
-        >>> tools = registry.get_tools(NodeType.UNDERSTANDING)
+        >>> tools = registry.get_tools(NodeType.SEMANTIC_PARSER)
     """
     
     _instance: Optional['ToolRegistry'] = None
@@ -73,7 +73,7 @@ class ToolRegistry:
             return
         
         self._tools: Dict[NodeType, List[ToolMetadata]] = {
-            NodeType.UNDERSTANDING: [],
+            NodeType.SEMANTIC_PARSER: [],
             NodeType.INSIGHT: [],
             NodeType.REPLANNER: [],
         }
@@ -242,10 +242,10 @@ class ToolRegistry:
         try:
             from tableau_assistant.src.orchestration.tools.data_model_tool import get_data_model
             self.register(
-                NodeType.UNDERSTANDING,
+                NodeType.SEMANTIC_PARSER,
                 get_data_model,
                 dependencies=["data_model_manager"],
-                tags=["data_model", "metadata", "boost"]
+                tags=["data_model", "metadata"]
             )
             count += 1
         except ImportError as e:
@@ -254,7 +254,7 @@ class ToolRegistry:
         try:
             from tableau_assistant.src.orchestration.tools.schema_tool import get_schema_module
             self.register(
-                NodeType.UNDERSTANDING,
+                NodeType.SEMANTIC_PARSER,
                 get_schema_module,
                 tags=["schema", "token_optimization"]
             )
@@ -265,19 +265,19 @@ class ToolRegistry:
         try:
             from tableau_assistant.src.orchestration.tools.date_tool import process_time_filter, calculate_relative_dates, detect_date_format
             self.register(
-                NodeType.UNDERSTANDING,
+                NodeType.SEMANTIC_PARSER,
                 process_time_filter,
                 dependencies=["date_manager"],
                 tags=["date", "parsing"]
             )
             self.register(
-                NodeType.UNDERSTANDING,
+                NodeType.SEMANTIC_PARSER,
                 calculate_relative_dates,
                 dependencies=["date_manager"],
                 tags=["date", "calculation"]
             )
             self.register(
-                NodeType.UNDERSTANDING,
+                NodeType.SEMANTIC_PARSER,
                 detect_date_format,
                 dependencies=["date_manager"],
                 tags=["date", "detection"]

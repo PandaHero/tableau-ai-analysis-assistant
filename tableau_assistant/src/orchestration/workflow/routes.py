@@ -6,8 +6,8 @@ This module contains the routing functions used by the StateGraph
 to determine the next node based on the current state.
 
 Routing decisions:
-1. After Understanding: is_analysis_question -> field_mapper or END
-2. After Replanner: should_replan + replan_count -> understanding or END
+1. After SemanticParser: intent.type == DATA_QUERY -> field_mapper or END
+2. After Replanner: should_replan + replan_count -> semantic_parser or END
 
 **Validates: Requirements 2.3, 2.4, 2.5, 17.4, 17.5, 17.6, 17.7**
 """
@@ -23,17 +23,15 @@ from tableau_assistant.src.core.models import ReplanDecision
 logger = logging.getLogger(__name__)
 
 
-def route_after_understanding(state: VizQLState) -> Literal["field_mapper", "end"]:
+def route_after_semantic_parser(state: VizQLState) -> Literal["field_mapper", "end"]:
     """
-    Route after Understanding/SemanticParser node.
+    Route after SemanticParser node.
     
-    Decision rules (supports both old UnderstandingAgent and new SemanticParserAgent):
-    1. New architecture: Check intent_type from SemanticParseResult
-       - DATA_QUERY -> field_mapper
-       - CLARIFICATION/GENERAL/IRRELEVANT -> end
-    2. Legacy: Check is_analysis_question
-       - True -> field_mapper
-       - False -> end
+    Decision rules based on intent type from SemanticParseResult:
+    - DATA_QUERY -> field_mapper (continue with data analysis)
+    - CLARIFICATION -> end (return clarification question)
+    - GENERAL -> end (return general response)
+    - IRRELEVANT -> end (return rejection message)
     
     Args:
         state: Current workflow state
@@ -77,14 +75,14 @@ def route_after_understanding(state: VizQLState) -> Literal["field_mapper", "end
 def route_after_replanner(
     state: VizQLState,
     max_replan_rounds: int = 3
-) -> Literal["understanding", "end"]:
+) -> Literal["semantic_parser", "end"]:
     """
     Smart replan routing logic.
     
     Decision rules (determined by Replanner Agent LLM):
     1. completeness_score >= 0.9 -> END (analysis complete)
     2. completeness_score < 0.9 and replan_count < max -> replan
-       - Route to understanding (re-understand new question)
+       - Route to semantic_parser (parse new exploration question)
     3. replan_count >= max -> END (force end)
     
     Args:
@@ -92,7 +90,7 @@ def route_after_replanner(
         max_replan_rounds: Maximum number of replan rounds (default 3)
     
     Returns:
-        Next node name: "understanding" or "end"
+        Next node name: "semantic_parser" or "end"
     """
     replan_decision = state.get("replan_decision")
     replan_count = state.get("replan_count", 0)
@@ -140,7 +138,7 @@ def route_after_replanner(
             f"completeness={completeness_score:.2f}, "
             f"next_question='{next_question[:50]}...'"
         )
-        return "understanding"
+        return "semantic_parser"
     
     logger.info(
         f"Analysis complete: completeness={completeness_score:.2f}, "

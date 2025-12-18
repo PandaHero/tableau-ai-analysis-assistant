@@ -26,7 +26,7 @@ from tableau_assistant.src.orchestration.workflow.factory import (
 )
 from tableau_assistant.src.orchestration.workflow.routes import (
     route_after_replanner,
-    route_after_understanding,
+    route_after_semantic_parser,
     calculate_completeness_score,
 )
 from tableau_assistant.src.orchestration.workflow.executor import (
@@ -65,7 +65,7 @@ __all__ = [
     "get_workflow_info",
     # Routing functions
     "route_after_replanner",
-    "route_after_understanding",
+    "route_after_semantic_parser",
     "calculate_completeness_score",
     # Context management
     "WorkflowContext",

@@ -117,7 +117,7 @@ class WorkflowPrinter:
     def _print_node_output(self, node_name: str, output: NodeOutput):
         """打印节点输出 (NodeOutput Pydantic 对象)"""
         
-        if node_name == "understanding":
+        if node_name == "semantic_parser":
             if output.semantic_query:
                 self._print_semantic_query(output.semantic_query)
         elif node_name == "field_mapper":

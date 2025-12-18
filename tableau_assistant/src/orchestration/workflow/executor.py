@@ -69,7 +69,7 @@ class NodeOutput(BaseModel):
     """节点输出数据结构 - 包含各节点可能的输出"""
     model_config = {"extra": "allow"}  # 允许额外字段
     
-    # Understanding 节点输出
+    # SemanticParser 节点输出
     semantic_query: Optional[SemanticQuery] = None
     is_analysis_question: Optional[bool] = None
     
@@ -152,7 +152,7 @@ class WorkflowExecutor:
     """
     
     # 工作流节点列表
-    NODES = ["understanding", "field_mapper", "query_builder", "execute", "insight", "replanner"]
+    NODES = ["semantic_parser", "field_mapper", "query_builder", "execute", "insight", "replanner"]
     
     def __init__(
         self,

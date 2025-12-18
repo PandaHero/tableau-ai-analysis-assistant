@@ -10,7 +10,7 @@ Agent 基础工具模块
 设计原则：
 - 提供工具函数，不强制继承
 - 每个 Agent 自己定义 Prompt 和处理逻辑
-- 参考 understanding/node.py 的实现模式
+- 参考 semantic_parser/node.py 的实现模式
 
 使用示例：
 
@@ -25,7 +25,7 @@ Agent 基础工具模块
     # 在 Agent 节点中使用
     async def my_agent_node(state, config):
         # 方式 1：使用 agent_name 自动选择 temperature
-        llm = get_llm(agent_name="understanding")  # temperature=0.1
+        llm = get_llm(agent_name="semantic_parser")  # temperature=0.1
         
         # 方式 2：直接指定 temperature
         llm = get_llm(temperature=0.1)
@@ -72,7 +72,7 @@ from tableau_assistant.src.infra.ai import get_llm as _get_llm
 # ═══════════════════════════════════════════════════════════════════════════
 
 AGENT_TEMPERATURE_CONFIG = {
-    "understanding": 0.1,       # 需要精确理解用户意图
+    "semantic_parser": 0.1,     # 需要精确理解用户意图
     "dimension_hierarchy": 0.1, # 需要精确推断层级关系
     "field_mapper": 0.1,        # 需要精确的字段映射
     "insight": 0.4,             # 需要创造性发现洞察
@@ -110,10 +110,10 @@ def get_llm(
     
     Examples:
         # 使用 agent 对应的 temperature
-        llm = get_llm(agent_name="understanding")  # temperature=0.1
+        llm = get_llm(agent_name="semantic_parser")  # temperature=0.1
         
         # 显式指定 temperature（覆盖 agent_name）
-        llm = get_llm(agent_name="understanding", temperature=0.3)
+        llm = get_llm(agent_name="semantic_parser", temperature=0.3)
         
         # 直接指定 temperature
         llm = get_llm(temperature=0.1)
@@ -322,7 +322,7 @@ async def call_llm_with_tools(
         LLM 最终响应内容（字符串）
     
     Example:
-        llm = get_llm(temperature=0.1)  # 或 get_llm(agent_name="understanding")
+        llm = get_llm(temperature=0.1)  # 或 get_llm(agent_name="semantic_parser")
         tools = [get_metadata, calculate_date_range]
         messages = MY_PROMPT.format_messages(question="各省份销售额")
         

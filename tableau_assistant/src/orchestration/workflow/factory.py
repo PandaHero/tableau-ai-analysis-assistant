@@ -4,9 +4,9 @@ Tableau Workflow Factory
 
 Creates the main Tableau Assistant workflow with middleware support.
 
-Workflow nodes (6 nodes, Boost merged into Understanding):
-1. Understanding Agent (LLM) - Question classification + semantic understanding
-2. FieldMapper Node (RAG + LLM hybrid) - Semantic field mapping
+Workflow nodes (6 nodes):
+1. SemanticParser Agent (LLM) - Semantic parsing with Step1 + Step2 + Observer
+2. FieldMapper Node (RAG + LLM hybrid) - Business term to technical field mapping
 3. QueryBuilder Node (pure code) - VizQL query generation
 4. Execute Node (pure code) - VizQL API execution
 5. Insight Agent (LLM) - Data insight analysis
@@ -47,7 +47,7 @@ from tableau_assistant.src.orchestration.middleware import (
 )
 from tableau_assistant.src.orchestration.workflow.routes import (
     route_after_replanner,
-    route_after_understanding,
+    route_after_semantic_parser,
 )
 
 # Import Node implementations
@@ -56,7 +56,6 @@ from tableau_assistant.src.nodes.query_builder import query_builder_node as _que
 from tableau_assistant.src.nodes.execute import execute_node as _execute_node
 
 # Import Agent implementations
-# Use new SemanticParserAgent instead of old UnderstandingAgent
 from tableau_assistant.src.agents.semantic_parser.node import semantic_parser_node as _semantic_parser_node
 from tableau_assistant.src.agents.insight.node import insight_node as _insight_node
 
@@ -231,9 +230,7 @@ def create_workflow(
     Create the Tableau Assistant workflow.
     
     The workflow contains 6 nodes:
-    Understanding -> FieldMapper -> QueryBuilder -> Execute -> Insight -> Replanner
-    
-    Note: Boost Agent has been removed, its functionality merged into Understanding Agent.
+    SemanticParser -> FieldMapper -> QueryBuilder -> Execute -> Insight -> Replanner
     
     All LLM nodes share the same middleware stack.
     
@@ -283,14 +280,9 @@ def create_workflow(
     # Create StateGraph
     graph = StateGraph(VizQLState)
     
-    # ========== Define placeholder node functions ==========
-    # These will be replaced with actual implementations in subsequent tasks
-    
-    # Understanding Agent node uses actual implementation
-    # imported from tableau_assistant.src.agents.understanding
-    
-    # Use the actual FieldMapper Node implementation
-    # The _field_mapper_node is imported from tableau_assistant.src.agents.field_mapper
+    # ========== Node implementations ==========
+    # SemanticParser: imported from tableau_assistant.src.agents.semantic_parser
+    # FieldMapper: imported from tableau_assistant.src.agents.field_mapper
     
     # QueryBuilder and Execute nodes use actual implementations
     # imported from tableau_assistant.src.nodes
@@ -304,7 +296,7 @@ def create_workflow(
         - Evaluate completeness (completeness_score)
         - Identify missing aspects (missing_aspects)
         - Generate new questions (new_questions)
-        - Route decision: should_replan=True -> Understanding, False -> END
+        - Route decision: should_replan=True -> SemanticParser, False -> END
         
         Output: ReplanDecision Pydantic object
         
@@ -422,24 +414,23 @@ def create_workflow(
         return result
     
     # ========== Add nodes to graph (6 nodes) ==========
-    # Use new SemanticParserAgent (LLM combination: Step1 + Step2 + Observer)
-    graph.add_node("understanding", _semantic_parser_node)  # Renamed from understanding to semantic_parser
-    graph.add_node("field_mapper", _field_mapper_node)  # Use actual implementation
-    graph.add_node("query_builder", _query_builder_node)  # Use actual implementation
-    graph.add_node("execute", _execute_node)  # Use actual implementation
-    graph.add_node("insight", _insight_node)  # Use actual implementation
+    graph.add_node("semantic_parser", _semantic_parser_node)  # Step1 + Step2 + Observer
+    graph.add_node("field_mapper", _field_mapper_node)
+    graph.add_node("query_builder", _query_builder_node)
+    graph.add_node("execute", _execute_node)
+    graph.add_node("insight", _insight_node)
     graph.add_node("replanner", replanner_node)
     
     # ========== Add edges ==========
     
-    # START -> Understanding
-    graph.add_edge(START, "understanding")
+    # START -> SemanticParser
+    graph.add_edge(START, "semantic_parser")
     
-    # Understanding -> FieldMapper or END (conditional)
-    # If is_analysis_question=False, route to END
+    # SemanticParser -> FieldMapper or END (conditional)
+    # If intent.type != DATA_QUERY, route to END
     graph.add_conditional_edges(
-        "understanding",
-        route_after_understanding,
+        "semantic_parser",
+        route_after_semantic_parser,
         {
             "field_mapper": "field_mapper",
             "end": END,
@@ -458,12 +449,12 @@ def create_workflow(
     # Insight -> Replanner
     graph.add_edge("insight", "replanner")
     
-    # Replanner -> Understanding or END (conditional)
+    # Replanner -> SemanticParser or END (conditional)
     graph.add_conditional_edges(
         "replanner",
         lambda state: route_after_replanner(state, config.get("max_replan_rounds", 3)),
         {
-            "understanding": "understanding",
+            "semantic_parser": "semantic_parser",
             "end": END,
         }
     )
@@ -526,11 +517,11 @@ def get_workflow_info(workflow: StateGraph) -> Dict[str, object]:
         checkpointer_type = type(workflow.checkpointer).__name__
     
     return {
-        "nodes": ["understanding", "field_mapper", "query_builder", "execute", "insight", "replanner"],
+        "nodes": ["semantic_parser", "field_mapper", "query_builder", "execute", "insight", "replanner"],
         "middleware": middleware_names,
         "checkpointer": checkpointer_type,
         "config": config,
-        "architecture": "semantic_parser_agent",  # New LLM combination architecture
+        "architecture": "semantic_parser_agent",  # Step1 + Step2 + Observer
     }
 
 
