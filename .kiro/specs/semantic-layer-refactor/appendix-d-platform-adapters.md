@@ -515,15 +515,70 @@ def _build_over_clause(
     return f"OVER ({' '.join(parts)})"
 ```
 
+## 验证结果模型
+
+```python
+class ValidationResult(BaseModel):
+    """验证结果"""
+    
+    is_valid: bool
+    """是否验证通过"""
+    
+    errors: list[ValidationError] = []
+    """错误列表"""
+    
+    warnings: list[str] = []
+    """警告列表"""
+    
+    auto_fixed: bool = False
+    """是否进行了自动修正"""
+```
+
 ## 平台映射总结
 
-| Computation | partition_by | Tableau | Power BI | SQL |
-|-------------|--------------|---------|----------|-----|
+### 计算类型映射
+
+| OperationType | partition_by | Tableau | Power BI | SQL |
+|---------------|--------------|---------|----------|-----|
 | RANK | [] | RANK() Addressing=全部 | RANKX(ALL()) | RANK() OVER () |
 | RANK | [月份] | RANK() Partitioning=月份 | RANKX(ALLEXCEPT(月份)) | RANK() OVER (PARTITION BY 月份) |
+| DENSE_RANK | [] | RANK(DENSE) | RANKX(..., DENSE) | DENSE_RANK() OVER () |
 | PERCENT | [] | PERCENT_OF_TOTAL() | DIVIDE + ALL() | SUM()/SUM() OVER () |
 | PERCENT | [月份] | PERCENT_OF_TOTAL() Partitioning=月份 | DIVIDE + ALLEXCEPT(月份) | SUM()/SUM() OVER (PARTITION BY 月份) |
 | RUNNING_SUM | [] | RUNNING_SUM() | CALCULATE + FILTER | SUM() OVER (ORDER BY) |
 | RUNNING_SUM | [省份] | RUNNING_SUM() Partitioning=省份 | CALCULATE + FILTER + ALLEXCEPT | SUM() OVER (PARTITION BY 省份 ORDER BY) |
+| RUNNING_AVG | [] | RUNNING_AVG() | CALCULATE + FILTER | AVG() OVER (ORDER BY) |
+| MOVING_AVG | [] | WINDOW_AVG() | AVERAGEX + DATESINPERIOD | AVG() OVER (ROWS N PRECEDING) |
+| MOVING_SUM | [] | WINDOW_SUM() | SUMX + DATESINPERIOD | SUM() OVER (ROWS N PRECEDING) |
 | YEAR_AGO | [省份] | LOOKUP(-1, YEAR) | SAMEPERIODLASTYEAR | LAG() OVER (PARTITION BY 省份) |
+| PERIOD_AGO | [省份] | LOOKUP(-1) | DATEADD | LAG() OVER (PARTITION BY 省份) |
+| DIFFERENCE | [] | 当前值 - LOOKUP(-1) | 当前值 - 上期值 | 当前值 - LAG() |
+| GROWTH_RATE | [] | (当前-上期)/上期 | DIVIDE(当前-上期, 上期) | (当前-LAG())/LAG() |
 | FIXED | [客户] | {FIXED [客户]: SUM()} | CALCULATE + ALLEXCEPT(客户) | 子查询 |
+
+### FIXED 类型的特殊处理
+
+`FIXED` 是粒度类操作，平台适配器根据 `partition_by` 与视图维度的关系，自动决定具体实现：
+
+| partition_by 与视图维度关系 | Tableau LOD 类型 | 说明 |
+|---------------------------|-----------------|------|
+| partition_by 与视图维度无关 | FIXED | 固定到指定粒度 |
+| partition_by 是视图维度的子集 | EXCLUDE | 排除某些维度，更粗粒度 |
+| partition_by 包含视图维度外的字段 | INCLUDE | 包含额外维度，更细粒度 |
+
+```python
+def determine_lod_type(partition_by: list[str], view_dimensions: list[str]) -> str:
+    """根据 partition_by 与视图维度的关系，决定 LOD 类型"""
+    
+    partition_set = set(partition_by)
+    view_set = set(view_dimensions)
+    
+    if partition_set == view_set:
+        return "NONE"  # 视图粒度，无需 LOD
+    elif partition_set.issubset(view_set):
+        return "EXCLUDE"  # 排除某些维度
+    elif partition_set.issuperset(view_set):
+        return "INCLUDE"  # 包含额外维度
+    else:
+        return "FIXED"  # 完全独立的粒度
+```

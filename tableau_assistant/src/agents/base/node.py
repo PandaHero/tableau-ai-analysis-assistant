@@ -61,10 +61,10 @@ T = TypeVar('T', bound=BaseModel)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# LLM 获取（从 model_manager 导入）
+# LLM 获取（从 infra/ai 导入）
 # ═══════════════════════════════════════════════════════════════════════════
 
-from tableau_assistant.src.model_manager import get_llm as _get_llm
+from tableau_assistant.src.infra.ai import get_llm as _get_llm
 
 
 # ═══════════════════════════════════════════════════════════════════════════

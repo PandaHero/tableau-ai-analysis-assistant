@@ -5,7 +5,7 @@ Agent 模块
 
 架构：
 - base/: 基础能力（LLM 调用、工具处理、Prompt 模板）
-- understanding/: 问题理解 Agent（含原 Boost 功能）
+- semantic_parser/: 语义解析 Agent（LLM 组合：Step1 + Step2 + Observer）
 - dimension_hierarchy/: 维度层级推断 Agent
 - field_mapper/: 字段映射 Agent（RAG + LLM 混合）
 - insight/: 洞察生成 Agent（Prompt 定义）
@@ -16,15 +16,15 @@ Agent 模块
 - routes.py: 路由逻辑
 
 使用示例：
-    from tableau_assistant.src.agents.understanding import understanding_node
+    from tableau_assistant.src.agents.semantic_parser import semantic_parser_node
     from tableau_assistant.src.agents.dimension_hierarchy import dimension_hierarchy_node
     from tableau_assistant.src.agents.field_mapper import field_mapper_node
     from tableau_assistant.src.agents.replanner import ReplannerAgent
-    from tableau_assistant.src.workflow.factory import create_tableau_workflow
+    from tableau_assistant.src.orchestration.workflow.factory import create_workflow
 """
 
 # 导出主要 Agent 节点
-from .understanding import understanding_node
+from .semantic_parser import semantic_parser_node
 from .dimension_hierarchy import dimension_hierarchy_node
 from .field_mapper import field_mapper_node, FieldMapperNode
 
@@ -32,7 +32,7 @@ from .field_mapper import field_mapper_node, FieldMapperNode
 from .replanner import ReplannerAgent, REPLANNER_PROMPT
 
 __all__ = [
-    "understanding_node",
+    "semantic_parser_node",
     "dimension_hierarchy_node",
     "field_mapper_node",
     "FieldMapperNode",

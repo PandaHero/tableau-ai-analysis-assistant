@@ -4,6 +4,216 @@
 
 本文档定义了语义层的完整数据模型，所有模型都是平台无关的。
 
+## Step 1 相关模型
+
+```python
+class Step1Output(BaseModel):
+    """Step 1 输出"""
+    
+    # ===== 核心输出 =====
+    restated_question: str
+    """重述后的完整问题（自然语言）"""
+    
+    # ===== 结构化输出（用于 Step 2 验证） =====
+    what: What
+    """目标（度量）"""
+    
+    where: Where
+    """范围（维度 + 筛选）"""
+    
+    how_type: HowType
+    """计算类型"""
+    
+    # ===== 意图分类 =====
+    intent: Intent
+    """意图分类"""
+
+
+class What(BaseModel):
+    """What - 目标"""
+    measures: list[MeasureSpec]
+
+
+class MeasureSpec(BaseModel):
+    """度量规格"""
+    field: str
+    """字段名（业务术语）"""
+    
+    aggregation: str = "SUM"
+    """聚合方式"""
+
+
+class Where(BaseModel):
+    """Where - 范围"""
+    dimensions: list[DimensionSpec]
+    filters: list[FilterSpec]
+
+
+class DimensionSpec(BaseModel):
+    """维度规格"""
+    field: str
+    """字段名"""
+    
+    granularity: str | None = None
+    """日期粒度（如 YEAR, MONTH, DAY）"""
+
+
+class FilterSpec(BaseModel):
+    """筛选规格"""
+    field: str
+    type: str  # SET, DATE_RANGE, NUMERIC_RANGE, TEXT_MATCH
+    values: list | dict
+
+
+class HowType(str, Enum):
+    """操作类型"""
+    SIMPLE = "SIMPLE"           # 简单聚合
+    RANKING = "RANKING"         # 排名类
+    CUMULATIVE = "CUMULATIVE"   # 累计类
+    COMPARISON = "COMPARISON"   # 比较类（占比、同比环比）
+    GRANULARITY = "GRANULARITY" # 粒度类（固定粒度聚合）
+
+
+class Intent(BaseModel):
+    """意图"""
+    type: IntentType
+    reasoning: str
+
+
+class IntentType(str, Enum):
+    """意图类型"""
+    DATA_QUERY = "DATA_QUERY"
+    CLARIFICATION = "CLARIFICATION"
+    GENERAL = "GENERAL"
+    IRRELEVANT = "IRRELEVANT"
+```
+
+## Step 2 相关模型
+
+```python
+class Step2Output(BaseModel):
+    """Step 2 输出"""
+    
+    computations: list[Computation]
+    """计算定义列表"""
+    
+    reasoning: str
+    """推理过程"""
+    
+    validation: Step2Validation
+    """自我验证结果"""
+
+
+class Step2Validation(BaseModel):
+    """Step 2 自我验证结果"""
+    
+    target_check: ValidationCheck
+    """target 验证"""
+    
+    partition_by_check: ValidationCheck
+    """partition_by 验证"""
+    
+    operation_check: ValidationCheck
+    """operation.type 验证"""
+    
+    all_valid: bool
+    """所有检查是否都通过"""
+    
+    inconsistencies: list[str]
+    """发现的不一致之处"""
+
+
+class ValidationCheck(BaseModel):
+    """验证检查"""
+    
+    inferred_value: str | list[str]
+    """从 restated_question 推断的值"""
+    
+    reference_value: str | list[str]
+    """Step 1 结构化输出中的值"""
+    
+    is_match: bool
+    """是否匹配"""
+    
+    note: str
+    """说明"""
+```
+
+## Observer 相关模型
+
+```python
+class ObserverInput(BaseModel):
+    """Observer 输入"""
+    
+    original_question: str
+    """原始问题（用于回溯）"""
+    
+    step1: Step1Output
+    """Step 1 输出"""
+    
+    step2: Step2Output
+    """Step 2 输出"""
+
+
+class ObserverOutput(BaseModel):
+    """Observer 输出"""
+    
+    is_consistent: bool
+    """Step 1 和 Step 2 是否一致"""
+    
+    conflicts: list[Conflict]
+    """发现的冲突"""
+    
+    decision: ObserverDecision
+    """Observer 的决策"""
+    
+    correction: Correction | None = None
+    """修正内容（仅当 decision=CORRECT）"""
+    
+    final_result: Computation | None = None
+    """最终结果"""
+
+
+class Conflict(BaseModel):
+    """冲突"""
+    
+    aspect: str
+    """冲突的方面（restatement/structure/semantic）"""
+    
+    description: str
+    """冲突描述"""
+    
+    step1_value: str
+    """Step 1 的值"""
+    
+    step2_value: str
+    """Step 2 的值"""
+
+
+class Correction(BaseModel):
+    """修正"""
+    
+    field: str
+    """要修正的字段"""
+    
+    original_value: str | list[str]
+    """原值"""
+    
+    corrected_value: str | list[str]
+    """修正值"""
+    
+    reason: str
+    """修正原因"""
+
+
+class ObserverDecision(str, Enum):
+    """Observer 决策"""
+    ACCEPT = "ACCEPT"       # 一致，接受 Step 2 结果
+    CORRECT = "CORRECT"     # 有小冲突，Observer 修正
+    RETRY = "RETRY"         # 有大冲突，需要重新推理
+    CLARIFY = "CLARIFY"     # 无法判断，需要用户澄清
+```
+
 ## 核心模型
 
 ### SemanticQuery
@@ -135,7 +345,11 @@ class Operation(BaseModel):
 
 
 class OperationType(str, Enum):
-    """操作类型枚举"""
+    """计算操作类型枚举
+    
+    这是通用模型的核心枚举，描述用户想要的计算操作。
+    平台适配器根据此类型转换为平台特定实现。
+    """
     
     # ========== 排名类 ==========
     RANK = "RANK"
@@ -144,18 +358,12 @@ class OperationType(str, Enum):
     DENSE_RANK = "DENSE_RANK"
     """密集排名（1, 2, 2, 3, ...）"""
     
-    TOP_N = "TOP_N"
-    """前 N 名，params: {n: int}"""
-    
     # ========== 累计类 ==========
     RUNNING_SUM = "RUNNING_SUM"
     """累计求和"""
     
     RUNNING_AVG = "RUNNING_AVG"
     """累计平均"""
-    
-    RUNNING_COUNT = "RUNNING_COUNT"
-    """累计计数"""
     
     # ========== 移动类 ==========
     MOVING_AVG = "MOVING_AVG"
@@ -183,7 +391,11 @@ class OperationType(str, Enum):
     
     # ========== 粒度类 ==========
     FIXED = "FIXED"
-    """固定粒度聚合（不受视图影响）"""
+    """固定粒度聚合（不受视图影响）
+    
+    平台适配器根据 partition_by 与视图维度的关系，
+    自动决定使用 Tableau 的 FIXED/INCLUDE/EXCLUDE。
+    """
 ```
 
 ### Filter
@@ -284,6 +496,20 @@ class TextMatchType(str, Enum):
     ENDS_WITH = "ENDS_WITH"       # 结尾
     EXACT = "EXACT"               # 精确匹配
     REGEX = "REGEX"               # 正则表达式
+
+
+class TopNFilter(Filter):
+    """Top N 筛选"""
+    filter_type: Literal[FilterType.TOP_N] = FilterType.TOP_N
+    
+    n: int
+    """返回前 N 条"""
+    
+    by_field: str
+    """按哪个字段排序"""
+    
+    direction: SortDirection = SortDirection.DESC
+    """排序方向（DESC = 前 N 名，ASC = 后 N 名）"""
 ```
 
 ### Sort
@@ -308,71 +534,6 @@ class SortDirection(str, Enum):
     DESC = "DESC"
 ```
 
-## Step 1 相关模型
-
-```python
-class Step1Output(BaseModel):
-    """Step 1 输出"""
-    
-    what: What
-    where: Where
-    how: How
-    semantic_restatement: str
-
-
-class What(BaseModel):
-    """What - 目标"""
-    measures: list[MeasureSpec]
-
-
-class MeasureSpec(BaseModel):
-    """度量规格"""
-    field: str
-    aggregation: str = "SUM"
-
-
-class Where(BaseModel):
-    """Where - 范围"""
-    dimensions: list[DimensionSpec]
-    filters: list[FilterSpec]
-
-
-class DimensionSpec(BaseModel):
-    """维度规格"""
-    field: str
-    granularity: str | None = None
-
-
-class FilterSpec(BaseModel):
-    """筛选规格"""
-    field: str
-    type: str
-    values: list | dict
-
-
-class How(BaseModel):
-    """How - 操作"""
-    type: HowType
-    hints: dict = {}
-
-
-class HowType(str, Enum):
-    """操作类型"""
-    SIMPLE = "SIMPLE"
-    RANKING = "RANKING"
-    CUMULATIVE = "CUMULATIVE"
-    COMPARISON = "COMPARISON"
-    GRANULARITY = "GRANULARITY"
-```
-
-## Step 2 相关模型
-
-```python
-class Step2Output(BaseModel):
-    """Step 2 输出"""
-    computations: list[Computation]
-```
-
 ## 解析结果模型
 
 ```python
@@ -393,20 +554,6 @@ class SemanticParseResult(BaseModel):
     
     general_response: str | None = None
     """通用响应（仅 GENERAL 意图）"""
-
-
-class Intent(BaseModel):
-    """意图"""
-    type: IntentType
-    reasoning: str
-
-
-class IntentType(str, Enum):
-    """意图类型"""
-    DATA_QUERY = "DATA_QUERY"
-    CLARIFICATION = "CLARIFICATION"
-    GENERAL = "GENERAL"
-    IRRELEVANT = "IRRELEVANT"
 
 
 class ClarificationQuestion(BaseModel):
@@ -454,23 +601,227 @@ class FieldMetadata(BaseModel):
     """示例值"""
 ```
 
+## 验证和结果模型
+
+```python
+class ValidationResult(BaseModel):
+    """验证结果"""
+    
+    is_valid: bool
+    """是否验证通过"""
+    
+    errors: list[ValidationError] = []
+    """错误列表"""
+    
+    warnings: list[str] = []
+    """警告列表"""
+    
+    auto_fixed: bool = False
+    """是否进行了自动修正"""
+
+
+class ValidationError(BaseModel):
+    """验证错误"""
+    
+    error_type: str
+    """错误类型"""
+    
+    field_path: str
+    """错误字段路径"""
+    
+    message: str
+    """错误消息"""
+    
+    suggestion: str | None = None
+    """修复建议"""
+
+
+class QueryResult(BaseModel):
+    """查询结果"""
+    
+    columns: list[ColumnInfo]
+    """列信息"""
+    
+    rows: list[dict]
+    """数据行"""
+    
+    row_count: int
+    """行数"""
+    
+    execution_time_ms: int | None = None
+    """执行时间（毫秒）"""
+
+
+class ColumnInfo(BaseModel):
+    """列信息"""
+    
+    name: str
+    """列名"""
+    
+    data_type: str
+    """数据类型"""
+    
+    is_dimension: bool = False
+    """是否是维度"""
+    
+    is_measure: bool = False
+    """是否是度量"""
+    
+    is_computation: bool = False
+    """是否是计算字段"""
+```
+
 ## 模型关系图
 
 ```
 SemanticParseResult
 ├── restated_question: str
 ├── intent: Intent
-├── semantic_query: SemanticQuery
+│   ├── type: IntentType (DATA_QUERY | CLARIFICATION | GENERAL | IRRELEVANT)
+│   └── reasoning: str
+├── semantic_query: SemanticQuery (仅 DATA_QUERY)
 │   ├── dimensions: list[DimensionField]
 │   ├── measures: list[MeasureField]
 │   ├── computations: list[Computation]
 │   │   ├── target: str
 │   │   ├── partition_by: list[str]
-│   │   └── operation: Operation
-│   │       ├── type: OperationType
-│   │       └── params: dict
+│   │   ├── operation: Operation
+│   │   │   ├── type: OperationType
+│   │   │   └── params: dict
+│   │   └── alias: str | None
 │   ├── filters: list[Filter]
-│   └── sorts: list[Sort]
-├── clarification: ClarificationQuestion
-└── general_response: str
+│   │   ├── SetFilter
+│   │   ├── DateRangeFilter
+│   │   ├── NumericRangeFilter
+│   │   ├── TextMatchFilter
+│   │   └── TopNFilter
+│   ├── sorts: list[Sort]
+│   └── row_limit: int | None
+├── clarification: ClarificationQuestion (仅 CLARIFICATION)
+│   ├── question: str
+│   ├── options: list[str] | None
+│   └── field_reference: str | None
+└── general_response: str (仅 GENERAL)
 ```
+
+## LLM 组合数据流
+
+```
+用户问题 + 历史对话 + 元数据
+        │
+        ▼
+┌───────────────────────────────────────────────────────────────┐
+│  Step 1: 语义理解与问题重述                                    │
+│                                                               │
+│  输出: Step1Output                                            │
+│  ├── restated_question ──────────────────────────────────────┼──→ Step 2 主要输入
+│  ├── what ───────────────────────────────────────────────────┼──→ Step 2 验证 target
+│  ├── where ──────────────────────────────────────────────────┼──→ Step 2 验证 partition_by
+│  ├── how_type ───────────────────────────────────────────────┼──→ Step 2 验证 operation.type
+│  └── intent ─────────────────────────────────────────────────┼──→ 决定后续流程
+└───────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────────────────────────────────────┐
+│                    intent.type == ?                            │
+├───────────────┬───────────────┬───────────────┬───────────────┤
+│  DATA_QUERY   │ CLARIFICATION │    GENERAL    │  IRRELEVANT   │
+└───────┬───────┴───────┬───────┴───────┬───────┴───────┬───────┘
+        │               │               │               │
+        ▼               ▼               ▼               ▼
+  继续处理        生成澄清问题     生成通用响应      拒绝处理
+        │               │               │               │
+        │               ▼               ▼               ▼
+        │         返回 clarification  返回 general_response  返回提示
+        │
+        ▼
+    how_type == SIMPLE?
+        │
+    ┌───┴───┐
+   Yes      No
+    │       │
+    ▼       ▼
+  直接   ┌───────────────────────────────────────────────────────┐
+  构建   │  Step 2: 计算推理与自我验证                            │
+  查询   │                                                       │
+         │  输出: Step2Output                                    │
+         │  ├── computations ────────────────────────────────────┼──→ 计算定义
+         │  ├── reasoning                                        │
+         │  └── validation                                       │
+         │      ├── target_check                                 │
+         │      ├── partition_by_check                           │
+         │      ├── operation_check                              │
+         │      ├── all_valid ───────────────────────────────────┼──→ 决定是否需要 Observer
+         │      └── inconsistencies                              │
+         └───────────────────────────────────────────────────────┘
+                │
+                ▼
+         validation.all_valid?
+                │
+            ┌───┴───┐
+           Yes      No
+            │       │
+            ▼       ▼
+         输出   ┌───────────────────────────────────────────────┐
+         结果   │  Observer: 一致性检查（按需介入）              │
+               │                                                │
+               │  输出: ObserverOutput                          │
+               │  ├── is_consistent                             │
+               │  ├── conflicts                                 │
+               │  ├── decision ─────────────────────────────────┼──→ ACCEPT/CORRECT/RETRY/CLARIFY
+               │  ├── correction                                │
+               │  └── final_result ─────────────────────────────┼──→ 最终计算定义
+               └────────────────────────────────────────────────┘
+                        │
+                        ▼
+                ┌───────────────┐
+                │ ACCEPT/CORRECT │ → 输出结果
+                │ RETRY          │ → 重新执行 Step 1/2
+                │ CLARIFY        │ → 请求用户澄清
+                └───────────────┘
+```
+
+## 验证规则映射
+
+### operation_check 的映射关系
+
+```python
+OPERATION_TYPE_MAPPING = {
+    HowType.RANKING: [
+        OperationType.RANK, 
+        OperationType.DENSE_RANK
+    ],
+    HowType.CUMULATIVE: [
+        OperationType.RUNNING_SUM, 
+        OperationType.RUNNING_AVG, 
+        OperationType.MOVING_AVG, 
+        OperationType.MOVING_SUM
+    ],
+    HowType.COMPARISON: [
+        OperationType.PERCENT, 
+        OperationType.DIFFERENCE, 
+        OperationType.GROWTH_RATE, 
+        OperationType.YEAR_AGO, 
+        OperationType.PERIOD_AGO
+    ],
+    HowType.GRANULARITY: [
+        OperationType.FIXED
+    ],
+}
+
+# 验证逻辑
+is_match = operation.type in OPERATION_TYPE_MAPPING[how_type]
+```
+
+### 分区推断规则
+
+| restated_question 中的关键词 | partition_by | 说明 |
+|---------------------------|--------------|------|
+| "排名"（无分区词） | [] | 全局排名 |
+| "每月排名"、"月内排名" | [时间维度] | 按月分区 |
+| "每省排名" | [省份] | 按省份分区 |
+| "占全国比例"、"占总体" | [] | 分母是全局 |
+| "占当月比例" | [时间维度] | 分母是当月 |
+| "同比"、"去年同期" | [非时间维度] | 沿时间比较 |
+| "累计"（无分区词） | [] | 全局累计 |
+| "每省累计" | [省份] | 按省份分区累计 |

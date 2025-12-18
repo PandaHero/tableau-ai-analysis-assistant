@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Set
 
-from tableau_assistant.src.models.metadata import (
+from tableau_assistant.src.core.models import (
     Metadata,
     DimensionHierarchyResult,
     DimensionAttributes,
@@ -138,7 +138,7 @@ def _compute_field_hash(dimension_fields: List[Any]) -> str:
 def _get_store_manager():
     """获取 StoreManager 实例"""
     try:
-        from tableau_assistant.src.capabilities.storage import StoreManager
+        from tableau_assistant.src.infra.storage import StoreManager
         return StoreManager()
     except Exception as e:
         logger.warning(f"无法获取 StoreManager: {e}")
@@ -697,10 +697,10 @@ def _get_dimension_rag():
     如果没有可用的提供者，返回 None（禁用 RAG）。
     """
     try:
-        from tableau_assistant.src.capabilities.rag.dimension_pattern import (
+        from tableau_assistant.src.infra.ai.rag.dimension_pattern import (
             DimensionHierarchyRAG,
         )
-        from tableau_assistant.src.model_manager import EmbeddingProviderFactory
+        from tableau_assistant.src.infra.ai import EmbeddingProviderFactory
         
         # 使用工厂方法自动检测 Embedding 提供者
         embedding_provider = EmbeddingProviderFactory.get_default()

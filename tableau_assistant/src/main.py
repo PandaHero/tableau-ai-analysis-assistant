@@ -46,7 +46,7 @@ app = FastAPI(
 )
 
 # 配置CORS
-from tableau_assistant.src.config.settings import settings
+from tableau_assistant.src.infra.config.settings import settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

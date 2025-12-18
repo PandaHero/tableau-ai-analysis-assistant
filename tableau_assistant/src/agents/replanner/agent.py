@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Replanner Agent
 
@@ -12,14 +13,11 @@ Design Specification: insight-design.md
 
 import logging
 import json
-from typing import Dict, List, Any, Optional, TYPE_CHECKING
+from typing import Dict, List, Any, Optional
 
-from tableau_assistant.src.models.replanner import ReplanDecision, ExplorationQuestion
+from tableau_assistant.src.core.models import ReplanDecision, ExplorationQuestion, Insight
 from tableau_assistant.src.agents.base import clean_json_output
 from .prompt import REPLANNER_PROMPT
-
-if TYPE_CHECKING:
-    from tableau_assistant.src.models.insight.models import Insight
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +58,7 @@ class ReplannerAgent:
     def _get_llm(self):
         """获取或创建 LLM 实例"""
         if self._llm is None:
-            from tableau_assistant.src.model_manager import get_llm
+            from tableau_assistant.src.infra.ai import get_llm
             self._llm = get_llm()
         return self._llm
     
@@ -83,7 +81,7 @@ class ReplannerAgent:
             data_insight_profile: Phase 1 统计分析结果
             dimension_hierarchy: 维度层级信息
             current_dimensions: 当前已分析的维度
-            current_round: 当前重规划轮次
+            current_round: 当前重规划轮数
             answered_questions: 已回答的问题列表（用于去重）
             
         Returns:
@@ -175,7 +173,7 @@ class ReplannerAgent:
                 confidence=0.3,
             )
     
-    def _format_insights_summary(self, insights: List["Insight"]) -> str:
+    def _format_insights_summary(self, insights: List[Insight]) -> str:
         """格式化洞察摘要
         
         Args:
@@ -279,7 +277,7 @@ class ReplannerAgent:
             return "（无已回答问题）"
         
         # 使用 trim_answered_questions 限制长度
-        from tableau_assistant.src.utils.conversation import trim_answered_questions
+        from tableau_assistant.src.infra.utils.conversation import trim_answered_questions
         trimmed = trim_answered_questions(questions)
         
         lines = []

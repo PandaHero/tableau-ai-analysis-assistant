@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 FieldMapper Prompt - 字段映射 Agent 的 Prompt 定义
 
@@ -8,8 +9,7 @@ from typing import Type
 from pydantic import BaseModel
 
 from tableau_assistant.src.agents.base.prompt import VizQLPrompt
-# 从 models 包导入数据模型（遵循数据模型集中管理原则）
-from tableau_assistant.src.models.field_mapper import SingleSelectionResult
+from tableau_assistant.src.core.models import SingleSelectionResult
 
 
 class FieldMapperPrompt(VizQLPrompt):
@@ -27,7 +27,7 @@ Expertise: semantic matching, field disambiguation, context-aware selection."""
     def get_task(self) -> str:
         return """Select the best matching technical field for the business term.
 
-Process: Analyze term semantics → Compare candidates → Consider context → Select best match or null."""
+Process: Analyze term semantics -> Compare candidates -> Consider context -> Select best match or null."""
     
     def get_specific_domain_knowledge(self) -> str:
         return """**Think step by step:**
@@ -46,9 +46,9 @@ Step 3: Consider context
 - Consider field role (dimension vs measure)
 
 Step 4: Make decision
-- High semantic match → select with high confidence
-- Partial match → select with medium confidence
-- No good match → set selected_field to null"""
+- High semantic match -> select with high confidence
+- Partial match -> select with medium confidence
+- No good match -> set selected_field to null"""
     
     def get_constraints(self) -> str:
         return """MUST: Only select from provided candidates

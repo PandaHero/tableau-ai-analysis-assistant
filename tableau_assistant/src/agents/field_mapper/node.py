@@ -21,11 +21,10 @@ import asyncio
 import hashlib
 import logging
 import time
-from typing import Dict, Any, Optional, List, Tuple, TYPE_CHECKING
+from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass, field
 
-if TYPE_CHECKING:
-    from langgraph.types import RunnableConfig
+from langgraph.types import RunnableConfig
 
 from .llm_selector import (
     LLMCandidateSelector,
@@ -33,12 +32,12 @@ from .llm_selector import (
     SingleSelectionResult,
 )
 
-from tableau_assistant.src.capabilities.rag.assembler import (
+from tableau_assistant.src.infra.ai.rag.assembler import (
     KnowledgeAssembler,
     AssemblerConfig,
     ChunkStrategy,
 )
-from tableau_assistant.src.capabilities.rag.reranker import LLMReranker
+from tableau_assistant.src.infra.ai.rag.reranker import LLMReranker
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +144,7 @@ class FieldMapperNode:
             self._store_manager = store_manager
         else:
             try:
-                from tableau_assistant.src.capabilities.storage.store_manager import get_store_manager
+                from tableau_assistant.src.infra.storage import get_store_manager
                 self._store_manager = get_store_manager()
             except Exception as e:
                 logger.warning(f"无法获取 StoreManager，缓存将不可用: {e}")
@@ -818,7 +817,7 @@ class FieldMapperNode:
 
 async def field_mapper_node(
     state: Dict[str, Any],
-    config: Optional["RunnableConfig"] = None,
+    config: Optional[RunnableConfig] = None,
 ) -> Dict[str, Any]:
     """
     FieldMapper Node function for StateGraph.
@@ -839,7 +838,7 @@ async def field_mapper_node(
     
     **Validates: Requirements 9.3**
     """
-    from tableau_assistant.src.models.field_mapper.models import MappedQuery, FieldMapping
+    from tableau_assistant.src.core.models.field_mapping import MappedQuery, FieldMapping
     from tableau_assistant.src.agents.base.middleware_runner import get_middleware_from_config
     
     start_time = time.time()
@@ -998,8 +997,8 @@ def _get_field_mapper(state: Dict[str, Any]) -> FieldMapperNode:
                 )
                 logger.info(f"两阶段架构已启用: {len(metadata.fields)} 个字段已索引")
             
-            from tableau_assistant.src.capabilities.rag.semantic_mapper import SemanticMapper
-            from tableau_assistant.src.capabilities.rag.field_indexer import FieldIndexer
+            from tableau_assistant.src.infra.ai.rag.semantic_mapper import SemanticMapper
+            from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
             
             field_indexer = FieldIndexer(datasource_luid=datasource_luid)
             if hasattr(metadata, 'fields'):
@@ -1011,8 +1010,8 @@ def _get_field_mapper(state: Dict[str, Any]) -> FieldMapperNode:
         except Exception as e:
             logger.warning(f"Failed to set up two-stage architecture: {e}")
             try:
-                from tableau_assistant.src.capabilities.rag.semantic_mapper import SemanticMapper
-                from tableau_assistant.src.capabilities.rag.field_indexer import FieldIndexer
+                from tableau_assistant.src.infra.ai.rag.semantic_mapper import SemanticMapper
+                from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
                 
                 field_indexer = FieldIndexer(datasource_luid=datasource_luid)
                 if hasattr(metadata, 'fields'):

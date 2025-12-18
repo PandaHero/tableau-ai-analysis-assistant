@@ -19,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from tableau_assistant.src.services.preload_service import (
+from tableau_assistant.src.api.preload_service import (
     PreloadService,
     PreloadStatus,
     get_preload_service,

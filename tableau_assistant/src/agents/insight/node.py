@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Insight Agent Node
 
@@ -14,20 +15,18 @@ Requirements:
 """
 
 import logging
-from typing import Dict, Optional, List, AsyncGenerator, TYPE_CHECKING
+from typing import Dict, Optional, List, AsyncGenerator
 
 from langgraph.types import RunnableConfig
 
 # 直接从具体模块导入，避免循环依赖
-# components/insight/__init__.py 导入 analyzer.py
+# components/__init__.py 导入 analyzer.py
 # analyzer.py 导入 agents/insight/prompt.py
-# 如果这里从 components/insight 包导入，会触发循环
-from tableau_assistant.src.components.insight.coordinator import AnalysisCoordinator
-from tableau_assistant.src.models.insight import InsightResult
-
-if TYPE_CHECKING:
-    from tableau_assistant.src.models.workflow.state import VizQLState
-    from tableau_assistant.src.models.vizql.execute_result import ExecuteResult
+# 如果这里从 components 包导入，会触发循环
+from tableau_assistant.src.agents.insight.components.coordinator import AnalysisCoordinator
+from tableau_assistant.src.core.models import InsightResult
+from tableau_assistant.src.platforms.tableau.models import ExecuteResult
+from tableau_assistant.src.orchestration.workflow.state import VizQLState
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ class InsightAgent:
     
     async def analyze(
         self,
-        query_result: "ExecuteResult",
+        query_result: ExecuteResult,
         context: Dict[str, object]
     ) -> InsightResult:
         """
@@ -106,7 +105,7 @@ class InsightAgent:
     
     async def analyze_streaming(
         self,
-        query_result: "ExecuteResult",
+        query_result: ExecuteResult,
         context: Dict[str, object]
     ) -> AsyncGenerator[Dict[str, object], None]:
         """
@@ -139,7 +138,7 @@ class InsightAgent:
             yield event
 
 
-async def insight_node(state: "VizQLState", config: RunnableConfig | None = None) -> Dict[str, object]:
+async def insight_node(state: VizQLState, config: RunnableConfig | None = None) -> Dict[str, object]:
     """
     Insight node entry point for LangGraph.
     
@@ -309,8 +308,9 @@ async def insight_node(state: "VizQLState", config: RunnableConfig | None = None
         }
 
 
+
 async def insight_node_streaming(
-    state: "VizQLState",
+    state: VizQLState,
     config: RunnableConfig | None = None
 ) -> AsyncGenerator[Dict[str, object], None]:
     """

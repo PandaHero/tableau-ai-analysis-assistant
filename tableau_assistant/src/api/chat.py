@@ -10,18 +10,18 @@ import json
 import time
 from typing import AsyncGenerator
 
-from tableau_assistant.src.models.api import (
-    VizQLQueryRequest,
-    VizQLQueryResponse,
+from tableau_assistant.src.api.models import (
+    ChatRequest,
+    ChatResponse,
     ErrorResponse,
     StreamEvent
 )
-from tableau_assistant.src.workflow.executor import WorkflowExecutor, EventType
+from tableau_assistant.src.orchestration.workflow.executor import WorkflowExecutor, EventType
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-async def resolve_datasource_luid(request: VizQLQueryRequest) -> str:
+async def resolve_datasource_luid(request: ChatRequest) -> str:
     """
     解析数据源 LUID
     
@@ -43,9 +43,9 @@ async def resolve_datasource_luid(request: VizQLQueryRequest) -> str:
     
     # 通过名称查找
     if request.datasource_name:
-        from tableau_assistant.src.bi_platforms.tableau import get_datasource_luid_by_name, get_tableau_auth_async
-        from tableau_assistant.src.capabilities.storage.store_manager import get_store_manager
-        from tableau_assistant.src.config.settings import settings
+        from tableau_assistant.src.platforms.tableau import get_datasource_luid_by_name, get_tableau_auth_async
+        from tableau_assistant.src.infra.storage import get_store_manager
+        from tableau_assistant.src.infra.config.settings import settings
         
         # 尝试从缓存获取
         store = get_store_manager()
@@ -101,7 +101,7 @@ async def resolve_datasource_luid(request: VizQLQueryRequest) -> str:
             )
     
     # 都没有提供，使用环境变量默认值
-    from tableau_assistant.src.config.settings import settings
+    from tableau_assistant.src.infra.config.settings import settings
     if settings.datasource_luid:
         return settings.datasource_luid
     
@@ -116,15 +116,15 @@ async def resolve_datasource_luid(request: VizQLQueryRequest) -> str:
 
 @router.post(
     "/chat",
-    response_model=VizQLQueryResponse,
+    response_model=ChatResponse,
     responses={
         400: {"model": ErrorResponse, "description": "请求参数错误"},
         500: {"model": ErrorResponse, "description": "服务器内部错误"}
     }
 )
-async def chat_query(request: VizQLQueryRequest) -> VizQLQueryResponse:
+async def chat_query(request: ChatRequest) -> ChatResponse:
     """
-    VizQL查询API（同步版本）
+    聊天查询API（同步版本）
     
     接收用户问题，返回完整的分析报告
     
@@ -203,7 +203,7 @@ async def chat_query(request: VizQLQueryRequest) -> VizQLQueryResponse:
         elif key_findings:
             executive_summary = "; ".join(key_findings[:3])
         
-        return VizQLQueryResponse(
+        return ChatResponse(
             executive_summary=executive_summary,
             key_findings=key_findings,
             analysis_path=analysis_path,
@@ -296,9 +296,9 @@ async def generate_sse_events(
 
 
 @router.post("/chat/stream")
-async def chat_query_stream(request: VizQLQueryRequest):
+async def chat_query_stream(request: ChatRequest):
     """
-    VizQL查询API（流式版本）
+    聊天查询API（流式版本）
     
     使用SSE推送实时进度，支持 token 级别的流式输出。
     
@@ -369,7 +369,7 @@ async def health_check():
     
     # 检查 LLM
     try:
-        from tableau_assistant.src.model_manager import get_llm
+        from tableau_assistant.src.infra.ai import get_llm
         llm = get_llm()
         checks["llm"] = {"status": "ok", "message": "LLM 连接正常"}
     except Exception as e:
@@ -378,9 +378,9 @@ async def health_check():
     
     # 检查 Tableau API
     try:
-        from tableau_assistant.src.bi_platforms.tableau import get_tableau_auth_async
+        from tableau_assistant.src.platforms.tableau import get_tableau_auth_async
         # 只检查配置是否存在，不实际调用 API
-        from tableau_assistant.src.config.settings import settings
+        from tableau_assistant.src.infra.config.settings import settings
         if settings.tableau_server_url and settings.tableau_site_name:
             checks["tableau"] = {"status": "ok", "message": "Tableau 配置正常"}
         else:
@@ -391,7 +391,7 @@ async def health_check():
     
     # 检查存储
     try:
-        from tableau_assistant.src.capabilities.storage.store_manager import get_store_manager
+        from tableau_assistant.src.infra.storage import get_store_manager
         store = get_store_manager()
         checks["storage"] = {"status": "ok", "message": "存储服务正常"}
     except Exception as e:

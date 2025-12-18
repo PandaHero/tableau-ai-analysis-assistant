@@ -1,11 +1,12 @@
+# -*- coding: utf-8 -*-
 """
 Insight Agent Prompts
 
 按照 PROMPT_AND_MODEL_GUIDE.md 规范实现的 Prompt 模板。
 
 核心原则：
-- Prompt 教 LLM 如何思考（Role, Task, Domain Knowledge, Constraints）
-- Schema（数据模型）告诉 LLM 输出什么（字段定义用 XML 标签）
+- Prompt 告诉 LLM 如何思考（Role, Task, Domain Knowledge, Constraints）
+- Schema（数据模型）告诉 LLM 输出什么（字段定义、XML 标签）
 - 使用 VizQLPrompt 基类的 4 段式结构
 - Output Model 自动注入 JSON Schema
 
@@ -18,7 +19,7 @@ from typing import Type, List
 from pydantic import BaseModel, Field, ConfigDict
 
 from tableau_assistant.src.agents.base.prompt import VizQLPrompt
-from tableau_assistant.src.models.insight import (
+from tableau_assistant.src.core.models import (
     Insight,
     NextBiteDecision,
     InsightQuality,
@@ -92,9 +93,9 @@ class CoordinatorPrompt(VizQLPrompt):
         return """Evaluate current analysis progress and decide next steps.
 
 Process:
-1. Review accumulated insights → Assess completeness
-2. Evaluate remaining chunks → Identify high-value targets
-3. Decide: Continue or Stop → If continue, which chunk next"""
+1. Review accumulated insights -> Assess completeness
+2. Evaluate remaining chunks -> Identify high-value targets
+3. Decide: Continue or Stop -> If continue, which chunk next"""
     
     def get_specific_domain_knowledge(self) -> str:
         return """**Think step by step:**
@@ -110,9 +111,9 @@ Step 2: Evaluate remaining data chunks
 - Are there anomaly chunks that need investigation?
 
 Step 3: Make decision
-- If completeness >= 0.8 and core question answered → Stop
-- If remaining chunks have low value → Stop
-- If important aspects missing → Continue with highest value chunk
+- If completeness >= 0.8 and core question answered -> Stop
+- If remaining chunks have low value -> Stop
+- If important aspects missing -> Continue with highest value chunk
 
 **Chunk Type Priority (for reference):**
 - anomalies: Highest priority (unexpected patterns)
@@ -170,10 +171,10 @@ class AnalystPrompt(VizQLPrompt):
 **IMPORTANT: Focus primarily on the actual data sample provided below. The data profile is supplementary context only.**
 
 Process:
-1. **Analyze data sample first** → Examine actual values, patterns, and relationships in the data
-2. Understand chunk context → What type of data is this?
-3. Use profile as reference → Compare findings with overall statistics
-4. Extract insights → Generate 2-5 structured insights based on data evidence"""
+1. **Analyze data sample first** -> Examine actual values, patterns, and relationships in the data
+2. Understand chunk context -> What type of data is this?
+3. Use profile as reference -> Compare findings with overall statistics
+4. Extract insights -> Generate 2-5 structured insights based on data evidence"""
     
     def get_specific_domain_knowledge(self) -> str:
         return """**Think step by step:**
@@ -254,7 +255,7 @@ class DirectAnalysisPrompt(VizQLPrompt):
     def get_task(self) -> str:
         return """Analyze data and extract key insights.
 
-Process: Understand context → Profile data → Identify patterns → Generate insights"""
+Process: Understand context -> Profile data -> Identify patterns -> Generate insights"""
     
     def get_specific_domain_knowledge(self) -> str:
         return """**Think step by step:**
@@ -270,10 +271,10 @@ Step 2: Profile the data
 - What is the concentration? (top N contribution)
 
 Step 3: Identify insight opportunities
-- Time-based change? → trend insight
-- Outliers/unexpected values? → anomaly insight
-- Group comparisons? → comparison insight
-- Distribution characteristics? → pattern insight
+- Time-based change? -> trend insight
+- Outliers/unexpected values? -> anomaly insight
+- Group comparisons? -> comparison insight
+- Distribution characteristics? -> pattern insight
 
 Step 4: Evaluate importance
 - Business impact: How significant is this finding?

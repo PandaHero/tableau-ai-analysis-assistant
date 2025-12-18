@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Execute Node
 
@@ -16,19 +17,15 @@ Requirements:
 """
 
 import logging
-import os
 import time
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional
 
 from langgraph.types import RunnableConfig
 
-from tableau_assistant.src.bi_platforms.tableau.vizql_client import VizQLClient
-from tableau_assistant.src.models.vizql.execute_result import ExecuteResult
-from tableau_assistant.src.exceptions import VizQLError
-
-if TYPE_CHECKING:
-    from tableau_assistant.src.models.workflow.state import VizQLState
-    from tableau_assistant.src.models.vizql.types import VizQLQuery
+from tableau_assistant.src.platforms.tableau.vizql_client import VizQLClient
+from tableau_assistant.src.platforms.tableau.models import ExecuteResult, VizQLQueryRequest as VizQLQuery
+from tableau_assistant.src.infra.exceptions import VizQLError
+from tableau_assistant.src.orchestration.workflow.state import VizQLState
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +105,7 @@ class ExecuteNode:
                 data = rows
             
             # 对浮点数进行四舍五入（根据配置）
-            from tableau_assistant.src.config.settings import settings
+            from tableau_assistant.src.infra.config.settings import settings
             data = self._round_numeric_values(data, settings.decimal_precision)
             
             return ExecuteResult(
@@ -196,7 +193,7 @@ class ExecuteNode:
             self._client = None
 
 
-async def execute_node(state: "VizQLState", config: RunnableConfig | None = None) -> Dict[str, object]:
+async def execute_node(state: VizQLState, config: RunnableConfig | None = None) -> Dict[str, object]:
     """
     Execute node entry point for LangGraph.
     
@@ -237,7 +234,7 @@ async def execute_node(state: "VizQLState", config: RunnableConfig | None = None
     
     if not datasource_luid:
         # Fallback to settings
-        from tableau_assistant.src.config.settings import settings
+        from tableau_assistant.src.infra.config.settings import settings
         datasource_luid = settings.datasource_luid
     
     if not datasource_luid:
@@ -252,7 +249,7 @@ async def execute_node(state: "VizQLState", config: RunnableConfig | None = None
         }
     
     # 从 RunnableConfig 获取 Tableau 认证（由 executor 在工作流启动时设置）
-    from tableau_assistant.src.bi_platforms.tableau import (
+    from tableau_assistant.src.platforms.tableau import (
         ensure_valid_auth_async,
         TableauAuthError,
     )

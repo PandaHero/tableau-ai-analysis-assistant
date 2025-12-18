@@ -17,8 +17,7 @@ def _auto_setup_certificates():
     """
     应用启动时自动设置证书
     
-    使用增强的证书管理器，支持：
-    - 配置文件加载
+    使用证书管理器，支持：
     - 多服务证书管理
     - 环境变量配置
     """
@@ -37,7 +36,7 @@ def _auto_setup_certificates():
         logger = logging.getLogger(__name__)
         
         # 从 settings 读取 Tableau 域名
-        from tableau_assistant.src.config.settings import settings
+        from tableau_assistant.src.infra.config.settings import settings
         tableau_domain = settings.tableau_domain
         if not tableau_domain:
             logger.debug("TABLEAU_DOMAIN 未设置，跳过证书自动配置")
@@ -48,65 +47,32 @@ def _auto_setup_certificates():
             logger.info("检测到 Tableau Cloud，使用系统证书库")
             return
         
-        # 内部 Tableau Server，使用增强的证书管理器
+        # 内部 Tableau Server，使用证书管理器
         logger.info(f"检测到内部 Tableau Server: {tableau_domain}")
         
-        from tableau_assistant.cert_manager import CertificateManager
-        from tableau_assistant.cert_manager.config_parser import ConfigurationParser
-        
-        # 检查是否有配置文件
-        config_file = Path("cert_config.yaml")
-        config = None
-        
-        if config_file.exists():
-            try:
-                parser = ConfigurationParser()
-                config = parser.load_config_with_precedence(
-                    config_file=str(config_file),
-                    env_config=parser.extract_env_config()
-                )
-                logger.info("✅ 已加载证书配置文件")
-            except Exception as e:
-                logger.warning(f"配置文件加载失败，使用默认配置: {e}")
+        from tableau_assistant.src.infra.certs import CertificateManager
         
         # 初始化证书管理器
         manager = CertificateManager()
         
-        # 注册预配置的服务（DeepSeek, Zhipu AI）
-        try:
-            results = manager.register_preconfigured_services(["deepseek", "zhipu-ai"])
-            for service_id, result in results.items():
-                if result["status"] == "registered":
-                    logger.info(f"✅ {service_id} 服务已注册")
-        except Exception as e:
-            logger.debug(f"预配置服务注册跳过: {e}")
-        
-        # 注册 Tableau 服务（使用新的助手方法）
-        try:
-            result = manager.register_tableau_service(fetch_on_register=False)
-            if result["status"] == "registered":
-                logger.info(f"✅ Tableau 服务已注册: {result['hostname']}")
-        except Exception as e:
-            logger.warning(f"Tableau 服务注册失败: {e}")
-            # 回退到旧方法
-            result = manager.fetch_tableau_certificates(
-                tableau_domain=tableau_domain,
-                force=False
-            )
+        # 解析域名
+        from urllib.parse import urlparse
+        parsed = urlparse(tableau_domain)
+        hostname = parsed.hostname or parsed.path.split('/')[0]
         
         # 获取 Tableau 证书
-        if "server_cert" in result:
-            cert_file = result["server_cert"]
-            status = result.get("status", "unknown")
+        try:
+            result = manager.fetch_and_save_certificates(hostname, force=False)
             
-            if status == "existing":
-                logger.info(f"✅ 使用现有证书: {cert_file}")
-            else:
-                logger.info(f"✅ 证书已自动获取: {cert_file}")
-            
-            # 设置环境变量（运行时生效）
-            os.environ["LLM_CA_BUNDLE"] = cert_file
-            os.environ["LLM_VERIFY_SSL"] = "true"
+            if "server_cert" in result:
+                cert_file = result["server_cert"]
+                logger.info(f"✅ 证书已配置: {cert_file}")
+                
+                # 设置环境变量（运行时生效）
+                os.environ["VIZQL_CA_BUNDLE"] = cert_file
+                os.environ["VIZQL_VERIFY_SSL"] = "true"
+        except Exception as e:
+            logger.warning(f"Tableau 证书获取失败: {e}")
         
     except Exception as e:
         # 静默失败，不影响应用启动

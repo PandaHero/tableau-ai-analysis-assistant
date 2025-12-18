@@ -14,8 +14,8 @@ Import Note:
 - 只在包级别导入 prompt（无循环依赖）
 - node.py 需要单独导入：from tableau_assistant.src.agents.insight.node import ...
 - 这样避免循环导入：
-  components/insight/analyzer.py → agents/insight/prompt.py → agents/insight/__init__.py
-  如果 __init__.py 导入 node.py，node.py 又导入 components/insight，就会循环
+  components/analyzer.py → agents/insight/prompt.py → agents/insight/__init__.py
+  如果 __init__.py 导入 node.py，node.py 又导入 components，就会循环
 """
 
 from .prompt import (
@@ -30,6 +30,19 @@ from .prompt import (
     COORDINATOR_PROMPT,
     ANALYST_PROMPT,
     DIRECT_ANALYSIS_PROMPT,
+)
+
+# Components - 洞察分析组件
+from .components import (
+    # Components
+    DataProfiler,
+    AnomalyDetector,
+    SemanticChunker,
+    ChunkAnalyzer,
+    InsightAccumulator,
+    InsightSynthesizer,
+    AnalysisCoordinator,
+    StatisticalAnalyzer,
 )
 
 # 注意：不在包级别导入 node.py，避免循环导入
@@ -48,4 +61,13 @@ __all__ = [
     "COORDINATOR_PROMPT",
     "ANALYST_PROMPT",
     "DIRECT_ANALYSIS_PROMPT",
+    # Components
+    "DataProfiler",
+    "AnomalyDetector",
+    "SemanticChunker",
+    "ChunkAnalyzer",
+    "InsightAccumulator",
+    "InsightSynthesizer",
+    "AnalysisCoordinator",
+    "StatisticalAnalyzer",
 ]

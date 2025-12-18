@@ -120,8 +120,6 @@ data/*.db
 *.twbr
 desktop.ini
 
-# Third-party projects
-DB-GPT-main/
 
 # IDE specific
 .trae/
