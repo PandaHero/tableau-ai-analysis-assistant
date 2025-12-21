@@ -40,13 +40,14 @@ export interface SSEEvent {
 }
 
 export interface TokenData {
-  token: string
-  agent?: string
+  content: string  // 后端发送的 token 内容字段
+  node?: string    // 产生 token 的节点名称
 }
 
 export interface NodeData {
-  node: string
-  output?: unknown
+  node: string           // 节点名称
+  content?: string       // 节点内容（如有）
+  output?: unknown       // 节点输出数据
 }
 
 export interface CompleteData {

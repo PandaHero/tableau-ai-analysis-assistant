@@ -4,13 +4,28 @@ Step 2 is the "Reasoning" phase of the LLM combination architecture.
 
 IMPORTANT: validation is filled by LLM, not computed by code.
 The component does NOT do additional validation - it trusts LLM's self-validation.
+
+使用 call_llm_with_tools 模式：
+- call_llm_with_tools(): 支持工具调用 + 中间件 + 流式输出
+- parse_json_response(): 解析 JSON 响应
+- 不使用 with_structured_output（对某些模型不可靠）
+
+关键：
+- 使用 call_llm_with_tools(streaming=True) 支持 token 流式输出
+- 传入中间件（从 config 获取）支持重试、摘要等功能
+- 当前不需要工具
 """
 
 import logging
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from ....core.models import Step1Output, Step2Output
 from ..prompts.step2 import STEP2_PROMPT
+from tableau_assistant.src.agents.base import (
+    get_llm,
+    call_llm_with_tools,
+    parse_json_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,17 +52,23 @@ class Step2Component:
     def _get_llm(self):
         """Get or create LLM instance."""
         if self._llm is None:
-            from tableau_assistant.src.agents.base import get_llm
             self._llm = get_llm(agent_name="semantic_parser")
         return self._llm
     
-    async def execute(self, step1_output: Step1Output) -> Step2Output:
+    async def execute(
+        self,
+        step1_output: Step1Output,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Step2Output:
         """Execute Step 2: Computation reasoning and self-validation.
         
         Only called when step1_output.how_type != SIMPLE.
         
         Args:
             step1_output: Output from Step 1
+            state: Current workflow state (for middleware)
+            config: LangGraph RunnableConfig (contains middleware)
             
         Returns:
             Step2Output with computations, reasoning, and LLM self-validation
@@ -64,20 +85,29 @@ class Step2Component:
             how_type=step1_output.how_type.value,
         )
         
-        # Call LLM with structured output
-        # LLM will fill in validation fields itself
-        llm = self._get_llm()
-        if hasattr(llm, 'with_structured_output'):
-            structured_llm = llm.with_structured_output(Step2Output)
-            result = await structured_llm.ainvoke(messages)
-        else:
-            # Fallback: parse JSON from response
-            from tableau_assistant.src.agents.base import invoke_llm, parse_json_response
-            response = await invoke_llm(llm, messages)
-            result = parse_json_response(response, Step2Output)
+        # Get middleware from config
+        middleware = None
+        if config and "configurable" in config:
+            middleware = config["configurable"].get("middleware")
         
+        # Call LLM using call_llm_with_tools (supports middleware + streaming)
+        # - tools=[]: No tools needed
+        # - streaming=True: Enable token streaming for frontend
+        # - middleware: Apply retry, summarization, etc.
+        llm = self._get_llm()
+        response = await call_llm_with_tools(
+            llm=llm,
+            messages=messages,
+            tools=[],  # No tools needed
+            streaming=True,
+            middleware=middleware,
+            state=state or {},
+            config=config,
+        )
+        
+        # Parse JSON response
         # NOTE: We do NOT do additional validation here.
         # The validation field is filled by LLM's self-validation.
         # If validation.all_valid == False, Observer will be triggered.
-        
+        result = parse_json_response(response, Step2Output)
         return result

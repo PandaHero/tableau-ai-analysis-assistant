@@ -2,10 +2,10 @@
 RAG 缓存管理器
 
 提供 Embedding 向量缓存功能。
-使用 StoreManager 作为统一的持久化存储。
+使用 LangGraph SqliteStore 作为统一的持久化存储。
 
 注意：VectorCache, MappingCache, CacheManager 已删除，
-统一使用 storage/store_manager.py 中的 StoreManager。
+统一使用 LangGraph SqliteStore (通过 get_langgraph_store())。
 """
 import hashlib
 import json
@@ -25,7 +25,7 @@ class CachedEmbeddingProvider:
     带缓存的 Embedding 提供者包装器
     
     包装任意 EmbeddingProvider，添加缓存功能。
-    使用 StoreManager 进行持久化存储。
+    使用 LangGraph SqliteStore 进行持久化存储。
     
     缓存命名空间: ("embedding_cache", model_name)
     TTL: 7 天
@@ -41,19 +41,19 @@ class CachedEmbeddingProvider:
         
         Args:
             provider: 原始 EmbeddingProvider
-            store_manager: StoreManager 实例（可选，默认使用全局实例）
+            store_manager: LangGraph SqliteStore 实例（可选，默认使用全局实例）
         """
         self.provider = provider
         
-        # 获取 StoreManager
+        # 获取 LangGraph SqliteStore
         if store_manager is not None:
             self._store_manager = store_manager
         else:
             try:
-                from tableau_assistant.src.infra.storage import get_store_manager
-                self._store_manager = get_store_manager()
+                from tableau_assistant.src.infra.storage import get_langgraph_store
+                self._store_manager = get_langgraph_store()
             except Exception as e:
-                logger.warning(f"无法获取 StoreManager，缓存将不可用: {e}")
+                logger.warning(f"无法获取 LangGraph Store，缓存将不可用: {e}")
                 self._store_manager = None
         
         # 统计信息

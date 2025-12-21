@@ -63,13 +63,19 @@ async def semantic_parser_node(
     messages: List[BaseMessage] = state.get("messages", [])
     history = _convert_messages_to_history(messages)
     
-    # Get metadata
-    metadata = state.get("metadata")
+    # Get data_model
+    data_model = state.get("data_model")
     
     try:
         # Create and run SemanticParserAgent
         agent = SemanticParserAgent()
-        result = await agent.parse(question, history, metadata)
+        result = await agent.parse(
+            question=question,
+            history=history,
+            metadata=data_model,
+            state=state,
+            config=config,
+        )
         
         # Build return state
         return_state: Dict[str, Any] = {
@@ -85,6 +91,18 @@ async def semantic_parser_node(
         if intent_type == IntentType.DATA_QUERY:
             return_state["semantic_query"] = result.semantic_query
             return_state["is_analysis_question"] = True
+            
+            # 生成用户友好的消息
+            user_message = f"🔍 理解您的问题：{result.restated_question}"
+            if result.semantic_query:
+                dims = [d.field_name for d in (result.semantic_query.dimensions or [])]
+                measures = [m.field_name for m in (result.semantic_query.measures or [])]
+                if dims:
+                    user_message += f"\n📊 分析维度：{', '.join(dims)}"
+                if measures:
+                    user_message += f"\n📈 分析指标：{', '.join(measures)}"
+            return_state["user_message"] = user_message
+            
             logger.info(
                 f"SemanticParser complete (DATA_QUERY): "
                 f"restated='{result.restated_question[:50]}...'"
@@ -93,26 +111,30 @@ async def semantic_parser_node(
         elif intent_type == IntentType.CLARIFICATION:
             return_state["clarification"] = result.clarification
             return_state["is_analysis_question"] = False
-            return_state["non_analysis_response"] = (
+            clarification_msg = (
                 result.clarification.question if result.clarification else
                 "请提供更多信息以便我理解您的问题。"
             )
+            return_state["non_analysis_response"] = clarification_msg
+            return_state["user_message"] = f"❓ {clarification_msg}"
             logger.info(f"SemanticParser complete (CLARIFICATION)")
         
         elif intent_type == IntentType.GENERAL:
             return_state["general_response"] = result.general_response
             return_state["is_analysis_question"] = False
-            return_state["non_analysis_response"] = (
+            general_msg = (
                 result.general_response or
                 "您好！我是数据分析助手，可以帮您分析数据。请问您想了解什么？"
             )
+            return_state["non_analysis_response"] = general_msg
+            return_state["user_message"] = general_msg
             logger.info(f"SemanticParser complete (GENERAL)")
         
         else:  # IRRELEVANT
             return_state["is_analysis_question"] = False
-            return_state["non_analysis_response"] = (
-                "抱歉，这个问题超出了我的能力范围。我是数据分析助手，可以帮您分析数据、查看趋势等。"
-            )
+            irrelevant_msg = "抱歉，这个问题超出了我的能力范围。我是数据分析助手，可以帮您分析数据、查看趋势等。"
+            return_state["non_analysis_response"] = irrelevant_msg
+            return_state["user_message"] = irrelevant_msg
             logger.info(f"SemanticParser complete (IRRELEVANT)")
         
         return return_state
@@ -136,11 +158,16 @@ def _convert_messages_to_history(messages: List[BaseMessage]) -> List[Dict[str, 
     
     Returns:
         List of {"role": "user/assistant", "content": "..."} dicts
+    
+    注意：不在这里限制历史消息数量。
+    历史消息的管理由 SummarizationMiddleware 负责：
+    - 当 token 超过阈值时自动摘要
+    - 保留最近 N 条消息（由 messages_to_keep 配置）
     """
     from langchain_core.messages import HumanMessage, AIMessage
     
     history = []
-    for msg in messages[-10:]:  # Keep last 10 messages
+    for msg in messages:  # 不限制数量，由 SummarizationMiddleware 管理
         if isinstance(msg, HumanMessage):
             history.append({"role": "user", "content": msg.content})
         elif isinstance(msg, AIMessage):

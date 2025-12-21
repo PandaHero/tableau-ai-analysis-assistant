@@ -9,7 +9,7 @@ Token 自动缓存 10 分钟（仅缓存成功的认证）
 
 认证上下文通过 RunnableConfig 传递给工作流节点：
 - 工作流启动时获取一次 token
-- 通过 RunnableConfig["configurable"]["tableau_auth"] 传递
+- 通过 RunnableConfig["configurable"]["workflow_context"].auth 传递
 - Token 过期时自动刷新
 """
 import os
@@ -26,10 +26,104 @@ from langgraph.types import RunnableConfig
 
 logger = logging.getLogger(__name__)
 
+
+# SSL 配置
+from tableau_assistant.src.infra.certs import get_certificate_config
+
+def _get_requests_verify(target_domain: Optional[str] = None):
+    """
+    获取 requests 的 SSL 验证参数
+    
+    支持多环境：根据目标域名返回对应的证书
+    
+    Args:
+        target_domain: 目标 Tableau 域名（可选）
+                      如果提供，会查找该域名对应的证书文件
+    
+    Returns:
+        - 证书文件路径（如果找到域名对应的证书）
+        - True（使用系统证书，如 Tableau Cloud）
+        - False（禁用 SSL 验证，不推荐）
+    """
+    from pathlib import Path
+    from urllib.parse import urlparse
+    
+    # 获取全局配置
+    cert_config = get_certificate_config()
+    
+    # 如果没有指定域名，使用全局配置
+    if not target_domain:
+        return cert_config.get_verify_param()
+    
+    # 解析域名
+    parsed = urlparse(target_domain)
+    hostname = (parsed.netloc or target_domain).lower()
+    
+    # 检查是否是 Tableau Cloud
+    # 使用 certifi 的证书而不是系统证书，避免 Windows 上的 SSL 问题
+    if "online.tableau.com" in hostname:
+        try:
+            import certifi
+            cert_path = certifi.where()
+            logger.debug(f"Tableau Cloud ({hostname}) 使用 certifi 证书: {cert_path}")
+            return cert_path
+        except ImportError:
+            logger.debug(f"Tableau Cloud ({hostname}) certifi 未安装，使用系统证书")
+            return True
+    
+    # 查找域名对应的证书文件
+    # 证书文件命名格式: {safe_hostname}_cert.pem
+    # 注意：hostname 可能包含端口号，需要同时尝试带端口和不带端口的文件名
+    safe_hostname_with_port = hostname.replace('.', '_').replace(':', '_')
+    # 去掉端口号的版本
+    hostname_no_port = hostname.split(':')[0]
+    safe_hostname_no_port = hostname_no_port.replace('.', '_')
+    
+    cert_dir = Path(cert_config.cert_dir)
+    
+    # 尝试多种可能的证书文件名
+    possible_cert_files = [
+        cert_dir / f"{safe_hostname_with_port}_cert.pem",  # 带端口
+        cert_dir / f"{safe_hostname_no_port}_cert.pem",    # 不带端口
+        cert_dir / f"{safe_hostname_with_port}.pem",
+        cert_dir / f"{safe_hostname_no_port}.pem",
+        cert_dir / "tableau_cert.pem",  # 全局 Tableau 证书
+    ]
+    
+    for cert_file in possible_cert_files:
+        if cert_file.exists():
+            logger.info(f"SSL: 使用证书文件 {cert_file} (域名: {hostname})")
+            return str(cert_file)
+    
+    logger.debug(f"SSL: 未找到证书文件，尝试过: {[str(f) for f in possible_cert_files]}")
+    
+    # 没有找到域名对应的证书，尝试自动获取
+    logger.info(f"未找到域名 {hostname} 的证书，尝试自动获取...")
+    try:
+        from tableau_assistant.src.infra.certs import CertificateManager
+        manager = CertificateManager()
+        
+        # 解析端口（使用不带端口的主机名）
+        port = parsed.port or 443
+        
+        # 获取并保存证书（使用不带端口的主机名）
+        result = manager.fetch_and_save_certificates(hostname_no_port, port)
+        cert_file = result.get("server_cert")
+        if cert_file and Path(cert_file).exists():
+            logger.info(f"已获取并保存证书: {cert_file}")
+            return cert_file
+    except Exception as e:
+        logger.warning(f"自动获取证书失败: {e}")
+    
+    # 回退到全局配置
+    logger.warning(f"未找到域名 {hostname} 的证书，使用全局配置")
+    return cert_config.get_verify_param()
+
 # Token 缓存（仅缓存成功的认证）
+# 支持多环境：使用 domain 作为缓存 key
 _CTX_TTL_SEC: int = 600  # 10 分钟
-_ctx_cache: Dict[str, Any] = {}
-_ctx_cached_at: float = 0.0
+_ctx_cache: Dict[str, Dict[str, Any]] = {}  # domain -> cache_data
+_ctx_cached_at: Dict[str, float] = {}  # domain -> cached_at
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -40,7 +134,7 @@ class TableauAuthContext(BaseModel):
     """
     Tableau 认证上下文
     
-    通过 RunnableConfig["configurable"]["tableau_auth"] 传递给所有节点。
+    通过 RunnableConfig["configurable"]["workflow_context"].auth 传递给所有节点。
     
     Attributes:
         api_key: Tableau API token
@@ -70,44 +164,52 @@ class TableauAuthError(Exception):
     pass
 
 
-def _get_tableau_context_from_env() -> Dict[str, Any]:
+def _get_tableau_context_from_env(target_domain: Optional[str] = None) -> Dict[str, Any]:
     """
-    从 settings 获取 Tableau token，支持 JWT 和 PAT 两种认证方式。
+    获取 Tableau token，支持 JWT 和 PAT 两种认证方式。
+    支持多环境：根据 target_domain 选择对应的配置。
     优先使用 JWT，如果 JWT 配置不完整则尝试 PAT。
+    
+    Args:
+        target_domain: 目标 Tableau 域名（可选），如果不提供则使用默认配置
     
     JWT 必需：TABLEAU_DOMAIN, TABLEAU_JWT_CLIENT_ID, TABLEAU_JWT_SECRET_ID, TABLEAU_JWT_SECRET, TABLEAU_USER
     PAT 必需：TABLEAU_DOMAIN, TABLEAU_PAT_NAME, TABLEAU_PAT_SECRET
     可选：TABLEAU_SITE, TABLEAU_API_VERSION(默认 3.18)
     
-    Token 10 分钟缓存
+    Token 10 分钟缓存（按域名分别缓存）
     返回: {"domain": str, "site": str, "api_key": Optional[str]}
     """
-    from tableau_assistant.src.infra.config.settings import settings
+    from tableau_assistant.src.infra.config.tableau_env import get_tableau_config
     
-    domain = settings.tableau_domain.strip().rstrip("/")
-    site = settings.tableau_site.strip()
-    tableau_api_version = settings.tableau_api_version.strip()
+    # 获取对应环境的配置
+    tableau_config = get_tableau_config(target_domain)
+    
+    domain = tableau_config.domain.strip().rstrip("/")
+    site = tableau_config.site.strip()
+    tableau_api_version = tableau_config.api_version.strip()
     
     # JWT 配置
-    jwt_client_id = settings.tableau_jwt_client_id.strip()
-    jwt_secret_id = settings.tableau_jwt_secret_id.strip()
-    jwt_secret = settings.tableau_jwt_secret.strip()
-    tableau_user = settings.tableau_user.strip()
+    jwt_client_id = tableau_config.jwt_client_id.strip()
+    jwt_secret_id = tableau_config.jwt_secret_id.strip()
+    jwt_secret = tableau_config.jwt_secret.strip()
+    tableau_user = tableau_config.user.strip()
     
     # PAT 配置
-    pat_name = settings.tableau_pat_name.strip()
-    pat_secret = settings.tableau_pat_secret.strip()
+    pat_name = tableau_config.pat_name.strip()
+    pat_secret = tableau_config.pat_secret.strip()
 
-    # 检查缓存
+    # 检查缓存（按域名分别缓存）
     global _ctx_cache, _ctx_cached_at
     now = time.time()
-    if (
-        _ctx_cache.get("api_key")
-        and _ctx_cache.get("domain") == domain
-        and _ctx_cache.get("site") == site
-        and (now - _ctx_cached_at) < _CTX_TTL_SEC
-    ):
-        return {"domain": _ctx_cache["domain"], "site": _ctx_cache["site"], "api_key": _ctx_cache["api_key"]}
+    cache_key = domain.lower()
+    
+    if cache_key in _ctx_cache:
+        cached = _ctx_cache[cache_key]
+        cached_at = _ctx_cached_at.get(cache_key, 0)
+        if cached.get("api_key") and (now - cached_at) < _CTX_TTL_SEC:
+            logger.debug(f"使用缓存的认证: {domain}")
+            return {"domain": cached["domain"], "site": cached["site"], "api_key": cached["api_key"]}
 
     # 尝试 JWT 认证
     jwt_error = None
@@ -126,15 +228,15 @@ def _get_tableau_context_from_env() -> Dict[str, Any]:
             )
             api_key = (session.get("credentials") or {}).get("token")
             if api_key:
-                logger.info("JWT 认证成功")
-                _ctx_cache = {"domain": domain, "site": site, "api_key": api_key}
-                _ctx_cached_at = now
-                return {"domain": domain, "site": site, "api_key": api_key}
+                logger.info(f"JWT 认证成功: {domain}")
+                _ctx_cache[cache_key] = {"domain": domain, "site": site, "api_key": api_key, "auth_method": "jwt"}
+                _ctx_cached_at[cache_key] = now
+                return {"domain": domain, "site": site, "api_key": api_key, "auth_method": "jwt"}
         except Exception as e:
             jwt_error = str(e)
-            logger.warning(f"JWT 认证失败: {e}")
+            logger.warning(f"JWT 认证失败 ({domain}): {e}")
     else:
-        logger.debug("JWT 配置不完整，跳过 JWT 认证")
+        logger.debug(f"JWT 配置不完整，跳过 JWT 认证: {domain}")
 
     # 尝试 PAT 认证
     pat_error = None
@@ -150,20 +252,19 @@ def _get_tableau_context_from_env() -> Dict[str, Any]:
             )
             api_key = (session.get("credentials") or {}).get("token")
             if api_key:
-                logger.info("PAT 认证成功")
-                _ctx_cache = {"domain": domain, "site": site, "api_key": api_key}
-                _ctx_cached_at = now
-                return {"domain": domain, "site": site, "api_key": api_key}
+                logger.info(f"PAT 认证成功: {domain}")
+                _ctx_cache[cache_key] = {"domain": domain, "site": site, "api_key": api_key, "auth_method": "pat"}
+                _ctx_cached_at[cache_key] = now
+                return {"domain": domain, "site": site, "api_key": api_key, "auth_method": "pat"}
         except Exception as e:
             pat_error = str(e)
-            logger.warning(f"PAT 认证失败: {e}")
+            logger.warning(f"PAT 认证失败 ({domain}): {e}")
     else:
-        logger.debug("PAT 配置不完整，跳过 PAT 认证")
+        logger.debug(f"PAT 配置不完整，跳过 PAT 认证: {domain}")
 
     # 认证失败 - 不缓存失败结果，下次请求会重试
-    error_msg = f"所有认证方式均失败。JWT: {jwt_error or '未配置'}, PAT: {pat_error or '未配置'}"
+    error_msg = f"所有认证方式均失败 ({domain})。JWT: {jwt_error or '未配置'}, PAT: {pat_error or '未配置'}"
     logger.error(error_msg)
-    # 注意：不缓存失败结果，这样下次请求会重新尝试认证
     return {"domain": domain, "site": site, "api_key": None, "error": error_msg}
 
 
@@ -203,7 +304,8 @@ def jwt_connected_app(
     response = requests.post(
         endpoint,
         headers={"Content-Type": "application/json", "Accept": "application/json"},
-        json=payload
+        json=payload,
+        verify=_get_requests_verify(tableau_domain)
     )
 
     if response.status_code == 200:
@@ -231,7 +333,8 @@ def pat_authentication(
     response = requests.post(
         endpoint,
         headers={"Content-Type": "application/json", "Accept": "application/json"},
-        json=payload
+        json=payload,
+        verify=_get_requests_verify(tableau_domain)
     )
 
     if response.status_code == 200:
@@ -243,15 +346,21 @@ def pat_authentication(
 # 认证获取函数（统一入口）
 # ═══════════════════════════════════════════════════════════════════════════
 
-def get_tableau_auth(force_refresh: bool = False) -> TableauAuthContext:
+def get_tableau_auth(
+    target_domain: Optional[str] = None,
+    force_refresh: bool = False
+) -> TableauAuthContext:
     """
     获取 Tableau 认证上下文（同步版本）
+    
+    支持多环境：根据 target_domain 选择对应的配置。
     
     优先级：
     1. 内存缓存（如果未过期）
     2. 调用认证 API 获取新 token
     
     Args:
+        target_domain: 目标 Tableau 域名（可选），如果不提供则使用默认配置
         force_refresh: 是否强制刷新 token
     
     Returns:
@@ -262,24 +371,31 @@ def get_tableau_auth(force_refresh: bool = False) -> TableauAuthContext:
     """
     global _ctx_cache, _ctx_cached_at
     
+    # 获取缓存 key
+    from tableau_assistant.src.infra.config.tableau_env import get_tableau_config
+    tableau_config = get_tableau_config(target_domain)
+    cache_key = tableau_config.domain.lower().rstrip("/")
+    
     # 1. 检查内存缓存
-    if not force_refresh and _ctx_cache.get("api_key"):
+    if not force_refresh and cache_key in _ctx_cache:
+        cached = _ctx_cache[cache_key]
+        cached_at = _ctx_cached_at.get(cache_key, 0)
         now = time.time()
-        if (now - _ctx_cached_at) < _CTX_TTL_SEC:
+        if cached.get("api_key") and (now - cached_at) < _CTX_TTL_SEC:
             return TableauAuthContext(
-                api_key=_ctx_cache["api_key"],
-                site=_ctx_cache.get("site", ""),
-                domain=_ctx_cache.get("domain", ""),
-                expires_at=_ctx_cached_at + _CTX_TTL_SEC,
-                auth_method=_ctx_cache.get("auth_method", "unknown"),
+                api_key=cached["api_key"],
+                site=cached.get("site", ""),
+                domain=cached.get("domain", ""),
+                expires_at=cached_at + _CTX_TTL_SEC,
+                auth_method=cached.get("auth_method", "unknown"),
             )
     
     # 2. 获取新 token
-    ctx = _get_tableau_context_from_env()
+    ctx = _get_tableau_context_from_env(target_domain)
     
     api_key = ctx.get("api_key")
     if not api_key:
-        error_msg = ctx.get("error", "认证失败，请检查 .env 中的 Tableau 配置")
+        error_msg = ctx.get("error", f"认证失败，请检查 .env 中的 Tableau 配置 ({target_domain or 'default'})")
         raise TableauAuthError(error_msg)
     
     return TableauAuthContext(
@@ -287,18 +403,27 @@ def get_tableau_auth(force_refresh: bool = False) -> TableauAuthContext:
         site=ctx.get("site", ""),
         domain=ctx.get("domain", ""),
         expires_at=time.time() + _CTX_TTL_SEC,
-        auth_method=_ctx_cache.get("auth_method", "unknown"),
+        auth_method=ctx.get("auth_method", "unknown"),
     )
 
 
-async def get_tableau_auth_async(force_refresh: bool = False) -> TableauAuthContext:
+async def get_tableau_auth_async(
+    target_domain: Optional[str] = None,
+    force_refresh: bool = False
+) -> TableauAuthContext:
     """
     获取 Tableau 认证上下文（异步版本）
     
+    支持多环境：根据 target_domain 选择对应的配置。
+    
     注意：当前实现是同步的，因为 Tableau API 调用是同步的。
     提供异步接口是为了与异步工作流兼容。
+    
+    Args:
+        target_domain: 目标 Tableau 域名（可选），如果不提供则使用默认配置
+        force_refresh: 是否强制刷新 token
     """
-    return get_tableau_auth(force_refresh=force_refresh)
+    return get_tableau_auth(target_domain=target_domain, force_refresh=force_refresh)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -344,16 +469,13 @@ def get_auth_from_config(config: Optional[RunnableConfig]) -> Optional[TableauAu
         return None
     
     configurable = config.get("configurable", {})
-    auth_data = configurable.get("tableau_auth")
     
-    if auth_data is None:
-        return None
+    # 从 workflow_context 获取认证
+    workflow_context = configurable.get("workflow_context")
+    if workflow_context is not None:
+        return workflow_context.auth
     
-    try:
-        return TableauAuthContext(**auth_data)
-    except Exception as e:
-        logger.warning(f"解析认证上下文失败: {e}")
-        return None
+    return None
 
 
 def ensure_valid_auth(config: Optional[RunnableConfig] = None) -> TableauAuthContext:

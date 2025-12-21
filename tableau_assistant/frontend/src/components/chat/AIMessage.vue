@@ -71,8 +71,10 @@
 </template>
 
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
 import type { AIMessage as AIMessageType } from '@/types'
-import MarkdownRenderer from '@/components/content/MarkdownRenderer.vue'
+// 懒加载 MarkdownRenderer (Task 21.1)
+const MarkdownRenderer = defineAsyncComponent(() => import('@/components/content/MarkdownRenderer.vue'))
 
 defineProps<{
   message: AIMessageType

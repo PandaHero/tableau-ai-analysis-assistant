@@ -43,54 +43,31 @@ Process: Infer target -> Infer partition_by -> Infer operation -> Self-validate 
     def get_specific_domain_knowledge(self) -> str:
         return """**Computation Model**
 
-Every complex computation can be described as: Computation = Target x Partition x Operation
-
-- **Target:** Which measure to compute on (must be in what.measures)
-- **Partition:** Which dimensions to partition by (must be subset of where.dimensions)
-- **Operation:** What computation to perform (must match how_type)
+Computation = Target × Partition × Operation
 
 **Think step by step:**
 
 Step 1: Infer target from restated_question
-   - Must be one of what.measures from Step 1
-   
 Step 2: Infer partition_by from partition keywords
-   - Global/total/no partition word -> [] (empty list)
-   - Per month/monthly -> [time dimension]
-   - Per province -> [province]
-   - Must be subset of where.dimensions from Step 1
-   
 Step 3: Infer operation.type from computation keywords
-   - Must match how_type via OPERATION_TYPE_MAPPING
-   
 Step 4: Self-validate all three checks against Step 1 output
 
 **OPERATION_TYPE_MAPPING (for self-validation):**
 
-- RANKING -> RANK, DENSE_RANK
-- CUMULATIVE -> RUNNING_SUM, RUNNING_AVG, MOVING_AVG, MOVING_SUM
-- COMPARISON -> PERCENT, DIFFERENCE, GROWTH_RATE, YEAR_AGO, PERIOD_AGO
-- GRANULARITY -> FIXED
-
-**Partition Keywords Reference:**
-
-- Global, total, overall, (no partition word) -> []
-- Per month, monthly, within month -> [time dimension]
-- Per province, within province -> [province]
-- Per category, within category -> [category]
+- RANKING → RANK, DENSE_RANK
+- CUMULATIVE → RUNNING_SUM, RUNNING_AVG, MOVING_AVG, MOVING_SUM
+- COMPARISON → PERCENT, DIFFERENCE, GROWTH_RATE, YEAR_AGO, PERIOD_AGO
+- GRANULARITY → FIXED
 
 **Self-Validation Checks:**
 
-1. target_check: Is target in what.measures?
-2. partition_by_check: Is partition_by subset of where.dimensions?
-3. operation_check: Does operation.type match how_type via OPERATION_TYPE_MAPPING?"""
+1. target_check: target ∈ what.measures?
+2. partition_by_check: partition_by ⊆ where.dimensions?
+3. operation_check: operation.type ∈ OPERATION_TYPE_MAPPING[how_type]?"""
 
     def get_constraints(self) -> str:
         return """MUST: Infer from restated_question, Validate against Step 1, Report inconsistencies
-MUST: Set all_valid = True only if ALL three checks pass
-MUST NOT: Infer partition_by dimensions not in where.dimensions
-MUST NOT: Use operation.type not in OPERATION_TYPE_MAPPING[how_type]
-MUST NOT: Mark all_valid = True if any check fails"""
+MUST NOT: Infer partition_by not in dimensions, Use operation.type not matching how_type"""
 
     def get_user_template(self) -> str:
         return """**Restated Question:** {restated_question}

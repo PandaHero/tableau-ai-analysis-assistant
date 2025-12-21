@@ -231,27 +231,27 @@ async def get_data_model(
             return format_tool_response(response)
         
         # 从 WorkflowContext 获取数据模型
-        metadata = None
+        data_model = None
         
         if config is not None:
             from tableau_assistant.src.orchestration.workflow.context import get_context
             ctx = get_context(config)
-            if ctx is not None and ctx.metadata is not None:
-                metadata = ctx.metadata
-                logger.debug("get_data_model: using metadata from WorkflowContext")
+            if ctx is not None and ctx.data_model is not None:
+                data_model = ctx.data_model
+                logger.debug("get_data_model: using data_model from WorkflowContext")
         
         # 检查是否获取到数据模型
-        if metadata is None:
+        if data_model is None:
             response = ToolResponse.fail(
                 code=ToolErrorCode.DEPENDENCY_ERROR,
-                message="无法获取数据模型：WorkflowContext 中没有 metadata",
+                message="无法获取数据模型：WorkflowContext 中没有 data_model",
                 recoverable=False,
                 suggestion="请确保工作流已正确初始化，并调用了 ensure_metadata_loaded()"
             )
             return format_tool_response(response)
         
         # 应用过滤
-        fields = metadata.fields
+        fields = data_model.fields
         
         if filter_role:
             filter_role_upper = filter_role.upper()

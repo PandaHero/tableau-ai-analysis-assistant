@@ -85,7 +85,7 @@ class ExplorationQuestion(BaseModel):
         le=10,
         description="""<what>优先级</what>
 <when>ALWAYS required</when>
-<rule>1=最高优先级，10=最低优先级</rule>"""
+<rule>1=直接回答用户问题, 2-3=关键支撑信息, 4-6=深化理解, 7-10=边缘探索</rule>"""
     )
     
     reasoning: str = Field(

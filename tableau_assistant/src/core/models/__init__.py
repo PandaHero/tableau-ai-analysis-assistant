@@ -6,7 +6,7 @@ Core Data Models - 平台无关的语义层模型
 
 1. 基础模型 (enums, fields, filters, computations)
 2. 语义解析模型 (step1, step2, observer, parse_result, query)
-3. 元数据模型 (metadata, data_model)
+3. 数据模型 (data_model)
 4. 验证模型 (validation)
 5. 维度层级模型 (dimension_hierarchy)
 6. 字段映射模型 (field_mapping)
@@ -99,14 +99,9 @@ from .validation import (
     ValidationResult,
 )
 
-# Metadata
-from .metadata import (
-    FieldMetadata,
-    Metadata,
-)
-
-# Data Model
+# Data Model (包含 FieldMetadata)
 from .data_model import (
+    FieldMetadata,
     DataModel,
     LogicalTable,
     LogicalTableRelationship,
@@ -212,10 +207,8 @@ __all__ = [
     "ValidationError",
     "ValidationErrorType",
     "ValidationResult",
-    # Metadata
-    "FieldMetadata",
-    "Metadata",
     # Data Model
+    "FieldMetadata",
     "DataModel",
     "LogicalTable",
     "LogicalTableRelationship",

@@ -7,7 +7,7 @@ import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
 import { useSessionStore } from '@/stores/session'
 import { useTableauStore } from '@/stores/tableau'
-import { SSEClient, type SSEEvent, type TokenData, type NodeData } from '@/api/streaming'
+import { SSEClient, type SSEEvent, type NodeData } from '@/api/streaming'
 import type { ProcessingStage } from '@/types'
 
 // 节点名称到处理阶段的映射
@@ -57,6 +57,20 @@ export function useStreaming() {
       // 获取数据源名称
       const datasourceName = settingsStore.datasourceName || 
         tableauStore.selectedDataSource?.name || ''
+      
+      // 获取 Tableau 环境信息（支持多环境）
+      const tableauDomain = tableauStore.tableauDomain
+      const tableauSite = tableauStore.tableauSite
+      const tableauContext = tableauStore.tableauContext
+      const datasourceConnectionInfo = tableauStore.datasourceConnectionInfo
+      
+      console.log('useStreaming - Tableau环境:', { 
+        tableauDomain, 
+        tableauSite,
+        tableauContext,
+        datasourceConnectionInfo,
+        isInTableau: tableauStore.isInTableau 
+      })
 
       // 连接并发送请求
       await client.value.connect({
@@ -65,6 +79,11 @@ export function useStreaming() {
         session_id: sessionStore.sessionId,
         analysis_depth: settingsStore.analysisDepth,
         language: settingsStore.language,
+        // Tableau 环境信息
+        tableau_domain: tableauDomain,
+        tableau_site: tableauSite,
+        tableau_context: tableauContext,
+        datasource_connection_info: datasourceConnectionInfo,
       })
     } catch (error) {
       handleError({
@@ -78,12 +97,16 @@ export function useStreaming() {
   /**
    * 处理 token 事件
    * 收到第一个 token 时会自动创建 AI 消息并添加到列表
+   * 
+   * 后端发送格式: { node, content, output }
+   * content 字段包含 token 内容
+   * 
+   * 现在所有节点都会输出用户友好的消息，直接显示给用户
    */
   function handleToken(event: SSEEvent) {
-    const data = event.data as TokenData
-    if (data?.token) {
-      // 使用 appendToCurrentResponse，它会在第一次调用时创建消息
-      chatStore.appendToCurrentResponse(data.token)
+    const data = event.data as { content?: string; node?: string }
+    if (data?.content) {
+      chatStore.appendToCurrentResponse(data.content)
     }
   }
 
@@ -100,11 +123,70 @@ export function useStreaming() {
 
   /**
    * 处理节点完成事件
+   * 根据节点类型更新消息的不同属性
    */
   function handleNodeComplete(event: SSEEvent) {
     const data = event.data as NodeData
-    // 可以在这里处理节点输出，如更新表格数据、洞察等
-    console.log('Node complete:', data?.node, data?.output)
+    if (!data?.node) return
+    
+    const output = data.output as Record<string, unknown> | undefined
+    
+    // 根据节点类型处理输出
+    switch (data.node) {
+      case 'execute':
+        // 执行节点完成，更新表格数据
+        if (output?.data) {
+          // 转换列定义，确保 type 是有效的枚举值
+          const rawColumns = (output.columns as Array<{ key: string; label: string; type?: string }>) || []
+          const columns = rawColumns.map(col => ({
+            key: col.key,
+            label: col.label,
+            type: (['string', 'number', 'date'].includes(col.type || '') 
+              ? col.type 
+              : 'string') as 'string' | 'number' | 'date'
+          }))
+          
+          chatStore.updateCurrentResponse({
+            data: {
+              columns,
+              rows: (output.data as Record<string, unknown>[]) || [],
+              totalCount: (output.row_count as number) || 0
+            }
+          })
+        }
+        break
+        
+      case 'insight':
+        // 洞察节点完成，更新洞察列表
+        if (output?.insights) {
+          const insights = (output.insights as Array<{
+            type?: string
+            title?: string
+            finding?: string
+            description?: string
+            confidence?: number
+            priority?: number
+          }>).map((item, index) => ({
+            id: `insight-${Date.now()}-${index}`,
+            type: (item.type || 'discovery') as 'discovery' | 'anomaly' | 'suggestion',
+            title: item.title || item.finding || '发现',
+            description: item.description || item.finding || '',
+            confidence: item.confidence || 80,
+            priority: item.priority || (100 - index)
+          }))
+          chatStore.updateCurrentResponse({ insights })
+        }
+        break
+        
+      case 'replanner':
+        // 重规划节点完成，更新推荐问题
+        if (output?.suggested_questions) {
+          chatStore.updateCurrentResponse({
+            suggestions: output.suggested_questions as string[]
+          })
+        }
+        break
+    }
   }
 
   /**

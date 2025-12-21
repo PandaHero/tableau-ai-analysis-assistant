@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Set
 
 from tableau_assistant.src.core.models import (
-    Metadata,
+    DataModel,
     DimensionHierarchyResult,
     DimensionAttributes,
 )
@@ -136,12 +136,12 @@ def _compute_field_hash(dimension_fields: List[Any]) -> str:
 
 
 def _get_store_manager():
-    """获取 StoreManager 实例"""
+    """获取 LangGraph SqliteStore 实例"""
     try:
-        from tableau_assistant.src.infra.storage import StoreManager
-        return StoreManager()
+        from tableau_assistant.src.infra.storage import get_langgraph_store
+        return get_langgraph_store()
     except Exception as e:
-        logger.warning(f"无法获取 StoreManager: {e}")
+        logger.warning(f"无法获取 LangGraph Store: {e}")
         return None
 
 
@@ -154,7 +154,7 @@ def _get_from_cache(
     
     Args:
         datasource_luid: 数据源 LUID
-        store_manager: StoreManager 实例（可选）
+        store_manager: LangGraph SqliteStore 实例（可选）
     
     Returns:
         缓存条目，如果不存在或已过期则返回 None
@@ -169,7 +169,7 @@ def _get_from_cache(
     try:
         namespace = (_get_cache_namespace(),)
         
-        # 使用 StoreManager.get() 返回 StoreItem
+        # 使用 LangGraph SqliteStore.get() 返回 StoreItem
         store_item = store.get(namespace, datasource_luid)
         if not store_item:
             logger.debug(f"缓存未命中: {datasource_luid}")
@@ -210,7 +210,7 @@ def _put_to_cache(
         datasource_luid: 数据源 LUID
         field_hash: 字段列表哈希值
         hierarchy_data: 推断结果
-        store_manager: StoreManager 实例（可选）
+        store_manager: LangGraph SqliteStore 实例（可选）
         ttl_days: 缓存过期天数
     
     Returns:
@@ -234,7 +234,7 @@ def _put_to_cache(
         namespace = (_get_cache_namespace(),)
         ttl_seconds = ttl_days * 24 * 60 * 60
         
-        # 使用 StoreManager.put() 方法
+        # 使用 LangGraph SqliteStore.put() 方法
         store.put(namespace, datasource_luid, entry.to_dict(), ttl=ttl_seconds)
         logger.info(f"缓存已更新: {datasource_luid}, {len(hierarchy_data)} 个字段")
         return True
@@ -732,7 +732,7 @@ The following are inference results from similar fields in the past. Use them as
 
 
 def _prepare_dimensions_info(
-    metadata: Metadata, rag=None
+    data_model: DataModel, rag=None
 ) -> tuple[List[Dict[str, Any]], str]:
     """
     准备维度字段信息，并获取 RAG few-shot 示例
@@ -740,7 +740,7 @@ def _prepare_dimensions_info(
     Returns:
         (维度信息列表, few_shot_section)
     """
-    dimension_fields = metadata.get_dimensions()
+    dimension_fields = data_model.get_dimensions()
 
     if not dimension_fields:
         return [], ""
@@ -786,7 +786,7 @@ def _prepare_dimensions_info(
 
 def _store_inference_results(
     result: DimensionHierarchyResult,
-    metadata: Metadata,
+    data_model: DataModel,
     rag,
     datasource_luid: Optional[str] = None,
 ) -> None:
@@ -808,7 +808,7 @@ def _store_inference_results(
 
             # 查找字段元数据
             field = None
-            for f in metadata.get_dimensions():
+            for f in data_model.get_dimensions():
                 if f.name == field_name:
                     field = f
                     break
@@ -849,7 +849,7 @@ def _store_inference_results(
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def dimension_hierarchy_node(
-    metadata: Metadata,
+    data_model: DataModel,
     datasource_luid: Optional[str] = None,
     stream: bool = True,
     use_cache: bool = True,
@@ -868,7 +868,7 @@ async def dimension_hierarchy_node(
     支持并行 + 流式输出。
     
     Args:
-        metadata: Metadata 对象（包含字段元数据）
+        data_model: DataModel 对象（包含字段元数据）
         datasource_luid: 数据源 LUID（可选，用于缓存和 RAG 存储）
         stream: 是否流式输出（默认 True）
         use_cache: 是否使用缓存（默认 True）
@@ -880,37 +880,15 @@ async def dimension_hierarchy_node(
         on_token: 流式输出回调函数
                   - 并行模式: (batch_id: int, token: str) -> None
                   - 串行模式: 使用 print 输出（兼容旧行为）
-        store_manager: StoreManager 实例（可选）
+        store_manager: LangGraph SqliteStore 实例（可选）
     
     Returns:
         DimensionHierarchyResult 模型对象
-    
-    流程：
-        1. 检查缓存（如果启用）
-        2. 缓存命中且 field_hash 相同 → 直接返回
-        3. 计算增量字段（如果启用增量推断）
-        4. 增量推断：仅推断新增字段
-        5. 全量推断：使用分批推断（并行或串行）
-        6. 合并缓存结果与新推断结果
-        7. 存储结果到缓存和 RAG
-        8. 返回结果
-    
-    Example:
-        # 并行 + 流式输出
-        def handle_token(batch_id: int, token: str):
-            print(f"[Batch {batch_id}] {token}", end="", flush=True)
-        
-        result = await dimension_hierarchy_node(
-            metadata, 
-            stream=True, 
-            parallel=True,
-            on_token=handle_token
-        )
     """
     logger.info("维度层级推断开始")
     
     # 获取维度字段
-    dimension_fields = metadata.get_dimensions()
+    dimension_fields = data_model.get_dimensions()
     if not dimension_fields:
         logger.warning("未找到维度字段")
         return DimensionHierarchyResult(dimension_hierarchy={})
@@ -1127,12 +1105,12 @@ async def dimension_hierarchy_node(
             )
 
         # 10. 存储结果到 RAG
-        _store_inference_results(result, metadata, rag, datasource_luid)
+        _store_inference_results(result, data_model, rag, datasource_luid)
 
-        # 11. 将维度层级信息注入到 metadata 的各个 FieldMetadata 对象
+        # 11. 将维度层级信息注入到 data_model 的各个 FieldMetadata 对象
         # 这样后续的 FieldIndexer 可以使用 category 等信息构建索引
         for field_name, attrs in result.dimension_hierarchy.items():
-            field = metadata.get_field(field_name)
+            field = data_model.get_field(field_name)
             if field:
                 field.category = attrs.category
                 field.category_detail = attrs.category_detail

@@ -5,6 +5,7 @@ Contains workflow nodes that don't use LLM directly:
 - FieldMapper: RAG + LLM hybrid node for semantic field mapping
 - QueryBuilder: Pure code node for VizQL query generation (uses platforms/tableau)
 - Execute: Pure code node for VizQL API execution
+- SelfCorrection: Query self-correction node (code + optional LLM)
 """
 
 # FieldMapper 已迁移到 agents 包
@@ -20,6 +21,11 @@ from tableau_assistant.src.nodes.execute import (
     execute_node,
     ExecuteNode,
 )
+from tableau_assistant.src.nodes.self_correction import (
+    self_correction_node,
+    SelfCorrectionNode,
+    QueryCorrector,
+)
 
 __all__ = [
     # FieldMapper
@@ -31,4 +37,8 @@ __all__ = [
     # Execute
     "execute_node",
     "ExecuteNode",
+    # SelfCorrection
+    "self_correction_node",
+    "SelfCorrectionNode",
+    "QueryCorrector",
 ]

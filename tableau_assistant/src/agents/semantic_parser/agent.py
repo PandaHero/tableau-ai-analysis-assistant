@@ -73,6 +73,8 @@ class SemanticParserAgent:
         question: str,
         history: list[dict[str, str]] | None = None,
         metadata: dict[str, Any] | None = None,
+        state: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
     ) -> SemanticParseResult:
         """Parse user question into SemanticParseResult.
         
@@ -80,12 +82,16 @@ class SemanticParserAgent:
             question: Current user question
             history: Conversation history
             metadata: Data source metadata
+            state: Current workflow state (for middleware)
+            config: LangGraph RunnableConfig (contains middleware)
             
         Returns:
             SemanticParseResult with intent-specific output
         """
         # Step 1: Semantic understanding
-        step1_output = await self.step1.execute(question, history, metadata)
+        step1_output = await self.step1.execute(
+            question, history, metadata, state=state, config=config
+        )
         
         # Intent branch
         intent_type = step1_output.intent.type
@@ -105,18 +111,24 @@ class SemanticParserAgent:
             return self._build_simple_query_result(step1_output)
         
         # Non-SIMPLE query, continue to Step 2
-        return await self._process_complex_query(question, step1_output)
+        return await self._process_complex_query(
+            question, step1_output, state=state, config=config
+        )
 
     async def _process_complex_query(
         self,
         original_question: str,
         step1_output: Step1Output,
+        state: dict[str, Any] | None = None,
+        config: dict[str, Any] | None = None,
     ) -> SemanticParseResult:
         """Process complex query with Step 2 and Observer.
         
         Args:
             original_question: Original user question
             step1_output: Output from Step 1
+            state: Current workflow state (for middleware)
+            config: LangGraph RunnableConfig (contains middleware)
             
         Returns:
             SemanticParseResult with semantic query
@@ -125,7 +137,9 @@ class SemanticParserAgent:
         
         while retries <= self.max_retries:
             # Step 2: Computation reasoning
-            step2_output = await self.step2.execute(step1_output)
+            step2_output = await self.step2.execute(
+                step1_output, state=state, config=config
+            )
             
             # Check validation
             if step2_output.validation.all_valid:
@@ -134,7 +148,8 @@ class SemanticParserAgent:
             
             # Validation failed, trigger Observer
             observer_output = await self.observer.execute(
-                original_question, step1_output, step2_output
+                original_question, step1_output, step2_output,
+                state=state, config=config
             )
             
             # Handle Observer decision
@@ -239,7 +254,28 @@ class SemanticParserAgent:
                     values=f.values,
                     include=True,
                 ))
-            # TODO: Add other filter type conversions as needed
+            elif f.type == FilterType.DATE_RANGE:
+                from ...core.models.filters import DateRangeFilter
+                from ...core.models.enums import DateRangeType, DateGranularity
+                from datetime import date
+                
+                # Build DateRangeFilter based on range_type
+                range_type = f.range_type or DateRangeType.CUSTOM
+                start_date = None
+                end_date = None
+                
+                # For CUSTOM with year specified, calculate date range
+                if range_type == DateRangeType.CUSTOM and f.year:
+                    start_date = date(f.year, 1, 1)
+                    end_date = date(f.year, 12, 31)
+                
+                filters.append(DateRangeFilter(
+                    field_name=f.field,
+                    range_type=range_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                    granularity=f.granularity or DateGranularity.YEAR,
+                ))
         
         return SemanticQuery(
             dimensions=dimensions if dimensions else None,

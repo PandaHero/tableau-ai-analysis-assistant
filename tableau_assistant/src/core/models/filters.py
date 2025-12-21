@@ -55,6 +55,22 @@ class SetFilter(Filter):
 <when>Default False (include)</when>
 <rule>排除/不包括→True, 只看/包括→False</rule>"""
     )
+    
+    include: bool = Field(
+        default=True,
+        description="""<what>Whether to include these values (opposite of exclude)</what>
+<when>Default True</when>
+<rule>只看/包括→True, 排除/不包括→False</rule>"""
+    )
+    
+    def model_post_init(self, __context) -> None:
+        """Sync include and exclude fields."""
+        # If include is explicitly set to False, set exclude to True
+        if not self.include:
+            object.__setattr__(self, 'exclude', True)
+        # If exclude is explicitly set to True, set include to False
+        if self.exclude:
+            object.__setattr__(self, 'include', False)
 
 
 class DateRangeFilter(Filter):

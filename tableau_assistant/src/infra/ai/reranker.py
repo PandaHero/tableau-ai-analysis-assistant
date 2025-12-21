@@ -31,7 +31,6 @@ def select_reranker(
     llm_call_fn: Optional[Callable[[str], str]] = None,
     # RRF 参数
     rrf_k: int = 60,
-    **kwargs  # 忽略其他参数（向后兼容）
 ):
     """
     选择并配置重排序器

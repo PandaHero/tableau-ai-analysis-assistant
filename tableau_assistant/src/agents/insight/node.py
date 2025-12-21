@@ -31,6 +31,24 @@ from tableau_assistant.src.orchestration.workflow.state import VizQLState
 logger = logging.getLogger(__name__)
 
 
+def _get_user_friendly_error_message(error: str) -> str:
+    """将技术错误消息转换为用户友好的消息"""
+    error_lower = error.lower() if error else ""
+    
+    if "validation error" in error_lower or "additional property" in error_lower:
+        return "抱歉，当前查询涉及的计算类型暂不支持。请尝试简化您的问题，或者直接询问具体的数据指标。"
+    elif "timeout" in error_lower:
+        return "查询超时，数据量可能较大。请尝试缩小查询范围或添加筛选条件。"
+    elif "connection" in error_lower:
+        return "连接数据源时出现问题，请稍后重试。"
+    elif "authentication" in error_lower or "auth" in error_lower:
+        return "数据源认证失败，请检查您的访问权限。"
+    elif "not found" in error_lower:
+        return "未找到相关数据，请检查您查询的字段或维度是否存在。"
+    else:
+        return f"查询执行遇到问题，请尝试换一种方式提问。如果问题持续，请联系管理员。"
+
+
 class InsightAgent:
     """
     Insight Agent - analyzes query results and generates insights.
@@ -68,7 +86,9 @@ class InsightAgent:
     async def analyze(
         self,
         query_result: ExecuteResult,
-        context: Dict[str, object]
+        context: Dict[str, object],
+        state: Optional[Dict[str, object]] = None,
+        config: Optional[RunnableConfig] = None,
     ) -> InsightResult:
         """
         Analyze query result and generate insights.
@@ -76,6 +96,8 @@ class InsightAgent:
         Args:
             query_result: ExecuteResult from Execute Node
             context: Analysis context (question, dimensions, measures)
+            state: Current workflow state (for middleware)
+            config: LangGraph RunnableConfig (contains middleware)
             
         Returns:
             InsightResult with findings
@@ -96,8 +118,8 @@ class InsightAgent:
         
         logger.info(f"Starting insight analysis: {len(data)} rows")
         
-        # Run analysis
-        result = await self.coordinator.analyze(data, context)
+        # Run analysis with state and config for middleware support
+        result = await self.coordinator.analyze(data, context, state, config)
         
         logger.info(f"Insight analysis complete: {len(result.findings)} insights")
         
@@ -106,7 +128,9 @@ class InsightAgent:
     async def analyze_streaming(
         self,
         query_result: ExecuteResult,
-        context: Dict[str, object]
+        context: Dict[str, object],
+        state: Optional[Dict[str, object]] = None,
+        config: Optional[RunnableConfig] = None,
     ) -> AsyncGenerator[Dict[str, object], None]:
         """
         Analyze with streaming progress updates.
@@ -114,6 +138,8 @@ class InsightAgent:
         Args:
             query_result: ExecuteResult from Execute Node
             context: Analysis context
+            state: Current workflow state (for middleware)
+            config: LangGraph RunnableConfig (contains middleware)
             
         Yields:
             Progress events
@@ -133,8 +159,8 @@ class InsightAgent:
             yield {"event": "complete", "result": InsightResult(summary="查询结果为空")}
             return
         
-        # Stream analysis
-        async for event in self.coordinator.analyze_streaming(data, context):
+        # Stream analysis with state and config for middleware support
+        async for event in self.coordinator.analyze_streaming(data, context, state, config):
             yield event
 
 
@@ -166,13 +192,25 @@ async def insight_node(state: VizQLState, config: RunnableConfig | None = None) 
     
     # Check if query was successful
     if hasattr(query_result, 'is_success') and not query_result.is_success():
-        logger.warning(f"Query failed, skipping insight analysis: {query_result.error}")
+        error_msg = query_result.error if hasattr(query_result, 'error') else "未知错误"
+        logger.warning(f"Query failed, skipping insight analysis: {error_msg}")
+        
+        # 生成用户友好的错误消息
+        user_friendly_msg = _get_user_friendly_error_message(error_msg)
+        
+        # 创建消息用于对话历史
+        from langchain_core.messages import HumanMessage, AIMessage
+        question = state.get("question", "")
+        new_messages = [
+            HumanMessage(content=question, additional_kwargs={"source": "insight_input"}),
+            AIMessage(content=user_friendly_msg, additional_kwargs={"source": "insight"}),
+        ]
+        
         return {
             "insights": [],
-            "insight_result": InsightResult(
-                summary=f"查询失败，无法进行洞察分析: {query_result.error}"
-            ),
+            "insight_result": InsightResult(summary=user_friendly_msg),
             "insight_complete": True,
+            "messages": new_messages,
         }
     
     # Build context
@@ -187,19 +225,19 @@ async def insight_node(state: VizQLState, config: RunnableConfig | None = None) 
     if semantic_query:
         # semantic_query 是 SemanticQuery Pydantic 对象，直接访问属性
         context["dimensions"] = [
-            {"name": d.name} for d in (semantic_query.dimensions or [])
+            {"name": d.field_name} for d in (semantic_query.dimensions or [])
         ]
         context["measures"] = [
-            {"name": m.name} for m in (semantic_query.measures or [])
+            {"name": m.field_name} for m in (semantic_query.measures or [])
         ]
     
     try:
         # Get dimension_hierarchy from state (from metadata)
         dimension_hierarchy = state.get("dimension_hierarchy", {})
         
-        # Run analysis with dimension_hierarchy
+        # Run analysis with dimension_hierarchy, passing state and config for middleware
         agent = InsightAgent(dimension_hierarchy=dimension_hierarchy)
-        result = await agent.analyze(query_result, context)
+        result = await agent.analyze(query_result, context, state=dict(state), config=config)
         
         # findings 保持为 Pydantic 对象列表
         findings = result.findings if result.findings else []
@@ -347,7 +385,8 @@ async def insight_node_streaming(
         dimension_hierarchy = state.get("dimension_hierarchy", {})
         agent = InsightAgent(dimension_hierarchy=dimension_hierarchy)
         
-        async for event in agent.analyze_streaming(query_result, context):
+        # Pass state and config for middleware support
+        async for event in agent.analyze_streaming(query_result, context, state=dict(state), config=config):
             yield event
             
             # If complete, also yield state update

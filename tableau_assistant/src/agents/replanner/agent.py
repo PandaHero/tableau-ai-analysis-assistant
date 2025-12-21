@@ -9,6 +9,10 @@ Design Specification: insight-design.md
 - 识别缺失的分析方面
 - 基于 dimension_hierarchy 生成多个探索问题
 - 为每个问题分配优先级
+
+使用 call_llm_with_tools 模式：
+- call_llm_with_tools(): 支持工具调用 + 中间件 + 流式输出
+- 不使用 with_structured_output（对某些模型不可靠）
 """
 
 import logging
@@ -16,7 +20,7 @@ import json
 from typing import Dict, List, Any, Optional
 
 from tableau_assistant.src.core.models import ReplanDecision, ExplorationQuestion, Insight
-from tableau_assistant.src.agents.base import clean_json_output
+from tableau_assistant.src.agents.base import clean_json_output, get_llm, call_llm_with_tools
 from .prompt import REPLANNER_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -58,8 +62,7 @@ class ReplannerAgent:
     def _get_llm(self):
         """获取或创建 LLM 实例"""
         if self._llm is None:
-            from tableau_assistant.src.infra.ai import get_llm
-            self._llm = get_llm()
+            self._llm = get_llm(agent_name="replanner")
         return self._llm
     
     async def replan(
@@ -71,9 +74,13 @@ class ReplannerAgent:
         current_dimensions: Optional[List[str]] = None,
         current_round: int = 1,
         answered_questions: Optional[List[str]] = None,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> ReplanDecision:
         """
         执行重规划决策
+        
+        使用 call_llm_with_tools 支持中间件和流式输出。
         
         Args:
             original_question: 原始用户问题
@@ -83,6 +90,8 @@ class ReplannerAgent:
             current_dimensions: 当前已分析的维度
             current_round: 当前重规划轮数
             answered_questions: 已回答的问题列表（用于去重）
+            state: 当前工作流状态（用于中间件）
+            config: LangGraph RunnableConfig（包含中间件）
             
         Returns:
             ReplanDecision 包含是否重规划、探索问题等
@@ -142,11 +151,25 @@ class ReplannerAgent:
                 max_rounds=self.max_replan_rounds,
             )
             
+            # 获取中间件
+            middleware = None
+            if config and "configurable" in config:
+                middleware = config["configurable"].get("middleware")
+            
+            # 使用 call_llm_with_tools 支持中间件和流式输出
             llm = self._get_llm()
-            response = await llm.ainvoke(messages)
+            response = await call_llm_with_tools(
+                llm=llm,
+                messages=messages,
+                tools=[],  # 不需要工具
+                streaming=True,
+                middleware=middleware,
+                state=state or {},
+                config=config,
+            )
             
             # 解析响应
-            decision = self._parse_response(response.content)
+            decision = self._parse_response(response)
             
             # 限制每轮问题数量
             if decision.exploration_questions:

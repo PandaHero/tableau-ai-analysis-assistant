@@ -7,6 +7,21 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Language, AnalysisDepth, CustomModel } from '@/types'
 import { STORAGE_KEYS, DEFAULT_CONFIG, BUILTIN_MODELS } from '@/types'
+import { 
+  isInTableauEnvironment, 
+  setSetting, 
+  saveSettings as saveTableauSettings,
+  getAllSettings 
+} from '@/utils/tableau'
+
+// Tableau 设置键名
+const TABLEAU_SETTINGS_KEYS = {
+  LANGUAGE: 'ai_assistant_language',
+  ANALYSIS_DEPTH: 'ai_assistant_analysis_depth',
+  SELECTED_MODEL: 'ai_assistant_selected_model',
+  DATASOURCE_NAME: 'ai_assistant_datasource_name',
+  CUSTOM_MODELS: 'ai_assistant_custom_models'
+}
 
 /**
  * 检测系统语言
@@ -57,30 +72,55 @@ export const useSettingsStore = defineStore('settings', () => {
   )
 
   /**
-   * 初始化 - 从 localStorage 恢复
+   * 初始化 - 从 Tableau 设置或 localStorage 恢复
+   * 优先级：Tableau 设置 > localStorage
+   * 自定义模型从后端 API 加载
    */
-  function initialize() {
+  async function initialize() {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS)
-      if (saved) {
-        const settings = JSON.parse(saved)
-        if (settings.language) language.value = settings.language
-        if (settings.analysisDepth) analysisDepth.value = settings.analysisDepth
-        if (settings.selectedModel) selectedModel.value = settings.selectedModel
-        if (settings.customModels) customModels.value = settings.customModels
-        if (settings.datasourceName) datasourceName.value = settings.datasourceName
-        if (settings.maxMessageLength) maxMessageLength.value = settings.maxMessageLength
-        if (typeof settings.autoScroll === 'boolean') autoScroll.value = settings.autoScroll
+      // 首先尝试从 Tableau 设置恢复
+      if (isInTableauEnvironment()) {
+        const tableauSettings = getAllSettings()
+        console.log('Restoring settings from Tableau:', tableauSettings)
+        
+        if (tableauSettings[TABLEAU_SETTINGS_KEYS.LANGUAGE]) {
+          language.value = tableauSettings[TABLEAU_SETTINGS_KEYS.LANGUAGE] as Language
+        }
+        if (tableauSettings[TABLEAU_SETTINGS_KEYS.ANALYSIS_DEPTH]) {
+          analysisDepth.value = tableauSettings[TABLEAU_SETTINGS_KEYS.ANALYSIS_DEPTH] as AnalysisDepth
+        }
+        if (tableauSettings[TABLEAU_SETTINGS_KEYS.SELECTED_MODEL]) {
+          selectedModel.value = tableauSettings[TABLEAU_SETTINGS_KEYS.SELECTED_MODEL]
+        }
+        if (tableauSettings[TABLEAU_SETTINGS_KEYS.DATASOURCE_NAME]) {
+          datasourceName.value = tableauSettings[TABLEAU_SETTINGS_KEYS.DATASOURCE_NAME]
+        }
+      } else {
+        // 回退到 localStorage
+        const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS)
+        if (saved) {
+          const settings = JSON.parse(saved)
+          if (settings.language) language.value = settings.language
+          if (settings.analysisDepth) analysisDepth.value = settings.analysisDepth
+          if (settings.selectedModel) selectedModel.value = settings.selectedModel
+          if (settings.datasourceName) datasourceName.value = settings.datasourceName
+          if (settings.maxMessageLength) maxMessageLength.value = settings.maxMessageLength
+          if (typeof settings.autoScroll === 'boolean') autoScroll.value = settings.autoScroll
+        }
       }
+      
+      // 从后端加载自定义模型（统一数据源）
+      await loadCustomModels()
+      
     } catch (e) {
       console.error('Failed to restore settings:', e)
     }
   }
 
   /**
-   * 持久化到 localStorage
+   * 持久化到 Tableau 设置和 localStorage
    */
-  function persist() {
+  async function persist() {
     try {
       const settings = {
         language: language.value,
@@ -91,7 +131,24 @@ export const useSettingsStore = defineStore('settings', () => {
         maxMessageLength: maxMessageLength.value,
         autoScroll: autoScroll.value
       }
+      
+      // 保存到 localStorage
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings))
+      
+      // 如果在 Tableau 环境中，也保存到 Tableau 设置
+      if (isInTableauEnvironment()) {
+        setSetting(TABLEAU_SETTINGS_KEYS.LANGUAGE, language.value)
+        setSetting(TABLEAU_SETTINGS_KEYS.ANALYSIS_DEPTH, analysisDepth.value)
+        setSetting(TABLEAU_SETTINGS_KEYS.SELECTED_MODEL, selectedModel.value)
+        if (datasourceName.value) {
+          setSetting(TABLEAU_SETTINGS_KEYS.DATASOURCE_NAME, datasourceName.value)
+        }
+        setSetting(TABLEAU_SETTINGS_KEYS.CUSTOM_MODELS, JSON.stringify(customModels.value))
+        
+        // 异步保存到 Tableau 服务器
+        await saveTableauSettings()
+        console.log('Settings saved to Tableau')
+      }
     } catch (e) {
       console.error('Failed to persist settings:', e)
     }
@@ -100,92 +157,156 @@ export const useSettingsStore = defineStore('settings', () => {
   /**
    * 设置语言
    */
-  function setLanguage(lang: Language) {
+  async function setLanguage(lang: Language) {
     language.value = lang
-    persist()
+    await persist()
   }
 
   /**
    * 设置分析深度
    */
-  function setAnalysisDepth(depth: AnalysisDepth) {
+  async function setAnalysisDepth(depth: AnalysisDepth) {
     analysisDepth.value = depth
-    persist()
+    await persist()
   }
 
   /**
    * 设置选中的模型
    */
-  function setSelectedModel(modelId: string) {
+  async function setSelectedModel(modelId: string) {
     selectedModel.value = modelId
-    persist()
+    await persist()
   }
 
   /**
    * 设置数据源名称
    */
-  function setDatasourceName(name: string | undefined) {
+  async function setDatasourceName(name: string | undefined) {
     datasourceName.value = name
-    persist()
+    await persist()
   }
 
   /**
-   * 添加自定义模型
+   * 从后端加载自定义模型列表
+   */
+  async function loadCustomModels(): Promise<void> {
+    try {
+      const response = await fetch('/api/models/custom')
+      if (response.ok) {
+        const models = await response.json()
+        customModels.value = models.map((m: { name: string; apiBase: string; modelId: string; createdAt: number }) => ({
+          name: m.name,
+          apiBase: m.apiBase,
+          modelId: m.modelId,
+          apiKey: '', // 后端不返回 apiKey
+          createdAt: m.createdAt
+        }))
+        console.log('Loaded custom models from backend:', customModels.value.length)
+      }
+    } catch (e) {
+      console.error('Failed to load custom models:', e)
+    }
+  }
+
+  /**
+   * 添加自定义模型（通过后端 API）
    */
   async function addCustomModel(model: CustomModel): Promise<void> {
-    const newModel = {
-      ...model,
-      createdAt: Date.now()
+    try {
+      const response = await fetch('/api/models/custom', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(model)
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Failed to add model')
+      }
+      
+      const created = await response.json()
+      customModels.value.push({
+        name: created.name,
+        apiBase: created.apiBase,
+        modelId: created.modelId,
+        apiKey: model.apiKey, // 保留本地的 apiKey
+        createdAt: created.createdAt
+      })
+      
+      await persist()
+    } catch (e) {
+      console.error('Failed to add custom model:', e)
+      throw e
     }
-    customModels.value.push(newModel)
-    persist()
   }
 
   /**
-   * 删除自定义模型
+   * 删除自定义模型（通过后端 API）
    */
   async function removeCustomModel(name: string): Promise<void> {
-    const index = customModels.value.findIndex(m => m.name === name)
-    if (index !== -1) {
-      customModels.value.splice(index, 1)
+    try {
+      const response = await fetch(`/api/models/custom/${encodeURIComponent(name)}`, {
+        method: 'DELETE'
+      })
+      
+      if (!response.ok && response.status !== 404) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Failed to delete model')
+      }
+      
+      // 从本地列表移除
+      const index = customModels.value.findIndex(m => m.name === name)
+      if (index !== -1) {
+        customModels.value.splice(index, 1)
+      }
       
       // 如果删除的是当前选中的模型，切换到默认模型
       if (selectedModel.value === `custom_${name}`) {
         selectedModel.value = DEFAULT_CONFIG.selectedModel
       }
       
-      persist()
+      await persist()
+    } catch (e) {
+      console.error('Failed to remove custom model:', e)
+      throw e
     }
   }
 
   /**
-   * 测试自定义模型连接
+   * 测试自定义模型连接（通过后端 API）
    */
-  async function testCustomModel(model: CustomModel): Promise<boolean> {
+  async function testCustomModel(model: CustomModel): Promise<{ success: boolean; message: string; latency_ms?: number }> {
     try {
-      // TODO: 实现实际的连接测试
-      // 这里需要调用后端 API 进行测试
       const response = await fetch('/api/models/custom/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(model)
+        body: JSON.stringify({
+          apiBase: model.apiBase,
+          apiKey: model.apiKey,
+          modelId: model.modelId
+        })
       })
-      return response.ok
-    } catch {
-      return false
+      
+      const result = await response.json()
+      return result
+    } catch (e) {
+      return {
+        success: false,
+        message: `连接失败: ${e instanceof Error ? e.message : '未知错误'}`
+      }
     }
   }
 
   /**
    * 重置为默认设置
    */
-  function resetToDefaults() {
+  async function resetToDefaults() {
     language.value = DEFAULT_CONFIG.language
     analysisDepth.value = DEFAULT_CONFIG.analysisDepth
     selectedModel.value = DEFAULT_CONFIG.selectedModel
     maxMessageLength.value = DEFAULT_CONFIG.maxMessageLength
     autoScroll.value = DEFAULT_CONFIG.autoScroll
-    persist()
+    await persist()
   }
 
   return {
@@ -204,6 +325,7 @@ export const useSettingsStore = defineStore('settings', () => {
     
     // 方法
     initialize,
+    loadCustomModels,
     setLanguage,
     setAnalysisDepth,
     setSelectedModel,

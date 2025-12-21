@@ -80,9 +80,11 @@ import { useI18n } from '@/utils/i18n'
 import LayoutContainer from '@/components/layout/LayoutContainer.vue'
 import HeaderBar from '@/components/layout/HeaderBar.vue'
 import InputArea from '@/components/layout/InputArea.vue'
-import WelcomePage from '@/components/layout/WelcomePage.vue'
-import ChatPage from '@/components/chat/ChatPage.vue'
-import SettingsPanel from '@/components/settings/SettingsPanel.vue'
+// 懒加载大型组件 (Task 21.1)
+import { defineAsyncComponent } from 'vue'
+const WelcomePage = defineAsyncComponent(() => import('@/components/layout/WelcomePage.vue'))
+const ChatPage = defineAsyncComponent(() => import('@/components/chat/ChatPage.vue'))
+const SettingsPanel = defineAsyncComponent(() => import('@/components/settings/SettingsPanel.vue'))
 
 const tableauStore = useTableauStore()
 const chatStore = useChatStore()

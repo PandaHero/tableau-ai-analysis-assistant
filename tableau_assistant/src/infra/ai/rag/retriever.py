@@ -13,7 +13,10 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tableau_assistant.src.infra.ai.rag.reranker import BaseReranker
 
 from tableau_assistant.src.infra.ai.rag.models import (
     FieldChunk,
@@ -884,6 +887,53 @@ class RetrievalPipeline:
         return results
 
 
+def _create_reranker(
+    reranker_type: str,
+    top_k: int = 10,
+    rrf_k: int = 60
+) -> Optional["BaseReranker"]:
+    """
+    创建重排序器
+    
+    Args:
+        reranker_type: 重排序器类型（llm/rrf/default）
+        top_k: 返回结果数量
+        rrf_k: RRF 参数 k
+    
+    Returns:
+        重排序器实例
+    """
+    from tableau_assistant.src.infra.ai.rag.reranker import (
+        DefaultReranker,
+        RRFReranker,
+        LLMReranker,
+    )
+    
+    if reranker_type == "default":
+        return DefaultReranker(top_k)
+    elif reranker_type == "rrf":
+        return RRFReranker(top_k, k=rrf_k)
+    elif reranker_type == "llm":
+        try:
+            from tableau_assistant.src.infra.ai.llm import get_llm
+            
+            llm = get_llm()
+            
+            def llm_call_fn(prompt: str) -> str:
+                response = llm.invoke(prompt)
+                if hasattr(response, 'content'):
+                    return response.content
+                return str(response)
+            
+            return LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn)
+        except Exception as e:
+            logger.warning(f"创建 LLMReranker 失败，使用默认排序: {e}")
+            return DefaultReranker(top_k)
+    else:
+        logger.warning(f"未知的重排序器类型: {reranker_type}，使用默认排序")
+        return DefaultReranker(top_k)
+
+
 class RetrieverFactory:
     """
     检索器工厂
@@ -990,13 +1040,9 @@ class RetrieverFactory:
         # 创建重排序器
         reranker = None
         if reranker_type:
-            from tableau_assistant.src.model_manager import select_reranker
-            
-            reranker = select_reranker(
+            reranker = _create_reranker(
                 reranker_type=reranker_type,
                 top_k=kwargs.get("rerank_top_k", 10),
-                llm_provider=kwargs.get("llm_provider"),
-                llm_model=kwargs.get("llm_model"),
                 rrf_k=kwargs.get("rrf_k", 60)
             )
         

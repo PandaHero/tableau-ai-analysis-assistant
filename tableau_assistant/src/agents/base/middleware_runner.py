@@ -118,19 +118,6 @@ try:
     from langchain.tools.tool_node import ToolCallRequest
     from langgraph.types import Command
     
-    # Runtime 类型
-    try:
-        from langgraph.runtime import Runtime
-    except ImportError:
-        # 如果 Runtime 不存在，定义一个简单的替代
-        @dataclass
-        class Runtime:
-            """LangGraph Runtime 替代类"""
-            context: Any = None
-            store: Any = None
-            checkpointer: Any = None
-            config: Dict[str, Any] = field(default_factory=dict)
-    
     LANGCHAIN_MIDDLEWARE_AVAILABLE = True
     
 except ImportError:
@@ -179,17 +166,25 @@ except ImportError:
             from dataclasses import replace
             return replace(self, **kwargs)
     
-    @dataclass
-    class Runtime:
-        """LangGraph Runtime"""
-        context: Any = None
-        store: Any = None
-        checkpointer: Any = None
-        config: Dict[str, Any] = field(default_factory=dict)
-    
     class Command:
         """LangGraph Command"""
         pass
+
+
+# Runtime 类型 - 始终使用本地定义以确保兼容性
+# LangGraph 的 Runtime 签名是: (*, context, store, stream_writer, previous)
+# 我们需要额外的 config 字段来传递配置
+@dataclass
+class Runtime:
+    """
+    LangGraph Runtime 兼容类
+    
+    LangGraph 原生 Runtime 签名: (*, context, store, stream_writer, previous)
+    我们扩展它以支持 config 字段用于传递 RunnableConfig
+    """
+    context: Any = None
+    store: Any = None
+    config: Dict[str, Any] = field(default_factory=dict)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -513,16 +508,14 @@ class MiddlewareRunner:
         config: Optional[Dict[str, Any]] = None,
         context: Any = None,
         store: Any = None,
-        checkpointer: Any = None,
     ) -> Runtime:
         """
-        构建 LangGraph Runtime 对象
+        构建 Runtime 对象
         
         Args:
             config: LangGraph RunnableConfig
             context: 用户自定义上下文
             store: 跨线程持久化存储
-            checkpointer: 单线程状态持久化
         
         Returns:
             Runtime 对象
@@ -530,7 +523,6 @@ class MiddlewareRunner:
         return Runtime(
             context=context,
             store=store,
-            checkpointer=checkpointer,
             config=config or {},
         )
     
@@ -752,14 +744,18 @@ class MiddlewareRunner:
                 result = None
                 
                 if async_hook and self._is_overridden(mw, async_hook_name):
+                    # 获取钩子函数的参数签名，只传递它接受的参数
+                    filtered_kwargs = self._filter_kwargs_for_hook(async_hook, kwargs)
                     # 调用异步钩子
-                    result = await async_hook(state=current_state, **kwargs)
+                    result = await async_hook(state=current_state, **filtered_kwargs)
                 elif sync_hook and self._is_overridden(mw, sync_hook_name):
+                    # 获取钩子函数的参数签名，只传递它接受的参数
+                    filtered_kwargs = self._filter_kwargs_for_hook(sync_hook, kwargs)
                     # 调用同步钩子
                     if asyncio.iscoroutinefunction(sync_hook):
-                        result = await sync_hook(state=current_state, **kwargs)
+                        result = await sync_hook(state=current_state, **filtered_kwargs)
                     else:
-                        result = sync_hook(state=current_state, **kwargs)
+                        result = sync_hook(state=current_state, **filtered_kwargs)
                 
                 # 合并状态更新（使用 reducer 处理特殊字段）
                 if result and isinstance(result, dict):
@@ -786,6 +782,45 @@ class MiddlewareRunner:
                 # 否则继续执行后续 middleware
         
         return current_state
+    
+    def _filter_kwargs_for_hook(
+        self,
+        hook: Callable,
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        根据钩子函数的签名过滤 kwargs
+        
+        只传递钩子函数实际接受的参数，避免 TypeError。
+        
+        Args:
+            hook: 钩子函数
+            kwargs: 要传递的参数字典
+        
+        Returns:
+            过滤后的参数字典
+        """
+        try:
+            sig = inspect.signature(hook)
+            params = sig.parameters
+            
+            # 检查是否接受 **kwargs
+            has_var_keyword = any(
+                p.kind == inspect.Parameter.VAR_KEYWORD
+                for p in params.values()
+            )
+            
+            if has_var_keyword:
+                # 如果接受 **kwargs，传递所有参数
+                return kwargs
+            
+            # 只传递函数签名中定义的参数
+            accepted_params = set(params.keys()) - {'self'}
+            return {k: v for k, v in kwargs.items() if k in accepted_params}
+            
+        except (ValueError, TypeError):
+            # 如果无法获取签名，返回原始 kwargs
+            return kwargs
 
     
     # ═══════════════════════════════════════════════════════════════════════

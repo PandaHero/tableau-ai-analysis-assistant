@@ -47,6 +47,16 @@ export interface ChatRequest {
   user_id?: string
   analysis_depth?: 'detailed' | 'comprehensive'
   language?: 'zh' | 'en'
+  // Tableau 环境信息（支持多环境）
+  tableau_domain?: string
+  tableau_site?: string
+  tableau_context?: 'desktop' | 'server' | 'cloud' | 'public-desktop' | 'public-web'
+  // 数据源连接信息（用于调试和环境检测）
+  datasource_connection_info?: {
+    serverURI?: string
+    connectionType?: string
+    isPublished?: boolean
+  }
 }
 
 // 聊天响应 - 与后端 VizQLQueryResponse 对应

@@ -8,102 +8,132 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 import json
 import time
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
 from tableau_assistant.src.api.models import (
     ChatRequest,
     ChatResponse,
     ErrorResponse,
-    StreamEvent
+    StreamEvent,
+    KeyFinding,
+    AnalysisStep,
+    Recommendation,
+    Visualization,
 )
 from tableau_assistant.src.orchestration.workflow.executor import WorkflowExecutor, EventType
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-async def resolve_datasource_luid(request: ChatRequest) -> str:
+async def resolve_datasource_luid(request: ChatRequest) -> tuple[str, str]:
     """
-    解析数据源 LUID
+    解析数据源 LUID 和对应的 Tableau 域名
     
     优先使用 datasource_luid，如果未提供则通过 datasource_name 查找。
     使用缓存减少 API 调用。
+    支持多 Tableau 环境：
+    - 如果提供了 tableau_domain，直接使用对应配置
+    - 如果是 desktop 环境且未提供 domain，尝试所有配置找到数据源
     
     Args:
         request: 查询请求
         
     Returns:
-        数据源 LUID
+        (datasource_luid, tableau_domain) 元组
         
     Raises:
         HTTPException: 如果无法解析数据源
     """
-    # 优先使用 LUID
+    import logging
+    import asyncio
+    logger = logging.getLogger(__name__)
+    
+    # 调试日志：打印收到的 Tableau 环境信息
+    logger.info(f"收到请求 - tableau_domain: {request.tableau_domain}, tableau_site: {request.tableau_site}, tableau_context: {request.tableau_context}")
+    logger.info(f"数据源连接信息: {request.datasource_connection_info}")
+    logger.info(f"数据源: datasource_luid={request.datasource_luid}, datasource_name='{request.datasource_name}'")
+    
+    from tableau_assistant.src.platforms.tableau import get_datasource_luid_by_name, get_tableau_auth_async
+    from tableau_assistant.src.infra.storage import get_langgraph_store
+    from tableau_assistant.src.infra.config.settings import settings
+    from tableau_assistant.src.infra.config.tableau_env import get_tableau_config, get_tableau_env_manager
+    
+    store = get_langgraph_store()
+    
+    # 优先使用 LUID（需要配合 domain 使用）
     if request.datasource_luid:
-        return request.datasource_luid
+        tableau_config = get_tableau_config(request.tableau_domain, request.tableau_context)
+        return request.datasource_luid, tableau_config.domain
     
     # 通过名称查找
     if request.datasource_name:
-        from tableau_assistant.src.platforms.tableau import get_datasource_luid_by_name, get_tableau_auth_async
-        from tableau_assistant.src.infra.storage import get_store_manager
-        from tableau_assistant.src.infra.config.settings import settings
-        
-        # 尝试从缓存获取
-        store = get_store_manager()
-        cache_key = f"datasource_luid:{request.datasource_name}"
-        cached_luid = store.get("datasource_luid_cache", cache_key)
-        
-        if cached_luid:
-            return cached_luid
-        
-        # 获取认证信息
-        try:
-            auth_ctx = await get_tableau_auth_async()
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=ErrorResponse(
-                    error="AuthError",
-                    message=f"Tableau 认证失败: {str(e)}"
-                ).model_dump()
+        # 如果明确指定了 domain 或 context 能确定环境，直接使用
+        if request.tableau_domain or request.tableau_context in ("cloud", "server"):
+            tableau_config = get_tableau_config(request.tableau_domain, request.tableau_context)
+            return await _find_datasource_in_env(
+                request.datasource_name,
+                tableau_config.domain,
+                request.tableau_site or tableau_config.site,
+                store,
+                logger
             )
         
-        # 调用 API 查找（同步函数，在线程池中执行）
-        import asyncio
-        try:
-            luid = await asyncio.to_thread(
-                get_datasource_luid_by_name,
-                api_key=auth_ctx.token,
-                domain=settings.tableau_server_url,
-                datasource_name=request.datasource_name,
-                site=settings.tableau_site_name
-            )
-            if luid:
-                # 缓存 1 小时
-                store.set("datasource_luid_cache", cache_key, luid, ttl=3600)
-                return luid
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail=ErrorResponse(
-                        error="DatasourceNotFound",
-                        message=f"无法找到数据源: {request.datasource_name}"
-                    ).model_dump()
-                )
-        except HTTPException:
-            raise
-        except Exception as e:
+        # Desktop 环境且未指定 domain，尝试所有配置
+        if request.tableau_context == "desktop":
+            logger.info("Desktop 环境，尝试在所有配置的 Tableau 环境中查找数据源")
+            env_manager = get_tableau_env_manager()
+            
+            # 获取所有配置的环境
+            errors = []
+            for env_key in ["server", "cloud"]:  # 优先尝试 server
+                if env_key not in env_manager._configs:
+                    continue
+                    
+                config = env_manager._configs[env_key]
+                logger.info(f"尝试在 {env_key} ({config.domain}) 中查找数据源...")
+                
+                try:
+                    luid, domain = await _find_datasource_in_env(
+                        request.datasource_name,
+                        config.domain,
+                        request.tableau_site or config.site,
+                        store,
+                        logger
+                    )
+                    logger.info(f"在 {env_key} 中找到数据源: {luid}")
+                    return luid, domain
+                except HTTPException as e:
+                    errors.append(f"{env_key}: {e.detail.get('message', str(e))}")
+                    logger.info(f"在 {env_key} 中未找到数据源: {e.detail}")
+                    continue
+                except Exception as e:
+                    errors.append(f"{env_key}: {str(e)}")
+                    logger.warning(f"在 {env_key} 中查找数据源失败: {e}")
+                    continue
+            
+            # 所有环境都没找到
             raise HTTPException(
                 status_code=400,
                 detail=ErrorResponse(
                     error="DatasourceNotFound",
-                    message=f"无法找到数据源: {request.datasource_name}，错误: {str(e)}"
+                    message=f"在所有配置的 Tableau 环境中都无法找到数据源: {request.datasource_name}"
                 ).model_dump()
             )
+        
+        # 其他情况，使用默认配置
+        tableau_config = get_tableau_config(request.tableau_domain, request.tableau_context)
+        return await _find_datasource_in_env(
+            request.datasource_name,
+            tableau_config.domain,
+            request.tableau_site or tableau_config.site,
+            store,
+            logger
+        )
     
     # 都没有提供，使用环境变量默认值
-    from tableau_assistant.src.infra.config.settings import settings
     if settings.datasource_luid:
-        return settings.datasource_luid
+        tableau_config = get_tableau_config(request.tableau_domain, request.tableau_context)
+        return settings.datasource_luid, tableau_config.domain
     
     raise HTTPException(
         status_code=400,
@@ -112,6 +142,88 @@ async def resolve_datasource_luid(request: ChatRequest) -> str:
             message="请提供 datasource_luid 或 datasource_name"
         ).model_dump()
     )
+
+
+async def _find_datasource_in_env(
+    datasource_name: str,
+    tableau_domain: str,
+    tableau_site: str,
+    store,
+    logger
+) -> tuple[str, str]:
+    """
+    在指定的 Tableau 环境中查找数据源
+    
+    Args:
+        datasource_name: 数据源名称
+        tableau_domain: Tableau 域名
+        tableau_site: Tableau 站点
+        store: 缓存存储
+        logger: 日志记录器
+        
+    Returns:
+        (datasource_luid, tableau_domain) 元组
+        
+    Raises:
+        HTTPException: 如果无法找到数据源
+    """
+    import asyncio
+    from tableau_assistant.src.platforms.tableau import get_datasource_luid_by_name, get_tableau_auth_async
+    
+    # 尝试从缓存获取
+    cache_key = f"datasource_luid:{tableau_domain}:{datasource_name}"
+    cached_item = store.get(namespace=("datasource_luid_cache",), key=cache_key)
+    
+    if cached_item:
+        cached_luid = cached_item.value.get("luid")
+        logger.info(f"从缓存获取数据源 LUID: {cached_luid}")
+        return cached_luid, tableau_domain
+    
+    # 获取认证信息
+    try:
+        auth_ctx = await get_tableau_auth_async(tableau_domain)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorResponse(
+                error="AuthError",
+                message=f"Tableau 认证失败 ({tableau_domain}): {str(e)}"
+            ).model_dump()
+        )
+    
+    # 调用 API 查找
+    try:
+        logger.info(f"查找数据源: name='{datasource_name}', domain={tableau_domain}, site={tableau_site}")
+        luid = await asyncio.to_thread(
+            get_datasource_luid_by_name,
+            api_key=auth_ctx.api_key,
+            domain=tableau_domain,
+            datasource_name=datasource_name,
+            site=tableau_site
+        )
+        logger.info(f"查找结果: luid={luid}")
+        if luid:
+            # 缓存 1 小时
+            store.put(namespace=("datasource_luid_cache",), key=cache_key, value={"luid": luid}, ttl=3600)
+            return luid, tableau_domain
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorResponse(
+                    error="DatasourceNotFound",
+                    message=f"无法找到数据源: {datasource_name}"
+                ).model_dump()
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=ErrorResponse(
+                error="DatasourceNotFound",
+                message=f"无法找到数据源: {datasource_name}，错误: {str(e)}"
+            ).model_dump()
+        )
 
 
 @router.post(
@@ -145,11 +257,14 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
     try:
         session_id = request.session_id or f"session_{int(time.time())}"
         
-        # 解析数据源 LUID
-        datasource_luid = await resolve_datasource_luid(request)
+        # 解析数据源 LUID 和对应的 Tableau 域名
+        datasource_luid, tableau_domain = await resolve_datasource_luid(request)
         
-        # 使用 WorkflowExecutor 执行同步查询
-        executor = WorkflowExecutor(datasource_luid=datasource_luid)
+        # 使用 WorkflowExecutor 执行同步查询（多环境支持）
+        executor = WorkflowExecutor(
+            datasource_luid=datasource_luid,
+            tableau_domain=tableau_domain,
+        )
         result = await executor.run(
             question=request.question,
             thread_id=session_id,
@@ -165,54 +280,111 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
                 ).model_dump()
             )
         
-        # 从 insights 提取关键发现
+        # 处理非分析问题（澄清、通用响应等）
+        if not result.is_analysis_question:
+            return ChatResponse(
+                executive_summary=result.non_analysis_response or result.general_response or result.clarification or "",
+                clarification=result.clarification,
+                general_response=result.general_response,
+                metadata={
+                    "duration": result.duration,
+                    "is_analysis_question": False,
+                }
+            )
+        
+        # 从 insights 提取关键发现（Insight 模型有 type, title, description, importance, evidence）
         key_findings = []
-        recommendations = []
         if result.insights:
             for insight in result.insights:
-                if hasattr(insight, 'finding'):
-                    key_findings.append(insight.finding)
-                if hasattr(insight, 'recommendation') and insight.recommendation:
-                    recommendations.append(insight.recommendation)
+                key_findings.append(KeyFinding(
+                    finding=insight.title,  # 使用 title 作为发现内容
+                    importance="high" if insight.importance >= 0.7 else ("medium" if insight.importance >= 0.4 else "low"),
+                    category=insight.type  # trend/anomaly/comparison/pattern
+                ))
         
         # 构建分析路径
         analysis_path = []
+        step_number = 1
         if result.semantic_query:
-            analysis_path.append({
-                "step": "semantic_parser",
-                "description": f"语义解析: {result.question}",
-                "output": result.semantic_query.model_dump() if hasattr(result.semantic_query, 'model_dump') else str(result.semantic_query)
-            })
+            analysis_path.append(AnalysisStep(
+                step_number=step_number,
+                agent_name="语义解析Agent",
+                description=f"理解问题: {result.question[:50]}...",
+                duration_ms=None
+            ))
+            step_number += 1
         if result.mapped_query:
-            analysis_path.append({
-                "step": "field_mapping",
-                "description": "字段映射完成",
-                "output": result.mapped_query.model_dump() if hasattr(result.mapped_query, 'model_dump') else str(result.mapped_query)
-            })
+            analysis_path.append(AnalysisStep(
+                step_number=step_number,
+                agent_name="字段映射Agent",
+                description="将业务术语映射到数据字段",
+                duration_ms=None
+            ))
+            step_number += 1
         if result.vizql_query:
-            analysis_path.append({
-                "step": "query_building",
-                "description": "VizQL 查询构建完成",
-                "output": result.vizql_query.model_dump() if hasattr(result.vizql_query, 'model_dump') else str(result.vizql_query)
-            })
+            analysis_path.append(AnalysisStep(
+                step_number=step_number,
+                agent_name="查询构建Agent",
+                description="构建VizQL查询",
+                duration_ms=None
+            ))
+            step_number += 1
+        if result.query_result:
+            analysis_path.append(AnalysisStep(
+                step_number=step_number,
+                agent_name="执行Agent",
+                description="执行查询并获取数据",
+                duration_ms=None
+            ))
+            step_number += 1
+        if result.insights:
+            analysis_path.append(AnalysisStep(
+                step_number=step_number,
+                agent_name="洞察Agent",
+                description=f"分析数据，发现 {len(result.insights)} 个洞察",
+                duration_ms=None
+            ))
         
         # 生成执行摘要
         executive_summary = ""
-        if result.replan_decision and hasattr(result.replan_decision, 'summary'):
-            executive_summary = result.replan_decision.summary or ""
-        elif key_findings:
-            executive_summary = "; ".join(key_findings[:3])
+        if result.replan_decision and result.replan_decision.reason:
+            executive_summary = result.replan_decision.reason
+        elif result.insights:
+            # 使用最重要的洞察作为摘要
+            sorted_insights = sorted(result.insights, key=lambda x: x.importance, reverse=True)
+            executive_summary = sorted_insights[0].description if sorted_insights else ""
+        
+        # 构建推荐问题（从 replan_decision 获取）
+        recommendations = []
+        if result.replan_decision and result.replan_decision.exploration_questions:
+            for i, eq in enumerate(result.replan_decision.exploration_questions):
+                recommendations.append(Recommendation(
+                    question=eq.question,
+                    reason=eq.reasoning,  # ExplorationQuestion 使用 reasoning 字段
+                    priority="high" if i == 0 else ("medium" if i < 3 else "low")
+                ))
+        
+        # 构建可视化数据（包含查询结果）
+        visualizations = []
+        if result.query_result and hasattr(result.query_result, 'data') and result.query_result.data:
+            visualizations.append(Visualization(
+                viz_type="table",
+                title="查询结果",
+                data={"rows": result.query_result.data},
+                config={"columns": result.query_result.columns if hasattr(result.query_result, 'columns') else []}
+            ))
         
         return ChatResponse(
             executive_summary=executive_summary,
             key_findings=key_findings,
             analysis_path=analysis_path,
             recommendations=recommendations,
-            visualizations=[],
+            visualizations=visualizations,
             metadata={
                 "duration": result.duration,
                 "replan_count": result.replan_count,
                 "is_analysis_question": result.is_analysis_question,
+                "row_count": len(result.query_result.data) if result.query_result and hasattr(result.query_result, 'data') and result.query_result.data else 0,
             }
         )
         
@@ -244,12 +416,13 @@ async def generate_sse_events(
     question: str,
     session_id: str,
     datasource_luid: str,
+    tableau_domain: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """
     生成SSE事件流
     
     使用 WorkflowExecutor.stream() 获取工作流事件并转换为 SSE 格式。
-    支持 token 级别的流式输出。
+    支持 token 级别的流式输出和多环境。
     
     事件类型：
     - node_start: 节点开始执行
@@ -262,12 +435,16 @@ async def generate_sse_events(
         question: 用户问题
         session_id: 会话ID
         datasource_luid: 数据源LUID
+        tableau_domain: Tableau 域名（多环境支持）
     
     Yields:
         SSE格式的事件字符串
     """
     try:
-        executor = WorkflowExecutor(datasource_luid=datasource_luid)
+        executor = WorkflowExecutor(
+            datasource_luid=datasource_luid,
+            tableau_domain=tableau_domain,
+        )
         
         async for event in executor.stream(question, thread_id=session_id):
             # 转换为前端友好的格式
@@ -315,17 +492,25 @@ async def chat_query_stream(request: ChatRequest):
     Returns:
         SSE流式响应
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
+        logger.info(f"chat_query_stream 收到请求: question='{request.question[:50] if request.question else 'None'}...'")
+        
         session_id = request.session_id or f"session_{int(time.time())}"
         
-        # 解析数据源 LUID
-        datasource_luid = await resolve_datasource_luid(request)
+        # 解析数据源 LUID 和对应的 Tableau 域名
+        datasource_luid, tableau_domain = await resolve_datasource_luid(request)
+        
+        logger.info(f"chat_query_stream 数据源解析成功: luid={datasource_luid}, domain={tableau_domain}")
         
         return StreamingResponse(
             generate_sse_events(
                 question=request.question,
                 session_id=session_id,
                 datasource_luid=datasource_luid,
+                tableau_domain=tableau_domain,
             ),
             media_type="text/event-stream",
             headers={
@@ -335,6 +520,7 @@ async def chat_query_stream(request: ChatRequest):
             }
         )
     except ValidationError as e:
+        logger.error(f"chat_query_stream ValidationError: {e}")
         raise HTTPException(
             status_code=400,
             detail=ErrorResponse(
@@ -344,6 +530,17 @@ async def chat_query_stream(request: ChatRequest):
                     {"code": err["type"], "message": err["msg"], "field": err["loc"][0]}
                     for err in e.errors()
                 ]
+            ).model_dump()
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"chat_query_stream 未知错误: {type(e).__name__}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorResponse(
+                error="InternalError",
+                message=f"服务器内部错误: {str(e)}"
             ).model_dump()
         )
 
@@ -376,13 +573,17 @@ async def health_check():
         checks["llm"] = {"status": "error", "message": str(e)}
         logger.warning(f"LLM health check failed: {e}")
     
-    # 检查 Tableau API
+    # 检查 Tableau API（多环境支持）
     try:
-        from tableau_assistant.src.platforms.tableau import get_tableau_auth_async
-        # 只检查配置是否存在，不实际调用 API
-        from tableau_assistant.src.infra.config.settings import settings
-        if settings.tableau_server_url and settings.tableau_site_name:
-            checks["tableau"] = {"status": "ok", "message": "Tableau 配置正常"}
+        from tableau_assistant.src.infra.config.tableau_env import get_tableau_env_manager
+        env_manager = get_tableau_env_manager()
+        domains = env_manager.get_all_domains()
+        
+        if domains:
+            checks["tableau"] = {
+                "status": "ok", 
+                "message": f"Tableau 配置正常，已配置 {len(domains)} 个环境"
+            }
         else:
             checks["tableau"] = {"status": "warning", "message": "Tableau 配置不完整"}
     except Exception as e:
@@ -391,8 +592,8 @@ async def health_check():
     
     # 检查存储
     try:
-        from tableau_assistant.src.infra.storage import get_store_manager
-        store = get_store_manager()
+        from tableau_assistant.src.infra.storage import get_langgraph_store
+        store = get_langgraph_store()
         checks["storage"] = {"status": "ok", "message": "存储服务正常"}
     except Exception as e:
         checks["storage"] = {"status": "error", "message": str(e)}

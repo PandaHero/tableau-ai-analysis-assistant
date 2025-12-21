@@ -41,24 +41,19 @@ Process: Merge history context -> Extract What/Where/How -> Classify intent -> G
     def get_specific_domain_knowledge(self) -> str:
         return """**Three-Element Model**
 
-Every data query can be described as: Query = What x Where x How
-
-- **What**: Target measures + aggregation (e.g., sales, profit)
-- **Where**: Dimensions for grouping + filters (e.g., province, month)
-- **How**: Computation type
-  - SIMPLE: Basic aggregation, no complex computation
-  - RANKING: ranking, Top N
-  - CUMULATIVE: cumulative, running total
-  - COMPARISON: percentage, YoY, MoM, growth rate
-  - GRANULARITY: fixed granularity aggregation
+Query = What × Where × How
+- What: Target measures + aggregation
+- Where: Dimensions + filters
+- How: SIMPLE | RANKING | CUMULATIVE | COMPARISON | GRANULARITY
 
 **Think step by step:**
 
 Step 1: Understand user intent - What does the user want to know?
-Step 2: Extract business entities - Use exact terms from the question
-Step 3: Classify entity roles - Which are dimensions? Which are measures?
-Step 4: Detect analysis type - Look for keywords
-Step 5: Preserve partition intent - Keep partition keywords
+Step 2: Extract business entities - Use exact terms from question
+Step 3: Classify entity roles - Dimension vs Measure
+Step 4: Detect date/time constraints as filters
+Step 5: Detect analysis type from keywords (排名/占比/同比/累计)
+Step 6: Preserve partition intent (每月/当月/全国)
 
 **Intent Classification**
 
@@ -69,14 +64,15 @@ Step 5: Preserve partition intent - Keep partition keywords
 
 **Merge Rules (for follow-up questions):**
 
-- Current question mentions explicitly -> Use current value
-- Current question doesn't mention -> Inherit from history
-- Current question modifies -> Replace corresponding element
-- Current question adds -> Merge with history"""
+- Current mentions explicitly → Use current value
+- Current doesn't mention → Inherit from history
+- Current modifies → Replace corresponding element
+- Current adds → Merge with history"""
 
     def get_constraints(self) -> str:
-        return """MUST: Preserve partition intent, Use business terms, Provide reasoning
-MUST NOT: Lose partition keywords, Invent fields, Classify as DATA_QUERY if incomplete"""
+        return """MUST: Preserve partition intent, Use exact terms from user question, Provide reasoning
+MUST NOT: Lose partition keywords, Invent fields, Classify as DATA_QUERY if incomplete
+MUST NOT: Select field names from metadata - extract exact terms from user question only (field mapping is done later by FieldMapper)"""
 
     def get_user_template(self) -> str:
         return """**Current Question:** {question}
@@ -86,6 +82,8 @@ MUST NOT: Lose partition keywords, Invent fields, Classify as DATA_QUERY if inco
 
 **Available Fields (for reference):**
 {metadata}
+
+**Current Time:** {current_time}
 
 Please analyze this question and output Step1Output JSON."""
 

@@ -147,6 +147,79 @@ def route_after_replanner(
     return "end"
 
 
+def route_after_execute(state: VizQLState) -> Literal["insight", "self_correction", "end"]:
+    """
+    Route after Execute node.
+    
+    Decision rules:
+    - query_result.is_success() -> insight (continue to analysis)
+    - query_result.error and correction_count < max -> self_correction (try to fix)
+    - query_result.error and correction exhausted -> end (结束，返回错误信息)
+    
+    Args:
+        state: Current workflow state
+    
+    Returns:
+        Next node name: "insight", "self_correction", or "end"
+    """
+    query_result = state.get("query_result")
+    correction_count = state.get("correction_count", 0)
+    correction_exhausted = state.get("correction_exhausted", False)
+    max_correction_attempts = 2  # 最多纠错 2 次
+    
+    # 检查是否有错误
+    has_error = False
+    is_success = False
+    if query_result:
+        if hasattr(query_result, 'is_success'):
+            is_success = query_result.is_success()
+            has_error = not is_success
+        elif hasattr(query_result, 'error'):
+            has_error = bool(query_result.error)
+            is_success = not has_error
+        elif isinstance(query_result, dict):
+            has_error = bool(query_result.get('error'))
+            is_success = not has_error
+    
+    # 成功执行，进入 insight 分析
+    if is_success:
+        logger.info("Query succeeded, routing to insight")
+        return "insight"
+    
+    # 有错误且未用尽纠错次数，尝试纠错
+    if has_error and not correction_exhausted and correction_count < max_correction_attempts:
+        logger.info(f"Query failed, routing to self_correction (attempt {correction_count + 1}/{max_correction_attempts})")
+        return "self_correction"
+    
+    # 纠错用尽，直接结束
+    logger.warning(f"Query failed and correction exhausted ({correction_count}/{max_correction_attempts}), routing to END")
+    return "end"
+
+
+def route_after_self_correction(state: VizQLState) -> Literal["execute", "end"]:
+    """
+    Route after Self-Correction node.
+    
+    Decision rules:
+    - correction_exhausted=False -> execute (retry with corrected query)
+    - correction_exhausted=True -> end (无法纠正，结束)
+    
+    Args:
+        state: Current workflow state
+    
+    Returns:
+        Next node name: "execute" or "end"
+    """
+    correction_exhausted = state.get("correction_exhausted", True)
+    
+    if correction_exhausted:
+        logger.warning("Correction exhausted or failed, routing to END")
+        return "end"
+    
+    logger.info("Query corrected, routing to execute for retry")
+    return "execute"
+
+
 
 def calculate_completeness_score(
     state: VizQLState,

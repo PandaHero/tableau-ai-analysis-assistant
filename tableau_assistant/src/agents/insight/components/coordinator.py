@@ -108,7 +108,9 @@ class AnalysisCoordinator:
     async def analyze(
         self,
         data: Any,
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> InsightResult:
         """
         主分析入口 - 两阶段分析架构
@@ -119,6 +121,8 @@ class AnalysisCoordinator:
         Args:
             data: 输入数据
             context: 分析上下文（question, dimensions, measures）
+            state: 当前工作流状态（用于中间件）
+            config: LangGraph RunnableConfig（包含中间件）
             
         Returns:
             InsightResult（包含 data_insight_profile）
@@ -176,10 +180,10 @@ class AnalysisCoordinator:
         
         # 2.3 执行分析
         if strategy == "direct":
-            result = await self._direct_analysis(data_list, analysis_context, profile)
+            result = await self._direct_analysis(data_list, analysis_context, profile, state, config)
         else:
             result = await self._progressive_analysis_two_phase(
-                data_list, analysis_context, profile, insight_profile
+                data_list, analysis_context, profile, insight_profile, state, config
             )
         
         # 更新结果
@@ -196,10 +200,18 @@ class AnalysisCoordinator:
     async def analyze_streaming(
         self,
         data: Any,
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         流式分析（带进度更新）- 双 LLM 协作模式
+        
+        Args:
+            data: 输入数据
+            context: 分析上下文
+            state: 当前工作流状态（用于中间件）
+            config: LangGraph RunnableConfig（包含中间件）
         """
         start_time = time.time()
         
@@ -230,14 +242,14 @@ class AnalysisCoordinator:
         }
         
         if strategy == "direct":
-            result = await self._direct_analysis(data_list, analysis_context, profile)
+            result = await self._direct_analysis(data_list, analysis_context, profile, state, config)
             result.execution_time = time.time() - start_time
             result.data_insight_profile = insight_profile
             yield {"event": "complete", "result": result}
             return
         
         async for event in self._progressive_analysis_streaming(
-            data_list, analysis_context, profile, insight_profile, start_time
+            data_list, analysis_context, profile, insight_profile, start_time, state, config
         ):
             yield event
     
@@ -247,6 +259,8 @@ class AnalysisCoordinator:
         context: Dict[str, Any],
         profile: DataProfile,
         insight_profile: DataInsightProfile,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> InsightResult:
         """两阶段渐进式分析 - 双 LLM 协作模式"""
         chunks = self.chunker.chunk_by_strategy(
@@ -282,6 +296,8 @@ class AnalysisCoordinator:
                 context=context,
                 insight_profile=insight_profile,
                 existing_insights=accumulated_insights,
+                state=state,
+                config=config,
             )
             
             for insight in new_insights:
@@ -295,6 +311,8 @@ class AnalysisCoordinator:
                 accumulated_insights=accumulated_insights,
                 remaining_chunks=remaining_chunks,
                 analyzed_count=analyzed_count,
+                state=state,
+                config=config,
             )
             
             if not next_decision.should_continue:
@@ -325,6 +343,8 @@ class AnalysisCoordinator:
         profile: DataProfile,
         insight_profile: DataInsightProfile,
         start_time: float,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """流式渐进式分析 - 双 LLM 协作模式"""
         chunks = self.chunker.chunk_by_strategy(
@@ -370,6 +390,8 @@ class AnalysisCoordinator:
                 context=context,
                 insight_profile=insight_profile,
                 existing_insights=accumulated_insights,
+                state=state,
+                config=config,
             )
             
             for insight in new_insights:
@@ -392,6 +414,8 @@ class AnalysisCoordinator:
                 accumulated_insights=accumulated_insights,
                 remaining_chunks=remaining_chunks,
                 analyzed_count=analyzed_count,
+                state=state,
+                config=config,
             )
             
             yield {
@@ -495,10 +519,12 @@ class AnalysisCoordinator:
         self,
         data: List[Dict[str, Any]],
         context: Dict[str, Any],
-        profile: DataProfile
+        profile: DataProfile,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> InsightResult:
         """直接分析（小数据集）"""
-        insights = await self.analyzer.analyze_full(data, context)
+        insights = await self.analyzer.analyze_full(data, context, state, config)
         
         anomaly_insights = self._create_anomaly_insights(context.get("anomalies"))
         insights.extend(anomaly_insights)

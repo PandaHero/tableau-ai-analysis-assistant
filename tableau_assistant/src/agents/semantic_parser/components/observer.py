@@ -2,13 +2,23 @@
 
 Observer is the "Metacognition" phase of the LLM combination architecture.
 Only triggered when step2.validation.all_valid == False.
+
+使用 call_llm_with_tools 模式（与 Step1/Step2 保持一致）：
+- call_llm_with_tools(): 支持工具调用 + 中间件 + 流式输出
+- parse_json_response(): 解析 JSON 响应
+- 不使用 with_structured_output（对某些模型不可靠）
 """
 
 import logging
-from typing import Any
+from typing import Any, Dict, Optional
 
 from ....core.models import ObserverOutput, Step1Output, Step2Output
 from ..prompts.observer import OBSERVER_PROMPT
+from tableau_assistant.src.agents.base import (
+    get_llm,
+    call_llm_with_tools,
+    parse_json_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +46,6 @@ class ObserverComponent:
     def _get_llm(self):
         """Get or create LLM instance."""
         if self._llm is None:
-            from tableau_assistant.src.agents.base import get_llm
             self._llm = get_llm(agent_name="semantic_parser")
         return self._llm
     
@@ -45,6 +54,8 @@ class ObserverComponent:
         original_question: str,
         step1_output: Step1Output,
         step2_output: Step2Output,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> ObserverOutput:
         """Execute Observer: Consistency checking.
         
@@ -54,6 +65,8 @@ class ObserverComponent:
             original_question: Original user question (before restatement)
             step1_output: Output from Step 1
             step2_output: Output from Step 2
+            state: Current workflow state (for middleware)
+            config: LangGraph RunnableConfig (contains middleware)
             
         Returns:
             ObserverOutput with decision and optional correction
@@ -115,15 +128,24 @@ class ObserverComponent:
             inconsistencies=validation.inconsistencies,
         )
         
-        # Call LLM with structured output
-        llm = self._get_llm()
-        if hasattr(llm, 'with_structured_output'):
-            structured_llm = llm.with_structured_output(ObserverOutput)
-            result = await structured_llm.ainvoke(messages)
-        else:
-            # Fallback: parse JSON from response
-            from tableau_assistant.src.agents.base import invoke_llm, parse_json_response
-            response = await invoke_llm(llm, messages)
-            result = parse_json_response(response, ObserverOutput)
+        # Get middleware from config
+        middleware = None
+        if config and "configurable" in config:
+            middleware = config["configurable"].get("middleware")
         
+        # Call LLM using call_llm_with_tools (supports middleware + streaming)
+        # 与 Step1/Step2 保持一致的调用模式
+        llm = self._get_llm()
+        response = await call_llm_with_tools(
+            llm=llm,
+            messages=messages,
+            tools=[],  # No tools needed
+            streaming=True,
+            middleware=middleware,
+            state=state or {},
+            config=config,
+        )
+        
+        # Parse JSON response
+        result = parse_json_response(response, ObserverOutput)
         return result

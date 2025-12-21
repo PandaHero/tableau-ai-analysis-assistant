@@ -107,7 +107,7 @@ class FieldMapperNode:
     FieldMapper Node - RAG + LLM Hybrid
     
     Maps business terms to technical field names using:
-    1. Cache lookup (fastest) - using StoreManager
+    1. Cache lookup (fastest) - using LangGraph SqliteStore
     2. RAG retrieval with high confidence fast path
     3. LLM fallback for low confidence cases
     """
@@ -128,7 +128,7 @@ class FieldMapperNode:
             semantic_mapper: SemanticMapper instance (lazy loaded if None)
             llm_selector: LLMCandidateSelector instance (lazy loaded if None)
             config: FieldMappingConfig (uses defaults if None)
-            store_manager: StoreManager for cache persistence
+            store_manager: LangGraph SqliteStore for cache persistence
             assembler: KnowledgeAssembler for metadata loading
             reranker: LLMReranker for second-stage reranking
         """
@@ -139,15 +139,15 @@ class FieldMapperNode:
         self._assembler = assembler
         self._reranker = reranker
         
-        # Get StoreManager
+        # Get LangGraph SqliteStore
         if store_manager is not None:
             self._store_manager = store_manager
         else:
             try:
-                from tableau_assistant.src.infra.storage import get_store_manager
-                self._store_manager = get_store_manager()
+                from tableau_assistant.src.infra.storage import get_langgraph_store
+                self._store_manager = get_langgraph_store()
             except Exception as e:
-                logger.warning(f"无法获取 StoreManager，缓存将不可用: {e}")
+                logger.warning(f"无法获取 LangGraph Store，缓存将不可用: {e}")
                 self._store_manager = None
         
         # Statistics
@@ -169,7 +169,7 @@ class FieldMapperNode:
         return ("field_mapping", datasource_luid)
     
     def _get_from_cache(self, term: str, datasource_luid: str) -> Optional[CachedMapping]:
-        """Get cached mapping from StoreManager"""
+        """Get cached mapping from LangGraph SqliteStore"""
         if self._store_manager is None or not self.config.enable_cache:
             return None
         
@@ -206,7 +206,7 @@ class FieldMapperNode:
         level: Optional[int] = None,
         granularity: Optional[str] = None
     ) -> bool:
-        """Save mapping to StoreManager cache"""
+        """Save mapping to LangGraph SqliteStore cache"""
         if self._store_manager is None or not self.config.enable_cache:
             return False
         
@@ -339,7 +339,9 @@ class FieldMapperNode:
         term: str,
         datasource_luid: str,
         context: Optional[str] = None,
-        role_filter: Optional[str] = None
+        role_filter: Optional[str] = None,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Any] = None,
     ) -> MappingResult:
         """
         Map a single business term to technical field.
@@ -400,7 +402,9 @@ class FieldMapperNode:
                 datasource_luid=datasource_luid,
                 context=context,
                 role_filter=role_filter,
-                start_time=start_time
+                start_time=start_time,
+                state=state,
+                config=config,
             )
         
         # 4. RAG retrieval
@@ -417,7 +421,9 @@ class FieldMapperNode:
                 datasource_luid=datasource_luid,
                 context=context,
                 role_filter=role_filter,
-                start_time=start_time
+                start_time=start_time,
+                state=state,
+                config=config,
             )
         
         # 5. High confidence fast path
@@ -463,7 +469,9 @@ class FieldMapperNode:
                 datasource_luid=datasource_luid,
                 context=context,
                 rag_result=rag_result,
-                start_time=start_time
+                start_time=start_time,
+                state=state,
+                config=config,
             )
         
         # 7. Use RAG result as fallback
@@ -498,18 +506,29 @@ class FieldMapperNode:
         datasource_luid: str,
         context: Optional[str],
         rag_result: Any,
-        start_time: float
+        start_time: float,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Any] = None,
     ) -> MappingResult:
         """LLM fallback when RAG confidence is low"""
         self._llm_fallback_count += 1
         
         candidates = self._convert_to_candidates(rag_result.retrieval_results)
         
+        # 从 config 获取 middleware 并设置到 llm_selector
+        middleware = None
+        if config and "configurable" in config:
+            middleware = config["configurable"].get("middleware")
+        if middleware:
+            self.llm_selector.set_middleware(middleware)
+        
         try:
             selection = await self.llm_selector.select(
                 term=term,
                 candidates=candidates,
-                context=context
+                context=context,
+                state=state,
+                config=config,
             )
             
             latency = int((time.time() - start_time) * 1000)
@@ -589,7 +608,9 @@ class FieldMapperNode:
         datasource_luid: str,
         context: Optional[str] = None,
         role_filter: Optional[str] = None,
-        start_time: Optional[float] = None
+        start_time: Optional[float] = None,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Any] = None,
     ) -> MappingResult:
         """使用 LLM 直接进行字段匹配（当 RAG 不可用时）"""
         if start_time is None:
@@ -636,12 +657,21 @@ class FieldMapperNode:
                 sample_values=chunk.sample_values
             ))
         
+        # 从 config 获取 middleware 并设置到 llm_selector
+        middleware = None
+        if config and "configurable" in config:
+            middleware = config["configurable"].get("middleware")
+        if middleware:
+            self.llm_selector.set_middleware(middleware)
+        
         try:
             self._llm_fallback_count += 1
             selection = await self.llm_selector.select(
                 term=term,
                 candidates=candidates,
-                context=context
+                context=context,
+                state=state,
+                config=config,
             )
             
             latency = int((time.time() - start_time) * 1000)
@@ -713,7 +743,9 @@ class FieldMapperNode:
         terms: List[str],
         datasource_luid: str,
         context: Optional[str] = None,
-        role_filters: Optional[Dict[str, str]] = None
+        role_filters: Optional[Dict[str, str]] = None,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Any] = None,
     ) -> Dict[str, MappingResult]:
         """
         Map multiple business terms concurrently.
@@ -723,6 +755,8 @@ class FieldMapperNode:
             datasource_luid: Datasource identifier
             context: Optional question context
             role_filters: Optional dict of term -> role filter
+            state: Optional workflow state (for middleware)
+            config: Optional LangGraph config (for middleware)
         
         Returns:
             Dict mapping term -> MappingResult
@@ -739,7 +773,9 @@ class FieldMapperNode:
                     term=term,
                     datasource_luid=datasource_luid,
                     context=context,
-                    role_filter=role_filters.get(term)
+                    role_filter=role_filters.get(term),
+                    state=state,
+                    config=config,
                 )
                 return (term, result)
         
@@ -877,14 +913,16 @@ async def field_mapper_node(
             "execution_path": ["field_mapper"]
         }
     
-    mapper = _get_field_mapper(state)
+    mapper = _get_field_mapper(state, config)
     
     try:
         mapping_results = await mapper.map_fields_batch(
             terms=list(terms_to_map.keys()),
             datasource_luid=datasource_luid,
             context=question,
-            role_filters=terms_to_map
+            role_filters=terms_to_map,
+            state=dict(state),
+            config=config,
         )
     except Exception as e:
         logger.error(f"Field mapping failed: {e}")
@@ -953,56 +991,74 @@ def _extract_terms_from_semantic_query(
     
     # 直接访问 Pydantic 对象属性
     for measure in semantic_query.measures or []:
-        if measure.name:
+        if measure.field_name:
             # COUNT/COUNTD 聚合通常作用于 dimension 字段（如 Order ID）
             # 不应该限制为 measure，否则会过滤掉正确的字段
-            aggregation = getattr(measure, 'aggregation', 'sum')
-            if aggregation in ('count', 'countd'):
+            aggregation = getattr(measure, 'aggregation', None)
+            agg_value = aggregation.value if hasattr(aggregation, 'value') else str(aggregation).lower()
+            if agg_value in ('count', 'countd', 'count_distinct'):
                 # 不设置 role_filter，允许匹配 dimension 和 measure
-                terms[measure.name] = None
+                terms[measure.field_name] = None
             else:
-                terms[measure.name] = "measure"
+                terms[measure.field_name] = "measure"
     
     for dimension in semantic_query.dimensions or []:
-        if dimension.name:
-            terms[dimension.name] = "dimension"
+        if dimension.field_name:
+            terms[dimension.field_name] = "dimension"
     
     for filter_spec in semantic_query.filters or []:
-        if filter_spec.field and filter_spec.field not in terms:
-            terms[filter_spec.field] = None
+        if filter_spec.field_name and filter_spec.field_name not in terms:
+            terms[filter_spec.field_name] = None
     
-    for analysis in semantic_query.analyses or []:
-        if analysis.target_measure and analysis.target_measure not in terms:
-            terms[analysis.target_measure] = "measure"
+    # 处理 computations 中的 target 字段
+    for computation in semantic_query.computations or []:
+        if computation.target and computation.target not in terms:
+            terms[computation.target] = "measure"
+        # partition_by 中的字段是维度
+        for partition_field in computation.partition_by or []:
+            if partition_field and partition_field not in terms:
+                terms[partition_field] = "dimension"
     
     return terms
 
 
-def _get_field_mapper(state: Dict[str, Any]) -> FieldMapperNode:
+def _get_field_mapper(state: Dict[str, Any], config: Optional[RunnableConfig] = None) -> FieldMapperNode:
     """Get or create FieldMapper instance."""
     if "_field_mapper" in state:
         return state["_field_mapper"]
     
     mapper = FieldMapperNode()
     
-    metadata = state.get("metadata")
+    # 优先从 config 的 WorkflowContext 获取 data_model
+    data_model = state.get("data_model")
     datasource_luid = state.get("datasource") or "default"
     
-    if metadata:
+    if config and not data_model:
         try:
-            if hasattr(metadata, 'fields') and metadata.fields:
+            from tableau_assistant.src.orchestration.workflow.context import get_context
+            ctx = get_context(config)
+            if ctx:
+                data_model = ctx.data_model
+                datasource_luid = ctx.datasource_luid or datasource_luid
+                logger.debug(f"从 WorkflowContext 获取 data_model: {data_model is not None}")
+        except Exception as e:
+            logger.warning(f"从 config 获取 WorkflowContext 失败: {e}")
+    
+    if data_model:
+        try:
+            if hasattr(data_model, 'fields') and data_model.fields:
                 mapper.load_metadata(
-                    fields=metadata.fields,
+                    fields=data_model.fields,
                     datasource_luid=datasource_luid
                 )
-                logger.info(f"两阶段架构已启用: {len(metadata.fields)} 个字段已索引")
+                logger.info(f"两阶段架构已启用: {len(data_model.fields)} 个字段已索引")
             
             from tableau_assistant.src.infra.ai.rag.semantic_mapper import SemanticMapper
             from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
             
             field_indexer = FieldIndexer(datasource_luid=datasource_luid)
-            if hasattr(metadata, 'fields'):
-                field_indexer.index_fields(metadata.fields)
+            if hasattr(data_model, 'fields'):
+                field_indexer.index_fields(data_model.fields)
             
             semantic_mapper = SemanticMapper(field_indexer=field_indexer)
             mapper.set_semantic_mapper(semantic_mapper)
@@ -1014,8 +1070,8 @@ def _get_field_mapper(state: Dict[str, Any]) -> FieldMapperNode:
                 from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
                 
                 field_indexer = FieldIndexer(datasource_luid=datasource_luid)
-                if hasattr(metadata, 'fields'):
-                    field_indexer.index_fields(metadata.fields)
+                if hasattr(data_model, 'fields'):
+                    field_indexer.index_fields(data_model.fields)
                 
                 semantic_mapper = SemanticMapper(field_indexer=field_indexer)
                 mapper.set_semantic_mapper(semantic_mapper)

@@ -233,58 +233,21 @@ class ToolRegistry:
         """
         自动发现并注册业务工具
         
+        注意：
+        - semantic_parser 不需要工具，元数据通过 state 传递
+        - insight 和 replanner 可能需要工具（待扩展）
+        
         Returns:
             注册的工具数量
         """
         count = 0
         
-        # 动态导入工具模块，支持可选依赖（工具模块不存在时优雅降级）
-        try:
-            from tableau_assistant.src.orchestration.tools.data_model_tool import get_data_model
-            self.register(
-                NodeType.SEMANTIC_PARSER,
-                get_data_model,
-                dependencies=["data_model_manager"],
-                tags=["data_model", "metadata"]
-            )
-            count += 1
-        except ImportError as e:
-            logger.warning(f"Failed to import get_data_model: {e}")
+        # semantic_parser 不需要工具：
+        # - 元数据已通过 workflow state 传递给节点
+        # - 日期处理只需在 prompt 中告诉 LLM 当前时间
+        # - 不需要 get_data_model、get_schema_module、日期工具
         
-        try:
-            from tableau_assistant.src.orchestration.tools.schema_tool import get_schema_module
-            self.register(
-                NodeType.SEMANTIC_PARSER,
-                get_schema_module,
-                tags=["schema", "token_optimization"]
-            )
-            count += 1
-        except ImportError as e:
-            logger.warning(f"Failed to import get_schema_module: {e}")
-        
-        try:
-            from tableau_assistant.src.orchestration.tools.date_tool import process_time_filter, calculate_relative_dates, detect_date_format
-            self.register(
-                NodeType.SEMANTIC_PARSER,
-                process_time_filter,
-                dependencies=["date_manager"],
-                tags=["date", "parsing"]
-            )
-            self.register(
-                NodeType.SEMANTIC_PARSER,
-                calculate_relative_dates,
-                dependencies=["date_manager"],
-                tags=["date", "calculation"]
-            )
-            self.register(
-                NodeType.SEMANTIC_PARSER,
-                detect_date_format,
-                dependencies=["date_manager"],
-                tags=["date", "detection"]
-            )
-            count += 3
-        except ImportError as e:
-            logger.warning(f"Failed to import date tools: {e}")
+        # 未来可以在这里注册 insight 和 replanner 的工具
         
         logger.info(f"Auto-discovered {count} tools")
         return count

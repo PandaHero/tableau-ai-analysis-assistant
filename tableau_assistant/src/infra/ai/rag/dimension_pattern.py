@@ -25,7 +25,7 @@ except ImportError:
     NUMPY_AVAILABLE = False
 
 from tableau_assistant.src.infra.ai.rag.embeddings import EmbeddingProvider, EmbeddingProviderFactory
-# VectorCache 已删除，使用 StoreManager 替代
+# VectorCache 已删除，使用 LangGraph SqliteStore 替代
 # from tableau_assistant.src.infra.ai.rag.cache import VectorCache
 
 logger = logging.getLogger(__name__)
@@ -199,7 +199,7 @@ class DimensionPatternStore:
         self._embedding_provider = embedding_provider or EmbeddingProviderFactory.create("mock")
         
         # 向量缓存（VectorCache 已删除，暂时禁用缓存）
-        # TODO: 使用 StoreManager 替代
+        # TODO: 使用 LangGraph SqliteStore 替代
         self._vector_cache = None
         
         # 内存中的向量索引

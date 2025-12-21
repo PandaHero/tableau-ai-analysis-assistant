@@ -5,12 +5,17 @@ import os
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 
 # 加载环境变量 - 从项目根目录加载
 root_dir = Path(__file__).parent.parent.parent
 env_path = root_dir / ".env"
 load_dotenv(dotenv_path=env_path)
+
+# 前端静态文件目录
+FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -57,15 +62,17 @@ app.add_middleware(
 
 # 注册路由
 from tableau_assistant.src.api.chat import router as chat_router
-from tableau_assistant.src.api.preload import router as preload_router
+from tableau_assistant.src.api.cache import router as cache_router
+from tableau_assistant.src.api.custom_models import router as custom_models_router
 
 app.include_router(chat_router)
-app.include_router(preload_router)
+app.include_router(cache_router)
+app.include_router(custom_models_router)
 
 
-@app.get("/")
-async def root():
-    """健康检查"""
+@app.get("/api/status")
+async def api_status():
+    """API 状态检查"""
     return {
         "status": "ok",
         "message": "VizQL Multi-Agent API is running",
@@ -77,6 +84,56 @@ async def root():
 async def health_check():
     """健康检查端点"""
     return {"status": "healthy"}
+
+
+# ============================================
+# 静态文件服务（生产模式）
+# ============================================
+
+# 检查是否存在前端构建
+if FRONTEND_DIST.exists() and (FRONTEND_DIST / "index.html").exists():
+    # 挂载静态资源目录（JS、CSS、图片等）
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+    
+    # 挂载其他静态文件（favicon 等）
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIST)), name="static")
+    
+    @app.get("/")
+    async def serve_frontend():
+        """服务前端首页"""
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
+    
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """
+        SPA 路由回退
+        
+        对于非 API 路径，返回 index.html 让前端路由处理
+        """
+        # API 路径不处理
+        if full_path.startswith("api/") or full_path in ["docs", "redoc", "openapi.json", "health"]:
+            return {"error": "Not found"}
+        
+        # 检查是否是静态文件
+        file_path = FRONTEND_DIST / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        
+        # 其他路径返回 index.html（SPA 路由）
+        return FileResponse(str(FRONTEND_DIST / "index.html"))
+else:
+    # 没有前端构建，显示 API 状态
+    @app.get("/")
+    async def root():
+        """API 根路径"""
+        return {
+            "status": "ok",
+            "message": "VizQL Multi-Agent API is running",
+            "version": "0.1.0",
+            "note": "Frontend not built. Run 'npm run build' in tableau_assistant/frontend to enable UI.",
+        }
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@
 - 两阶段检索：向量检索 top-K + LLM Rerank
 - 高置信度快速路径（≥0.9 直接返回，无需 LLM）
 - 低置信度 LLM 回退选择
-- 字段映射缓存（24小时 TTL，基于 StoreManager）
+- 字段映射缓存（24小时 TTL，基于 LangGraph SqliteStore）
 
 ### 📊 渐进式洞察分析（AI 宝宝吃饭模式）
 - **Phase 1 统计分析**：分布检测、异常检测、聚类分析、帕累托分析
@@ -136,7 +136,7 @@ tableau-ai-analysis-assistant/
 │   │   │   │   ├── reranker.py          # LLM 重排序器
 │   │   │   │   ├── assembler.py         # 知识组装器
 │   │   │   │   └── embeddings.py        # 向量化
-│   │   │   ├── storage/            # 持久化存储（SQLite + StoreManager）
+│   │   │   ├── storage/            # 持久化存储（LangGraph SqliteStore）
 │   │   │   ├── date_processing/    # 日期处理
 │   │   │   └── data_model/         # 数据模型管理
 │   │   │
@@ -380,7 +380,7 @@ while (true) {
 | API 框架 | FastAPI |
 | 数据验证 | Pydantic v2 |
 | 向量检索 | Sentence Transformers |
-| 缓存存储 | SQLite (StoreManager) |
+| 缓存存储 | LangGraph SqliteStore |
 | BI 平台 | Tableau VizQL Data Service |
 | 前端框架 | Vue 3 + TypeScript + Vite |
 | 状态管理 | Pinia |

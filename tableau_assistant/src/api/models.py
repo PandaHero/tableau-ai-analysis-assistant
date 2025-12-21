@@ -64,6 +64,29 @@ class ChatRequest(BaseModel):
         description="响应语言：zh（中文）或 en（英文）"
     )
     
+    # Tableau 环境信息（支持多环境）
+    tableau_domain: Optional[str] = Field(
+        default=None,
+        description="Tableau 服务器域名（可选，用于多环境支持）",
+        examples=["https://10ax.online.tableau.com", "https://tableau.company.com"]
+    )
+    
+    tableau_site: Optional[str] = Field(
+        default=None,
+        description="Tableau 站点名称（可选，配合 tableau_domain 使用）"
+    )
+    
+    tableau_context: Optional[str] = Field(
+        default=None,
+        description="Tableau 运行环境（desktop/server/cloud），用于在无法获取 domain 时推断配置",
+        examples=["desktop", "server", "cloud"]
+    )
+    
+    datasource_connection_info: Optional[dict] = Field(
+        default=None,
+        description="数据源连接信息，包含 serverURI, connectionType, isPublished"
+    )
+    
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -115,12 +138,28 @@ class ChatResponse(BaseModel):
     聊天查询响应
     
     用于 POST /api/chat 端点的最终响应
+    支持两种响应类型：
+    1. 数据分析响应（is_analysis_question=True）：包含 key_findings, analysis_path 等
+    2. 非分析响应（is_analysis_question=False）：包含 clarification 或 general_response
     """
+    # 通用字段
     executive_summary: str = Field(
-        ...,
+        default="",
         description="执行摘要（一句话回答）"
     )
     
+    # 非分析响应字段（当 is_analysis_question=False 时使用）
+    clarification: Optional[str] = Field(
+        default=None,
+        description="澄清问题（当需要用户提供更多信息时）"
+    )
+    
+    general_response: Optional[str] = Field(
+        default=None,
+        description="通用响应（当问题不是数据分析问题时）"
+    )
+    
+    # 数据分析响应字段
     key_findings: List[KeyFinding] = Field(
         default_factory=list,
         description="关键发现列表"
@@ -262,9 +301,7 @@ class StreamEvent(BaseModel):
     )
 
 
-# 向后兼容别名（将在未来版本移除）
-VizQLQueryRequest = ChatRequest
-VizQLQueryResponse = ChatResponse
+
 
 
 # 示例用法

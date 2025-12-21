@@ -10,6 +10,10 @@ ChunkAnalyzer Component - 双 LLM 协作分析器
 - analyze_chunk_with_analyst(): 使用分析师 LLM 分析数据块
 - decide_next_with_coordinator(): 使用主持人 LLM 决定下一步
 - analyze_full(): 直接分析小数据集（< 100 行）
+
+使用 call_llm_with_tools 模式：
+- call_llm_with_tools(): 支持工具调用 + 中间件 + 流式输出
+- 不使用 with_structured_output（对某些模型不可靠）
 """
 
 import logging
@@ -34,6 +38,9 @@ from tableau_assistant.src.agents.insight.prompt import (
     DIRECT_ANALYSIS_PROMPT,
 )
 
+# 导入 call_llm_with_tools 支持中间件和流式输出
+from tableau_assistant.src.agents.base import call_llm_with_tools
+
 logger = logging.getLogger(__name__)
 
 
@@ -44,6 +51,10 @@ class ChunkAnalyzer:
     核心功能（来自 insight-design.md）：
     1. 分析师 LLM：分析数据块并提取洞察
     2. 主持人 LLM：决定分析顺序、累积洞察、决定早停
+    
+    使用 call_llm_with_tools 模式支持：
+    - 中间件（重试、摘要等）
+    - Token 流式输出
     """
     
     def __init__(self, llm=None, max_sample_rows: int = 150):
@@ -60,8 +71,8 @@ class ChunkAnalyzer:
     def _get_llm(self):
         """获取或创建 LLM 实例"""
         if self._llm is None:
-            from tableau_assistant.src.infra.ai import get_llm
-            self._llm = get_llm()
+            from tableau_assistant.src.agents.base import get_llm
+            self._llm = get_llm(agent_name="insight")
         return self._llm
     
     async def analyze_chunk_with_analyst(
@@ -70,6 +81,8 @@ class ChunkAnalyzer:
         context: Dict[str, Any],
         insight_profile: DataInsightProfile,
         existing_insights: List[Insight],
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> List[Insight]:
         """
         使用分析师 LLM 分析数据块
@@ -79,11 +92,15 @@ class ChunkAnalyzer:
         - 结合整体画像和 top_n_summary 解读局部数据
         - 生成结构化洞察
         
+        使用 call_llm_with_tools 支持中间件和流式输出。
+        
         Args:
             chunk: 当前要分析的数据块
             context: 分析上下文（question, dimensions, measures）
             insight_profile: 整体数据画像（Phase 1 结果）
             existing_insights: 已有洞察（避免重复）
+            state: 当前工作流状态（用于中间件）
+            config: LangGraph RunnableConfig（包含中间件）
             
         Returns:
             List[Insight]: 新发现的洞察
@@ -136,10 +153,24 @@ class ChunkAnalyzer:
                 existing_insights=existing_text,
             )
             
-            llm = self._get_llm()
-            response = await llm.ainvoke(messages)
+            # 获取中间件
+            middleware = None
+            if config and "configurable" in config:
+                middleware = config["configurable"].get("middleware")
             
-            insights = self._parse_insights_response(response.content)
+            # 使用 call_llm_with_tools 支持中间件和流式输出
+            llm = self._get_llm()
+            response = await call_llm_with_tools(
+                llm=llm,
+                messages=messages,
+                tools=[],  # 不需要工具
+                streaming=True,
+                middleware=middleware,
+                state=state or {},
+                config=config,
+            )
+            
+            insights = self._parse_insights_response(response)
             logger.info(f"分析师 LLM 分析 {chunk.chunk_type}: {len(insights)} 个洞察")
             return insights
             
@@ -154,6 +185,8 @@ class ChunkAnalyzer:
         accumulated_insights: List[Insight],
         remaining_chunks: List[PriorityChunk],
         analyzed_count: int,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> Tuple[NextBiteDecision, InsightQuality]:
         """
         使用主持人 LLM 决定下一步
@@ -163,12 +196,16 @@ class ChunkAnalyzer:
         - 累积洞察，判断完成度
         - 决定是否早停
         
+        使用 call_llm_with_tools 支持中间件和流式输出。
+        
         Args:
             context: 分析上下文（question）
             insight_profile: 整体数据画像（Phase 1 结果）
             accumulated_insights: 已累积的洞察
             remaining_chunks: 剩余的数据块
             analyzed_count: 已分析的块数
+            state: 当前工作流状态（用于中间件）
+            config: LangGraph RunnableConfig（包含中间件）
             
         Returns:
             (NextBiteDecision, InsightQuality)
@@ -198,10 +235,24 @@ class ChunkAnalyzer:
                 analyzed_count=analyzed_count,
             )
             
-            llm = self._get_llm()
-            response = await llm.ainvoke(messages)
+            # 获取中间件
+            middleware = None
+            if config and "configurable" in config:
+                middleware = config["configurable"].get("middleware")
             
-            decision, quality = self._parse_coordinator_response(response.content, remaining_chunks)
+            # 使用 call_llm_with_tools 支持中间件和流式输出
+            llm = self._get_llm()
+            response = await call_llm_with_tools(
+                llm=llm,
+                messages=messages,
+                tools=[],  # 不需要工具
+                streaming=True,
+                middleware=middleware,
+                state=state or {},
+                config=config,
+            )
+            
+            decision, quality = self._parse_coordinator_response(response, remaining_chunks)
             logger.info(
                 f"主持人 LLM 决策: continue={decision.should_continue}, "
                 f"next_chunk_id={decision.next_chunk_id}, "
@@ -216,10 +267,20 @@ class ChunkAnalyzer:
     async def analyze_full(
         self,
         data: List[Dict[str, Any]],
-        context: Dict[str, Any]
+        context: Dict[str, Any],
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> List[Insight]:
         """
         直接分析完整数据集（用于小数据集 < 100 行）
+        
+        使用 call_llm_with_tools 支持中间件和流式输出。
+        
+        Args:
+            data: 完整数据集
+            context: 分析上下文
+            state: 当前工作流状态（用于中间件）
+            config: LangGraph RunnableConfig（包含中间件）
         """
         sample_data = data[:self.max_sample_rows]
         data_str = json.dumps(sample_data, ensure_ascii=False, indent=2)
@@ -241,10 +302,24 @@ class ChunkAnalyzer:
                 ]),
             )
             
-            llm = self._get_llm()
-            response = await llm.ainvoke(messages)
+            # 获取中间件
+            middleware = None
+            if config and "configurable" in config:
+                middleware = config["configurable"].get("middleware")
             
-            insights = self._parse_insights_response(response.content)
+            # 使用 call_llm_with_tools 支持中间件和流式输出
+            llm = self._get_llm()
+            response = await call_llm_with_tools(
+                llm=llm,
+                messages=messages,
+                tools=[],  # 不需要工具
+                streaming=True,
+                middleware=middleware,
+                state=state or {},
+                config=config,
+            )
+            
+            insights = self._parse_insights_response(response)
             logger.info(f"直接分析完成: {len(insights)} 个洞察")
             return insights
             

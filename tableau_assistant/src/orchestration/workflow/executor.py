@@ -23,7 +23,7 @@
 
 认证机制:
     - 工作流启动时获取一次 Tableau token
-    - 通过 RunnableConfig["configurable"]["tableau_auth"] 传递给所有节点
+    - 通过 RunnableConfig["configurable"]["workflow_context"].auth 传递给所有节点
     - Token 过期时自动刷新
 """
 
@@ -49,7 +49,9 @@ from tableau_assistant.src.platforms.tableau import (
     TableauAuthError,
     get_tableau_auth_async,
 )
-from tableau_assistant.src.infra.storage import get_store_manager
+from tableau_assistant.src.infra.storage.langgraph_store import get_langgraph_store
+from tableau_assistant.src.infra.storage.data_model_cache import DataModelCache
+from tableau_assistant.src.infra.storage.data_model_loader import TableauDataModelLoader
 from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, Insight, ReplanDecision
 from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery, ExecuteResult
 
@@ -118,6 +120,11 @@ class WorkflowResult:
     replan_count: int = 0
     error: Optional[str] = None
     
+    # 非分析响应（当 is_analysis_question=False 时使用）
+    clarification: Optional[str] = None
+    general_response: Optional[str] = None
+    non_analysis_response: Optional[str] = None
+    
     @classmethod
     def from_state(cls, question: str, state: Dict[str, object], duration: float) -> "WorkflowResult":
         """从工作流状态创建结果"""
@@ -134,6 +141,10 @@ class WorkflowResult:
             is_analysis_question=state.get("is_analysis_question", True),
             replan_count=state.get("replan_count", 0),
             error=state.get("errors", [{}])[0].get("error") if state.get("errors") else None,
+            # 非分析响应
+            clarification=state.get("clarification"),
+            general_response=state.get("general_response"),
+            non_analysis_response=state.get("non_analysis_response"),
         )
 
 
@@ -157,6 +168,7 @@ class WorkflowExecutor:
     def __init__(
         self,
         datasource_luid: Optional[str] = None,
+        tableau_domain: Optional[str] = None,
         max_replan_rounds: int = 2,
         use_memory_checkpointer: bool = True,
     ):
@@ -165,13 +177,19 @@ class WorkflowExecutor:
         
         Args:
             datasource_luid: 数据源 LUID（可选，默认从环境变量获取）
+            tableau_domain: Tableau 域名（可选，用于多环境支持）
             max_replan_rounds: 最大重规划轮数
             use_memory_checkpointer: 是否使用内存检查点
         """
         from tableau_assistant.src.infra.config.settings import settings
         self._datasource_luid = datasource_luid or settings.datasource_luid
+        self._tableau_domain = tableau_domain
         self._max_replan_rounds = max_replan_rounds
-        self._store = get_store_manager()
+        
+        # 初始化 LangGraph Store 和 DataModelCache
+        self._langgraph_store = get_langgraph_store()
+        self._data_model_cache = DataModelCache(self._langgraph_store)
+        
         self._workflow = create_workflow(
             use_memory_checkpointer=use_memory_checkpointer,
             config={"max_replan_rounds": max_replan_rounds}
@@ -200,9 +218,9 @@ class WorkflowExecutor:
         start_time = time.time()
         
         try:
-            # 1. 获取 Tableau 认证
+            # 1. 获取 Tableau 认证（多环境支持）
             try:
-                auth_ctx = await get_tableau_auth_async()
+                auth_ctx = await get_tableau_auth_async(target_domain=self._tableau_domain)
             except TableauAuthError as e:
                 logger.error(f"Tableau 认证失败: {e}")
                 return WorkflowResult(
@@ -212,28 +230,40 @@ class WorkflowExecutor:
                     error=f"Tableau 认证失败: {e}",
                 )
             
-            # 2. 创建 WorkflowContext
+            # 2. 使用 DataModelCache 加载数据模型（缓存优先）
+            loader = TableauDataModelLoader(auth_ctx)
+            data_model, is_cache_hit = await self._data_model_cache.get_or_load(ds_luid, loader)
+            
+            # 构建加载状态
+            load_status = MetadataLoadStatus(
+                source="cache" if is_cache_hit else "api",
+                hierarchy_inferred=not is_cache_hit,
+                message="从缓存加载" if is_cache_hit else "从 API 加载并缓存"
+            )
+            logger.info(f"数据模型加载状态: {load_status.message}")
+            
+            # 3. 创建 WorkflowContext
             ctx = WorkflowContext(
                 auth=auth_ctx,
-                store=self._store,
                 datasource_luid=ds_luid,
+                tableau_domain=self._tableau_domain or auth_ctx.domain,
+                data_model=data_model,
                 max_replan_rounds=self._max_replan_rounds,
+                metadata_load_status=load_status,
             )
-            
-            # 3. 加载数据模型（从缓存或 API，包含维度层级）
-            ctx = await ctx.ensure_metadata_loaded()
-            
-            # 记录加载状态
-            if ctx.metadata_load_status:
-                logger.info(f"数据模型加载状态: {ctx.metadata_load_status.message}")
             
             # 4. 创建配置
             config = create_workflow_config(thread_id, ctx)
             
-            # 5. 构建初始 State（包含数据模型）
+            # 5. 注入 middleware 到 config（使所有节点可以使用 middleware）
+            from tableau_assistant.src.orchestration.workflow.factory import inject_middleware_to_config
+            if hasattr(self._workflow, 'middleware'):
+                config = inject_middleware_to_config(config, self._workflow.middleware)
+            
+            # 6. 构建初始 State（包含数据模型）
             state = self._create_initial_state(question, ctx)
             
-            # 6. 执行工作流
+            # 7. 执行工作流
             result = await self._workflow.ainvoke(state, config)
             
             duration = time.time() - start_time
@@ -266,8 +296,8 @@ class WorkflowExecutor:
         return {
             "question": question,
             "messages": [],
-            # 数据模型（所有节点共享）- 直接传递 Metadata 对象
-            "metadata": ctx.metadata,
+            # 数据模型（所有节点共享）
+            "data_model": ctx.data_model,
             "dimension_hierarchy": ctx.dimension_hierarchy,
             "datasource": ctx.datasource_luid,
             # Replanner 需要的额外数据（初始为空，由 Insight 节点填充）
@@ -298,7 +328,7 @@ class WorkflowExecutor:
         try:
             # 1. 获取 Tableau 认证
             try:
-                auth_ctx = await get_tableau_auth_async()
+                auth_ctx = await get_tableau_auth_async(target_domain=self._tableau_domain)
             except TableauAuthError as e:
                 logger.error(f"Tableau 认证失败: {e}")
                 yield WorkflowEvent(
@@ -307,19 +337,35 @@ class WorkflowExecutor:
                 )
                 return
             
-            # 2. 创建 WorkflowContext
-            ctx = WorkflowContext(
-                auth=auth_ctx,
-                store=self._store,
-                datasource_luid=ds_luid,
-                max_replan_rounds=self._max_replan_rounds,
+            # 2. 使用 DataModelCache 加载数据模型
+            loader = TableauDataModelLoader(auth_ctx)
+            data_model, is_cache_hit = await self._data_model_cache.get_or_load(ds_luid, loader)
+            
+            # 构建加载状态
+            load_status = MetadataLoadStatus(
+                source="cache" if is_cache_hit else "api",
+                hierarchy_inferred=not is_cache_hit,
+                message="从缓存加载" if is_cache_hit else "从 API 加载并缓存"
             )
             
-            # 3. 加载数据模型
-            ctx = await ctx.ensure_metadata_loaded()
+            # 3. 创建 WorkflowContext
+            ctx = WorkflowContext(
+                auth=auth_ctx,
+                datasource_luid=ds_luid,
+                tableau_domain=self._tableau_domain or auth_ctx.domain,
+                data_model=data_model,
+                max_replan_rounds=self._max_replan_rounds,
+                metadata_load_status=load_status,
+            )
             
             # 4. 创建配置和初始状态
             config = create_workflow_config(thread_id, ctx)
+            
+            # 5. 注入 middleware 到 config（使所有节点可以使用 middleware）
+            from tableau_assistant.src.orchestration.workflow.factory import inject_middleware_to_config
+            if hasattr(self._workflow, 'middleware'):
+                config = inject_middleware_to_config(config, self._workflow.middleware)
+            
             state = self._create_initial_state(question, ctx)
             
             current_node = None
@@ -335,26 +381,21 @@ class WorkflowExecutor:
                     # 节点开始
                     if event_type == "on_chain_start" and event_name in self.NODES:
                         current_node = event_name
+                        
+                        # 发送节点开始事件
                         yield WorkflowEvent(
                             type=EventType.NODE_START,
                             node_name=event_name,
                         )
                     
-                    # Token 流式输出
-                    elif event_type == "on_chat_model_stream":
-                        chunk = event_data.get("chunk")
-                        if chunk and hasattr(chunk, "content") and chunk.content:
-                            yield WorkflowEvent(
-                                type=EventType.TOKEN,
-                                node_name=current_node,
-                                content=chunk.content,
-                            )
-                    
                     # 节点完成
                     elif event_type == "on_chain_end" and event_name in self.NODES:
                         output = event_data.get("output", {})
-                        # 将 output dict 转换为 NodeOutput Pydantic 对象
+                        
+                        # 构建节点输出
                         node_output = NodeOutput(**output) if output else None
+                        
+                        # 发送节点完成事件
                         yield WorkflowEvent(
                             type=EventType.NODE_COMPLETE,
                             node_name=event_name,

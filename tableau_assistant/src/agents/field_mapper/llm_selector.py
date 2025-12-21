@@ -9,17 +9,18 @@ Features:
 - Structured output with reasoning
 - Context-aware selection
 - Uses base agent utilities
+- Streaming support for real-time token output
 """
 
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Any, Dict
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
 from tableau_assistant.src.agents.base import (
     get_llm,
-    invoke_llm,
+    call_llm_with_tools,
     parse_json_response,
 )
 from .prompt import FIELD_MAPPER_PROMPT, SingleSelectionResult
@@ -54,12 +55,15 @@ class LLMCandidateSelector:
     
     Used when RAG retrieval confidence is below threshold (< 0.9).
     Selects the best match from top-k candidates using LLM reasoning.
+    
+    Supports streaming output for real-time token display.
     """
     
     def __init__(
         self,
         llm=None,
-        confidence_threshold: float = 0.7
+        confidence_threshold: float = 0.7,
+        middleware: Optional[List[Any]] = None,
     ):
         """
         Initialize LLM candidate selector.
@@ -67,9 +71,11 @@ class LLMCandidateSelector:
         Args:
             llm: LangChain ChatModel instance (lazy loaded if None)
             confidence_threshold: Minimum confidence for valid selection
+            middleware: Optional middleware list for streaming support
         """
         self._llm = llm
         self.confidence_threshold = confidence_threshold
+        self._middleware = middleware
     
     @property
     def llm(self):
@@ -77,6 +83,10 @@ class LLMCandidateSelector:
         if self._llm is None:
             self._llm = get_llm(agent_name="field_mapper")
         return self._llm
+    
+    def set_middleware(self, middleware: List[Any]) -> None:
+        """Set middleware for streaming support"""
+        self._middleware = middleware
     
     def _format_candidates(self, candidates: List[FieldCandidate]) -> str:
         """Format candidates for prompt"""
@@ -99,15 +109,21 @@ class LLMCandidateSelector:
         self,
         term: str,
         candidates: List[FieldCandidate],
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> SingleSelectionResult:
         """
         Select best field match for a single term.
+        
+        Uses streaming LLM call for real-time token output.
         
         Args:
             term: Business term to map
             candidates: List of candidate fields from RAG
             context: Optional question context
+            state: Optional workflow state (for middleware)
+            config: Optional LangGraph config (for middleware)
         
         Returns:
             SingleSelectionResult with selected field and reasoning
@@ -131,14 +147,20 @@ class LLMCandidateSelector:
         )
         
         try:
-            # Use structured output if available
-            if hasattr(self.llm, 'with_structured_output'):
-                structured_llm = self.llm.with_structured_output(SingleSelectionResult)
-                result = await structured_llm.ainvoke(messages)
-            else:
-                # Fallback to parsing JSON from response
-                response = await invoke_llm(self.llm, messages)
-                result = parse_json_response(response, SingleSelectionResult)
+            # Use streaming call_llm_with_tools for real-time token output
+            # This allows LangGraph's astream_events to capture token events
+            response = await call_llm_with_tools(
+                llm=self.llm,
+                messages=messages,
+                tools=[],  # No tools needed for field selection
+                streaming=True,  # Enable streaming for token-level output
+                middleware=self._middleware,
+                state=state or {},
+                config=config,
+            )
+            
+            # Parse JSON response
+            result = parse_json_response(response, SingleSelectionResult)
             
             # 验证 LLM 选择的字段是否在候选列表中
             # 如果不在，回退到 RAG 的第一个候选
@@ -177,7 +199,9 @@ class LLMCandidateSelector:
     async def select_batch(
         self,
         terms_with_candidates: List[Tuple[str, List[FieldCandidate]]],
-        context: Optional[str] = None
+        context: Optional[str] = None,
+        state: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
     ) -> List[SingleSelectionResult]:
         """
         Select best field matches for multiple terms.
@@ -187,6 +211,8 @@ class LLMCandidateSelector:
         Args:
             terms_with_candidates: List of (term, candidates) tuples
             context: Optional question context
+            state: Optional workflow state (for middleware)
+            config: Optional LangGraph config (for middleware)
         
         Returns:
             List of SingleSelectionResult for each term
@@ -197,7 +223,7 @@ class LLMCandidateSelector:
         # Process each term individually
         results = []
         for term, candidates in terms_with_candidates:
-            result = await self.select(term, candidates, context)
+            result = await self.select(term, candidates, context, state, config)
             results.append(result)
         
         return results

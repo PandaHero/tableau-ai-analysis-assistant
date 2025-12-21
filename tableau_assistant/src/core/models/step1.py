@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .enums import (
     AggregationType,
     DateGranularity,
+    DateRangeType,
     FilterType,
     HowType,
     IntentType,
@@ -23,7 +24,8 @@ class MeasureSpec(BaseModel):
     field: str = Field(
         description="""<what>Business term for the measure</what>
 <when>ALWAYS required</when>
-<rule>Use exact term from question</rule>"""
+<rule>Extract exact term from user question</rule>
+<must_not>Select from metadata - use user's original wording only</must_not>"""
     )
     
     aggregation: AggregationType = Field(
@@ -40,7 +42,8 @@ class DimensionSpec(BaseModel):
     field: str = Field(
         description="""<what>Business term for the dimension</what>
 <when>ALWAYS required</when>
-<rule>Use exact term from question</rule>"""
+<rule>Extract exact term from user question</rule>
+<must_not>Select from metadata - use user's original wording only</must_not>"""
     )
     
     granularity: DateGranularity | None = Field(
@@ -51,23 +54,74 @@ class DimensionSpec(BaseModel):
 
 
 class FilterSpec(BaseModel):
-    """Filter specification in Step 1 output."""
+    """Filter specification in Step 1 output.
+    
+    <what>Filter condition for data query</what>
+    
+    <fill_order>
+    1. field (ALWAYS)
+    2. type (ALWAYS)
+    3. values (if SET)
+    4. range_type, year, granularity (if DATE_RANGE)
+    </fill_order>
+    
+    <examples>
+    SET: {"field": "城市", "type": "SET", "values": ["北京"]}
+    DATE_RANGE: {"field": "订单日期", "type": "DATE_RANGE", "range_type": "CUSTOM", "year": 2024, "granularity": "YEAR"}
+    </examples>
+    
+    <anti_patterns>
+    ❌ "2024年" with type=SET (should be DATE_RANGE)
+    ❌ range_type=CUSTOM without year value
+    </anti_patterns>
+    """
     model_config = ConfigDict(extra="forbid")
     
     field: str = Field(
         description="""<what>Field to filter on</what>
-<when>ALWAYS required</when>"""
+<when>ALWAYS required</when>
+<rule>Extract exact term from user question</rule>
+<must_not>Select from metadata - use user's original wording only</must_not>"""
     )
     
     type: FilterType = Field(
-        description="""<what>Type of filter</what>
-<when>ALWAYS required</when>"""
+        description="""<what>Filter type</what>
+<when>ALWAYS required</when>
+<rule>具体值→SET, 时间范围→DATE_RANGE</rule>
+<must_not>Use SET for year/date constraints</must_not>"""
     )
     
+    # For SET filters
     values: list[str] | None = Field(
         default=None,
         description="""<what>Filter values</what>
-<when>For SET filters</when>"""
+<when>ONLY for type=SET</when>
+<dependency>type == SET</dependency>"""
+    )
+    
+    # For DATE_RANGE filters
+    range_type: DateRangeType | None = Field(
+        default=None,
+        description="""<what>Date range type</what>
+<when>REQUIRED for type=DATE_RANGE</when>
+<rule>2024年→CUSTOM, 今年→CURRENT, 去年→PREVIOUS</rule>
+<dependency>type == DATE_RANGE</dependency>"""
+    )
+    
+    year: int | None = Field(
+        default=None,
+        description="""<what>Year value</what>
+<when>REQUIRED when range_type=CUSTOM</when>
+<rule>"2024年" → 2024</rule>
+<dependency>range_type == CUSTOM</dependency>
+<must_not>Leave null for specific year mention</must_not>"""
+    )
+    
+    granularity: DateGranularity | None = Field(
+        default=None,
+        description="""<what>Date granularity</what>
+<when>For DATE_RANGE filters</when>
+<rule>年→YEAR, 月→MONTH, 周→WEEK</rule>"""
     )
 
 
@@ -79,7 +133,8 @@ class What(BaseModel):
         default_factory=list,
         description="""<what>List of measures to compute</what>
 <when>ALWAYS required</when>
-<rule>Extract from question, use business terms</rule>"""
+<rule>Extract exact terms from user question</rule>
+<must_not>Select from metadata</must_not>"""
     )
 
 
@@ -91,7 +146,8 @@ class Where(BaseModel):
         default_factory=list,
         description="""<what>List of dimensions for grouping</what>
 <when>Usually required</when>
-<rule>Extract from question, use business terms</rule>"""
+<rule>Extract exact terms from user question</rule>
+<must_not>Select from metadata</must_not>"""
     )
     
     filters: list[FilterSpec] = Field(
@@ -161,22 +217,26 @@ class Step1Output(BaseModel):
     what: What = Field(
         description="""<what>Target measures</what>
 <when>ALWAYS required</when>
-<rule>Extract from question, use business terms</rule>"""
+<rule>Extract exact terms from user question</rule>
+<must_not>Select from metadata</must_not>"""
     )
     
     where: Where = Field(
         description="""<what>Dimensions + filters</what>
 <when>ALWAYS required</when>
-<rule>Extract from question, use business terms</rule>"""
+<rule>Extract exact terms from user question</rule>
+<must_not>Select from metadata</must_not>"""
     )
     
     how_type: HowType = Field(
+        default=HowType.SIMPLE,
         description="""<what>Computation type</what>
 <when>ALWAYS required</when>
 <rule>排名→RANKING, 累计→CUMULATIVE, 占比/同比→COMPARISON, 固定粒度→GRANULARITY, 其他→SIMPLE</rule>"""
     )
     
     intent: Intent = Field(
+        default_factory=lambda: Intent(type=IntentType.DATA_QUERY, reasoning="Default: assumed data query"),
         description="""<what>Intent classification + reasoning</what>
 <when>ALWAYS required</when>
 <rule>Complete info→DATA_QUERY, Unspecified values→CLARIFICATION, Metadata→GENERAL, Unrelated→IRRELEVANT</rule>"""

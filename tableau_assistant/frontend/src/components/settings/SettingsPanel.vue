@@ -78,7 +78,18 @@
               :label="model.name"
               :value="`custom_${model.name}`"
             >
-              {{ model.name }}
+              <div class="custom-model-option">
+                <span>{{ model.name }}</span>
+                <el-button
+                  type="danger"
+                  link
+                  size="small"
+                  class="delete-model-btn"
+                  @click.stop="handleDeleteCustomModel(model.name)"
+                >
+                  删除
+                </el-button>
+              </div>
             </el-option>
           </el-option-group>
         </el-select>
@@ -230,6 +241,20 @@ function handleSaveCustomModel(model: CustomModel) {
   showCustomModelDialog.value = false
   ElMessage.success('模型已添加')
 }
+
+async function handleDeleteCustomModel(name: string) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除模型 "${name}" 吗？`,
+      '确认删除',
+      { type: 'warning' }
+    )
+    await settingsStore.removeCustomModel(name)
+    ElMessage.success('模型已删除')
+  } catch {
+    // 用户取消
+  }
+}
 </script>
 
 <style scoped>
@@ -273,6 +298,22 @@ function handleSaveCustomModel(model: CustomModel) {
 .add-model-btn {
   margin-top: 8px;
   padding: 0;
+}
+
+.custom-model-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.delete-model-btn {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.custom-model-option:hover .delete-model-btn {
+  opacity: 1;
 }
 
 .danger-zone {

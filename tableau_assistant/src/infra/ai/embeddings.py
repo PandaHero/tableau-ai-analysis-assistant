@@ -32,13 +32,12 @@ SUPPORTED_EMBEDDING_PROVIDERS: List[str] = [
 ]
 
 # 导入证书管理器
-try:
-    from tableau_assistant.src.infra.certs import get_certificate_config
-    def get_httpx_client_kwargs():
-        return get_certificate_config().httpx_client_kwargs()
-except ImportError:
-    def get_httpx_client_kwargs():
-        return {}
+from tableau_assistant.src.infra.certs import get_certificate_config
+
+
+def get_httpx_client_kwargs():
+    """获取 httpx 客户端的 SSL 配置"""
+    return get_certificate_config().httpx_client_kwargs()
 
 
 def select_embeddings(

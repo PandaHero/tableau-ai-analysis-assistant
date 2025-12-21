@@ -71,17 +71,23 @@ class VizQLClient:
     - Unified error handling
     """
     
-    def __init__(self, config: Optional[VizQLClientConfig] = None):
+    def __init__(self, config: Optional[VizQLClientConfig] = None, domain: Optional[str] = None):
         """
         Initialize VizQL client.
         
         Args:
             config: Client configuration. If None, reads from environment variables.
+            domain: Tableau domain for multi-environment support. Used when config is None.
         """
         if config is None:
             from tableau_assistant.src.infra.config.settings import settings
+            from tableau_assistant.src.infra.config.tableau_env import get_tableau_config
+            
+            # 获取对应环境的配置
+            tableau_config = get_tableau_config(domain)
+            
             config = VizQLClientConfig(
-                base_url=settings.tableau_domain,
+                base_url=tableau_config.domain,
                 verify_ssl=settings.vizql_verify_ssl,
                 ca_bundle=settings.vizql_ca_bundle or None,
                 timeout=settings.vizql_timeout,
@@ -107,9 +113,61 @@ class VizQLClient:
         return session
     
     def _get_verify(self) -> Union[bool, str]:
-        """Get SSL verification setting."""
+        """
+        Get SSL verification setting.
+        
+        优先级：
+        1. 配置的 ca_bundle
+        2. 根据 base_url 域名查找对应的证书
+        3. 全局 verify_ssl 设置
+        """
+        # 如果配置了 ca_bundle，直接使用
         if self.config.ca_bundle:
             return self.config.ca_bundle
+        
+        # 根据域名查找证书
+        from pathlib import Path
+        from urllib.parse import urlparse
+        from tableau_assistant.src.infra.certs import get_certificate_config
+        
+        cert_config = get_certificate_config()
+        
+        # 解析域名
+        parsed = urlparse(self.config.base_url)
+        hostname = (parsed.netloc or self.config.base_url).lower()
+        
+        # Tableau Cloud 使用 certifi 证书包（解决 Windows 系统证书问题）
+        if "online.tableau.com" in hostname:
+            try:
+                import certifi
+                logger.debug(f"Tableau Cloud ({hostname}) 使用 certifi 证书")
+                return certifi.where()
+            except ImportError:
+                logger.debug(f"Tableau Cloud ({hostname}) 使用系统证书")
+                return True
+        
+        # 查找域名对应的证书
+        # 注意：hostname 可能包含端口号，需要同时尝试带端口和不带端口的文件名
+        safe_hostname_with_port = hostname.replace('.', '_').replace(':', '_')
+        hostname_no_port = hostname.split(':')[0]
+        safe_hostname_no_port = hostname_no_port.replace('.', '_')
+        
+        cert_dir = Path(cert_config.cert_dir)
+        
+        possible_cert_files = [
+            cert_dir / f"{safe_hostname_with_port}_cert.pem",
+            cert_dir / f"{safe_hostname_no_port}_cert.pem",
+            cert_dir / f"{safe_hostname_with_port}.pem",
+            cert_dir / f"{safe_hostname_no_port}.pem",
+            cert_dir / "tableau_cert.pem",
+        ]
+        
+        for cert_file in possible_cert_files:
+            if cert_file.exists():
+                logger.debug(f"VizQLClient 使用证书: {cert_file}")
+                return str(cert_file)
+        
+        # 回退到配置的 verify_ssl
         return self.config.verify_ssl
 
     
@@ -514,12 +572,59 @@ class VizQLClient:
                 return await _do_request(new_session)
     
     def _get_aiohttp_ssl(self):
-        """Get SSL parameter for aiohttp."""
-        try:
-            from tableau_assistant.src.infra.certs import get_certificate_config
-            return get_certificate_config().aiohttp_kwargs().get("ssl", True)
-        except ImportError:
-            return self.config.verify_ssl
+        """
+        Get SSL parameter for aiohttp.
+        
+        根据 base_url 域名查找对应的证书。
+        """
+        import ssl
+        from pathlib import Path
+        from urllib.parse import urlparse
+        from tableau_assistant.src.infra.certs import get_certificate_config
+        
+        cert_config = get_certificate_config()
+        
+        # 如果配置了 ca_bundle，使用它
+        if self.config.ca_bundle:
+            return ssl.create_default_context(cafile=self.config.ca_bundle)
+        
+        # 解析域名
+        parsed = urlparse(self.config.base_url)
+        hostname = (parsed.netloc or self.config.base_url).lower()
+        
+        # Tableau Cloud 使用 certifi 证书包（解决 Windows 系统证书问题）
+        if "online.tableau.com" in hostname:
+            try:
+                import certifi
+                logger.debug(f"aiohttp: Tableau Cloud ({hostname}) 使用 certifi 证书")
+                return ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                logger.debug(f"aiohttp: Tableau Cloud ({hostname}) 使用系统证书")
+                return True
+        
+        # 查找域名对应的证书
+        # 注意：hostname 可能包含端口号，需要同时尝试带端口和不带端口的文件名
+        safe_hostname_with_port = hostname.replace('.', '_').replace(':', '_')
+        hostname_no_port = hostname.split(':')[0]
+        safe_hostname_no_port = hostname_no_port.replace('.', '_')
+        
+        cert_dir = Path(cert_config.cert_dir)
+        
+        possible_cert_files = [
+            cert_dir / f"{safe_hostname_with_port}_cert.pem",
+            cert_dir / f"{safe_hostname_no_port}_cert.pem",
+            cert_dir / f"{safe_hostname_with_port}.pem",
+            cert_dir / f"{safe_hostname_no_port}.pem",
+            cert_dir / "tableau_cert.pem",
+        ]
+        
+        for cert_file in possible_cert_files:
+            if cert_file.exists():
+                logger.debug(f"aiohttp 使用证书: {cert_file}")
+                return ssl.create_default_context(cafile=str(cert_file))
+        
+        # 回退到全局配置
+        return cert_config.aiohttp_kwargs().get("ssl", True)
     
     async def _handle_error_async(self, response: "aiohttp.ClientResponse") -> None:
         """Handle async API error response."""

@@ -111,16 +111,9 @@ Step 2: Evaluate remaining data chunks
 - Are there anomaly chunks that need investigation?
 
 Step 3: Make decision
-- If completeness >= 0.8 and core question answered -> Stop
-- If remaining chunks have low value -> Stop
-- If important aspects missing -> Continue with highest value chunk
-
-**Chunk Type Priority (for reference):**
-- anomalies: Highest priority (unexpected patterns)
-- cluster_*: High priority (natural groupings)
-- pareto_top_20: High priority (key contributors)
-- segment_*: Medium priority (time-based patterns)
-- tail_data: Low priority (but may contain hidden gems)"""
+- Balance completeness against remaining value
+- Consider whether core question is answered
+- Prioritize high-value chunks over low-value ones"""
     
     def get_constraints(self) -> str:
         return """MUST: Give clear decision with reasoning, estimate completeness accurately
@@ -186,21 +179,20 @@ Step 1: **Analyze the actual data sample (PRIMARY FOCUS)**
 - **Your insights MUST cite specific values from the data sample**
 
 Step 2: Understand chunk context
-- What type of data chunk is this? (anomalies, top_data, cluster, etc.)
+- What type of data chunk is this?
 - What is the business meaning of this data?
 
 Step 3: Use profile as reference (SECONDARY)
 - How does this chunk differ from overall statistics?
-- Use max, q75, median from statistics as comparison baseline
-- Calculate ratios: value / median, value / q75
+- Use statistics as comparison baseline
+- Calculate ratios for context
 
 Step 4: Compare with Top N data
 - How does this data compare to top performers?
-- Calculate ranking gaps (e.g., "5x of second place")
-- Use pareto_ratio to explain concentration
+- Calculate ranking gaps
+- Explain concentration patterns
 
 Step 5: Extract insights
-- Identify patterns: trend, anomaly, comparison, pattern
 - **Each insight MUST reference specific data points from the sample**
 - Avoid repeating existing insights
 
@@ -266,15 +258,15 @@ Step 1: Understand the business context
 - What measures (numeric fields) are involved?
 
 Step 2: Profile the data
-- What is the data distribution? (normal, long-tail, bimodal)
+- What is the data distribution?
 - Are there any obvious patterns or outliers?
-- What is the concentration? (top N contribution)
+- What is the concentration?
 
 Step 3: Identify insight opportunities
-- Time-based change? -> trend insight
-- Outliers/unexpected values? -> anomaly insight
-- Group comparisons? -> comparison insight
-- Distribution characteristics? -> pattern insight
+- Look for time-based changes
+- Look for outliers or unexpected values
+- Look for group comparisons
+- Look for distribution characteristics
 
 Step 4: Evaluate importance
 - Business impact: How significant is this finding?
@@ -284,7 +276,7 @@ Step 4: Evaluate importance
 **Insight Quality Criteria:**
 - Each insight must have concrete evidence with numbers
 - Write insights in Chinese
-- Generate 2-5 insights, prioritized by importance"""
+- Prioritize by importance"""
     
     def get_constraints(self) -> str:
         return """MUST: Generate 2-5 insights, provide evidence, write in Chinese

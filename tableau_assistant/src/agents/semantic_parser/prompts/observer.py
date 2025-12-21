@@ -41,52 +41,20 @@ Process: Check restatement completeness -> Review validation results -> Check se
     def get_specific_domain_knowledge(self) -> str:
         return """**Consistency Checks:**
 
-1. **Restatement Completeness:**
-   - Did restated_question preserve key information from original_question?
-   - Were partition keywords preserved?
-   
-2. **Structure Consistency:**
-   - Review Step 2's validation results (target_check, partition_by_check, operation_check)
-   - Are the inconsistencies real or false positives?
-   
-3. **Semantic Consistency:**
-   - Does the computation match the user's intent?
-   - Is the partition_by semantically correct for the question?
+1. Restatement Completeness: Did restated_question preserve key info?
+2. Structure Consistency: Review Step 2's validation results
+3. Semantic Consistency: Does computation match user intent?
 
 **Decision Rules:**
 
-- All checks pass -> ACCEPT (Use Step 2's computation as final result)
-- Small conflict, can fix -> CORRECT (Fix the issue, provide corrected computation)
-- Large conflict -> RETRY (Request Step 2 to re-run)
-- Cannot determine -> CLARIFY (Request user clarification)
-
-**When to CORRECT (small conflicts):**
-
-- partition_by has minor mismatch but semantically correct
-- operation.type is close but not exact match
-- Target is correct but named slightly differently
-
-**When to RETRY (large conflicts):**
-
-- Target is completely wrong
-- partition_by is fundamentally incorrect
-- operation.type is in wrong category
-
-**When to CLARIFY:**
-
-- Original question is ambiguous
-- Multiple valid interpretations exist
-- Cannot determine user's true intent"""
+- All checks pass → ACCEPT
+- Small conflict, can fix → CORRECT
+- Large conflict → RETRY
+- Cannot determine → CLARIFY"""
 
     def get_constraints(self) -> str:
-        return """MUST: Check original_question (not just restated_question)
-MUST: Review all validation results from Step 2
-MUST: Provide correction details if decision is CORRECT
-MUST: Provide final_result if decision is ACCEPT or CORRECT
-
-MUST NOT: ACCEPT when validation clearly failed
-MUST NOT: RETRY for minor fixable issues
-MUST NOT: CLARIFY when the intent is clear"""
+        return """MUST: Check original_question, Review validation, Provide correction if CORRECT
+MUST NOT: ACCEPT when validation failed, RETRY for minor issues, CLARIFY when clear"""
 
     def get_user_template(self) -> str:
         return """**Original Question:** {original_question}

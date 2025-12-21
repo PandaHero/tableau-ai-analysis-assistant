@@ -46,9 +46,8 @@ Step 3: Consider context
 - Consider field role (dimension vs measure)
 
 Step 4: Make decision
-- High semantic match -> select with high confidence
-- Partial match -> select with medium confidence
-- No good match -> set selected_field to null"""
+- Evaluate semantic match strength
+- Set selected_field to null if no good match exists"""
     
     def get_constraints(self) -> str:
         return """MUST: Only select from provided candidates

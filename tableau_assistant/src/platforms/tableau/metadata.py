@@ -18,13 +18,105 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tableau_assistant.src.platforms.tableau.vizql_client import VizQLClient, VizQLClientConfig
 
 # SSL 配置
-try:
-    from tableau_assistant.src.infra.certs import get_certificate_config
-    def _get_aiohttp_ssl():
-        return get_certificate_config().aiohttp_kwargs().get("ssl", True)
-except ImportError:
-    def _get_aiohttp_ssl():
+import logging
+from tableau_assistant.src.infra.certs import get_certificate_config
+
+_metadata_logger = logging.getLogger(__name__)
+
+def _get_aiohttp_ssl(target_domain: str = None):
+    """
+    获取 aiohttp 的 SSL 参数
+    
+    Args:
+        target_domain: 目标域名（可选），用于查找域名对应的证书
+    """
+    # 对于 Tableau Cloud，使用系统证书
+    if target_domain and "online.tableau.com" in target_domain.lower():
         return True
+    
+    # 对于其他域名，尝试查找对应的证书
+    if target_domain:
+        import ssl
+        from pathlib import Path
+        from urllib.parse import urlparse
+        
+        parsed = urlparse(target_domain)
+        hostname = (parsed.netloc or target_domain).lower()
+        # 注意：hostname 可能包含端口号，需要同时尝试带端口和不带端口的文件名
+        safe_hostname_with_port = hostname.replace('.', '_').replace(':', '_')
+        hostname_no_port = hostname.split(':')[0]
+        safe_hostname_no_port = hostname_no_port.replace('.', '_')
+        
+        cert_config = get_certificate_config()
+        cert_dir = Path(cert_config.cert_dir)
+        
+        # 尝试查找域名对应的证书
+        possible_cert_files = [
+            cert_dir / f"{safe_hostname_with_port}_cert.pem",
+            cert_dir / f"{safe_hostname_no_port}_cert.pem",
+            cert_dir / f"{safe_hostname_with_port}.pem",
+            cert_dir / f"{safe_hostname_no_port}.pem",
+            cert_dir / "tableau_cert.pem",
+        ]
+        
+        for cert_file in possible_cert_files:
+            if cert_file.exists():
+                _metadata_logger.debug(f"aiohttp 使用证书: {cert_file}")
+                return ssl.create_default_context(cafile=str(cert_file))
+    
+    return get_certificate_config().aiohttp_kwargs().get("ssl", True)
+
+def _get_requests_verify(target_domain: str = None):
+    """
+    获取 requests 的 SSL 验证参数
+    
+    Args:
+        target_domain: 目标域名（可选），用于查找域名对应的证书
+    """
+    from pathlib import Path
+    from urllib.parse import urlparse
+    
+    cert_config = get_certificate_config()
+    
+    # 如果没有指定域名，使用全局配置
+    if not target_domain:
+        return cert_config.get_verify_param()
+    
+    # 解析域名
+    parsed = urlparse(target_domain)
+    hostname = (parsed.netloc or target_domain).lower()
+    
+    # Tableau Cloud 使用 certifi 证书包（解决 Windows 系统证书问题）
+    if "online.tableau.com" in hostname:
+        try:
+            import certifi
+            return certifi.where()
+        except ImportError:
+            return True
+    
+    # 查找域名对应的证书
+    # 注意：hostname 可能包含端口号，需要同时尝试带端口和不带端口的文件名
+    safe_hostname_with_port = hostname.replace('.', '_').replace(':', '_')
+    hostname_no_port = hostname.split(':')[0]
+    safe_hostname_no_port = hostname_no_port.replace('.', '_')
+    
+    cert_dir = Path(cert_config.cert_dir)
+    
+    possible_cert_files = [
+        cert_dir / f"{safe_hostname_with_port}_cert.pem",
+        cert_dir / f"{safe_hostname_no_port}_cert.pem",
+        cert_dir / f"{safe_hostname_with_port}.pem",
+        cert_dir / f"{safe_hostname_no_port}.pem",
+        cert_dir / "tableau_cert.pem",
+    ]
+    
+    for cert_file in possible_cert_files:
+        if cert_file.exists():
+            _metadata_logger.debug(f"requests 使用证书: {cert_file}")
+            return str(cert_file)
+    
+    # 回退到全局配置
+    return cert_config.get_verify_param()
 
 
 def get_data_dictionary(
@@ -101,10 +193,10 @@ def get_data_dictionary(
             # 过滤掉 BIN 和 GROUP 类型的字段，这些字段不支持 TOP 过滤和计算
             dimension_names = [
                 f['name'] for f in simplified_fields 
-                if f.get('role', '').upper() == 'DIMENSION'
-                and f.get('columnClass', '').upper() not in ('BIN', 'GROUP')
+                if (f.get('role') or '').upper() == 'DIMENSION'
+                and (f.get('columnClass') or '').upper() not in ('BIN', 'GROUP')
             ]
-            measure_field = next((f['name'] for f in simplified_fields if f.get('role', '').upper() == 'MEASURE'), None)
+            measure_field = next((f['name'] for f in simplified_fields if (f.get('role') or '').upper() == 'MEASURE'), None)
             
             if dimension_names and measure_field:
                 samples_dict = _fetch_dimension_samples(
@@ -117,7 +209,7 @@ def get_data_dictionary(
                 )
                 
                 for field in simplified_fields:
-                    if field.get('role', '').upper() == 'DIMENSION':
+                    if (field.get('role') or '').upper() == 'DIMENSION':
                         field_name = field['name']
                         if field_name in samples_dict:
                             dim_data = samples_dict[field_name]
@@ -198,10 +290,10 @@ async def get_data_dictionary_async(
             # 过滤掉 BIN 和 GROUP 类型的字段，这些字段不支持 TOP 过滤和计算
             dimension_names = [
                 f['name'] for f in simplified_fields 
-                if f.get('role', '').upper() == 'DIMENSION'
-                and f.get('columnClass', '').upper() not in ('BIN', 'GROUP')
+                if (f.get('role') or '').upper() == 'DIMENSION'
+                and (f.get('columnClass') or '').upper() not in ('BIN', 'GROUP')
             ]
-            measure_field = next((f['name'] for f in simplified_fields if f.get('role', '').upper() == 'MEASURE'), None)
+            measure_field = next((f['name'] for f in simplified_fields if (f.get('role') or '').upper() == 'MEASURE'), None)
             
             if dimension_names and measure_field:
                 samples_dict = await _fetch_dimension_samples_async(
@@ -214,7 +306,7 @@ async def get_data_dictionary_async(
                 )
                 
                 for field in simplified_fields:
-                    if field.get('role', '').upper() == 'DIMENSION':
+                    if (field.get('role') or '').upper() == 'DIMENSION':
                         field_name = field['name']
                         if field_name in samples_dict:
                             dim_data = samples_dict[field_name]
@@ -352,7 +444,7 @@ def _fetch_graphql_roles(
         if site:
             headers['X-Tableau-Site'] = site
         
-        response = requests.post(full_url, headers=headers, json={"query": query, "variables": {}})
+        response = requests.post(full_url, headers=headers, json={"query": query, "variables": {}}, verify=_get_requests_verify(domain))
         
         if response.status_code == 200:
             data = response.json()
@@ -506,7 +598,12 @@ def get_datasource_luid_by_name(
     datasource_name: str,
     site: Optional[str] = None
 ) -> Optional[str]:
-    """通过名称查找数据源 LUID"""
+    """
+    通过名称查找数据源 LUID
+    
+    注意：Tableau Cloud 的 GraphQL API 不支持 filter 参数，
+    所以我们获取所有数据源然后在本地进行过滤。
+    """
     if not datasource_name or not datasource_name.strip():
         return None
 
@@ -520,76 +617,68 @@ def get_datasource_luid_by_name(
         name = parts[0].strip()
         project = parts[1].strip() if len(parts) > 1 else None
 
-    def graphql_query(query: str, variables: Dict[str, Any]) -> Optional[Dict]:
-        try:
-            headers = {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'X-Tableau-Auth': api_key
-            }
-            if site:
-                headers['X-Tableau-Site'] = site
-            
-            response = requests.post(
-                f"{domain}/api/metadata/graphql",
-                headers=headers,
-                json={"query": query, "variables": variables}
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if 'errors' not in data:
-                    return data
-        except Exception:
-            pass
-        return None
+    # 构建请求头
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-Tableau-Auth': api_key
+    }
+    if site:
+        headers['X-Tableau-Site'] = site
 
-    # 精确匹配 + 项目
-    if project:
-        q = """
-        query($name:String!, $project:String!) {
-          publishedDatasources(filter:{ name:$name, projectName:$project }) {
-            luid name projectName
+    # 获取所有数据源（Tableau Cloud 不支持 filter 参数）
+    try:
+        query = """
+        query {
+          publishedDatasources {
+            luid
+            name
+            projectName
           }
         }
         """
-        data = graphql_query(q, {"name": name, "project": project})
-        if data:
-            for ds in data.get("data", {}).get("publishedDatasources", []):
+        
+        response = requests.post(
+            f"{domain}/api/metadata/graphql",
+            headers=headers,
+            json={"query": query},
+            verify=_get_requests_verify(domain)
+        )
+        
+        if response.status_code != 200:
+            _metadata_logger.warning(f"GraphQL 请求失败: {response.status_code}")
+            return None
+        
+        data = response.json()
+        if 'errors' in data:
+            _metadata_logger.warning(f"GraphQL 错误: {data['errors']}")
+            return None
+        
+        datasources = data.get("data", {}).get("publishedDatasources", [])
+        
+        # 如果有项目名，先尝试精确匹配名称和项目
+        if project:
+            for ds in datasources:
                 if ds.get("name") == name and ds.get("projectName") == project:
                     return ds.get("luid")
-
-    # 精确匹配
-    q = """
-    query($name:String!) {
-      publishedDatasources(filter:{ name:$name }) {
-        luid name
-      }
-    }
-    """
-    data = graphql_query(q, {"name": name})
-    if data:
-        items = data.get("data", {}).get("publishedDatasources", [])
-        for ds in items:
+        
+        # 精确匹配名称
+        for ds in datasources:
             if ds.get("name") == name:
                 return ds.get("luid")
-        if items:
-            return items[0].get("luid")
-
-    # 模糊匹配
-    q = """
-    query($kw:String!) {
-      publishedDatasources(filter:{ name:{ contains:$kw } }) {
-        luid name
-      }
-    }
-    """
-    data = graphql_query(q, {"kw": name})
-    if data:
-        items = data.get("data", {}).get("publishedDatasources", [])
-        if items:
-            return items[0].get("luid")
-
-    return None
+        
+        # 模糊匹配（名称包含搜索词）
+        name_lower = name.lower()
+        for ds in datasources:
+            ds_name = ds.get("name", "")
+            if name_lower in ds_name.lower():
+                return ds.get("luid")
+        
+        return None
+        
+    except Exception as e:
+        _metadata_logger.error(f"查找数据源失败: {e}")
+        return None
 
 
 async def get_datasource_metadata(

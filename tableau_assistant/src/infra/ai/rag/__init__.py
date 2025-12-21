@@ -76,7 +76,7 @@ from tableau_assistant.src.infra.ai.rag.assembler import (
     AssemblerConfig,
     KnowledgeAssembler,
 )
-# MappingCache 和 CacheManager 已删除，使用 StoreManager 替代
+# MappingCache 和 CacheManager 已删除，使用 LangGraph SqliteStore 替代
 from tableau_assistant.src.infra.ai.rag.dimension_pattern import (
     DimensionPattern,
     PatternSearchResult,
@@ -106,7 +106,7 @@ __all__ = [
     "EmbeddingProvider",
     "ZhipuEmbedding",
     "EmbeddingProviderFactory",
-    # 缓存（VectorCache, MappingCache, CacheManager 已删除，使用 StoreManager 替代）
+    # 缓存（VectorCache, MappingCache, CacheManager 已删除，使用 LangGraph SqliteStore 替代）
     "CachedEmbeddingProvider",
     # 索引器
     "FieldIndexer",

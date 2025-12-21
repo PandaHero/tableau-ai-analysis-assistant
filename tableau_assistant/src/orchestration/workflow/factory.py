@@ -4,13 +4,14 @@ Tableau Workflow Factory
 
 Creates the main Tableau Assistant workflow with middleware support.
 
-Workflow nodes (6 nodes):
+Workflow nodes (7 nodes):
 1. SemanticParser Agent (LLM) - Semantic parsing with Step1 + Step2 + Observer
 2. FieldMapper Node (RAG + LLM hybrid) - Business term to technical field mapping
 3. QueryBuilder Node (pure code) - VizQL query generation
 4. Execute Node (pure code) - VizQL API execution
-5. Insight Agent (LLM) - Data insight analysis
-6. Replanner Agent (LLM) - Replan decision
+5. SelfCorrection Node (code + LLM) - Query self-correction on execution failure
+6. Insight Agent (LLM) - Data insight analysis
+7. Replanner Agent (LLM) - Replan decision
 
 Middleware stack (7 middleware):
 - TodoListMiddleware (LangChain)
@@ -54,6 +55,7 @@ from tableau_assistant.src.orchestration.workflow.routes import (
 from tableau_assistant.src.agents.field_mapper import field_mapper_node as _field_mapper_node
 from tableau_assistant.src.nodes.query_builder import query_builder_node as _query_builder_node
 from tableau_assistant.src.nodes.execute import execute_node as _execute_node
+from tableau_assistant.src.nodes.self_correction import self_correction_node as _self_correction_node
 
 # Import Agent implementations
 from tableau_assistant.src.agents.semantic_parser.node import semantic_parser_node as _semantic_parser_node
@@ -289,7 +291,7 @@ def create_workflow(
     
     # insight_node 使用实际实现（从 tableau_assistant.src.agents.insight.node 导入）
     
-    async def replanner_node(state: "VizQLState") -> Dict[str, object]:
+    async def replanner_node(state: "VizQLState", runnable_config: Optional[Dict[str, Any]] = None) -> Dict[str, object]:
         """
         Replanner Agent node (LLM)
         
@@ -342,6 +344,7 @@ def create_workflow(
         trimmed_questions = trim_answered_questions(answered_questions)
         
         # 执行重规划决策 - insights 是 Pydantic 对象列表
+        # 传递 state 和 runnable_config 以支持中间件和流式输出
         decision = await replanner.replan(
             original_question=state.get("question", ""),
             insights=insights,  # 直接传递 Pydantic 对象列表
@@ -350,6 +353,8 @@ def create_workflow(
             current_dimensions=state.get("current_dimensions", []),
             current_round=replan_count + 1,
             answered_questions=trimmed_questions,  # 传递已回答问题用于去重
+            state=dict(state),  # 传递状态用于中间件
+            config=runnable_config,  # 传递 config 用于中间件
         )
         
         # 记录重规划历史
@@ -413,11 +418,12 @@ def create_workflow(
         
         return result
     
-    # ========== Add nodes to graph (6 nodes) ==========
+    # ========== Add nodes to graph (7 nodes) ==========
     graph.add_node("semantic_parser", _semantic_parser_node)  # Step1 + Step2 + Observer
     graph.add_node("field_mapper", _field_mapper_node)
     graph.add_node("query_builder", _query_builder_node)
     graph.add_node("execute", _execute_node)
+    graph.add_node("self_correction", _self_correction_node)  # Self-Correction 节点
     graph.add_node("insight", _insight_node)
     graph.add_node("replanner", replanner_node)
     
@@ -443,8 +449,28 @@ def create_workflow(
     # QueryBuilder -> Execute
     graph.add_edge("query_builder", "execute")
     
-    # Execute -> Insight
-    graph.add_edge("execute", "insight")
+    # Execute -> Insight or Self-Correction (conditional)
+    # If query failed and correction not exhausted -> self_correction
+    from tableau_assistant.src.orchestration.workflow.routes import route_after_execute, route_after_self_correction
+    graph.add_conditional_edges(
+        "execute",
+        route_after_execute,
+        {
+            "insight": "insight",
+            "self_correction": "self_correction",
+            "end": END,
+        }
+    )
+    
+    # Self-Correction -> Execute (retry) or END (give up)
+    graph.add_conditional_edges(
+        "self_correction",
+        route_after_self_correction,
+        {
+            "execute": "execute",
+            "end": END,
+        }
+    )
     
     # Insight -> Replanner
     graph.add_edge("insight", "replanner")
@@ -517,11 +543,11 @@ def get_workflow_info(workflow: StateGraph) -> Dict[str, object]:
         checkpointer_type = type(workflow.checkpointer).__name__
     
     return {
-        "nodes": ["semantic_parser", "field_mapper", "query_builder", "execute", "insight", "replanner"],
+        "nodes": ["semantic_parser", "field_mapper", "query_builder", "execute", "self_correction", "insight", "replanner"],
         "middleware": middleware_names,
         "checkpointer": checkpointer_type,
         "config": config,
-        "architecture": "semantic_parser_agent",  # Step1 + Step2 + Observer
+        "architecture": "semantic_parser_agent",  # Step1 + Step2 + Observer + Self-Correction
     }
 
 

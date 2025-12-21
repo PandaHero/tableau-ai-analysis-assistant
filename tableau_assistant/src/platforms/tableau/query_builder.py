@@ -242,7 +242,12 @@ class TableauQueryBuilder(BaseQueryBuilder):
         comp: Computation,
         view_dimensions: list[str],
     ) -> dict:
-        """Build VizQL table calculation field."""
+        """Build VizQL table calculation field.
+        
+        Note: According to VizQL API schema, TableCalcField requires 'tableCalculation'
+        and optionally allows 'function' or 'calculation', but not both.
+        The 'function' in TableCalcField is for the base measure aggregation.
+        """
         op_type = comp.operation.type
         params = comp.operation.params
         
@@ -337,10 +342,10 @@ class TableauQueryBuilder(BaseQueryBuilder):
                 "dimensions": partition_dims,
             }
         
-        # Build the field
+        # Build the field - TableCalcField only needs fieldCaption and tableCalculation
+        # Do NOT include 'function' here as it conflicts with tableCalculation in VizQL schema
         field = {
             "fieldCaption": comp.target,
-            "function": "SUM",  # Base aggregation
             "tableCalculation": table_calc,
         }
         

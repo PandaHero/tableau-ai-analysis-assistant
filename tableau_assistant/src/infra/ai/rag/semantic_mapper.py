@@ -12,7 +12,7 @@
 
 注意：
 - LLM 判断功能由任务规划 agent 处理，本模块不包含 LLM 调用
-- 缓存由上层 FieldMapperNode 通过 StoreManager 统一管理
+- 缓存由上层 FieldMapperNode 通过 LangGraph SqliteStore 统一管理
 """
 import logging
 import time
@@ -175,7 +175,7 @@ class MappingConfig:
     """
     映射配置（纯 RAG 检索层）
     
-    注意：缓存由上层 FieldMapperNode 通过 StoreManager 统一管理
+    注意：缓存由上层 FieldMapperNode 通过 LangGraph SqliteStore 统一管理
     
     Attributes:
         top_k: 向量检索返回数量
@@ -212,7 +212,7 @@ class SemanticMapper:
     
     注意：
     - LLM 判断由任务规划 agent 处理，本模块只返回检索结果和候选字段
-    - 缓存由上层 FieldMapperNode 通过 StoreManager 统一管理
+    - 缓存由上层 FieldMapperNode 通过 LangGraph SqliteStore 统一管理
     """
     
     def __init__(
@@ -225,7 +225,7 @@ class SemanticMapper:
         """
         初始化语义映射器（纯 RAG 检索层）
         
-        注意：缓存由上层 FieldMapperNode 通过 StoreManager 统一管理
+        注意：缓存由上层 FieldMapperNode 通过 LangGraph SqliteStore 统一管理
         
         Args:
             field_indexer: 字段索引器
@@ -261,13 +261,28 @@ class SemanticMapper:
         """
         创建默认的 LLMReranker
         
-        使用 model_manager.select_reranker，自动从环境变量读取 LLM 配置。
+        直接使用 get_llm 获取 LLM 实例，创建 LLMReranker。
+        使用流式输出收集完整响应。
         """
         try:
-            from tableau_assistant.src.model_manager import select_reranker
+            from tableau_assistant.src.infra.ai.rag.reranker import LLMReranker
+            from tableau_assistant.src.infra.ai.llm import get_llm
             
-            # select_reranker("llm") 会自动使用 get_llm 读取环境变量配置
-            return select_reranker(reranker_type="llm", top_k=self.config.top_k)
+            llm = get_llm()
+            
+            # 创建 LLM 调用函数（使用流式输出）
+            def llm_call_fn(prompt: str) -> str:
+                # 使用流式输出收集完整响应
+                chunks = []
+                for chunk in llm.stream(prompt):
+                    if hasattr(chunk, 'content') and chunk.content:
+                        chunks.append(chunk.content)
+                return "".join(chunks)
+            
+            return LLMReranker(
+                top_k=self.config.top_k,
+                llm_call_fn=llm_call_fn
+            )
         except Exception as e:
             logger.warning(f"创建 LLMReranker 失败，两阶段检索将降级为单阶段: {e}")
             return None
@@ -809,7 +824,7 @@ class SemanticMapper:
         # 只用 term，不拼接 context
         return term
     
-    # 缓存方法已移除，由上层 FieldMapperNode 通过 StoreManager 统一管理
+    # 缓存方法已移除，由上层 FieldMapperNode 通过 LangGraph SqliteStore 统一管理
     
     def _disambiguate(
         self,

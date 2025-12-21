@@ -6,8 +6,11 @@
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from .tableau_env import TableauEnvConfig
 
 # 获取项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
@@ -21,7 +24,7 @@ if env_path.exists():
 class Settings(BaseSettings):
     """应用配置"""
 
-    # Tableau配置
+    # Tableau 默认配置（兼容旧代码）
     tableau_domain: str = os.getenv("TABLEAU_DOMAIN", "")
     tableau_site: str = os.getenv("TABLEAU_SITE", "")
     tableau_api_version: str = os.getenv("TABLEAU_API_VERSION", "3.24")
@@ -33,6 +36,19 @@ class Settings(BaseSettings):
     tableau_pat_secret: str = os.getenv("TABLEAU_PAT_SECRET", "")
     datasource_luid: str = os.getenv("DATASOURCE_LUID", "")
     decimal_precision: int = int(os.getenv("DECIMAL_PRECISION", "2"))
+    
+    def get_tableau_config(self, domain: Optional[str] = None) -> "TableauEnvConfig":
+        """
+        获取 Tableau 配置（支持多环境）
+        
+        Args:
+            domain: Tableau 域名，如果不提供则使用默认配置
+        
+        Returns:
+            匹配的 Tableau 环境配置
+        """
+        from .tableau_env import get_tableau_config
+        return get_tableau_config(domain)
 
     # LLM配置
     llm_api_base: str = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")

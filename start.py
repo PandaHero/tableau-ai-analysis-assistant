@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 """
 One-click startup script for Tableau Assistant (Backend + Frontend).
 
@@ -21,6 +22,17 @@ Usage:
 
 import os
 import sys
+
+# Fix Windows console encoding
+if sys.platform == 'win32':
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
+    # Set console to UTF-8 mode
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        ctypes.windll.kernel32.SetConsoleCP(65001)
+    except:
+        pass
 import subprocess
 import platform
 import time
@@ -271,45 +283,62 @@ def load_env_vars():
 
 
 def validate_env_vars():
-    """Validate critical environment variables."""
+    """Validate critical environment variables (supports multi-environment)."""
     print_header("Validating Environment Variables")
     
     # Load .env file
     env_vars = load_env_vars()
     
-    # Critical variables that must be set
-    critical_vars = [
-        "TABLEAU_DOMAIN",
-        "TABLEAU_JWT_CLIENT_ID",
-        "TABLEAU_JWT_SECRET_ID",
-        "TABLEAU_JWT_SECRET",
-        "TABLEAU_USER",
-        "LLM_API_BASE"
-    ]
+    # Check for multi-environment Tableau config (TABLEAU_CLOUD_* or TABLEAU_SERVER_*)
+    has_cloud = env_vars.get('TABLEAU_CLOUD_DOMAIN', '')
+    has_server = env_vars.get('TABLEAU_SERVER_DOMAIN', '')
+    has_default = env_vars.get('TABLEAU_DOMAIN', '')
     
-    missing_vars = []
-    placeholder_vars = []
-    
-    for var in critical_vars:
-        if var not in env_vars or not env_vars[var]:
-            missing_vars.append(var)
-        elif env_vars[var].startswith('your-') or env_vars[var] == 'http://localhost:8000/v1':
-            # Check for placeholder values
-            if var != "LLM_API_BASE":  # LLM_API_BASE default is acceptable
-                placeholder_vars.append(var)
-    
-    if missing_vars:
-        print_error("Missing required environment variables:")
-        for var in missing_vars:
-            print(f"  - {var}")
-        print_info("\nPlease edit tableau_assistant/.env and set these variables")
+    # At least one Tableau environment must be configured
+    if not has_cloud and not has_server and not has_default:
+        print_error("No Tableau environment configured!")
+        print_info("Please configure at least one of:")
+        print_info("  - TABLEAU_CLOUD_* (for Tableau Cloud)")
+        print_info("  - TABLEAU_SERVER_* (for Tableau Server)")
         sys.exit(1)
     
-    if placeholder_vars:
-        print_error("Found placeholder values in environment variables:")
-        for var in placeholder_vars:
-            print(f"  - {var} = {env_vars[var]}")
-        print_info("\nPlease edit tableau_assistant/.env and replace placeholder values")
+    # Validate each configured environment
+    tableau_envs = []
+    
+    if has_cloud:
+        cloud_vars = ["TABLEAU_CLOUD_DOMAIN", "TABLEAU_CLOUD_USER"]
+        cloud_auth_jwt = all([
+            env_vars.get("TABLEAU_CLOUD_JWT_CLIENT_ID"),
+            env_vars.get("TABLEAU_CLOUD_JWT_SECRET_ID"),
+            env_vars.get("TABLEAU_CLOUD_JWT_SECRET"),
+        ])
+        cloud_auth_pat = all([
+            env_vars.get("TABLEAU_CLOUD_PAT_NAME"),
+            env_vars.get("TABLEAU_CLOUD_PAT_SECRET"),
+        ])
+        if not cloud_auth_jwt and not cloud_auth_pat:
+            print_error("Tableau Cloud: Missing authentication (need JWT or PAT)")
+            sys.exit(1)
+        tableau_envs.append(("Cloud", env_vars.get("TABLEAU_CLOUD_DOMAIN")))
+    
+    if has_server:
+        server_auth_jwt = all([
+            env_vars.get("TABLEAU_SERVER_JWT_CLIENT_ID"),
+            env_vars.get("TABLEAU_SERVER_JWT_SECRET_ID"),
+            env_vars.get("TABLEAU_SERVER_JWT_SECRET"),
+        ])
+        server_auth_pat = all([
+            env_vars.get("TABLEAU_SERVER_PAT_NAME"),
+            env_vars.get("TABLEAU_SERVER_PAT_SECRET"),
+        ])
+        if not server_auth_jwt and not server_auth_pat:
+            print_error("Tableau Server: Missing authentication (need JWT or PAT)")
+            sys.exit(1)
+        tableau_envs.append(("Server", env_vars.get("TABLEAU_SERVER_DOMAIN")))
+    
+    # Check LLM config
+    if not env_vars.get('LLM_API_BASE'):
+        print_error("Missing LLM_API_BASE")
         sys.exit(1)
     
     print_success("All critical environment variables are set")
@@ -320,17 +349,20 @@ def validate_env_vars():
     print(f"  Backend Port: {env_vars.get('PORT', '8000')}")
     print(f"  Frontend Host: {env_vars.get('VITE_APP_HOST', '127.0.0.1')}")
     print(f"  Frontend Port: {env_vars.get('VITE_APP_PORT', '5173')}")
-    print(f"  Tableau Domain: {env_vars.get('TABLEAU_DOMAIN', 'Not set')}")
-    print(f"  Tableau Site: {env_vars.get('TABLEAU_SITE', 'Not set')}")
-    print(f"  Tableau User: {env_vars.get('TABLEAU_USER', 'Not set')}")
-    print(f"  LLM API Base: {env_vars.get('LLM_API_BASE', 'Not set')}")
+    
+    # Show Tableau environments
+    print_info("\nTableau Environments:")
+    for env_name, domain in tableau_envs:
+        print(f"  {env_name}: {domain}")
+    
+    print(f"\n  LLM API Base: {env_vars.get('LLM_API_BASE', 'Not set')}")
     
     return True
 
 
 def verify_env_config():
-    """Verify environment configuration and enforce HTTPS."""
-    print_header("Verifying Environment Configuration")
+    """Verify environment configuration using certificate manager."""
+    print_header("Verifying SSL Certificates")
     
     root_env = Path(".env")
     
@@ -340,45 +372,68 @@ def verify_env_config():
     
     print_success("Root .env file found")
     
-    # Load and verify SSL configuration
-    env_vars = load_env_vars()
-    host = env_vars.get('HOST', '127.0.0.1')
-    port = env_vars.get('PORT', '8000')
-    ssl_cert = env_vars.get('SSL_CERT_FILE', '')
-    ssl_key = env_vars.get('SSL_KEY_FILE', '')
-    frontend_ssl_cert = env_vars.get('FRONTEND_SSL_CERT_FILE', '')
-    frontend_ssl_key = env_vars.get('FRONTEND_SSL_KEY_FILE', '')
-    
-    # 强制检查后端SSL配置
-    if not ssl_cert or not ssl_key:
-        print_error("❌ Backend SSL certificates are required!")
-        print_error("   Please configure SSL_CERT_FILE and SSL_KEY_FILE in .env")
+    # 使用证书管理器初始化证书
+    try:
+        # 添加项目路径到 sys.path
+        import sys
+        project_root = Path(__file__).parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        
+        from tableau_assistant.src.infra.certs import get_certificate_manager
+        
+        print_info("初始化证书管理器...")
+        manager = get_certificate_manager()
+        
+        if not manager.initialize():
+            print_error("❌ 证书初始化失败!")
+            return False
+        
+        # 获取 SSL 配置
+        ssl_config = manager.get_app_ssl_config()
+        ssl_cert = ssl_config.get("ssl_certfile", "")
+        ssl_key = ssl_config.get("ssl_keyfile", "")
+        
+        # 获取证书状态
+        status = manager.get_status()
+        source = status.get("source", "unknown")
+        
+        print_success(f"✓ 证书来源: {source}")
+        print_success(f"✓ 证书文件: {ssl_cert}")
+        print_success(f"✓ 私钥文件: {ssl_key}")
+        
+        # 显示过期信息
+        app_status = status.get("application", {})
+        if app_status:
+            days_left = app_status.get("days_until_expiry", 0)
+            expires = app_status.get("expires", "")
+            if app_status.get("warning"):
+                print_error(f"⚠️ 证书即将过期! 剩余 {days_left} 天")
+            else:
+                print_info(f"证书有效期: 剩余 {days_left} 天")
+        
+        # 导出环境变量供后续使用
+        env_exports = manager.export_to_env()
+        for key, value in env_exports.items():
+            os.environ[key] = value
+        
+        # 显示 HTTPS 配置
+        env_vars = load_env_vars()
+        host = env_vars.get('HOST', '127.0.0.1')
+        port = env_vars.get('PORT', '8000')
+        api_base_url = f"https://{host}:{port}"
+        print_info(f"API URL: {api_base_url}")
+        print_success("🔒 HTTPS 已启用")
+        
+        return True
+        
+    except ImportError as e:
+        print_error(f"❌ 无法导入证书管理器: {e}")
+        print_info("请确保已安装所有依赖: pip install -r tableau_assistant/requirements.txt")
         return False
-    
-    if not Path(ssl_cert).exists():
-        print_error(f"❌ Backend SSL certificate not found: {ssl_cert}")
+    except Exception as e:
+        print_error(f"❌ 证书验证失败: {e}")
         return False
-    
-    if not Path(ssl_key).exists():
-        print_error(f"❌ Backend SSL key not found: {ssl_key}")
-        return False
-    
-    print_success(f"✓ Backend SSL configured: {ssl_cert}")
-    
-    # 强制检查前端SSL配置
-    if not frontend_ssl_cert or not frontend_ssl_key:
-        print_error("❌ Frontend SSL certificates are required!")
-        print_error("   Please configure FRONTEND_SSL_CERT_FILE and FRONTEND_SSL_KEY_FILE in .env")
-        return False
-    
-    print_success(f"✓ Frontend SSL configured: {frontend_ssl_cert}")
-    
-    # 显示HTTPS配置
-    api_base_url = f"https://{host}:{port}"
-    print_info(f"API URL: {api_base_url}")
-    print_success("🔒 HTTPS enforced for production")
-    
-    return True
 
 
 # ============================================
@@ -603,7 +658,9 @@ def check_npm():
             capture_output=True,
             text=True,
             check=True,
-            shell=True  # Use shell on Windows
+            shell=True,  # Use shell on Windows
+            encoding='utf-8',
+            errors='replace'
         )
         version = result.stdout.strip()
         print_success(f"npm {version} found")
@@ -649,7 +706,9 @@ def install_frontend_deps():
             check=True,
             capture_output=True,
             text=True,
-            shell=True  # Use shell on Windows
+            shell=True,  # Use shell on Windows
+            encoding='utf-8',
+            errors='replace'
         )
         
         print_success("Frontend dependencies installed successfully")
@@ -686,7 +745,9 @@ def build_frontend():
             check=True,
             capture_output=True,
             text=True,
-            shell=True
+            shell=True,
+            encoding='utf-8',
+            errors='replace'
         )
         
         # Check if dist folder exists
@@ -737,9 +798,9 @@ def start_backend():
     host = env_vars.get('HOST', '127.0.0.1')
     port = env_vars.get('PORT', '8000')
     
-    # Check if SSL is configured
-    ssl_cert = env_vars.get('SSL_CERT_FILE', '')
-    ssl_key = env_vars.get('SSL_KEY_FILE', '')
+    # 从环境变量获取 SSL 配置（由证书管理器设置）
+    ssl_cert = os.environ.get('SSL_CERT_FILE', '')
+    ssl_key = os.environ.get('SSL_KEY_FILE', '')
     
     # Resolve relative paths from project root
     if ssl_cert and not Path(ssl_cert).is_absolute():
@@ -804,7 +865,8 @@ def start_backend():
             stderr=subprocess.STDOUT,  # Combine stderr with stdout
             text=True,
             bufsize=1,  # Line buffered
-            universal_newlines=True
+            encoding='utf-8',  # Fix Windows GBK encoding issue
+            errors='replace'  # Replace invalid characters
         )
         
         print_success("✓ Backend server started")
@@ -837,22 +899,25 @@ def start_frontend():
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            shell=True  # Use shell on Windows
+            shell=True,  # Use shell on Windows
+            encoding='utf-8',  # Fix Windows GBK encoding issue
+            errors='replace'  # Replace invalid characters
         )
         
         # Determine frontend protocol based on SSL configuration
         env_vars = load_env_vars()
-        frontend_ssl_cert = env_vars.get('FRONTEND_SSL_CERT_FILE', '')
-        frontend_ssl_key = env_vars.get('FRONTEND_SSL_KEY_FILE', '')
+        # 前端使用与后端相同的证书（从环境变量或 .env 获取）
+        frontend_ssl_cert = os.environ.get('SSL_CERT_FILE', '') or env_vars.get('SSL_CERT_FILE', '')
+        frontend_ssl_key = os.environ.get('SSL_KEY_FILE', '') or env_vars.get('SSL_KEY_FILE', '')
         frontend_host = env_vars.get('VITE_APP_HOST', '127.0.0.1')
         frontend_port = env_vars.get('VITE_APP_PORT', '5173')
         
-        # Check if frontend SSL is configured
+        # Check if frontend SSL is configured (Vite requires HTTPS)
         if frontend_ssl_cert and frontend_ssl_key:
             frontend_protocol = "https"
             print_success("✓ Frontend server started (HTTPS enabled)")
         else:
-            frontend_protocol = "http"
+            frontend_protocol = "https"  # Vite 配置要求 HTTPS
             print_success("✓ Frontend server started")
         
         print(f"  Local:    {frontend_protocol}://{frontend_host}:{frontend_port}")
@@ -915,9 +980,9 @@ def monitor_processes():
     # Determine protocols
     env_vars = load_env_vars()
     
-    # Backend protocol
-    ssl_cert = env_vars.get('SSL_CERT_FILE', '')
-    ssl_key = env_vars.get('SSL_KEY_FILE', '')
+    # Backend protocol - 从 os.environ 获取（证书管理器设置的）
+    ssl_cert = os.environ.get('SSL_CERT_FILE', '') or env_vars.get('SSL_CERT_FILE', '')
+    ssl_key = os.environ.get('SSL_KEY_FILE', '') or env_vars.get('SSL_KEY_FILE', '')
     backend_protocol = "https" if (ssl_cert and ssl_key and Path(ssl_cert).exists() and Path(ssl_key).exists()) else "http"
     
     # Get host and port from env
@@ -937,9 +1002,8 @@ def monitor_processes():
             print_info("\n📦 Production mode: Frontend served from backend")
     else:
         # Development mode - separate frontend server
-        frontend_ssl_cert = env_vars.get('FRONTEND_SSL_CERT_FILE', '')
-        frontend_ssl_key = env_vars.get('FRONTEND_SSL_KEY_FILE', '')
-        frontend_protocol = "https" if (frontend_ssl_cert and frontend_ssl_key) else "http"
+        # 前端使用与后端相同的证书（Vite 配置要求 HTTPS）
+        frontend_protocol = "https"
         frontend_host = env_vars.get('VITE_APP_HOST', '127.0.0.1')
         frontend_port = env_vars.get('VITE_APP_PORT', '5173')
         

@@ -57,12 +57,13 @@ class QueryBuilderNode:
         """
         self._query_builder = TableauQueryBuilder()
     
-    async def build(self, mapped_query: MappedQuery) -> VizQLQueryModel:
+    async def build(self, mapped_query: MappedQuery, datasource_luid: str) -> VizQLQueryModel:
         """
         Build VizQLQuery Pydantic object from MappedQuery.
         
         Args:
             mapped_query: MappedQuery with field mappings
+            datasource_luid: Datasource LUID for the query
             
         Returns:
             VizQLQuery Pydantic object ready for execution
@@ -77,13 +78,17 @@ class QueryBuilderNode:
         # Use TableauQueryBuilder to build VizQL request
         vizql_request = self._query_builder.build(mapped_semantic_query)
         
+        # 确保 datasource 字段存在
+        datasource_dict = {"datasourceLuid": datasource_luid}
+        
         # Convert to VizQLQuery Pydantic model
         vizql_query = VizQLQueryModel(
+            datasource=datasource_dict,
             fields=vizql_request.get("fields", []),
             filters=vizql_request.get("filters"),
         )
         
-        logger.info(f"Built VizQLQuery with {len(vizql_query.fields)} fields")
+        logger.info(f"Built VizQLQuery with {len(vizql_query.fields)} fields for datasource {datasource_luid}")
         return vizql_query
     
     def _apply_field_mappings(
@@ -187,10 +192,21 @@ async def query_builder_node(
             "query_builder_complete": True,
         }
     
+    # 从 config 获取 datasource_luid
+    datasource_luid = state.get("datasource") or "default"
+    if config:
+        try:
+            from tableau_assistant.src.orchestration.workflow.context import get_context
+            ctx = get_context(config)
+            if ctx and ctx.datasource_luid:
+                datasource_luid = ctx.datasource_luid
+        except Exception as e:
+            logger.warning(f"从 config 获取 datasource_luid 失败: {e}")
+    
     try:
         # Build VizQL query
         builder = QueryBuilderNode()
-        vizql_query = await builder.build(mapped_query)
+        vizql_query = await builder.build(mapped_query, datasource_luid)
         
         logger.info("QueryBuilder node completed successfully")
         return {

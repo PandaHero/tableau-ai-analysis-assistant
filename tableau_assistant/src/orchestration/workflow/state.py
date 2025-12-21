@@ -111,6 +111,11 @@ class VizQLState(TypedDict):
     # ═══════════════════════════════════════════════════════════════════════
     is_analysis_question: bool             # intent.type == DATA_QUERY (for routing)
     
+    # Non-analysis responses (when is_analysis_question=False)
+    clarification: Optional[str]           # Clarification question for user
+    general_response: Optional[str]        # General response (non-data questions)
+    non_analysis_response: Optional[str]   # Combined non-analysis response
+    
     # ═══════════════════════════════════════════════════════════════════════
     # Pure Semantic Layer (new architecture - using core/models)
     # All fields are Pydantic objects, NOT dicts
@@ -162,10 +167,10 @@ class VizQLState(TypedDict):
     replanner_complete: bool
     
     # ═══════════════════════════════════════════════════════════════════════
-    # Metadata (数据模型，在工作流启动时加载)
+    # 数据模型（在工作流启动时加载）
     # ═══════════════════════════════════════════════════════════════════════
     datasource: Optional[str]                  # Datasource name/LUID
-    metadata: Optional[Dict[str, str]]         # 完整数据模型（Metadata 对象序列化）
+    data_model: Optional[Dict[str, str]]       # 完整数据模型（DataModel 对象序列化）
     dimension_hierarchy: Optional[Dict[str, Dict[str, str]]]  # 维度层级结构
     
     # Replanner 需要的额外数据（由 Insight 节点填充）
@@ -259,6 +264,11 @@ def create_initial_state(
         # Intent classification (for routing)
         is_analysis_question=True,  # Default to True, SemanticParser will update based on intent.type
         
+        # Non-analysis responses (when is_analysis_question=False)
+        clarification=None,
+        general_response=None,
+        non_analysis_response=None,
+        
         # Pure semantic layer (using core/models)
         semantic_parse_result=None,  # SemanticParserAgent output
         semantic_query=None,         # SemanticQuery (from parse result)
@@ -292,10 +302,11 @@ def create_initial_state(
         
         # Metadata (数据模型)
         datasource=datasource,
-        metadata=None,
+        data_model=None,
         dimension_hierarchy=None,
         data_insight_profile=None,
         current_dimensions=[],
+        pending_questions=[],
         
         # Error handling
         errors=[],

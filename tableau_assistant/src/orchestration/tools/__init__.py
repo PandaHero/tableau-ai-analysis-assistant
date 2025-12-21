@@ -34,10 +34,6 @@ from tableau_assistant.src.orchestration.tools.data_model_tool import (
     GetDataModelInput,
 )
 
-from tableau_assistant.src.orchestration.tools.schema_tool import (
-    get_schema_module,
-)
-
 from tableau_assistant.src.orchestration.tools.metadata_tool import (
     get_metadata,
     GetMetadataInput,
@@ -51,8 +47,6 @@ __all__ = [
     "safe_tool_execution", "safe_async_tool_execution",
     # Data model tool
     "get_data_model", "GetDataModelInput",
-    # Schema tool
-    "get_schema_module",
     # Metadata tool
     "get_metadata", "GetMetadataInput",
 ]

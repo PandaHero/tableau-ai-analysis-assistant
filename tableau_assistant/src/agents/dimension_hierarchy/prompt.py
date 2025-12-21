@@ -28,32 +28,28 @@ Process: Analyze semantics → Classify category → Determine level → Identif
     def get_specific_domain_knowledge(self) -> str:
         return """**Think step by step:**
 
-Step 1: Classify category
-- geographic: locations, addresses, regions (省份、城市、区县)
-- time: dates, periods (年、月、日、季度)
-- product: items, categories, brands (产品、类别、品牌)
-- customer: segments, types (客户、客户类型)
-- organization: departments, teams (部门、团队)
-- financial: accounts, cost centers (科目、成本中心)
-- other: none of the above
+Step 1: Analyze field semantics
+- What does the field name suggest?
+- What do the sample values indicate?
+- What is the unique count telling us about granularity?
 
-Step 2: Determine level (1-5 scale)
-- Level 1 (coarsest): Country, Year, Top Category
-- Level 2 (coarse): Province, Quarter, Category
-- Level 3 (medium): City, Month, Subcategory
-- Level 4 (fine): District, Week, Brand
-- Level 5 (finest): Address, Date, SKU
+Step 2: Classify into semantic category
+- Consider the business domain of the field
+- Look for semantic indicators in name and values
 
-Step 3: Identify parent-child relationships
+Step 3: Determine hierarchical level
+- Compare unique counts across fields
+- Identify coarse-to-fine relationships
+- Consider typical business hierarchies
+
+Step 4: Identify parent-child relationships
 - Parent: coarser dimension (lower unique count, broader semantics)
 - Child: finer dimension (higher unique count, narrower semantics)
 - If uncertain, leave as null (DO NOT GUESS)
 
-Step 4: Score confidence (0.0-1.0)
-- 0.9-1.0: Clear semantics, explicit indicators
-- 0.7-0.9: Good semantic match
-- 0.5-0.7: Ambiguous signals
-- 0.0-0.5: Very uncertain"""
+Step 5: Score confidence based on evidence strength
+- Clear semantic indicators increase confidence
+- Ambiguous signals decrease confidence"""
     
     def get_constraints(self) -> str:
         return """MUST: assign level 1-5 for every dimension, provide reasoning

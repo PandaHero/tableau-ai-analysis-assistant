@@ -860,6 +860,8 @@ def clean_json_output(content: str) -> str:
     - Markdown 代码块
     - 额外的空白
     - 尾随逗号
+    - 尾随字符（trailing characters）
+    - 多个 JSON 对象
     
     Args:
         content: LLM 输出内容
@@ -871,11 +873,37 @@ def clean_json_output(content: str) -> str:
     content = re.sub(r'```json\s*', '', content)
     content = re.sub(r'```\s*', '', content)
     
-    # Step 2: 提取 JSON（找第一个 { 和最后一个 }）
+    # Step 2: 提取 JSON（找第一个 { 和匹配的 }）
+    # 使用括号匹配而不是简单的 rfind，处理嵌套情况
     start = content.find('{')
-    end = content.rfind('}')
-    if start != -1 and end != -1 and end > start:
-        content = content[start:end+1]
+    if start != -1:
+        depth = 0
+        end = -1
+        in_string = False
+        escape = False
+        
+        for i, char in enumerate(content[start:], start):
+            if escape:
+                escape = False
+                continue
+            if char == '\\':
+                escape = True
+                continue
+            if char == '"' and not escape:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if char == '{':
+                depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        
+        if end != -1:
+            content = content[start:end+1]
     
     # Step 3: 尝试直接解析
     try:

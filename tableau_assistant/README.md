@@ -9,7 +9,7 @@
 - LangChain 0.3+
 - FastAPI
 - Pydantic v2
-- SQLite (StoreManager)
+- SQLite (LangGraph SqliteStore)
 - Tableau VizQL Data Service
 - JWT/PAT Authentication
 

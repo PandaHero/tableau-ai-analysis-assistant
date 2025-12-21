@@ -4,57 +4,92 @@
 提供 SSL/TLS 证书的获取、验证和管理功能。
 
 主要功能：
-- 证书获取：从服务器获取证书链
-- 证书验证：验证证书有效性
-- 证书存储：管理本地证书存储
-- 服务注册：管理服务证书配置
+- 配置加载：从 cert_config.yaml 加载配置
+- 自签名证书：开发环境自动生成
+- 公司证书：生产环境支持自动拉取
+- 服务证书：第三方服务证书自动获取
+- 热更新：证书文件变化自动重载
 
 使用示例：
     from tableau_assistant.src.infra.certs import (
         CertificateManager,
-        CertificateConfig,
         get_certificate_manager,
     )
     
     # 获取证书管理器
     manager = get_certificate_manager()
     
-    # 获取并保存证书
-    cert_paths = manager.fetch_and_save_certificates("tableau.example.com")
+    # 初始化证书
+    manager.initialize()
+    
+    # 获取 SSL 配置
+    ssl_config = manager.get_app_ssl_config()
 """
 
 from .manager import CertificateManager
-from .config import CertificateConfig, get_certificate_config, SSLConfig, get_ssl_config
+from .config import (
+    CertificateConfig,
+    get_certificate_config,
+    get_cert_config,
+    ConfigLoader,
+    ConfigLoadError,
+    CertConfigData,
+    ApplicationConfig,
+    BackendCertConfig,
+    CompanyCertConfig,
+    ServiceCertConfig,
+)
 from .fetcher import CertificateFetcher
 from .validator import CertificateValidator
-from .models import CertificateInfo, CertificateChain, ValidationResult
+from .self_signed import SelfSignedGenerator
+from .hot_reload import HotReloader
 from .service_registry import ServiceRegistry, ServiceConfig
 
 # 全局证书管理器实例
 _certificate_manager: CertificateManager | None = None
 
 
-def get_certificate_manager() -> CertificateManager:
-    """获取全局证书管理器实例"""
+def get_certificate_manager(
+    config_path: str = "cert_config.yaml",
+    force_new: bool = False
+) -> CertificateManager:
+    """
+    获取全局证书管理器实例
+    
+    Args:
+        config_path: 配置文件路径
+        force_new: 是否强制创建新实例
+    """
     global _certificate_manager
-    if _certificate_manager is None:
-        _certificate_manager = CertificateManager()
+    if force_new or _certificate_manager is None:
+        _certificate_manager = CertificateManager(config_path)
     return _certificate_manager
 
 
 __all__ = [
+    # 主要类
     "CertificateManager",
     "CertificateConfig",
+    "ConfigLoader",
     "CertificateFetcher",
     "CertificateValidator",
-    "CertificateInfo",
-    "CertificateChain",
-    "ValidationResult",
+    "SelfSignedGenerator",
+    "HotReloader",
     "ServiceRegistry",
+    
+    # 数据模型
+    "CertConfigData",
+    "ApplicationConfig",
+    "BackendCertConfig",
+    "CompanyCertConfig",
+    "ServiceCertConfig",
     "ServiceConfig",
+    
+    # 异常
+    "ConfigLoadError",
+    
+    # 工厂函数
     "get_certificate_manager",
     "get_certificate_config",
-    # 向后兼容别名
-    "SSLConfig",
-    "get_ssl_config",
+    "get_cert_config",
 ]
