@@ -31,7 +31,7 @@ class DimensionAttributes(BaseModel):
     </fill_order>
     
     <examples>
-    省份: {"category": "geographic", "level": 2, "granularity": "coarse", "parent_dimension": null, "child_dimension": "城市"}
+    省份: {"category": "geography", "level": 2, "granularity": "coarse", "parent_dimension": null, "child_dimension": "城市"}
     月份: {"category": "time", "level": 3, "granularity": "medium", "parent_dimension": "季度", "child_dimension": "日期"}
     </examples>
     
@@ -41,11 +41,11 @@ class DimensionAttributes(BaseModel):
     </anti_patterns>
     """
     
-    category: Literal["geographic", "time", "product", "customer", "organization", "financial", "other"] = Field(
+    category: Literal["geography", "time", "product", "customer", "organization", "financial", "other"] = Field(
         description="""<what>维度类别</what>
 <when>ALWAYS required</when>
 <rule>
-- geographic: 地理位置（省份、城市、区县）
+- geography: 地理位置（省份、城市、区县）
 - time: 时间（年、月、日、季度）
 - product: 产品（产品、类别、品牌）
 - customer: 客户（客户、客户类型）
@@ -58,7 +58,7 @@ class DimensionAttributes(BaseModel):
     category_detail: str = Field(
         description="""<what>详细类别描述</what>
 <when>ALWAYS required</when>
-<rule>格式: 'category-subcategory'，如 'geographic-province'</rule>"""
+<rule>格式: 'category-subcategory'，如 'geography-province'</rule>"""
     )
     
     level: int = Field(
@@ -159,7 +159,7 @@ class DimensionHierarchyResult(BaseModel):
     </fill_order>
     
     <examples>
-    {"dimension_hierarchy": {"省份": {"category": "geographic", "level": 2, ...}, "城市": {"category": "geographic", "level": 3, "parent_dimension": "省份", ...}}}
+    {"dimension_hierarchy": {"省份": {"category": "geography", "level": 2, ...}, "城市": {"category": "geography", "level": 3, "parent_dimension": "省份", ...}}}
     </examples>
     """
     

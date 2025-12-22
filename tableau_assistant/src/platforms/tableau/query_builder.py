@@ -379,10 +379,18 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return field
     
     def _build_filter(self, f: Any) -> dict | None:
-        """Build VizQL filter from core filter model."""
+        """Build VizQL filter from core filter model.
+        
+        VizQL API Filter schema requires:
+        - field: FilterField object with fieldCaption (required)
+        - filterType: string enum (required)
+        - Additional properties based on filterType
+        
+        See openapi.json Filter schema for details.
+        """
         if isinstance(f, SetFilter):
             return {
-                "fieldCaption": f.field_name,
+                "field": {"fieldCaption": f.field_name},
                 "filterType": "SET",
                 "values": f.values,
                 "exclude": f.exclude,
@@ -391,16 +399,20 @@ class TableauQueryBuilder(BaseQueryBuilder):
         elif isinstance(f, DateRangeFilter):
             if f.range_type == DateRangeType.CUSTOM:
                 # Absolute date range
-                return {
-                    "fieldCaption": f.field_name,
+                filter_dict = {
+                    "field": {"fieldCaption": f.field_name},
                     "filterType": "QUANTITATIVE_DATE",
-                    "minValue": f.start_date,
-                    "maxValue": f.end_date,
+                    "quantitativeFilterType": "RANGE",
                 }
+                if f.start_date:
+                    filter_dict["min"] = f.start_date.isoformat() if hasattr(f.start_date, 'isoformat') else str(f.start_date)
+                if f.end_date:
+                    filter_dict["max"] = f.end_date.isoformat() if hasattr(f.end_date, 'isoformat') else str(f.end_date)
+                return filter_dict
             else:
                 # Relative date range
                 return {
-                    "fieldCaption": f.field_name,
+                    "field": {"fieldCaption": f.field_name},
                     "filterType": "DATE",
                     "anchor": f.range_type.value,
                     "periodType": f.granularity.value if f.granularity else "DAY",
@@ -408,27 +420,33 @@ class TableauQueryBuilder(BaseQueryBuilder):
                 }
         
         elif isinstance(f, NumericRangeFilter):
-            return {
-                "fieldCaption": f.field_name,
+            filter_dict = {
+                "field": {"fieldCaption": f.field_name},
                 "filterType": "QUANTITATIVE_NUMERICAL",
-                "minValue": f.min_value,
-                "maxValue": f.max_value,
+                "quantitativeFilterType": "RANGE",
             }
+            if f.min_value is not None:
+                filter_dict["min"] = f.min_value
+            if f.max_value is not None:
+                filter_dict["max"] = f.max_value
+            return filter_dict
         
         elif isinstance(f, TextMatchFilter):
             return {
-                "fieldCaption": f.field_name,
+                "field": {"fieldCaption": f.field_name},
                 "filterType": "MATCH",
-                "pattern": f.pattern,
-                "matchType": f.match_type.value,
+                "contains": f.pattern if f.match_type.value == "CONTAINS" else None,
+                "startsWith": f.pattern if f.match_type.value == "STARTS_WITH" else None,
+                "endsWith": f.pattern if f.match_type.value == "ENDS_WITH" else None,
+                "exactMatch": f.pattern if f.match_type.value == "EXACT" else None,
             }
         
         elif isinstance(f, TopNFilter):
             return {
-                "fieldCaption": f.field_name,
+                "field": {"fieldCaption": f.field_name},
                 "filterType": "TOP",
                 "howMany": f.n,
-                "fieldToMeasure": f.by_field,
+                "fieldToMeasure": {"fieldCaption": f.by_field},
                 "direction": f.direction.value,
             }
         

@@ -51,8 +51,8 @@ class SemanticGroup(BaseModel):
     """具有相同语义类型的列分组"""
     model_config = ConfigDict(extra="forbid")
     
-    type: Literal["time", "category", "numeric", "geographic"] = Field(
-        description="语义类型: time/geographic/category/numeric"
+    type: Literal["time", "category", "numeric", "geography"] = Field(
+        description="语义类型: time/geography/category/numeric"
     )
     columns: List[str] = Field(description="属于该语义组的列名列表")
 

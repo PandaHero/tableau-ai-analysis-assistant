@@ -254,10 +254,21 @@ class CertificateConfig:
         return context
     
     def httpx_client_kwargs(self) -> Dict[str, Any]:
+        """
+        获取 httpx 客户端的 SSL 配置
+        
+        httpx 的 verify 参数支持:
+        - bool: True/False
+        - str: CA 证书文件路径
+        - ssl.SSLContext: SSL 上下文（不推荐，某些场景不兼容）
+        
+        这里优先返回证书路径字符串，兼容性最好
+        """
         if not self.verify_ssl:
             return {"verify": False}
         if self.ca_bundle:
-            return {"verify": ssl.create_default_context(cafile=self.ca_bundle)}
+            # 返回证书路径字符串，而不是 SSLContext
+            return {"verify": self.ca_bundle}
         return {"verify": True}
     
     def requests_kwargs(self) -> Dict[str, Any]:

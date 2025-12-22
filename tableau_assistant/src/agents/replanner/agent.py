@@ -323,21 +323,57 @@ class ReplannerAgent:
             exploration_questions = []
             for q_data in data.get("exploration_questions", []):
                 try:
-                    question = ExplorationQuestion(
-                        question=q_data.get("question", ""),
-                        exploration_type=q_data.get("exploration_type", "drill_down"),
-                        target_dimension=q_data.get("target_dimension", ""),
-                        filter=q_data.get("filter"),
-                        priority=q_data.get("priority", 5),
-                        reasoning=q_data.get("reasoning", ""),
-                    )
+                    # 处理 LLM 可能返回字符串而不是对象的情况
+                    if isinstance(q_data, str):
+                        # LLM 返回了纯字符串问题，转换为对象
+                        question = ExplorationQuestion(
+                            question=q_data,
+                            exploration_type="drill_down",
+                            target_dimension="",
+                            filter=None,
+                            priority=5,
+                            reasoning="LLM 生成的探索问题",
+                        )
+                    elif isinstance(q_data, dict):
+                        question = ExplorationQuestion(
+                            question=q_data.get("question", ""),
+                            exploration_type=q_data.get("exploration_type", "drill_down"),
+                            target_dimension=q_data.get("target_dimension", ""),
+                            filter=q_data.get("filter"),
+                            priority=q_data.get("priority", 5),
+                            reasoning=q_data.get("reasoning", ""),
+                        )
+                    else:
+                        logger.warning(f"未知的探索问题格式: {type(q_data)}")
+                        continue
                     exploration_questions.append(question)
                 except Exception as e:
-                    logger.warning(f"解析探索问题失败: {e}")
+                    logger.warning(f"解析探索问题失败: {e}, 数据: {q_data}")
+            
+            completeness_score = float(data.get("completeness_score", 0.5))
+            should_replan_raw = bool(data.get("should_replan", False))
+            
+            # 强制执行 Schema 规则: completeness_score < 0.9 → should_replan=True
+            # 但如果没有探索问题，则不重规划（避免无限循环）
+            if completeness_score < 0.9 and not should_replan_raw:
+                if exploration_questions:
+                    logger.warning(
+                        f"LLM 返回 completeness={completeness_score:.2f} 但 should_replan=False，"
+                        f"根据 Schema 规则强制设为 True"
+                    )
+                    should_replan = True
+                else:
+                    # 没有探索问题，保持 False 避免无限循环
+                    logger.info(
+                        f"completeness={completeness_score:.2f} 但无探索问题，保持 should_replan=False"
+                    )
+                    should_replan = False
+            else:
+                should_replan = should_replan_raw
             
             return ReplanDecision(
-                completeness_score=float(data.get("completeness_score", 0.5)),
-                should_replan=bool(data.get("should_replan", False)),
+                completeness_score=completeness_score,
+                should_replan=should_replan,
                 reason=data.get("reason", ""),
                 missing_aspects=data.get("missing_aspects", []),
                 exploration_questions=exploration_questions,

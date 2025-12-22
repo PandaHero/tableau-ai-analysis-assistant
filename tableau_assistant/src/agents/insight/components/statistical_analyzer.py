@@ -489,7 +489,7 @@ class StatisticalAnalyzer:
         
         # 4. 语义分块（检查是否有合适的语义列）
         for group in profile.semantic_groups:
-            if group.type in ("time", "geographic", "category"):
+            if group.type in ("time", "geography", "category"):
                 return "by_semantic"
         
         # 5. 统计分块（有数值列）

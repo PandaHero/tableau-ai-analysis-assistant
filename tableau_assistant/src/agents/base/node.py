@@ -133,27 +133,50 @@ def get_llm(
 # 工具调用处理
 # ═══════════════════════════════════════════════════════════════════════════
 
-def convert_messages(messages: List[Dict[str, str]]) -> List:
+def convert_messages(messages: List) -> List:
     """
     将字典格式的消息转换为 LangChain 消息对象
     
+    支持两种输入格式：
+    1. 字典格式: [{"role": "system", "content": "..."}, ...]
+    2. LangChain 消息对象: [HumanMessage(...), AIMessage(...), ...]
+    
     Args:
-        messages: [{"role": "system", "content": "..."}, ...]
+        messages: 消息列表（字典或 LangChain 消息对象）
     
     Returns:
         LangChain 消息对象列表
     """
+    from langchain_core.messages import BaseMessage
+    
     langchain_messages = []
     for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content", "")
+        # 如果已经是 LangChain 消息对象，直接添加
+        if isinstance(msg, BaseMessage):
+            langchain_messages.append(msg)
+            continue
         
-        if role == "system":
-            langchain_messages.append(SystemMessage(content=content))
-        elif role == "user":
-            langchain_messages.append(HumanMessage(content=content))
-        elif role == "assistant":
-            langchain_messages.append(AIMessage(content=content))
+        # 字典格式转换
+        if isinstance(msg, dict):
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            
+            if role == "system":
+                langchain_messages.append(SystemMessage(content=content))
+            elif role == "user":
+                langchain_messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                langchain_messages.append(AIMessage(content=content))
+            elif role == "tool":
+                # 处理工具消息
+                tool_call_id = msg.get("tool_call_id", "")
+                langchain_messages.append(ToolMessage(content=content, tool_call_id=tool_call_id))
+            else:
+                # 未知角色，默认作为 HumanMessage
+                logger.warning(f"Unknown message role: {role}, treating as HumanMessage")
+                langchain_messages.append(HumanMessage(content=content))
+        else:
+            logger.warning(f"Unknown message type: {type(msg)}, skipping")
     
     return langchain_messages
 

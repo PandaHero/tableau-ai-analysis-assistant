@@ -514,7 +514,7 @@ class SemanticChunker:
         
         group_col = None
         for group in semantic_groups:
-            if group.type in ("time", "geographic", "category"):
+            if group.type in ("time", "geography", "category"):
                 for col in group.columns:
                     if col in df.columns:
                         unique_count = df[col].nunique()

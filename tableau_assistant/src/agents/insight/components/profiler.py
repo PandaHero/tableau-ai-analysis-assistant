@@ -146,7 +146,7 @@ class DataProfiler:
         """
         groups_by_type: Dict[str, List[str]] = {
             "time": [],
-            "geographic": [],
+            "geography": [],
             "category": [],
             "numeric": [],
         }
@@ -160,8 +160,8 @@ class DataProfiler:
                 
                 if category == "time":
                     groups_by_type["time"].append(col)
-                elif category == "geographic":
-                    groups_by_type["geographic"].append(col)
+                elif category == "geography":
+                    groups_by_type["geography"].append(col)
                 elif category in ("product", "customer", "organization", "financial", "other"):
                     # 这些都归类为 category（分类维度）
                     groups_by_type["category"].append(col)
@@ -185,7 +185,7 @@ class DataProfiler:
         获取指定类别的列。
         
         Args:
-            category: 类别名称（geographic, time, product 等）
+            category: 类别名称（geography, time, product 等）
             
         Returns:
             该类别的列名列表

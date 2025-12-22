@@ -34,12 +34,78 @@ SUPPORTED_LLM_PROVIDERS: List[str] = [
 ]
 
 # 导入证书管理器
-from tableau_assistant.src.infra.certs import get_certificate_config
+from tableau_assistant.src.infra.certs import get_certificate_config, get_cert_config
 
 
 def get_httpx_client_kwargs():
-    """获取 httpx 客户端的 SSL 配置"""
+    """获取 httpx 客户端的 SSL 配置（全局默认）"""
     return get_certificate_config().httpx_client_kwargs()
+
+
+def _get_service_http_clients(service_id: str):
+    """
+    获取服务特定的 HTTP 客户端
+    
+    优先级：
+    1. Linux/Mac: 优先使用系统证书（通常足够）
+    2. Windows 或系统证书失败: 使用 cert_config.yaml 中的服务证书
+    3. 回退到 certifi
+    
+    Args:
+        service_id: 服务 ID（如 "deepseek", "zhipu-ai"）
+        
+    Returns:
+        (http_client, http_async_client) 元组
+    """
+    import platform
+    from pathlib import Path
+    
+    # Linux/Mac 优先尝试系统证书（公网 API 通常不需要自定义证书）
+    if platform.system() != "Windows":
+        try:
+            client = httpx.Client(verify=True, timeout=60.0)
+            async_client = httpx.AsyncClient(verify=True, timeout=60.0)
+            logger.debug(f"{service_id}: 使用系统证书")
+            return (client, async_client)
+        except Exception as e:
+            logger.warning(f"{service_id}: 系统证书不可用，尝试自定义证书: {e}")
+    
+    cert_path = None
+    
+    # 尝试从证书管理器获取服务特定证书
+    try:
+        config = get_cert_config()
+        service = config.services.get(service_id)
+        if service and service.ca_bundle:
+            service_cert_path = Path(config.cert_dir) / service.ca_bundle
+            if service_cert_path.exists():
+                cert_path = str(service_cert_path)
+                logger.info(f"使用证书管理器的 {service_id} 证书: {cert_path}")
+    except Exception as e:
+        logger.warning(f"从证书管理器获取 {service_id} 证书失败: {e}")
+    
+    # 回退到 certifi
+    if not cert_path:
+        try:
+            import certifi
+            cert_path = certifi.where()
+            logger.debug(f"回退使用 certifi 证书: {cert_path}")
+        except ImportError:
+            logger.warning("certifi 未安装")
+    
+    # 创建客户端
+    if cert_path:
+        return (
+            httpx.Client(verify=cert_path, timeout=60.0),
+            httpx.AsyncClient(verify=cert_path, timeout=60.0)
+        )
+    
+    # 使用系统默认
+    logger.debug(f"使用系统默认证书")
+    return (
+        httpx.Client(verify=True, timeout=60.0),
+        httpx.AsyncClient(verify=True, timeout=60.0)
+    )
 
 # 尝试导入 Anthropic 模型（可选依赖）
 ANTHROPIC_AVAILABLE = False
@@ -115,9 +181,11 @@ def select_model(
         return _create_claude_model(model_name, temperature)
     
     elif provider == "deepseek":
+        # DeepSeek 使用服务特定证书
+        ds_http_client, ds_async_client = _get_service_http_clients("deepseek")
         return _create_deepseek_model(
             model_name, temperature, llm_api_key,
-            http_client, http_async_client
+            ds_http_client, ds_async_client
         )
     
     elif provider == "qwen":
@@ -127,9 +195,11 @@ def select_model(
         )
     
     elif provider == "zhipu":
+        # 智谱使用服务特定证书
+        zhipu_http_client, zhipu_async_client = _get_service_http_clients("zhipu-ai")
         return _create_zhipu_model(
             model_name, temperature, llm_api_key,
-            http_client, http_async_client
+            zhipu_http_client, zhipu_async_client
         )
     
     else:

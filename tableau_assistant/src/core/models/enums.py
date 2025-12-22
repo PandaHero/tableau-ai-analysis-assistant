@@ -180,6 +180,7 @@ class DimensionCategory(str, Enum):
     PRODUCT = "product"
     CUSTOMER = "customer"
     ORGANIZATION = "organization"
+    FINANCIAL = "financial"
     OTHER = "other"
 
 
