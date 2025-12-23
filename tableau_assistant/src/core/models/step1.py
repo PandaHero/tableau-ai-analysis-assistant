@@ -3,17 +3,23 @@
 Step 1 is the "Intuition" phase of the LLM combination architecture.
 It understands the user question, restates it as a complete standalone question,
 extracts structured What/Where/How, and classifies intent.
+
+Includes LLM self-validation for filter completeness:
+- DATE_RANGE filters must have at least one of start_date or end_date
+- TOP_N filters must have n and by_field
+- SET filters must have values
 """
 
-from pydantic import BaseModel, ConfigDict, Field
+from datetime import date
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .enums import (
     AggregationType,
     DateGranularity,
-    DateRangeType,
     FilterType,
     HowType,
     IntentType,
+    SortDirection,
 )
 
 
@@ -23,9 +29,7 @@ class MeasureSpec(BaseModel):
     
     field: str = Field(
         description="""<what>Business term for the measure</what>
-<when>ALWAYS required</when>
-<rule>Extract exact term from user question</rule>
-<must_not>Select from metadata - use user's original wording only</must_not>"""
+<when>ALWAYS required</when>"""
     )
     
     aggregation: AggregationType = Field(
@@ -41,9 +45,7 @@ class DimensionSpec(BaseModel):
     
     field: str = Field(
         description="""<what>Business term for the dimension</what>
-<when>ALWAYS required</when>
-<rule>Extract exact term from user question</rule>
-<must_not>Select from metadata - use user's original wording only</must_not>"""
+<when>ALWAYS required</when>"""
     )
     
     granularity: DateGranularity | None = Field(
@@ -62,33 +64,32 @@ class FilterSpec(BaseModel):
     1. field (ALWAYS)
     2. type (ALWAYS)
     3. values (if SET)
-    4. range_type, year, granularity (if DATE_RANGE)
+    4. start_date, end_date (if DATE_RANGE)
+    5. n, by_field, direction (if TOP_N)
     </fill_order>
     
     <examples>
-    SET: {"field": "城市", "type": "SET", "values": ["北京"]}
-    DATE_RANGE: {"field": "订单日期", "type": "DATE_RANGE", "range_type": "CUSTOM", "year": 2024, "granularity": "YEAR"}
+    SET filter: {"field": "city", "type": "SET", "values": ["Beijing"]}
+    DATE_RANGE filter: {"field": "order_date", "type": "DATE_RANGE", "start_date": "2024-01-01", "end_date": "2024-12-31"}
+    TOP_N filter: {"field": "city", "type": "TOP_N", "n": 5, "by_field": "sales", "direction": "DESC"}
     </examples>
     
     <anti_patterns>
-    ❌ "2024年" with type=SET (should be DATE_RANGE)
-    ❌ range_type=CUSTOM without year value
+    X Year constraint with type=SET (should be DATE_RANGE)
+    X DATE_RANGE without start_date or end_date
+    X top N without by_field (must specify measure to rank by)
     </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
     field: str = Field(
         description="""<what>Field to filter on</what>
-<when>ALWAYS required</when>
-<rule>Extract exact term from user question</rule>
-<must_not>Select from metadata - use user's original wording only</must_not>"""
+<when>ALWAYS required</when>"""
     )
     
     type: FilterType = Field(
         description="""<what>Filter type</what>
-<when>ALWAYS required</when>
-<rule>具体值→SET, 时间范围→DATE_RANGE</rule>
-<must_not>Use SET for year/date constraints</must_not>"""
+<when>ALWAYS required</when>"""
     )
     
     # For SET filters
@@ -99,30 +100,56 @@ class FilterSpec(BaseModel):
 <dependency>type == SET</dependency>"""
     )
     
-    # For DATE_RANGE filters
-    range_type: DateRangeType | None = Field(
+    # For DATE_RANGE filters - LLM calculates concrete dates
+    start_date: str | None = Field(
         default=None,
-        description="""<what>Date range type</what>
+        description="""<what>Start date in YYYY-MM-DD format</what>
 <when>REQUIRED for type=DATE_RANGE</when>
-<rule>2024年→CUSTOM, 今年→CURRENT, 去年→PREVIOUS</rule>
-<dependency>type == DATE_RANGE</dependency>"""
+<dependency>type == DATE_RANGE</dependency>
+<rule>Calculate based on user intent and current_time</rule>"""
     )
     
-    year: int | None = Field(
+    end_date: str | None = Field(
         default=None,
-        description="""<what>Year value</what>
-<when>REQUIRED when range_type=CUSTOM</when>
-<rule>"2024年" → 2024</rule>
-<dependency>range_type == CUSTOM</dependency>
-<must_not>Leave null for specific year mention</must_not>"""
+        description="""<what>End date in YYYY-MM-DD format</what>
+<when>REQUIRED for type=DATE_RANGE</when>
+<dependency>type == DATE_RANGE</dependency>
+<rule>Calculate based on user intent and current_time</rule>"""
     )
     
-    granularity: DateGranularity | None = Field(
+    # For TOP_N filters
+    n: int | None = Field(
         default=None,
-        description="""<what>Date granularity</what>
-<when>For DATE_RANGE filters</when>
-<rule>年→YEAR, 月→MONTH, 周→WEEK</rule>"""
+        description="""<what>Number of top/bottom items</what>
+<when>REQUIRED for type=TOP_N</when>
+<dependency>type == TOP_N</dependency>"""
     )
+    
+    by_field: str | None = Field(
+        default=None,
+        description="""<what>Measure field to rank by</what>
+<when>REQUIRED for type=TOP_N</when>
+<dependency>type == TOP_N</dependency>"""
+    )
+    
+    direction: SortDirection | None = Field(
+        default=None,
+        description="""<what>Sort direction for TOP_N</what>
+<when>For type=TOP_N, default DESC for top N, ASC for bottom N</when>
+<dependency>type == TOP_N</dependency>"""
+    )
+    
+    @field_validator('start_date', 'end_date')
+    @classmethod
+    def validate_date_format(cls, v: str | None) -> str | None:
+        """Validate date string is in YYYY-MM-DD format."""
+        if v is None:
+            return v
+        try:
+            date.fromisoformat(v)
+            return v
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid date format '{v}'. Expected YYYY-MM-DD format.") from e
 
 
 class What(BaseModel):
@@ -132,9 +159,7 @@ class What(BaseModel):
     measures: list[MeasureSpec] = Field(
         default_factory=list,
         description="""<what>List of measures to compute</what>
-<when>ALWAYS required</when>
-<rule>Extract exact terms from user question</rule>
-<must_not>Select from metadata</must_not>"""
+<when>ALWAYS required</when>"""
     )
 
 
@@ -145,9 +170,7 @@ class Where(BaseModel):
     dimensions: list[DimensionSpec] = Field(
         default_factory=list,
         description="""<what>List of dimensions for grouping</what>
-<when>Usually required</when>
-<rule>Extract exact terms from user question</rule>
-<must_not>Select from metadata</must_not>"""
+<when>Usually required</when>"""
     )
     
     filters: list[FilterSpec] = Field(
@@ -163,26 +186,95 @@ class Intent(BaseModel):
     
     type: IntentType = Field(
         description="""<what>Intent type</what>
-<when>ALWAYS required</when>
-<rule>
-- Complete info → DATA_QUERY
-- Unspecified values → CLARIFICATION
-- Metadata question → GENERAL
-- Unrelated → IRRELEVANT
-</rule>"""
+<when>ALWAYS required</when>"""
     )
     
     reasoning: str = Field(
         description="""<what>Reasoning for classification</what>
+<when>ALWAYS required</when>"""
+    )
+
+
+class FilterValidationCheck(BaseModel):
+    """Single filter validation check result (filled by LLM)."""
+    model_config = ConfigDict(extra="forbid")
+    
+    filter_field: str = Field(
+        description="""<what>Field name of the filter being checked</what>
+<when>ALWAYS required</when>"""
+    )
+    
+    filter_type: FilterType = Field(
+        description="""<what>Type of the filter</what>
+<when>ALWAYS required</when>"""
+    )
+    
+    is_complete: bool = Field(
+        description="""<what>Whether filter has all required fields</what>
 <when>ALWAYS required</when>
-<rule>Explain why this intent was chosen</rule>"""
+<rule>DATE_RANGE: has start_date OR end_date | TOP_N: has n AND by_field | SET: has values</rule>"""
+    )
+    
+    missing_fields: list[str] = Field(
+        default_factory=list,
+        description="""<what>List of missing required fields</what>
+<when>If is_complete=False</when>
+<examples>["start_date", "end_date"], ["n", "by_field"], ["values"]</examples>"""
+    )
+    
+    note: str = Field(
+        default="",
+        description="""<what>Explanation or suggestion for fixing</what>
+<when>Recommended when is_complete=False</when>"""
+    )
+
+
+class Step1Validation(BaseModel):
+    """Step 1 self-validation (LLM validates filter completeness).
+    
+    <fill_order>
+    1. filter_checks (one per filter, empty if no filters)
+    2. all_valid
+    3. issues (if any)
+    </fill_order>
+    
+    <examples>
+    No filters: {"filter_checks": [], "all_valid": true, "issues": []}
+    Valid filter: {"filter_checks": [{"filter_field": "date", "filter_type": "DATE_RANGE", "is_complete": true}], "all_valid": true, "issues": []}
+    </examples>
+    
+    <anti_patterns>
+    X all_valid=true when any filter_check has is_complete=false
+    X Missing filter_checks entry for a filter in where.filters
+    </anti_patterns>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    filter_checks: list[FilterValidationCheck] = Field(
+        default_factory=list,
+        description="""<what>Validation result for each filter</what>
+<when>One entry per filter in where.filters</when>
+<rule>Empty list if no filters</rule>"""
+    )
+    
+    all_valid: bool = Field(
+        description="""<what>All filters are complete</what>
+<when>ALWAYS required</when>
+<rule>True only if all filter_checks have is_complete=True, or no filters exist</rule>"""
+    )
+    
+    issues: list[str] = Field(
+        default_factory=list,
+        description="""<what>List of validation issues</what>
+<when>If all_valid=False</when>
+<examples>["DATE_RANGE filter 'order_date' missing start_date and end_date"]</examples>"""
     )
 
 
 class Step1Output(BaseModel):
     """Step 1 output: Semantic understanding and question restatement.
     
-    <what>Restated question + structured What/Where/How + intent classification</what>
+    <what>Restated question + structured What/Where/How + intent classification + self-validation</what>
     
     <fill_order>
     1. restated_question (ALWAYS first)
@@ -190,19 +282,18 @@ class Step1Output(BaseModel):
     3. where (ALWAYS)
     4. how_type (ALWAYS)
     5. intent (ALWAYS)
+    6. validation (ALWAYS - self-check filter completeness)
     </fill_order>
     
     <examples>
-    Input: "各省份销售额"
-    Output: {"restated_question": "按省份分组，计算销售额总和", "how_type": "SIMPLE", "intent": {"type": "DATA_QUERY"}}
-    
-    Input: History="各省份各月销售额", Current="每月排名呢？"
-    Output: {"restated_question": "按省份和月份分组，在每个月内按销售额降序排名", "how_type": "RANKING"}
+    Simple: {"restated_question": "Group by province, calculate total sales", "how_type": "SIMPLE", "validation": {"all_valid": true, "filter_checks": [], "issues": []}}
+    With filter: {"restated_question": "Show 2024 sales by month", "where": {"filters": [{"field": "date", "type": "DATE_RANGE", "start_date": "2024-01-01", "end_date": "2024-12-31"}]}, "validation": {"all_valid": true, "filter_checks": [{"filter_field": "date", "filter_type": "DATE_RANGE", "is_complete": true}], "issues": []}}
     </examples>
     
     <anti_patterns>
-    ❌ Losing partition intent: "每月排名" → "按销售额排名" (lost "每月")
-    ❌ Using technical field names: {"field": "[Sales].[Amount]"}
+    X Losing scope modifiers: "monthly ranking" becomes "rank by sales" (lost "monthly")
+    X Using technical field names: {"field": "[Sales].[Amount]"}
+    X DATE_RANGE filter without dates: validation.all_valid must be false
     </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
@@ -210,34 +301,34 @@ class Step1Output(BaseModel):
     restated_question: str = Field(
         description="""<what>Complete standalone question in natural language</what>
 <when>ALWAYS required</when>
-<rule>Must preserve partition intent (每月→"在每个月内", 当月→"当月")</rule>
-<must_not>Lose partition keywords (will cause wrong computation scope)</must_not>"""
+<must_not>Lose scope keywords (will cause wrong computation scope)</must_not>"""
     )
     
     what: What = Field(
         description="""<what>Target measures</what>
-<when>ALWAYS required</when>
-<rule>Extract exact terms from user question</rule>
-<must_not>Select from metadata</must_not>"""
+<when>ALWAYS required</when>"""
     )
     
     where: Where = Field(
         description="""<what>Dimensions + filters</what>
-<when>ALWAYS required</when>
-<rule>Extract exact terms from user question</rule>
-<must_not>Select from metadata</must_not>"""
+<when>ALWAYS required</when>"""
     )
     
     how_type: HowType = Field(
         default=HowType.SIMPLE,
-        description="""<what>Computation type</what>
-<when>ALWAYS required</when>
-<rule>排名→RANKING, 累计→CUMULATIVE, 占比/同比→COMPARISON, 固定粒度→GRANULARITY, 其他→SIMPLE</rule>"""
+        description="""<what>Computation complexity</what>
+<when>ALWAYS required</when>"""
     )
     
     intent: Intent = Field(
         default_factory=lambda: Intent(type=IntentType.DATA_QUERY, reasoning="Default: assumed data query"),
         description="""<what>Intent classification + reasoning</what>
+<when>ALWAYS required</when>"""
+    )
+    
+    validation: Step1Validation = Field(
+        default_factory=lambda: Step1Validation(all_valid=True),
+        description="""<what>Self-validation of filter completeness</what>
 <when>ALWAYS required</when>
-<rule>Complete info→DATA_QUERY, Unspecified values→CLARIFICATION, Metadata→GENERAL, Unrelated→IRRELEVANT</rule>"""
+<rule>Check each filter has required fields based on its type</rule>"""
     )

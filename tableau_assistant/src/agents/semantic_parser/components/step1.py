@@ -2,22 +2,35 @@
 
 Step 1 is the "Intuition" phase of the LLM combination architecture.
 
-使用 call_llm_with_tools 模式：
-- call_llm_with_tools(): 支持工具调用 + 中间件 + 流式输出
-- parse_json_response(): 解析 JSON 响应
-- 不使用 with_structured_output（对某些模型不可靠）
+For deep thinking models (DeepSeek R1):
+- Model has built-in thinking capability, outputs thinking process in <think>...</think> tags
+- Thinking process is automatically extracted to AIMessage.additional_kwargs["thinking"]
+- call_llm_with_tools returns complete AIMessage
 
-关键：
-- 使用 call_llm_with_tools(streaming=True) 支持 token 流式输出
-- 传入中间件（从 config 获取）支持重试、摘要等功能
-- 当前不需要工具（元数据通过 state 传递）
+Uses call_llm_with_tools pattern:
+- call_llm_with_tools(): supports tool calls + middleware + streaming
+- parse_json_response(): parses JSON response
+- Does not use with_structured_output (unreliable for some models)
+
+Key points:
+- call_llm_with_tools(streaming=True) enables token streaming for frontend
+- Middleware (from config) supports retry, summarization, etc.
+- Currently no tools needed
+
+Error handling:
+- This component does NOT handle errors internally
+- All errors (Pydantic or semantic) are propagated to the Agent
+- Agent routes errors to Observer for correction
+- ValidationError carries original LLM output for Observer to analyze
 """
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from ....core.models import Step1Output
+from ....core.models.data_model import DataModel
+from ....core.exceptions import ValidationError
 from ..prompts.step1 import STEP1_PROMPT
 from tableau_assistant.src.agents.base import (
     get_llm,
@@ -37,6 +50,10 @@ class Step1Component:
     - Extract What/Where/How structure
     - Classify intent
     - Generate complete restatement
+    
+    Error Handling:
+    - This component does NOT handle errors internally
+    - All errors are propagated to the Agent for Observer-based correction
     """
     
     def __init__(self, llm=None):
@@ -57,27 +74,32 @@ class Step1Component:
         self,
         question: str,
         history: list[dict[str, str]] | None = None,
-        metadata: dict[str, Any] | None = None,
+        data_model: DataModel | None = None,
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
-    ) -> Step1Output:
+    ) -> Tuple[Step1Output, str]:
         """Execute Step 1: Semantic understanding and question restatement.
         
         Args:
             question: Current user question
             history: Conversation history (list of {"role": "user/assistant", "content": "..."})
-            metadata: Data source metadata (available fields, etc.)
+            data_model: Data source model (DataModel object with fields, tables, relationships)
             state: Current workflow state (for middleware)
             config: LangGraph RunnableConfig (contains middleware)
             
         Returns:
-            Step1Output with restated_question, what, where, how_type, intent
+            Tuple of (Step1Output, thinking_process)
+            - Step1Output: restated_question, what, where, how_type, intent
+            - thinking_process: R1 model's thinking process (if available)
+            
+        Raises:
+            ValueError: When Pydantic validation fails (handled by Agent via Observer)
         """
         # Format history for prompt
         history_str = self._format_history(history)
         
-        # Format metadata for prompt
-        metadata_str = self._format_metadata(metadata)
+        # Format data model for prompt
+        data_model_str = self._format_data_model(data_model)
         
         # Get current time for date-related questions
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -86,7 +108,7 @@ class Step1Component:
         messages = STEP1_PROMPT.format_messages(
             question=question,
             history=history_str,
-            metadata=metadata_str,
+            data_model=data_model_str,
             current_time=current_time,
         )
         
@@ -95,96 +117,95 @@ class Step1Component:
         if config and "configurable" in config:
             middleware = config["configurable"].get("middleware")
         
-        # Call LLM using call_llm_with_tools (supports middleware + streaming)
-        # - tools=[]: No tools needed, metadata is passed via state
-        # - streaming=True: Enable token streaming for frontend
-        # - middleware: Apply retry, summarization, etc.
         llm = self._get_llm()
+        
+        # Call LLM
         response = await call_llm_with_tools(
             llm=llm,
             messages=messages,
-            tools=[],  # No tools needed
+            tools=[],
             streaming=True,
             middleware=middleware,
             state=state or {},
             config=config,
         )
         
-        # Parse JSON response
-        result = parse_json_response(response, Step1Output)
-        return result
+        # Extract thinking process (R1 model specific)
+        thinking = response.additional_kwargs.get("thinking", "")
+        
+        # Parse and validate JSON response
+        # If validation fails, wrap in ValidationError with original output
+        try:
+            result = parse_json_response(response.content, Step1Output)
+        except ValueError as e:
+            # Wrap error with original output for Observer
+            raise ValidationError(
+                message=str(e),
+                original_output=response.content,
+                step="step1",
+            ) from e
+        
+        return result, thinking
     
     def _format_history(self, history: list[dict[str, str]] | None) -> str:
         """Format conversation history for prompt.
         
-        注意：不在这里限制历史消息数量。
-        历史消息的管理由 SummarizationMiddleware 负责：
-        - 当 token 超过阈值时自动摘要
-        - 保留最近 N 条消息（由 messages_to_keep 配置）
+        Note: History message count is NOT limited here.
+        History management is handled by SummarizationMiddleware:
+        - Auto-summarize when token count exceeds threshold
+        - Keep recent N messages (configured by messages_to_keep)
         """
         if not history:
             return "(No previous conversation)"
         
         formatted = []
-        for msg in history:  # 不限制数量，由 SummarizationMiddleware 管理
+        for msg in history:  # No limit, managed by SummarizationMiddleware
             role = msg.get("role", "user")
             content = msg.get("content", "")
             formatted.append(f"[{role}]: {content}")
         
         return "\n".join(formatted)
     
-    def _format_metadata(self, metadata: Any | None) -> str:
-        """Format metadata for prompt.
+    def _format_data_model(self, data_model: DataModel | None) -> str:
+        """Format data model for prompt.
         
-        支持两种格式：
-        1. Metadata Pydantic 对象（推荐）
-        2. dict 格式（向后兼容）
+        Args:
+            data_model: DataModel object containing fields, tables, relationships
+            
+        Returns:
+            Formatted string describing available fields for LLM reference
         """
-        if not metadata:
-            return "(No metadata available)"
+        if not data_model:
+            return "(No data model available)"
         
-        # 处理 Pydantic Metadata 对象
-        if hasattr(metadata, 'fields') and hasattr(metadata, 'get_dimensions'):
-            # Metadata Pydantic 对象
-            fields = metadata.fields
-            if not fields:
-                return "(No fields available)"
-            
-            dimensions = [
-                f.fieldCaption or f.name
-                for f in fields 
-                if f.role == "dimension"
-            ]
-            measures = [
-                f.fieldCaption or f.name
-                for f in fields 
-                if f.role == "measure"
-            ]
-        else:
-            # dict 格式（向后兼容）
-            fields = metadata.get("fields", []) if isinstance(metadata, dict) else []
-            if not fields:
-                return "(No fields available)"
-            
-            # Format as simple list - check both 'role' and 'type' for compatibility
-            dimensions = [
-                f.get("name") or f.get("fieldCaption", "")
-                for f in fields 
-                if (f.get("role", "").upper() == "DIMENSION" or f.get("type") == "dimension")
-            ]
-            measures = [
-                f.get("name") or f.get("fieldCaption", "")
-                for f in fields 
-                if (f.get("role", "").upper() == "MEASURE" or f.get("type") == "measure")
-            ]
+        if not data_model.fields:
+            return "(No fields available)"
         
         result = []
-        if dimensions:
-            # 不硬编码限制字段数量
-            # 如果字段过多导致 prompt 过长，由 SummarizationMiddleware 处理
-            # 或者在 settings 中配置 max_fields_in_prompt
-            result.append(f"维度字段: {', '.join(dimensions)}")
-        if measures:
-            result.append(f"度量字段: {', '.join(measures)}")
+        
+        # Add data source info
+        result.append(f"Data Source: {data_model.datasource_name}")
+        
+        # For multi-table data model, show table structure
+        if data_model.is_multi_table:
+            result.append(f"Tables: {len(data_model.logical_tables)}")
+            for table in data_model.logical_tables:
+                table_fields = data_model.get_fields_by_table(table.logicalTableId)
+                dims = [f.fieldCaption or f.name for f in table_fields if f.role == "dimension"]
+                meas = [f.fieldCaption or f.name for f in table_fields if f.role == "measure"]
+                result.append(f"  [{table.caption}]")
+                if dims:
+                    result.append(f"    Dimensions: {', '.join(dims)}")
+                if meas:
+                    result.append(f"    Measures: {', '.join(meas)}")
+        else:
+            # Single table: just list dimensions and measures
+            dimensions = [f.fieldCaption or f.name for f in data_model.get_dimensions()]
+            measures = [f.fieldCaption or f.name for f in data_model.get_measures()]
+            
+            if dimensions:
+                result.append(f"Dimensions: {', '.join(dimensions)}")
+            if measures:
+                result.append(f"Measures: {', '.join(measures)}")
         
         return "\n".join(result) if result else "(No fields available)"

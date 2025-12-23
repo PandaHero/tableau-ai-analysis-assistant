@@ -5,21 +5,28 @@ Step 2 is the "Reasoning" phase of the LLM combination architecture.
 IMPORTANT: validation is filled by LLM, not computed by code.
 The component does NOT do additional validation - it trusts LLM's self-validation.
 
-使用 call_llm_with_tools 模式：
-- call_llm_with_tools(): 支持工具调用 + 中间件 + 流式输出
-- parse_json_response(): 解析 JSON 响应
-- 不使用 with_structured_output（对某些模型不可靠）
+Uses call_llm_with_tools pattern:
+- call_llm_with_tools(): supports tool calls + middleware + streaming
+- parse_json_response(): parses JSON response
+- Does not use with_structured_output (unreliable for some models)
 
-关键：
-- 使用 call_llm_with_tools(streaming=True) 支持 token 流式输出
-- 传入中间件（从 config 获取）支持重试、摘要等功能
-- 当前不需要工具
+Key points:
+- call_llm_with_tools(streaming=True) enables token streaming for frontend
+- Middleware (from config) supports retry, summarization, etc.
+- Currently no tools needed
+
+Error handling:
+- This component does NOT handle errors internally
+- All errors (Pydantic or semantic) are propagated to the Agent
+- Agent routes errors to Observer for correction
+- ValidationError carries original LLM output for Observer to analyze
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ....core.models import Step1Output, Step2Output
+from ....core.exceptions import ValidationError
 from ..prompts.step2 import STEP2_PROMPT
 from tableau_assistant.src.agents.base import (
     get_llm,
@@ -91,9 +98,6 @@ class Step2Component:
             middleware = config["configurable"].get("middleware")
         
         # Call LLM using call_llm_with_tools (supports middleware + streaming)
-        # - tools=[]: No tools needed
-        # - streaming=True: Enable token streaming for frontend
-        # - middleware: Apply retry, summarization, etc.
         llm = self._get_llm()
         response = await call_llm_with_tools(
             llm=llm,
@@ -105,9 +109,16 @@ class Step2Component:
             config=config,
         )
         
-        # Parse JSON response
-        # NOTE: We do NOT do additional validation here.
-        # The validation field is filled by LLM's self-validation.
-        # If validation.all_valid == False, Observer will be triggered.
-        result = parse_json_response(response, Step2Output)
+        # Parse JSON response from AIMessage.content
+        # If validation fails, wrap in ValidationError with original output
+        try:
+            result = parse_json_response(response.content, Step2Output)
+        except ValueError as e:
+            # Wrap error with original output for Observer
+            raise ValidationError(
+                message=str(e),
+                original_output=response.content,
+                step="step2",
+            ) from e
+        
         return result

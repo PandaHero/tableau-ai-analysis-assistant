@@ -1,57 +1,68 @@
 """Observer models - Consistency checking (Metacognition).
 
 Observer is the "Metacognition" phase of the LLM combination architecture.
-It checks consistency between Step 1 and Step 2 outputs when validation fails.
-Only triggered when step2.validation.all_valid == False.
+It handles two scenarios:
+1. Step 1 validation failed - correct filter issues (missing dates, etc.)
+2. Step 2 validation failed - check consistency between Step 1 and Step 2
+
+Triggered when:
+- step1.validation.all_valid == False (Step 1 filter issues)
+- step2.validation.all_valid == False (Step 1/2 consistency issues)
 """
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .computations import Computation
 from .enums import ObserverDecision
-from .step1 import Step1Output
+from .step1 import Step1Output, FilterSpec
 from .step2 import Step2Output
 
 
 class Conflict(BaseModel):
-    """Conflict found between Step 1 and Step 2."""
+    """Conflict found during validation.
+    
+    <what>Describes a specific inconsistency or issue</what>
+    """
     model_config = ConfigDict(extra="forbid")
     
     aspect: str = Field(
         description="""<what>Aspect of the conflict</what>
 <when>ALWAYS required</when>
-<rule>e.g., "target", "partition_by", "operation"</rule>"""
+<examples>filter_completeness, step1_step2_consistency, computation_mismatch</examples>"""
     )
     
     description: str = Field(
         description="""<what>Description of the conflict</what>
-<when>ALWAYS required</when>
-<rule>Explain what is inconsistent</rule>"""
+<when>ALWAYS required</when>"""
     )
     
     step1_value: str = Field(
+        default="",
         description="""<what>Value from Step 1</what>
-<when>ALWAYS required</when>"""
+<when>For consistency checks</when>"""
     )
     
     step2_value: str = Field(
+        default="",
         description="""<what>Value from Step 2</what>
-<when>ALWAYS required</when>"""
+<when>For consistency checks</when>"""
     )
 
 
 class Correction(BaseModel):
-    """Correction made by Observer."""
+    """Correction made by Observer.
+    
+    <what>Details of how to fix a conflict</what>
+    """
     model_config = ConfigDict(extra="forbid")
     
     field: str = Field(
         description="""<what>Field being corrected</what>
-<when>ALWAYS required</when>
-<rule>e.g., "partition_by", "operation.type"</rule>"""
+<when>ALWAYS required</when>"""
     )
     
     original_value: str = Field(
-        description="""<what>Original value from Step 2</what>
+        description="""<what>Original value</what>
 <when>ALWAYS required</when>"""
     )
     
@@ -62,19 +73,40 @@ class Correction(BaseModel):
     
     reason: str = Field(
         description="""<what>Reason for correction</what>
-<when>ALWAYS required</when>
-<rule>Explain why this correction is made</rule>"""
+<when>ALWAYS required</when>"""
+    )
+
+
+class Step1Correction(BaseModel):
+    """Correction for Step 1 output (filter issues).
+    
+    <what>Corrected filters when Step 1 validation fails</what>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    corrected_filters: list[FilterSpec] = Field(
+        description="""<what>Complete list of corrected filters</what>
+<when>ALWAYS required when correcting Step 1</when>
+<rule>Include ALL filters, not just the corrected ones</rule>"""
+    )
+    
+    corrections_made: list[Correction] = Field(
+        default_factory=list,
+        description="""<what>List of corrections applied</what>
+<when>ALWAYS required</when>"""
     )
 
 
 class ObserverInput(BaseModel):
-    """Input to Observer."""
+    """Input to Observer.
+    
+    <what>All information needed for consistency checking</what>
+    """
     model_config = ConfigDict(extra="forbid")
     
     original_question: str = Field(
         description="""<what>Original user question</what>
-<when>ALWAYS required</when>
-<rule>Used to check if restated_question preserved key info</rule>"""
+<when>ALWAYS required</when>"""
     )
     
     step1: Step1Output = Field(
@@ -82,70 +114,76 @@ class ObserverInput(BaseModel):
 <when>ALWAYS required</when>"""
     )
     
-    step2: Step2Output = Field(
+    step2: Step2Output | None = Field(
+        default=None,
         description="""<what>Step 2 output</what>
-<when>ALWAYS required</when>"""
+<when>Only for Step 2 validation failures</when>"""
     )
 
 
 class ObserverOutput(BaseModel):
-    """Observer output: Consistency check result.
+    """Observer output: Validation check result.
     
-    <what>Consistency check + decision + correction</what>
-    
-    Observer checks:
-    1. Restatement completeness: Did restated_question preserve key info from original?
-    2. Structure consistency: Review Step 2's validation results
-    3. Semantic consistency: Does computation match the intent?
+    <what>Validation check + decision + correction</what>
     
     <fill_order>
     1. is_consistent (ALWAYS first)
     2. conflicts (ALWAYS, can be empty)
     3. decision (ALWAYS)
-    4. correction (if decision=CORRECT)
-    5. final_result (if decision=ACCEPT or CORRECT)
+    4. step1_correction (if correcting Step 1 filters)
+    5. correction (if correcting Step 2 computation)
+    6. final_result (if decision=ACCEPT or CORRECT for Step 2)
     </fill_order>
     
     <examples>
-    Consistent: {"is_consistent": true, "conflicts": [], "decision": "ACCEPT", "final_result": {...}}
-    Correctable: {"is_consistent": false, "conflicts": [...], "decision": "CORRECT", "correction": {...}, "final_result": {...}}
+    Step1 filter fix: {"is_consistent": false, "conflicts": [{"aspect": "filter_completeness", ...}], "decision": "CORRECT", "step1_correction": {"corrected_filters": [...]}}
+    Step2 consistent: {"is_consistent": true, "conflicts": [], "decision": "ACCEPT", "final_result": {...}}
+    Step2 correctable: {"is_consistent": false, "conflicts": [...], "decision": "CORRECT", "correction": {...}, "final_result": {...}}
     </examples>
     
     <anti_patterns>
-    ❌ ACCEPT when validation failed
-    ❌ RETRY for minor fixable issues
+    X ACCEPT when any validation check failed
+    X RETRY for minor fixable issues (use CORRECT instead)
+    X CLARIFY when the answer is determinable
     </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
     is_consistent: bool = Field(
-        description="""<what>Whether Step 1 and Step 2 are consistent</what>
-<when>ALWAYS required</when>
-<rule>Check restatement, structure, semantics</rule>"""
+        description="""<what>Whether validation passed</what>
+<when>ALWAYS required</when>"""
     )
     
     conflicts: list[Conflict] = Field(
         default_factory=list,
-        description="""<what>Inconsistencies found</what>
-<when>ALWAYS fill (empty if consistent)</when>"""
+        description="""<what>Issues found</what>
+<when>ALWAYS fill (empty list if consistent)</when>"""
     )
     
     decision: ObserverDecision = Field(
         description="""<what>Action to take</what>
-<when>ALWAYS required</when>
-<rule>All pass→ACCEPT, Small conflict→CORRECT, Large conflict→RETRY, Unclear→CLARIFY</rule>"""
+<when>ALWAYS required</when>"""
     )
     
+    # For Step 1 filter corrections
+    step1_correction: Step1Correction | None = Field(
+        default=None,
+        description="""<what>Corrected Step 1 filters</what>
+<when>ONLY when correcting Step 1 filter issues</when>
+<dependency>decision == CORRECT and step1 validation failed</dependency>"""
+    )
+    
+    # For Step 2 computation corrections (existing)
     correction: Correction | None = Field(
         default=None,
-        description="""<what>Correction details</what>
-<when>ONLY when decision=CORRECT</when>
-<dependency>decision == "CORRECT"</dependency>"""
+        description="""<what>Correction details for Step 2</what>
+<when>ONLY when decision=CORRECT for Step 2</when>
+<dependency>decision == CORRECT and step2 validation failed</dependency>"""
     )
     
     final_result: Computation | None = Field(
         default=None,
         description="""<what>Final computation after correction</what>
-<when>ONLY when decision=ACCEPT or CORRECT</when>
-<dependency>decision in ["ACCEPT", "CORRECT"]</dependency>"""
+<when>ONLY when decision=ACCEPT or CORRECT for Step 2</when>
+<dependency>decision in [ACCEPT, CORRECT] and step2 exists</dependency>"""
     )

@@ -17,6 +17,8 @@ Core Data Models - 平台无关的语义层模型
 # Enums
 from .enums import (
     AggregationType,
+    CalcAggregation,
+    CalcType,
     DateGranularity,
     DateRangeType,
     DimensionCategory,
@@ -26,10 +28,10 @@ from .enums import (
     IntentType,
     MappingSource,
     ObserverDecision,
-    OperationType,
+    RankStyle,
+    RelativeTo,
     SortDirection,
     TextMatchType,
-    OPERATION_TYPE_MAPPING,
 )
 
 # Fields
@@ -41,8 +43,8 @@ from .fields import (
 
 # Computations
 from .computations import (
+    CalcParams,
     Computation,
-    Operation,
 )
 
 # Filters
@@ -62,9 +64,11 @@ from .query import SemanticQuery
 from .step1 import (
     DimensionSpec,
     FilterSpec,
+    FilterValidationCheck,
     Intent,
     MeasureSpec,
     Step1Output,
+    Step1Validation,
     What,
     Where,
 )
@@ -82,6 +86,7 @@ from .observer import (
     Correction,
     ObserverInput,
     ObserverOutput,
+    Step1Correction,
 )
 
 # Parse Result
@@ -152,6 +157,8 @@ from .replan import (
 __all__ = [
     # Enums
     "AggregationType",
+    "CalcAggregation",
+    "CalcType",
     "DateGranularity",
     "DateRangeType",
     "DimensionCategory",
@@ -161,17 +168,17 @@ __all__ = [
     "IntentType",
     "MappingSource",
     "ObserverDecision",
-    "OperationType",
+    "RankStyle",
+    "RelativeTo",
     "SortDirection",
     "TextMatchType",
-    "OPERATION_TYPE_MAPPING",
     # Fields
     "DimensionField",
     "MeasureField",
     "Sort",
     # Computations
+    "CalcParams",
     "Computation",
-    "Operation",
     # Filters
     "DateRangeFilter",
     "Filter",
@@ -184,9 +191,11 @@ __all__ = [
     # Step 1
     "DimensionSpec",
     "FilterSpec",
+    "FilterValidationCheck",
     "Intent",
     "MeasureSpec",
     "Step1Output",
+    "Step1Validation",
     "What",
     "Where",
     # Step 2
@@ -198,6 +207,7 @@ __all__ = [
     "Correction",
     "ObserverInput",
     "ObserverOutput",
+    "Step1Correction",
     # Parse Result
     "ClarificationQuestion",
     "SemanticParseResult",
