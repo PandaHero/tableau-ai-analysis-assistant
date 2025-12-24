@@ -20,7 +20,7 @@ from typing import Dict, Optional, List, Union, Any
 from langgraph.types import RunnableConfig
 from langchain_core.language_models import BaseChatModel
 
-from tableau_assistant.src.orchestration.workflow.state import VizQLState
+from tableau_assistant.src.core.state import VizQLState
 
 # Use new core/models
 from tableau_assistant.src.core.models import (
@@ -30,6 +30,12 @@ from tableau_assistant.src.core.models import (
     Computation,
     AggregationType,
     DateGranularity,
+    Sort,
+    SetFilter,
+    DateRangeFilter,
+    NumericRangeFilter,
+    TextMatchFilter,
+    TopNFilter,
 )
 from tableau_assistant.src.core.models import MappedQuery
 from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQueryModel
@@ -57,18 +63,20 @@ class QueryBuilderNode:
         """
         self._query_builder = TableauQueryBuilder()
     
-    async def build(self, mapped_query: MappedQuery, datasource_luid: str) -> VizQLQueryModel:
+    async def build(self, mapped_query: MappedQuery, datasource_luid: str, field_metadata: Dict[str, Any] = None) -> VizQLQueryModel:
         """
         Build VizQLQuery Pydantic object from MappedQuery.
         
         Args:
             mapped_query: MappedQuery with field mappings
             datasource_luid: Datasource LUID for the query
+            field_metadata: Optional dict mapping field names to metadata (for date type detection)
             
         Returns:
             VizQLQuery Pydantic object ready for execution
         """
         semantic_query = mapped_query.semantic_query
+        field_metadata = field_metadata or {}
         
         # Apply field mappings to semantic query
         mapped_semantic_query = self._apply_field_mappings(
@@ -76,7 +84,7 @@ class QueryBuilderNode:
         )
         
         # Use TableauQueryBuilder to build VizQL request
-        vizql_request = self._query_builder.build(mapped_semantic_query)
+        vizql_request = self._query_builder.build(mapped_semantic_query, field_metadata=field_metadata)
         
         # 确保 datasource 字段存在
         datasource_dict = {"datasourceLuid": datasource_luid}
@@ -86,6 +94,8 @@ class QueryBuilderNode:
             datasource=datasource_dict,
             fields=vizql_request.get("fields", []),
             filters=vizql_request.get("filters"),
+            sorts=vizql_request.get("sorts"),
+            row_limit=vizql_request.get("rowLimit"),
         )
         
         logger.info(f"Built VizQLQuery with {len(vizql_query.fields)} fields for datasource {datasource_luid}")
@@ -153,13 +163,66 @@ class QueryBuilderNode:
                 for c in semantic_query.computations
             ]
         
+        # Map filters
+        mapped_filters = None
+        if semantic_query.filters:
+            mapped_filters = []
+            for f in semantic_query.filters:
+                if isinstance(f, SetFilter):
+                    mapped_filters.append(SetFilter(
+                        field_name=get_tech_field(f.field_name),
+                        values=f.values,
+                        include=f.include,
+                        exclude=f.exclude,
+                    ))
+                elif isinstance(f, DateRangeFilter):
+                    mapped_filters.append(DateRangeFilter(
+                        field_name=get_tech_field(f.field_name),
+                        start_date=f.start_date,
+                        end_date=f.end_date,
+                    ))
+                elif isinstance(f, NumericRangeFilter):
+                    mapped_filters.append(NumericRangeFilter(
+                        field_name=get_tech_field(f.field_name),
+                        min_value=f.min_value,
+                        max_value=f.max_value,
+                    ))
+                elif isinstance(f, TextMatchFilter):
+                    mapped_filters.append(TextMatchFilter(
+                        field_name=get_tech_field(f.field_name),
+                        pattern=f.pattern,
+                        match_type=f.match_type,
+                    ))
+                elif isinstance(f, TopNFilter):
+                    mapped_filters.append(TopNFilter(
+                        field_name=get_tech_field(f.field_name),
+                        n=f.n,
+                        by_field=get_tech_field(f.by_field),
+                        direction=f.direction,
+                    ))
+                else:
+                    # Unknown filter type, keep as is
+                    mapped_filters.append(f)
+        
+        # Map sorts
+        mapped_sorts = None
+        if semantic_query.sorts:
+            mapped_sorts = [
+                Sort(
+                    field_name=get_tech_field(s.field_name),
+                    direction=s.direction,
+                    priority=s.priority,
+                )
+                for s in semantic_query.sorts
+            ]
+        
         # Create new SemanticQuery with mapped fields
         return SemanticQuery(
             dimensions=mapped_dimensions,
             measures=mapped_measures,
             computations=mapped_computations,
-            filters=semantic_query.filters,  # TODO: Map filter fields
-            sorts=semantic_query.sorts,
+            filters=mapped_filters,
+            sorts=mapped_sorts,
             row_limit=semantic_query.row_limit,
         )
 
@@ -203,10 +266,17 @@ async def query_builder_node(
         except Exception as e:
             logger.warning(f"从 config 获取 datasource_luid 失败: {e}")
     
+    # Get data_model for field metadata (used for date type detection)
+    data_model = state.get("data_model")
+    field_metadata = {}
+    if data_model:
+        fields = data_model.get("fields", []) if isinstance(data_model, dict) else getattr(data_model, "fields", [])
+        field_metadata = {f.get("name") if isinstance(f, dict) else getattr(f, "name", ""): f for f in fields}
+    
     try:
         # Build VizQL query
         builder = QueryBuilderNode()
-        vizql_query = await builder.build(mapped_query, datasource_luid)
+        vizql_query = await builder.build(mapped_query, datasource_luid, field_metadata=field_metadata)
         
         logger.info("QueryBuilder node completed successfully")
         return {

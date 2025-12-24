@@ -4,9 +4,12 @@ These types map directly to the VizQL API schema for query construction.
 """
 
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Import base class from core
+from tableau_assistant.src.core.models.query_request import QueryRequest
 
 
 class VizQLFunction(str, Enum):
@@ -159,20 +162,39 @@ class VizQLTopFilter(VizQLFilterBase):
 # VizQL Query Request/Response
 # ═══════════════════════════════════════════════════════════════════════════
 
-class VizQLQueryRequest(BaseModel):
-    """VizQL query request (from OpenAPI QueryRequest)."""
+class VizQLQueryRequest(QueryRequest):
+    """VizQL query request (from OpenAPI QueryRequest).
+    
+    Inherits from QueryRequest base class for platform-agnostic state handling.
+    """
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     
-    datasource: dict = Field(description="Datasource identifier")
-    fields: list[dict] = Field(description="Fields to query")
-    filters: list[dict] | None = Field(default=None, description="Filter conditions")
-    row_limit: int | None = Field(default=None, alias="rowLimit")
+    # Override with VizQL-specific types (same structure, just explicit)
+    datasource: Dict[str, Any] = Field(description="Datasource identifier")
+    fields: List[Dict[str, Any]] = Field(description="Fields to query")
+    filters: Optional[List[Dict[str, Any]]] = Field(default=None, description="Filter conditions")
+    sorts: Optional[List[Dict[str, Any]]] = Field(default=None, description="Sort specifications")
+    row_limit: Optional[int] = Field(default=None, alias="rowLimit")
+    
+    def to_api_dict(self) -> Dict[str, Any]:
+        """Convert to VizQL API request dictionary."""
+        result = {
+            "datasource": self.datasource,
+            "fields": self.fields,
+        }
+        if self.filters:
+            result["filters"] = self.filters
+        if self.sorts:
+            result["sorts"] = self.sorts
+        if self.row_limit is not None:
+            result["rowLimit"] = self.row_limit
+        return result
 
 
 class VizQLQueryResponse(BaseModel):
     """VizQL query response (from OpenAPI QueryOutput)."""
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     
-    columns: list[dict]
-    data: list[list[Any]]
+    columns: List[Dict[str, Any]]
+    data: List[List[Any]]
     row_count: int = Field(alias="rowCount")

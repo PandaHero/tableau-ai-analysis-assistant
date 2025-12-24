@@ -17,7 +17,7 @@ from typing import Dict, List, Literal, Optional, Union
 
 # VizQLState must be imported at runtime because LangGraph's add_conditional_edges
 # calls get_type_hints() to infer the output schema
-from tableau_assistant.src.orchestration.workflow.state import VizQLState, ErrorRecord
+from tableau_assistant.src.core.state import VizQLState, ErrorRecord
 from tableau_assistant.src.core.models import ReplanDecision
 
 logger = logging.getLogger(__name__)

@@ -271,8 +271,8 @@ def create_workflow(
         ... )
         >>> result = workflow.invoke({"question": "2024年各地区销售额"})
     """
-    # Import state from orchestration workflow
-    from tableau_assistant.src.orchestration.workflow.state import VizQLState
+    # Import state from core (avoid circular import)
+    from tableau_assistant.src.core.state import VizQLState
     
     config = {**get_default_config(), **(config or {})}
     

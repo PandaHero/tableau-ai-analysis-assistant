@@ -37,6 +37,9 @@ from tableau_assistant.src.infra.ai.llm import (
     SUPPORTED_LLM_PROVIDERS,
 )
 
+# DeepSeek R1 推理模型
+from tableau_assistant.src.infra.ai.deepseek_r1 import DeepSeekR1Chat
+
 # Embedding 模型管理
 from tableau_assistant.src.infra.ai.embeddings import (
     select_embeddings,
@@ -58,6 +61,7 @@ __all__ = [
     "select_model",
     "get_llm",
     "SUPPORTED_LLM_PROVIDERS",
+    "DeepSeekR1Chat",
     # Embedding
     "select_embeddings",
     "EmbeddingProvider",

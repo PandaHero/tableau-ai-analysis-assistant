@@ -24,7 +24,19 @@ from .enums import (
 
 
 class MeasureSpec(BaseModel):
-    """Measure specification in Step 1 output."""
+    """Measure specification in Step 1 output.
+    
+    <examples>
+    Amount/revenue/sales: {"field": "Sales", "aggregation": "SUM"}
+    Count/quantity/number of items: {"field": "Order ID", "aggregation": "COUNTD"}
+    Average/mean: {"field": "Price", "aggregation": "AVG"}
+    </examples>
+    
+    <anti_patterns>
+    X "order count" with aggregation=SUM (should be COUNTD)
+    X "number of customers" with aggregation=SUM (should be COUNT or COUNTD)
+    </anti_patterns>
+    """
     model_config = ConfigDict(extra="forbid")
     
     field: str = Field(
@@ -34,24 +46,49 @@ class MeasureSpec(BaseModel):
     
     aggregation: AggregationType = Field(
         default=AggregationType.SUM,
-        description="""<what>Aggregation function</what>
-<when>Default SUM</when>"""
+        description="""<what>Aggregation function inferred from user intent</what>
+<when>ALWAYS required</when>"""
+    )
+    
+    sort_direction: SortDirection | None = Field(
+        default=None,
+        description="""<what>Sort direction for this measure</what>
+<when>When user specifies sorting</when>"""
+    )
+    
+    sort_priority: int = Field(
+        default=0,
+        description="""<what>Sort priority (lower = higher priority)</what>
+<when>For multi-measure sorting, 0 = primary sort</when>"""
     )
 
 
 class DimensionSpec(BaseModel):
-    """Dimension specification in Step 1 output."""
+    """Dimension specification in Step 1 output.
+    
+    <examples>
+    Date with granularity: {"field": "Order Date", "granularity": "MONTH"}
+    Non-date dimension: {"field": "Province", "granularity": null}
+    </examples>
+    
+    <anti_patterns>
+    X Using granularity word as field name: {"field": "Month"} (should be {"field": "Order Date", "granularity": "MONTH"})
+    X Missing granularity for time-based grouping: "by month" without granularity=MONTH
+    </anti_patterns>
+    """
     model_config = ConfigDict(extra="forbid")
     
     field: str = Field(
         description="""<what>Business term for the dimension</what>
-<when>ALWAYS required</when>"""
+<when>ALWAYS required</when>
+<rule>Use actual date field name (e.g., "Order Date"), not granularity word (e.g., "Month")</rule>"""
     )
     
     granularity: DateGranularity | None = Field(
         default=None,
         description="""<what>Time granularity for date fields</what>
-<when>ONLY for date/time fields</when>"""
+<when>REQUIRED when user mentions time periods</when>
+<rule>Infer from keywords: by month/monthly/per month -> MONTH | by quarter/quarterly -> QUARTER | by year/yearly/annual -> YEAR | by week/weekly -> WEEK | by day/daily -> DAY</rule>"""
     )
 
 

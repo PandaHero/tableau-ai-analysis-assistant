@@ -24,7 +24,8 @@ import sys
 from typing import Optional
 
 from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, ReplanDecision
-from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery, ExecuteResult
+from tableau_assistant.src.core.models import ExecuteResult
+from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery
 from tableau_assistant.src.orchestration.workflow.executor import NodeOutput, WorkflowEvent, WorkflowResult
 
 # Windows 终端编码修复

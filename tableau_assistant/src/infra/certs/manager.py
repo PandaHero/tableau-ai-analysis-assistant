@@ -262,17 +262,17 @@ class CertificateManager:
                 logger.info(f"服务 {service_id}: 使用现有证书")
                 return
         
-        # 获取证书
-        logger.info(f"获取服务 {service_id} 证书: {hostname}:{config.port}")
+        # 获取完整证书链
+        logger.info(f"获取服务 {service_id} 证书链: {hostname}:{config.port}")
         try:
-            self.fetcher.fetch_server_certificate(
+            self.fetcher.fetch_certificate_chain(
                 hostname,
                 config.port,
                 str(cert_file)
             )
-            logger.info(f"服务 {service_id} 证书已保存: {cert_file}")
+            logger.info(f"服务 {service_id} 证书链已保存: {cert_file}")
         except Exception as e:
-            logger.warning(f"服务 {service_id} 证书获取失败: {e}")
+            logger.warning(f"服务 {service_id} 证书链获取失败: {e}")
     
     def _validate_app_certificates(self) -> bool:
         """验证应用证书"""

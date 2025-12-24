@@ -1,62 +1,61 @@
-"""
-数据模型定义
+"""Data Model Definitions.
 
-定义 Tableau 数据源的完整数据模型，包含：
-- 字段元数据（FieldMetadata）
-- 逻辑表（LogicalTable）
-- 表关系（LogicalTableRelationship）
-- 数据模型（DataModel）
+Defines the complete data model for Tableau data sources, including:
+- FieldMetadata: Field metadata
+- LogicalTable: Logical table
+- LogicalTableRelationship: Table relationship
+- DataModel: Data model
 
-数据模型是最高层次的抽象，包含了数据源的完整结构信息。
+DataModel is the highest level abstraction containing complete structure information.
 
-来自 VizQL API:
-- /read-metadata → 字段元数据
-- /get-datasource-model → 逻辑表和关系
+From VizQL API:
+- /read-metadata -> Field metadata
+- /get-datasource-model -> Logical tables and relationships
 """
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any, Literal
 
 
 class FieldMetadata(BaseModel):
+    """Field metadata model.
+    
+    Describes detailed information for a single field, including basic attributes,
+    statistics, and dimension hierarchy inference results.
+    
+    Supports two data sources:
+    1. GraphQL API: Uses name, role, dataType, aggregation etc.
+    2. VizQL API: Uses fieldName, fieldCaption, columnClass, logicalTableId etc.
     """
-    字段元数据模型
     
-    描述单个字段的详细信息，包括基本属性、统计信息、维度层级推断结果等。
+    # Basic info
+    name: str = Field(..., description="Field name")
+    fieldCaption: str = Field(..., description="Field display name")
+    role: Literal["dimension", "measure"] = Field(..., description="Field role")
+    dataType: str = Field(..., description="Data type: DATE/DATETIME/STRING/INTEGER/REAL etc.")
     
-    支持两种数据来源：
-    1. GraphQL API：使用 name, role, dataType, aggregation 等字段
-    2. VizQL API：使用 fieldName, fieldCaption, columnClass, logicalTableId 等字段
-    """
+    # Optional info
+    dataCategory: Optional[str] = Field(None, description="Data category")
+    aggregation: Optional[str] = Field(None, description="Aggregation method")
+    formula: Optional[str] = Field(None, description="Calculation formula")
+    description: Optional[str] = Field(None, description="Field description")
     
-    # 基本信息
-    name: str = Field(..., description="字段名称")
-    fieldCaption: str = Field(..., description="字段显示名称")
-    role: Literal["dimension", "measure"] = Field(..., description="字段角色")
-    dataType: str = Field(..., description="数据类型：DATE/DATETIME/STRING/INTEGER/REAL等")
+    # VizQL API fields
+    fieldName: Optional[str] = Field(None, description="Underlying database column name")
+    columnClass: Optional[str] = Field(None, description="Field type: COLUMN/BIN/GROUP/CALCULATION/TABLE_CALCULATION")
+    logicalTableId: Optional[str] = Field(None, description="Logical table ID")
+    logicalTableCaption: Optional[str] = Field(None, description="Logical table name")
     
-    # 可选信息
-    dataCategory: Optional[str] = Field(None, description="数据类别")
-    aggregation: Optional[str] = Field(None, description="聚合方式")
-    formula: Optional[str] = Field(None, description="计算公式")
-    description: Optional[str] = Field(None, description="字段描述")
+    # Statistics
+    sample_values: Optional[List[str]] = Field(None, description="Sample values")
+    unique_count: Optional[int] = Field(None, description="Unique value count")
     
-    # VizQL API 字段
-    fieldName: Optional[str] = Field(None, description="底层数据库列名")
-    columnClass: Optional[str] = Field(None, description="字段类型：COLUMN/BIN/GROUP/CALCULATION/TABLE_CALCULATION")
-    logicalTableId: Optional[str] = Field(None, description="所属逻辑表ID")
-    logicalTableCaption: Optional[str] = Field(None, description="所属逻辑表名称")
-    
-    # 统计信息
-    sample_values: Optional[List[str]] = Field(None, description="样本值")
-    unique_count: Optional[int] = Field(None, description="唯一值数量")
-    
-    # 维度层级推断结果（由 dimension_hierarchy_agent 添加）
-    category: Optional[str] = Field(None, description="维度类别（地理/时间/产品/客户/组织/财务/其他）")
-    category_detail: Optional[str] = Field(None, description="详细类别描述")
-    level: Optional[int] = Field(None, description="层级级别（1-5）")
-    granularity: Optional[str] = Field(None, description="粒度描述")
-    parent_dimension: Optional[str] = Field(None, description="父维度字段名")
-    child_dimension: Optional[str] = Field(None, description="子维度字段名")
+    # Dimension hierarchy inference results (added by dimension_hierarchy_agent)
+    category: Optional[str] = Field(None, description="Dimension category (geography/time/product/customer/organization/financial/other)")
+    category_detail: Optional[str] = Field(None, description="Detailed category description")
+    level: Optional[int] = Field(None, description="Hierarchy level (1-5)")
+    granularity: Optional[str] = Field(None, description="Granularity description")
+    parent_dimension: Optional[str] = Field(None, description="Parent dimension field name")
+    child_dimension: Optional[str] = Field(None, description="Child dimension field name")
     
     model_config = ConfigDict(frozen=False, extra="allow")
     
@@ -74,7 +73,7 @@ class FieldMetadata(BaseModel):
         logical_table_caption: Optional[str] = None,
         **kwargs
     ) -> "FieldMetadata":
-        """从 VizQL API 响应创建 FieldMetadata"""
+        """Create FieldMetadata from VizQL API response."""
         return cls(
             name=field_name,
             fieldCaption=field_caption,
@@ -91,76 +90,75 @@ class FieldMetadata(BaseModel):
 
 
 class LogicalTable(BaseModel):
-    """逻辑表"""
-    logicalTableId: str = Field(..., description="逻辑表唯一标识符")
-    caption: str = Field(..., description="逻辑表显示名称")
+    """Logical table."""
+    logicalTableId: str = Field(..., description="Logical table unique identifier")
+    caption: str = Field(..., description="Logical table display name")
     
     model_config = ConfigDict(frozen=False)
 
 
 class LogicalTableRelationship(BaseModel):
-    """逻辑表关系"""
-    fromLogicalTableId: str = Field(..., description="源逻辑表 ID")
-    toLogicalTableId: str = Field(..., description="目标逻辑表 ID")
+    """Logical table relationship."""
+    fromLogicalTableId: str = Field(..., description="Source logical table ID")
+    toLogicalTableId: str = Field(..., description="Target logical table ID")
     
     model_config = ConfigDict(frozen=False)
 
 
 class DataModel(BaseModel):
+    """Data model.
+    
+    Complete data model for a data source, the highest level abstraction.
+    Contains all structure information: logical tables, relationships, field metadata.
     """
-    数据模型
+    # Data source basic info
+    datasource_luid: str = Field(..., description="Data source LUID")
+    datasource_name: str = Field(..., description="Data source name")
+    datasource_description: Optional[str] = Field(None, description="Data source description")
+    datasource_owner: Optional[str] = Field(None, description="Data source owner")
     
-    数据源的完整数据模型，是最高层次的抽象。
-    包含数据源的所有结构信息：逻辑表、表关系、字段元数据。
-    """
-    # 数据源基本信息
-    datasource_luid: str = Field(..., description="数据源 LUID")
-    datasource_name: str = Field(..., description="数据源名称")
-    datasource_description: Optional[str] = Field(None, description="数据源描述")
-    datasource_owner: Optional[str] = Field(None, description="数据源所有者")
+    # Logical table structure (optional, single table scenario may not have)
+    logical_tables: List[LogicalTable] = Field(default_factory=list, description="Logical table list")
+    logical_table_relationships: List[LogicalTableRelationship] = Field(default_factory=list, description="Logical table relationship list")
     
-    # 逻辑表结构（可选，单表场景可能没有）
-    logical_tables: List[LogicalTable] = Field(default_factory=list, description="逻辑表列表")
-    logical_table_relationships: List[LogicalTableRelationship] = Field(default_factory=list, description="逻辑表关系列表")
+    # Field metadata (required)
+    fields: List[FieldMetadata] = Field(..., description="Field metadata list")
+    field_count: int = Field(..., description="Field count")
     
-    # 字段元数据（必需）
-    fields: List[FieldMetadata] = Field(..., description="字段元数据列表")
-    field_count: int = Field(..., description="字段数量")
+    # Dimension hierarchy (optional, inferred by LLM)
+    dimension_hierarchy: Optional[Dict[str, Any]] = Field(None, description="Dimension hierarchy inference result")
     
-    # 维度层级（可选，由 LLM 推断）
-    dimension_hierarchy: Optional[Dict[str, Any]] = Field(None, description="维度层级推断结果")
-    
-    # 原始响应（调试用）
-    raw_response: Optional[Dict[str, Any]] = Field(None, description="原始 API 响应")
+    # Raw response (for debugging)
+    raw_response: Optional[Dict[str, Any]] = Field(None, description="Raw API response")
     
     model_config = ConfigDict(frozen=False, extra="allow")
     
     @property
     def has_logical_tables(self) -> bool:
-        """是否有逻辑表结构"""
+        """Whether has logical table structure."""
         return len(self.logical_tables) > 0
     
     @property
     def is_multi_table(self) -> bool:
-        """是否是多表数据源"""
+        """Whether is multi-table data source."""
         return len(self.logical_tables) > 1
     
     def get_table_caption(self, table_id: str) -> Optional[str]:
-        """通过逻辑表 ID 获取表名"""
+        """Get table name by logical table ID."""
         for table in self.logical_tables:
             if table.logicalTableId == table_id:
                 return table.caption
         return None
     
     def get_table_by_id(self, table_id: str) -> Optional[LogicalTable]:
-        """通过逻辑表 ID 获取逻辑表对象"""
+        """Get logical table object by ID."""
         for table in self.logical_tables:
             if table.logicalTableId == table_id:
                 return table
         return None
     
     def get_related_tables(self, table_id: str) -> List[LogicalTable]:
-        """获取与指定表有关系的所有表"""
+        """Get all tables related to the specified table."""
         related_ids = set()
         for rel in self.logical_table_relationships:
             if rel.fromLogicalTableId == table_id:
@@ -170,32 +168,32 @@ class DataModel(BaseModel):
         return [t for t in self.logical_tables if t.logicalTableId in related_ids]
     
     def get_field(self, field_name: str) -> Optional[FieldMetadata]:
-        """根据字段名查询字段元数据"""
+        """Get field metadata by field name."""
         for field in self.fields:
             if field.name == field_name or field.fieldCaption == field_name:
                 return field
         return None
     
     def get_date_fields(self) -> List[FieldMetadata]:
-        """获取所有日期字段"""
+        """Get all date fields."""
         date_fields = []
         for field in self.fields:
             if field.dataType in ("DATE", "DATETIME"):
                 date_fields.append(field)
-            elif field.category and "时间" in field.category:
+            elif field.category and "time" in field.category.lower():
                 date_fields.append(field)
         return date_fields
     
     def get_dimensions(self) -> List[FieldMetadata]:
-        """获取所有维度字段"""
+        """Get all dimension fields."""
         return [field for field in self.fields if field.role == "dimension"]
     
     def get_measures(self) -> List[FieldMetadata]:
-        """获取所有度量字段"""
+        """Get all measure fields."""
         return [field for field in self.fields if field.role == "measure"]
     
     def get_fields_by_table(self, table_id: str) -> List[FieldMetadata]:
-        """获取指定逻辑表的所有字段"""
+        """Get all fields for a specific logical table."""
         return [field for field in self.fields if field.logicalTableId == table_id]
 
 

@@ -27,5 +27,5 @@ __all__ = [
     "STEP2_PROMPT",
     "STEP1_OBSERVER_PROMPT",
     "STEP2_OBSERVER_PROMPT",
-    "OBSERVER_PROMPT",
+    "OBSERVER_PROMPT",  # Backward compatibility alias for STEP2_OBSERVER_PROMPT
 ]

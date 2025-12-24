@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 
 from langgraph.types import RunnableConfig
 
-from tableau_assistant.src.orchestration.workflow.state import VizQLState
+from tableau_assistant.src.core.state import VizQLState
 from .corrector import QueryCorrector, CorrectionResult, ErrorCategory
 
 logger = logging.getLogger(__name__)
@@ -265,8 +265,7 @@ class SelfCorrectionNode:
             )
             
             # 解析响应
-            import re
-            content = response.content if hasattr(response, 'content') else str(response)
+            content = response.content
             
             # 提取 JSON
             json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)

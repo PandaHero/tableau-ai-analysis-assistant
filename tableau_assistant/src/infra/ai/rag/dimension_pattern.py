@@ -392,7 +392,7 @@ class DimensionPatternStore:
             if pattern_id not in self._pattern_ids:
                 self._pattern_ids.append(pattern_id)
             
-            logger.info(f"已存储维度模式: {field_caption} -> {category}/{level}")
+            # logger.info(f"已存储维度模式: {field_caption} -> {category}/{level}")
             return pattern
             
         except Exception as e:

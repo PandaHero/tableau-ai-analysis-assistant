@@ -704,6 +704,7 @@ async def get_datasource_metadata(
     import logging
     from tableau_assistant.src.core.models import (
         DataModel,
+        FieldMetadata,
         LogicalTable,
         LogicalTableRelationship,
     )
@@ -771,8 +772,14 @@ async def get_datasource_metadata(
                     for r in data_model_dict.get("logicalTableRelationships", [])
                 ]
                 data_model = DataModel(
-                    logicalTables=logical_tables,
-                    logicalTableRelationships=relationships
+                    datasource_luid=datasource_luid,
+                    datasource_name=metadata.get("datasource_name", "Unknown"),
+                    datasource_description=metadata.get("datasource_description"),
+                    datasource_owner=metadata.get("datasource_owner"),
+                    logical_tables=logical_tables,
+                    logical_table_relationships=relationships,
+                    fields=[FieldMetadata(**f) for f in standardized_fields],
+                    field_count=len(standardized_fields),
                 )
                 logger.info(f"解析数据模型: {len(logical_tables)} 个逻辑表, {len(relationships)} 个关系")
             except Exception as e:

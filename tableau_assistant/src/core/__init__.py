@@ -6,6 +6,7 @@ that can be adapted to any BI platform (Tableau, Power BI, Superset, etc.).
 Modules:
     models: Core data models (SemanticQuery, Computation, Step1Output, etc.)
     interfaces: Abstract base classes for platform adapters
+    state: Workflow state types (VizQLState, etc.)
 """
 
 from .interfaces import (
@@ -16,23 +17,25 @@ from .interfaces import (
 from .models import (
     # Enums
     AggregationType,
+    CalcAggregation,
+    CalcType,
     DateGranularity,
     DateRangeType,
     FilterType,
     HowType,
     IntentType,
     ObserverDecision,
-    OperationType,
+    RankStyle,
+    RelativeTo,
     SortDirection,
     TextMatchType,
-    OPERATION_TYPE_MAPPING,
     # Fields
     DimensionField,
     MeasureField,
     Sort,
     # Computations
+    CalcParams,
     Computation,
-    Operation,
     # Filters
     DateRangeFilter,
     Filter,
@@ -68,6 +71,18 @@ from .models import (
     ValidationError,
     ValidationErrorType,
     ValidationResult,
+    # Execute Result
+    ExecuteResult,
+    # Query Request
+    QueryRequest,
+)
+from .state import (
+    VizQLState,
+    VizQLInput,
+    VizQLOutput,
+    create_initial_state,
+    ErrorRecord,
+    WarningRecord,
 )
 
 __all__ = [
@@ -77,23 +92,25 @@ __all__ = [
     "BaseQueryBuilder",
     # Enums
     "AggregationType",
+    "CalcAggregation",
+    "CalcType",
     "DateGranularity",
     "DateRangeType",
     "FilterType",
     "HowType",
     "IntentType",
     "ObserverDecision",
-    "OperationType",
+    "RankStyle",
+    "RelativeTo",
     "SortDirection",
     "TextMatchType",
-    "OPERATION_TYPE_MAPPING",
     # Fields
     "DimensionField",
     "MeasureField",
     "Sort",
     # Computations
+    "CalcParams",
     "Computation",
-    "Operation",
     # Filters
     "DateRangeFilter",
     "Filter",
@@ -129,4 +146,13 @@ __all__ = [
     "ValidationError",
     "ValidationErrorType",
     "ValidationResult",
+    # Execute Result
+    "ExecuteResult",
+    # State
+    "VizQLState",
+    "VizQLInput",
+    "VizQLOutput",
+    "create_initial_state",
+    "ErrorRecord",
+    "WarningRecord",
 ]

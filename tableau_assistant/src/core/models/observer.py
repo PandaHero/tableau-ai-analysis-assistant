@@ -61,14 +61,17 @@ class Correction(BaseModel):
 <when>ALWAYS required</when>"""
     )
     
-    original_value: str = Field(
-        description="""<what>Original value</what>
-<when>ALWAYS required</when>"""
+    original_value: str | int | None = Field(
+        default=None,
+        description="""<what>Original value (as string)</what>
+<when>ALWAYS required</when>
+<rule>Convert to string if needed, use "null" for None</rule>"""
     )
     
-    corrected_value: str = Field(
-        description="""<what>Corrected value</what>
-<when>ALWAYS required</when>"""
+    corrected_value: str | int | None = Field(
+        description="""<what>Corrected value (as string)</what>
+<when>ALWAYS required</when>
+<rule>Convert to string if needed</rule>"""
     )
     
     reason: str = Field(

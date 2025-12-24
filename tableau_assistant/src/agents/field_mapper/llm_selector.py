@@ -159,8 +159,8 @@ class LLMCandidateSelector:
                 config=config,
             )
             
-            # Parse JSON response
-            result = parse_json_response(response, SingleSelectionResult)
+            # Parse JSON response from AIMessage.content
+            result = parse_json_response(response.content, SingleSelectionResult)
             
             # 验证 LLM 选择的字段是否在候选列表中
             # 如果不在，回退到 RAG 的第一个候选

@@ -190,7 +190,7 @@ async def _call_llm_with_tools_and_middleware(
     middleware: List[Any],
     state: Dict[str, Any],
     config: Optional[Dict[str, Any]],
-) -> str:
+) -> AIMessage:
     """
     带 middleware 支持的 LLM 调用（内部函数）
     
@@ -200,6 +200,9 @@ async def _call_llm_with_tools_and_middleware(
     3. after_model hooks
     4. 如果有 tool_calls，执行 wrap_tool_call chain
     5. 循环直到没有 tool_calls 或达到 max_iterations
+    
+    Returns:
+        AIMessage: 完整的 LLM 响应消息
     """
     from tableau_assistant.src.agents.base.middleware_runner import (
         MiddlewareRunner,
@@ -215,7 +218,7 @@ async def _call_llm_with_tools_and_middleware(
     langchain_messages = convert_messages(messages)
     
     # 构建工具映射
-    tool_map = {tool.name: tool for tool in tools}
+    tool_map = {tool.name: tool for tool in tools} if tools else {}
     
     # 迭代处理
     for iteration in range(max_iterations):
@@ -230,15 +233,16 @@ async def _call_llm_with_tools_and_middleware(
             _llm = request.model
             _msgs = request.messages
             
-            # 绑定工具
+            # 绑定工具（如果有的话）
             if request.tools:
                 _llm = _llm.bind_tools(request.tools)
             
             # 调用 LLM
+            # 传递 config 以便 LangGraph 的 callbacks 能捕获流式事件
             if streaming:
-                response = await _stream_llm_call_internal(_llm, _msgs)
+                response = await _stream_llm_call_internal(_llm, _msgs, config=config)
             else:
-                response = await _llm.ainvoke(_msgs)
+                response = await _llm.ainvoke(_msgs, config=config)
             
             return runner.build_model_response(
                 result=[response] if isinstance(response, AIMessage) else [response],
@@ -273,7 +277,7 @@ async def _call_llm_with_tools_and_middleware(
         # 检查是否有工具调用
         if not response.tool_calls:
             logger.debug("No tool calls, returning response (with middleware)")
-            return response.content
+            return response
         
         # 4. 处理工具调用（通过 wrap_tool_call 链）
         for tool_call in response.tool_calls:
@@ -306,10 +310,10 @@ async def _call_llm_with_tools_and_middleware(
     logger.warning(f"Max iterations ({max_iterations}) reached (with middleware)")
     
     for msg in reversed(langchain_messages):
-        if hasattr(msg, 'content') and msg.content:
-            return msg.content
+        if isinstance(msg, AIMessage):
+            return msg
     
-    return ""
+    return AIMessage(content="")
 
 
 async def call_llm_with_tools(
@@ -322,14 +326,17 @@ async def call_llm_with_tools(
     middleware: Optional[List[Any]] = None,
     state: Optional[Dict[str, Any]] = None,
     config: Optional[Dict[str, Any]] = None,
-) -> str:
+) -> AIMessage:
     """
-    调用 LLM 并处理工具调用
+    调用 LLM 并处理工具调用，返回完整的 AIMessage
     
     这是 Agent 节点的核心函数，处理 LLM 与工具的交互循环。
     默认使用流式调用，以便 LangGraph 的 astream_events 能捕获 token 事件。
     
-    支持 middleware 参数，当提供时会创建 MiddlewareRunner 并应用所有钩子。
+    返回完整的 AIMessage，包含：
+    - content: 响应内容
+    - additional_kwargs: 额外信息（如 R1 模型的思考过程 "thinking"）
+    - tool_calls: 工具调用信息
     
     Args:
         llm: LLM 实例
@@ -342,24 +349,22 @@ async def call_llm_with_tools(
         config: 可选的 LangGraph RunnableConfig（用于 middleware）
     
     Returns:
-        LLM 最终响应内容（字符串）
+        AIMessage: 完整的 LLM 响应消息
+        - response.content: 响应内容（字符串）
+        - response.additional_kwargs.get("thinking"): R1 模型的思考过程
     
     Example:
-        llm = get_llm(temperature=0.1)  # 或 get_llm(agent_name="semantic_parser")
-        tools = [get_metadata, calculate_date_range]
+        llm = get_llm(agent_name="semantic_parser")
         messages = MY_PROMPT.format_messages(question="各省份销售额")
         
-        # 不带 middleware
-        response = await call_llm_with_tools(llm, messages, tools)
-        result = parse_json_response(response, SemanticQuery)
+        response = await call_llm_with_tools(llm, messages, tools=[])
         
-        # 带 middleware
-        response = await call_llm_with_tools(
-            llm, messages, tools,
-            middleware=middleware_stack,
-            state=state,
-            config=config,
-        )
+        # 获取响应内容
+        content = response.content
+        result = parse_json_response(content, SemanticQuery)
+        
+        # 获取思考过程（R1 模型）
+        thinking = response.additional_kwargs.get("thinking", "")
     """
     # 如果提供了 middleware，使用 MiddlewareRunner
     if middleware:
@@ -374,14 +379,14 @@ async def call_llm_with_tools(
             config=config,
         )
     
-    # 绑定工具到 LLM
-    llm_with_tools = llm.bind_tools(tools)
+    # 绑定工具到 LLM（如果有工具的话）
+    llm_with_tools = llm.bind_tools(tools) if tools else llm
     
     # 转换消息格式
     langchain_messages = convert_messages(messages)
     
     # 构建工具映射（用于快速查找）
-    tool_map = {tool.name: tool for tool in tools}
+    tool_map = {tool.name: tool for tool in tools} if tools else {}
     
     # 迭代处理工具调用
     for iteration in range(max_iterations):
@@ -389,10 +394,11 @@ async def call_llm_with_tools(
         
         if streaming:
             # 流式调用 - 支持 token 级别输出
-            response = await _stream_llm_call_internal(llm_with_tools, langchain_messages)
+            # 传递 config 以便 LangGraph 的 callbacks 能捕获流式事件
+            response = await _stream_llm_call_internal(llm_with_tools, langchain_messages, config=config)
         else:
             # 非流式调用
-            response = await llm_with_tools.ainvoke(langchain_messages)
+            response = await llm_with_tools.ainvoke(langchain_messages, config=config)
         
         langchain_messages.append(response)
         
@@ -400,7 +406,7 @@ async def call_llm_with_tools(
         if not response.tool_calls:
             # 没有工具调用，返回最终响应
             logger.debug("No tool calls, returning response")
-            return response.content
+            return response
         
         # 处理工具调用
         for tool_call in response.tool_calls:
@@ -434,62 +440,66 @@ async def call_llm_with_tools(
     # 达到最大迭代次数
     logger.warning(f"Max iterations ({max_iterations}) reached")
     
-    # 返回最后一条消息的内容
+    # 返回最后一条 AIMessage
     for msg in reversed(langchain_messages):
-        if hasattr(msg, 'content') and msg.content:
-            return msg.content
+        if isinstance(msg, AIMessage):
+            return msg
     
-    return ""
+    return AIMessage(content="")
 
 
 async def _stream_llm_call_internal(
     llm: BaseChatModel,
     messages: List,
+    config: Optional[Dict[str, Any]] = None,
 ) -> AIMessage:
     """
     内部流式调用 LLM，返回完整的 AIMessage
     
-    使用 astream_events 而不是 ainvoke，这样 LangGraph 的外层 astream_events 
-    能够捕获到 on_chat_model_stream 事件，实现 token 级别的流式输出。
+    使用 astream 进行流式调用，收集所有 chunk 后合并为完整的 AIMessage。
+    通过传递 config 参数，LangGraph 的 astream_events 能捕获 token 事件。
     
-    关键：LangGraph 的事件传播机制会将内部 LLM 调用的事件冒泡到外层，
-    所以在节点内部使用 astream_events 调用 LLM，外层的 workflow.astream_events
-    就能捕获到 token 事件。
+    对于 R1 模型：
+    - 流式输出包含思考过程和最终答案
+    - 最后一个 chunk 的 additional_kwargs 包含解析后的 thinking 和 raw_content
+    - 返回的 content 应该是最终答案（不含思考过程）
     
     Args:
-        llm: 已绑定工具的 LLM 实例
+        llm: LLM 实例（可能已绑定工具）
         messages: LangChain 消息列表
+        config: LangGraph RunnableConfig（包含 callbacks，用于流式事件捕获）
     
     Returns:
-        完整的 AIMessage（包含 content 和 tool_calls）
+        完整的 AIMessage（包含 content、tool_calls 和 additional_kwargs）
     """
     collected_content = []
     tool_calls = []
+    additional_kwargs = {}
     
-    # 使用 astream_events 以便事件能被 LangGraph 捕获
-    async for event in llm.astream_events(messages, version="v2"):
-        event_type = event.get("event")
+    # 使用 astream 进行流式调用
+    # 关键：传递 config 参数，使 LangGraph 的 callbacks 能捕获流式事件
+    async for chunk in llm.astream(messages, config=config):
+        # 收集 content（同时 LangGraph 会捕获这些 chunk 作为事件）
+        if hasattr(chunk, "content") and chunk.content:
+            collected_content.append(chunk.content)
         
-        if event_type == "on_chat_model_stream":
-            chunk = event.get("data", {}).get("chunk")
-            if chunk:
-                # 收集 content
-                if hasattr(chunk, "content") and chunk.content:
-                    collected_content.append(chunk.content)
+        # 收集 additional_kwargs（R1 模型的思考过程在最后一个 chunk）
+        if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
+            additional_kwargs.update(chunk.additional_kwargs)
+        
+        # 收集 tool_calls（流式累积）
+        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+            for tc_chunk in chunk.tool_call_chunks:
+                tc_index = tc_chunk.get("index", 0)
+                while len(tool_calls) <= tc_index:
+                    tool_calls.append({"name": "", "args": "", "id": ""})
                 
-                # 收集 tool_calls（流式累积）
-                if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                    for tc_chunk in chunk.tool_call_chunks:
-                        tc_index = tc_chunk.get("index", 0)
-                        while len(tool_calls) <= tc_index:
-                            tool_calls.append({"name": "", "args": "", "id": ""})
-                        
-                        if tc_chunk.get("name"):
-                            tool_calls[tc_index]["name"] = tc_chunk["name"]
-                        if tc_chunk.get("id"):
-                            tool_calls[tc_index]["id"] = tc_chunk["id"]
-                        if tc_chunk.get("args"):
-                            tool_calls[tc_index]["args"] += tc_chunk["args"]
+                if tc_chunk.get("name"):
+                    tool_calls[tc_index]["name"] = tc_chunk["name"]
+                if tc_chunk.get("id"):
+                    tool_calls[tc_index]["id"] = tc_chunk["id"]
+                if tc_chunk.get("args"):
+                    tool_calls[tc_index]["args"] += tc_chunk["args"]
     
     # 解析 tool_calls 的 args（从字符串到字典）
     import json as json_module
@@ -506,9 +516,21 @@ async def _stream_llm_call_internal(
                 "id": tc["id"],
             })
     
+    # 确定最终的 content
+    # 对于 R1 模型，additional_kwargs 中有 answer 字段，直接使用
+    # 对于其他模型，使用收集的 content
+    full_content = "".join(collected_content)
+    
+    if "answer" in additional_kwargs:
+        # R1 模型：使用解析后的答案
+        final_content = additional_kwargs["answer"]
+    else:
+        final_content = full_content
+    
     return AIMessage(
-        content="".join(collected_content),
-        tool_calls=parsed_tool_calls
+        content=final_content,
+        tool_calls=parsed_tool_calls,
+        additional_kwargs=additional_kwargs,
     )
 
 

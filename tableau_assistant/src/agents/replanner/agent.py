@@ -169,7 +169,7 @@ class ReplannerAgent:
             )
             
             # 解析响应
-            decision = self._parse_response(response)
+            decision = self._parse_response(response.content)
             
             # 限制每轮问题数量
             if decision.exploration_questions:

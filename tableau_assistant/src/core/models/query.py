@@ -36,8 +36,8 @@ class SemanticQuery(BaseModel):
     </fill_order>
     
     <examples>
-    Simple query: {"dimensions": [{"field_name": "省份"}], "measures": [{"field_name": "销售额"}]}
-    With computation: {"dimensions": [...], "measures": [...], "computations": [{"target": "销售额", "partition_by": [], "operation": {"type": "RANK"}}]}
+    Simple: {"dimensions": [{"field_name": "Province"}], "measures": [{"field_name": "Sales"}]}
+    With computation: {"dimensions": [...], "measures": [...], "computations": [{"target": "Sales", "calc_type": "RANK", "partition_by": ["Month"]}]}
     </examples>
     """
     model_config = ConfigDict(extra="forbid")

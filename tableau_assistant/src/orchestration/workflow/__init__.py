@@ -43,7 +43,8 @@ from tableau_assistant.src.orchestration.workflow.context import (
     get_context,
     get_context_or_raise,
 )
-from tableau_assistant.src.orchestration.workflow.state import (
+# Import state from core (canonical location) - state.py re-exports for backward compatibility
+from tableau_assistant.src.core.state import (
     VizQLState,
     VizQLInput,
     VizQLOutput,

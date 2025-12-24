@@ -431,6 +431,11 @@ async def generate_sse_events(
     - complete: 工作流完成
     - error: 错误
     
+    SSE 格式说明：
+    - 每个事件以 "data: " 开头
+    - 事件之间用两个换行符分隔
+    - token 事件会立即发送，不做缓冲
+    
     Args:
         question: 用户问题
         session_id: 会话ID
@@ -440,30 +445,48 @@ async def generate_sse_events(
     Yields:
         SSE格式的事件字符串
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
         executor = WorkflowExecutor(
             datasource_luid=datasource_luid,
             tableau_domain=tableau_domain,
         )
         
+        token_count = 0
+        
         async for event in executor.stream(question, thread_id=session_id):
             # 转换为前端友好的格式
-            sse_event = StreamEvent(
-                event_type=event.type.value,
-                data={
-                    "node": event.node_name,
-                    "content": event.content,
-                    "output": event.output.model_dump() if event.output else None,
-                },
-                timestamp=event.timestamp
-            )
-            yield f"data: {sse_event.model_dump_json()}\n\n"
+            if event.type == EventType.TOKEN:
+                # Token 事件：精简格式，减少传输开销
+                token_count += 1
+                sse_data = {
+                    "event_type": "token",
+                    "data": {"content": event.content, "node": event.node_name},
+                    "timestamp": event.timestamp
+                }
+                yield f"data: {json.dumps(sse_data, ensure_ascii=False)}\n\n"
+            else:
+                # 其他事件：完整格式
+                sse_event = StreamEvent(
+                    event_type=event.type.value,
+                    data={
+                        "node": event.node_name,
+                        "content": event.content,
+                        "output": event.output.model_dump() if event.output else None,
+                    },
+                    timestamp=event.timestamp
+                )
+                yield f"data: {sse_event.model_dump_json()}\n\n"
             
             # 完成或错误时结束
             if event.type in (EventType.COMPLETE, EventType.ERROR):
+                logger.info(f"SSE 流结束: {event.type.value}, 共输出 {token_count} 个 token")
                 break
                 
     except Exception as e:
+        logger.error(f"SSE 生成错误: {e}", exc_info=True)
         error_event = StreamEvent(
             event_type="error",
             data={"message": str(e)},

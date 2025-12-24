@@ -153,6 +153,19 @@ from .replan import (
     ReplanDecision,
 )
 
+# Execute Result
+from .execute_result import (
+    ExecuteResult,
+    ColumnMetadata,
+    RowData,
+    RowValue,
+)
+
+# Query Request (abstract base)
+from .query_request import (
+    QueryRequest,
+)
+
 
 __all__ = [
     # Enums
@@ -251,4 +264,11 @@ __all__ = [
     # Replan
     "ExplorationQuestion",
     "ReplanDecision",
+    # Execute Result
+    "ExecuteResult",
+    "ColumnMetadata",
+    "RowData",
+    "RowValue",
+    # Query Request
+    "QueryRequest",
 ]

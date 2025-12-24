@@ -34,45 +34,34 @@ class Step1Prompt(VizQLPrompt):
 Expertise: Question restatement, Three-element model extraction, Intent classification"""
 
     def get_task(self) -> str:
-        return """Restate user's follow-up question as a complete, standalone question.
+        return """Restate user's follow-up question as complete, standalone question.
 
-Process: Merge history context -> Extract What/Where/How -> Classify intent -> Generate restatement"""
+Process: Merge history → Extract What/Where/How → Classify intent → Generate restatement"""
 
     def get_specific_domain_knowledge(self) -> str:
         return """**Three-Element Model**
-
 Query = What × Where × How
 - What: Target measures + aggregation
 - Where: Dimensions + filters
-- How: SIMPLE | RANKING | CUMULATIVE | COMPARISON | GRANULARITY
+- How: SIMPLE (no computation) | COMPLEX (needs Step 2)
 
 **Think step by step:**
-
-Step 1: Understand user intent - What does the user want to know?
-Step 2: Extract business entities - Use exact terms from question
-Step 3: Classify entity roles - Dimension vs Measure
-Step 4: Detect date/time constraints as filters
-Step 5: Detect analysis type from keywords (排名/占比/同比/累计)
-Step 6: Preserve partition intent (每月/当月/全国)
+Step 1: Understand user intent
+Step 2: Extract business entities (use exact terms from question)
+Step 3: Classify entity roles (dimension vs measure)
+Step 4: Detect if complex computation needed (ranking, running total, LOD, etc.)
+Step 5: Preserve partition intent (per month/within month etc.)
 
 **Intent Classification**
-
 - DATA_QUERY: Has queryable fields, info complete
 - CLARIFICATION: References unspecified values
 - GENERAL: Asks about metadata/fields
-- IRRELEVANT: Not about data analysis
-
-**Merge Rules (for follow-up questions):**
-
-- Current mentions explicitly → Use current value
-- Current doesn't mention → Inherit from history
-- Current modifies → Replace corresponding element
-- Current adds → Merge with history"""
+- IRRELEVANT: Not about data analysis"""
 
     def get_constraints(self) -> str:
-        return """MUST: Preserve partition intent, Use exact terms from user question, Provide reasoning
-MUST NOT: Lose partition keywords, Invent fields, Classify as DATA_QUERY if incomplete
-MUST NOT: Select field names from metadata - extract exact terms from user question only (field mapping is done later by FieldMapper)"""
+        return """MUST: Preserve partition intent, Use business terms, Provide reasoning
+MUST: Output restated_question in the SAME LANGUAGE as the user's question
+MUST NOT: Lose partition keywords, Invent fields, Classify as DATA_QUERY if incomplete"""
 
     def get_user_template(self) -> str:
         return """**Current Question:** {question}
@@ -81,7 +70,7 @@ MUST NOT: Select field names from metadata - extract exact terms from user quest
 {history}
 
 **Available Fields (for reference):**
-{metadata}
+{data_model}
 
 **Current Time:** {current_time}
 
@@ -94,8 +83,4 @@ Please analyze this question and output Step1Output JSON."""
 # Create prompt instance
 STEP1_PROMPT = Step1Prompt()
 
-# Legacy constants for backward compatibility
-STEP1_SYSTEM_PROMPT = STEP1_PROMPT.get_system_message()
-STEP1_USER_TEMPLATE = STEP1_PROMPT.get_user_template()
-
-__all__ = ["Step1Prompt", "STEP1_PROMPT", "STEP1_SYSTEM_PROMPT", "STEP1_USER_TEMPLATE"]
+__all__ = ["Step1Prompt", "STEP1_PROMPT"]

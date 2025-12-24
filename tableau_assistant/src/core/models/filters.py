@@ -9,8 +9,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from .enums import (
-    DateGranularity,
-    DateRangeType,
     FilterType,
     SortDirection,
     TextMatchType,
@@ -39,7 +37,10 @@ class Filter(BaseModel):
 class SetFilter(Filter):
     """Set filter - filter by specific values.
     
-    Example: "只看北京和上海" → SetFilter(field_name="城市", values=["北京", "上海"])
+    <examples>
+    Include: SetFilter(field_name="City", values=["Beijing", "Shanghai"])
+    Exclude: SetFilter(field_name="Region", values=["North"], exclude=True)
+    </examples>
     """
     filter_type: FilterType = Field(default=FilterType.SET)
     
@@ -53,14 +54,14 @@ class SetFilter(Filter):
         default=False,
         description="""<what>Whether to exclude these values</what>
 <when>Default False (include)</when>
-<rule>排除/不包括→True, 只看/包括→False</rule>"""
+<rule>exclude/not include -> True, only/include -> False</rule>"""
     )
     
     include: bool = Field(
         default=True,
         description="""<what>Whether to include these values (opposite of exclude)</what>
 <when>Default True</when>
-<rule>只看/包括→True, 排除/不包括→False</rule>"""
+<rule>only/include -> True, exclude/not include -> False</rule>"""
     )
     
     def model_post_init(self, __context) -> None:
@@ -76,50 +77,36 @@ class SetFilter(Filter):
 class DateRangeFilter(Filter):
     """Date range filter - filter by date range.
     
-    Supports both relative (last month, this year) and absolute (2024-01-01 to 2024-12-31) ranges.
+    Uses concrete start_date and end_date values.
+    LLM calculates these based on user intent and current_time.
+    
+    <examples>
+    Year 2024: DateRangeFilter(field_name="Order Date", start_date="2024-01-01", end_date="2024-12-31")
+    Last month (Dec 2024): DateRangeFilter(field_name="Order Date", start_date="2024-11-01", end_date="2024-11-30")
+    </examples>
     """
     filter_type: FilterType = Field(default=FilterType.DATE_RANGE)
     
-    range_type: DateRangeType = Field(
-        description="""<what>Type of date range</what>
-<when>ALWAYS required</when>
-<rule>
-- 本月/当月→CURRENT, 上月→PREVIOUS
-- 最近N月→PREVIOUS_N, 年初至今→TO_DATE
-- 具体日期→CUSTOM
-</rule>"""
-    )
-    
     start_date: date | None = Field(
         default=None,
-        description="""<what>Start date for CUSTOM range</what>
-<when>ONLY when range_type=CUSTOM</when>"""
+        description="""<what>Start date of the range</what>
+<when>REQUIRED for date filtering</when>"""
     )
     
     end_date: date | None = Field(
         default=None,
-        description="""<what>End date for CUSTOM range</what>
-<when>ONLY when range_type=CUSTOM</when>"""
-    )
-    
-    n: int | None = Field(
-        default=None,
-        description="""<what>Number of periods for PREVIOUS_N/NEXT_N</what>
-<when>ONLY when range_type=PREVIOUS_N or NEXT_N</when>"""
-    )
-    
-    granularity: DateGranularity = Field(
-        default=DateGranularity.MONTH,
-        description="""<what>Granularity for relative ranges</what>
-<when>For relative date ranges</when>
-<rule>最近3个月→MONTH, 最近2年→YEAR</rule>"""
+        description="""<what>End date of the range</what>
+<when>REQUIRED for date filtering</when>"""
     )
 
 
 class NumericRangeFilter(Filter):
     """Numeric range filter - filter by numeric range.
     
-    Example: "销售额大于1000" → NumericRangeFilter(field_name="销售额", min_value=1000)
+    <examples>
+    Greater than: NumericRangeFilter(field_name="Sales", min_value=1000, include_min=False)
+    Range: NumericRangeFilter(field_name="Price", min_value=10, max_value=100)
+    </examples>
     """
     filter_type: FilterType = Field(default=FilterType.NUMERIC_RANGE)
     
@@ -139,21 +126,24 @@ class NumericRangeFilter(Filter):
         default=True,
         description="""<what>Include minimum value</what>
 <when>Default True (>=)</when>
-<rule>大于→False, 大于等于→True</rule>"""
+<rule>greater than -> False, greater than or equal -> True</rule>"""
     )
     
     include_max: bool = Field(
         default=True,
         description="""<what>Include maximum value</what>
 <when>Default True (<=)</when>
-<rule>小于→False, 小于等于→True</rule>"""
+<rule>less than -> False, less than or equal -> True</rule>"""
     )
 
 
 class TextMatchFilter(Filter):
     """Text match filter - filter by text pattern.
     
-    Example: "产品名包含'手机'" → TextMatchFilter(field_name="产品名", pattern="手机", match_type=CONTAINS)
+    <examples>
+    Contains: TextMatchFilter(field_name="ProductName", pattern="Phone", match_type=CONTAINS)
+    Starts with: TextMatchFilter(field_name="Category", pattern="Tech", match_type=STARTS_WITH)
+    </examples>
     """
     filter_type: FilterType = Field(default=FilterType.TEXT_MATCH)
     
@@ -165,15 +155,17 @@ class TextMatchFilter(Filter):
     match_type: TextMatchType = Field(
         default=TextMatchType.CONTAINS,
         description="""<what>Type of text matching</what>
-<when>Default CONTAINS</when>
-<rule>包含→CONTAINS, 开头→STARTS_WITH, 结尾→ENDS_WITH, 精确→EXACT</rule>"""
+<when>Default CONTAINS</when>"""
     )
 
 
 class TopNFilter(Filter):
     """Top N filter - filter to top/bottom N records.
     
-    Example: "销售额前10的产品" → TopNFilter(field_name="产品", n=10, by_field="销售额")
+    <examples>
+    Top 10: TopNFilter(field_name="Product", n=10, by_field="Sales")
+    Bottom 5: TopNFilter(field_name="Region", n=5, by_field="Revenue", direction=ASC)
+    </examples>
     """
     filter_type: FilterType = Field(default=FilterType.TOP_N)
     
@@ -191,6 +183,5 @@ class TopNFilter(Filter):
     direction: SortDirection = Field(
         default=SortDirection.DESC,
         description="""<what>Sort direction for ranking</what>
-<when>Default DESC (top N)</when>
-<rule>前N/Top N→DESC, 后N/Bottom N→ASC</rule>"""
+<when>Default DESC (top N)</when>"""
     )

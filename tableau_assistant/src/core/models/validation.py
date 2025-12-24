@@ -25,20 +25,25 @@ class ValidationError(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     error_type: ValidationErrorType = Field(
-        description="Type of validation error"
+        description="""<what>Type of validation error</what>
+<when>ALWAYS required</when>"""
     )
     
     field_path: str = Field(
-        description="Path to the field with error, e.g., 'computations[0].partition_by'"
+        description="""<what>Path to the field with error</what>
+<when>ALWAYS required</when>
+<rule>Use dot notation, e.g., 'computations[0].partition_by'</rule>"""
     )
     
     message: str = Field(
-        description="Human-readable error message"
+        description="""<what>Human-readable error message</what>
+<when>ALWAYS required</when>"""
     )
     
     suggestion: str | None = Field(
         default=None,
-        description="Suggested fix for the error"
+        description="""<what>Suggested fix for the error</what>
+<when>Optional, when fix is known</when>"""
     )
 
 
@@ -50,22 +55,26 @@ class ValidationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     is_valid: bool = Field(
-        description="Whether validation passed"
+        description="""<what>Whether validation passed</what>
+<when>ALWAYS required</when>"""
     )
     
     errors: list[ValidationError] = Field(
         default_factory=list,
-        description="List of validation errors"
+        description="""<what>List of validation errors</what>
+<when>When is_valid=False</when>"""
     )
     
     warnings: list[ValidationError] = Field(
         default_factory=list,
-        description="List of validation warnings (non-blocking)"
+        description="""<what>List of validation warnings (non-blocking)</what>
+<when>Optional, for non-critical issues</when>"""
     )
     
     auto_fixed: list[str] = Field(
         default_factory=list,
-        description="List of fields that were auto-fixed"
+        description="""<what>List of fields that were auto-fixed</what>
+<when>When auto-correction was applied</when>"""
     )
 
 
@@ -74,26 +83,31 @@ class ColumnInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     name: str = Field(
-        description="Column name"
+        description="""<what>Column name</what>
+<when>ALWAYS required</when>"""
     )
     
     data_type: str = Field(
-        description="Data type of the column"
+        description="""<what>Data type of the column</what>
+<when>ALWAYS required</when>"""
     )
     
     is_dimension: bool = Field(
         default=False,
-        description="Whether this is a dimension column"
+        description="""<what>Whether this is a dimension column</what>
+<when>Default False</when>"""
     )
     
     is_measure: bool = Field(
         default=False,
-        description="Whether this is a measure column"
+        description="""<what>Whether this is a measure column</what>
+<when>Default False</when>"""
     )
     
     is_computation: bool = Field(
         default=False,
-        description="Whether this is a computed column"
+        description="""<what>Whether this is a computed column</what>
+<when>Default False</when>"""
     )
 
 
@@ -105,18 +119,22 @@ class QueryResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     columns: list[ColumnInfo] = Field(
-        description="Column information"
+        description="""<what>Column information</what>
+<when>ALWAYS required</when>"""
     )
     
     rows: list[dict[str, Any]] = Field(
-        description="Query result rows"
+        description="""<what>Query result rows</what>
+<when>ALWAYS required</when>"""
     )
     
     row_count: int = Field(
-        description="Total number of rows returned"
+        description="""<what>Total number of rows returned</what>
+<when>ALWAYS required</when>"""
     )
     
     execution_time_ms: int | None = Field(
         default=None,
-        description="Query execution time in milliseconds"
+        description="""<what>Query execution time in milliseconds</what>
+<when>Optional, for performance tracking</when>"""
     )

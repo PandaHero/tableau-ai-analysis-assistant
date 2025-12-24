@@ -260,22 +260,19 @@ VizQL API中LOD表达式通过`CalculatedField`类型实现：
 
 ## 需求
 
-### 需求1：重构HowType枚举以区分表计算和LOD
+### 需求1：简化HowType枚举为二元分类
 
-**用户故事：** 作为开发者，我希望清晰区分表计算和LOD的使用场景，以便系统能够根据用户意图选择正确的计算方式。
+**用户故事：** 作为开发者，我希望Step1只判断是否需要复杂计算，具体计算类型由Step2推理，以便简化Step1职责并支持组合场景。
 
 #### 验收标准
 
-1. 当用户问题被分类时，语义解析器应当将其分类为以下之一：SIMPLE、TABLE_CALC或LOD
-2. 当用户问题需要在分组内进行排名或排序（如：排名、Top N、第几名）时，语义解析器应当将how_type设置为TABLE_CALC
-3. 当用户问题需要累计或滚动计算（如：累计、汇总、YTD）时，语义解析器应当将how_type设置为TABLE_CALC
-4. 当用户问题需要与前值进行比较（如：环比、增长率、差异）时，语义解析器应当将how_type设置为TABLE_CALC
-5. 当用户问题需要移动窗口计算（如：移动平均、滚动三个月）时，语义解析器应当将how_type设置为TABLE_CALC
-6. 当用户问题需要在视图内计算占比（如：子类别占大类的百分比）时，语义解析器应当将how_type设置为TABLE_CALC
-7. 当用户问题需要访问原始数据行级别的信息（如：每个客户的首次购买日期、识别新客户）时，语义解析器应当将how_type设置为LOD
-8. 当用户问题需要创建一个独立于视图的、可重用的指标（如：每个客户的终身消费额）时，语义解析器应当将how_type设置为LOD
-9. 当用户问题需要在不同于视图的粒度上进行聚合时，语义解析器应当将how_type设置为LOD
-10. 当用户问题是简单聚合且无复杂计算时，语义解析器应当将how_type设置为SIMPLE
+1. 当用户问题被分类时，Step1应当将how_type设置为SIMPLE或COMPLEX
+2. 当用户问题是简单聚合且无复杂计算时，Step1应当将how_type设置为SIMPLE
+3. 当用户问题需要排名、累计、环比、移动平均、占比等表计算时，Step1应当将how_type设置为COMPLEX
+4. 当用户问题需要LOD表达式（如每个客户的首购日期）时，Step1应当将how_type设置为COMPLEX
+5. 当用户问题需要LOD与表计算组合（如新客户销售额排名）时，Step1应当将how_type设置为COMPLEX
+6. 当how_type为SIMPLE时，系统不执行Step2
+7. 当how_type为COMPLEX时，系统执行Step2来推理具体的计算类型和参数
 
 ### 需求2：Step2输出对齐VizQL API的TableCalcField结构
 
@@ -358,7 +355,8 @@ VizQL API中LOD表达式通过`CalculatedField`类型实现：
 
 #### 验收标准
 
-1. 当用户问题需要先创建独立于视图的原子指标，再对其进行视角转换时，系统应当先生成CalculatedField（用于LOD），再生成TableCalcField（用于表计算）
-2. 系统应当支持在TableCalcField中引用CalculatedField的结果
-3. 当LOD与表计算组合使用时，系统应当生成正确的VizQL API请求，包含CalculatedField和TableCalcField
-4. 当视图维度已经包含所需的聚合粒度时，系统应当仅使用表计算而不需要LOD
+1. Step2应当能够在computations列表中同时输出LOD类型和表计算类型的Computation
+2. 当用户问题需要先创建独立于视图的原子指标，再对其进行视角转换时，Step2应当先输出LOD Computation，再输出表计算Computation
+3. QueryBuilder应当按正确顺序生成字段：先生成CalculatedField（LOD），再生成TableCalcField（表计算）
+4. 系统应当支持在TableCalcField中引用CalculatedField的结果
+5. 当视图维度已经包含所需的聚合粒度时，Step2应当仅输出表计算Computation而不需要LOD

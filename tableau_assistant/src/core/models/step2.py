@@ -4,7 +4,7 @@ Step 2 is the "Reasoning" phase of the LLM combination architecture.
 It infers computation from restated_question and validates against Step 1 output.
 
 IMPORTANT: validation is LLM self-validation, NOT code validation.
-The LLM fills in the validation fields based on OPERATION_TYPE_MAPPING reference in the prompt.
+The LLM fills in the validation fields based on the rules in field descriptions.
 """
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,126 +15,111 @@ from .computations import Computation
 class ValidationCheck(BaseModel):
     """Single validation check result (filled by LLM).
     
-    LLM compares its inferred value against Step 1's reference value.
+    <what>LLM compares its inferred value against Step 1's reference value</what>
     """
     model_config = ConfigDict(extra="forbid")
     
     inferred_value: str | list[str] = Field(
         description="""<what>Value inferred from restated_question</what>
 <when>ALWAYS required</when>
-<rule>What LLM inferred in Step 2</rule>"""
+<rule>Extract what you inferred in Step 2</rule>"""
     )
     
     reference_value: str | list[str] = Field(
         description="""<what>Value from Step 1 structured output</what>
 <when>ALWAYS required</when>
-<rule>What Step 1 extracted</rule>"""
+<rule>Extract what Step 1 extracted</rule>"""
     )
     
     is_match: bool = Field(
         description="""<what>Whether inferred matches reference</what>
 <when>ALWAYS required</when>
-<rule>LLM judges if they are semantically equivalent</rule>"""
+<rule>True if semantically equivalent, False otherwise</rule>
+<must_not>Mark as True when values are clearly different</must_not>"""
     )
     
     note: str = Field(
         default="",
         description="""<what>Explanation of the check result</what>
-<when>Recommended</when>
+<when>Recommended, especially when is_match=False</when>
 <rule>Explain why match or mismatch</rule>"""
     )
 
 
 class Step2Validation(BaseModel):
-    """Step 2 self-validation result (filled by LLM).
+    """Step 2 self-validation (LLM validates against Step 1).
     
-    LLM validates its own reasoning against Step 1 output.
-    This is NOT code validation - LLM fills these fields.
-    
-    Validation checks:
-    - target_check: Is target in what.measures?
-    - partition_by_check: Is partition_by subset of where.dimensions?
-    - operation_check: Does operation.type match how_type via OPERATION_TYPE_MAPPING?
+    <fill_order>
+    1. target_check
+    2. partition_by_check
+    3. calc_type_check
+    4. all_valid
+    5. inconsistencies (if any)
+    </fill_order>
     """
     model_config = ConfigDict(extra="forbid")
     
     target_check: ValidationCheck = Field(
-        description="""<what>Check if target is in what.measures</what>
-<when>ALWAYS required</when>
-<rule>target ∈ what.measures</rule>"""
+        description="""<what>Check target in what.measures</what>
+<when>ALWAYS</when>"""
     )
     
     partition_by_check: ValidationCheck = Field(
-        description="""<what>Check if partition_by is subset of where.dimensions</what>
-<when>ALWAYS required</when>
-<rule>partition_by ⊆ where.dimensions</rule>"""
+        description="""<what>Check partition_by subset of where.dimensions</what>
+<when>ALWAYS</when>"""
     )
     
-    operation_check: ValidationCheck = Field(
-        description="""<what>Check if operation.type matches how_type</what>
-<when>ALWAYS required</when>
-<rule>Use OPERATION_TYPE_MAPPING from prompt to verify match</rule>
-<must_not>Mark as match if operation.type not in mapping[how_type]</must_not>"""
+    calc_type_check: ValidationCheck = Field(
+        description="""<what>Check calc_type matches question intent</what>
+<when>ALWAYS</when>"""
     )
     
     all_valid: bool = Field(
-        description="""<what>Whether all checks passed</what>
-<when>ALWAYS required</when>
-<rule>True only if all three checks have is_match=True</rule>"""
+        description="""<what>All checks passed</what>
+<when>ALWAYS</when>
+<rule>True only if all is_match=True</rule>"""
     )
     
     inconsistencies: list[str] = Field(
         default_factory=list,
-        description="""<what>List of inconsistencies found</what>
-<when>When all_valid=False</when>
-<rule>Describe each mismatch</rule>"""
+        description="""<what>List of mismatches</what>
+<when>If all_valid=False</when>"""
     )
 
 
 class Step2Output(BaseModel):
-    """Step 2 output: Computation reasoning and LLM self-validation.
-    
-    <what>Computation definitions + LLM self-validation results</what>
-    
-    IMPORTANT: validation is filled by LLM, not computed by code.
-    LLM uses OPERATION_TYPE_MAPPING reference in prompt to validate.
+    """Step 2 output: Computation reasoning + self-validation.
     
     <fill_order>
-    1. reasoning (ALWAYS first)
-    2. computations (ALWAYS)
-    3. validation (ALWAYS - LLM self-validates)
+    1. reasoning (ALWAYS)
+    2. computations (ALWAYS, can be multiple)
+    3. validation (ALWAYS)
     </fill_order>
     
     <examples>
-    Input: restated_question="按省份分组，在每个月内按销售额降序排名"
-    Output: {
-        "reasoning": "从重述中推断：target=销售额，partition_by=[订单日期]（每月内），operation=RANK",
-        "computations": [{"target": "销售额", "partition_by": ["订单日期"], "operation": {"type": "RANK"}}],
-        "validation": {"all_valid": true, ...}
-    }
+    Single: {"computations": [{"target": "Sales", "calc_type": "RANK", "partition_by": ["Month"]}]}
+    Combination: {"computations": [{"calc_type": "LOD_FIXED", ...}, {"calc_type": "RANK", ...}]}
     </examples>
     
     <anti_patterns>
-    ❌ partition_by not in dimensions: where.dimensions=["省份"], partition_by=["月份"]
-    ❌ operation.type not matching how_type: how_type=RANKING, operation.type=PERCENT
+    X Combination outputs only one Computation
+    X LOD after table calc (should be LOD first)
     </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
     reasoning: str = Field(
-        description="""<what>Inference process description</what>
-<when>ALWAYS required</when>
-<rule>Explain how target, partition_by, operation were inferred from restated_question</rule>"""
+        description="""<what>Inference process</what>
+<when>ALWAYS</when>"""
     )
     
     computations: list[Computation] = Field(
         description="""<what>Computation definitions</what>
-<when>ALWAYS required</when>
-<rule>Each has target, partition_by, operation</rule>"""
+<when>ALWAYS</when>
+<rule>Combination: LOD first, then table calc</rule>"""
     )
     
     validation: Step2Validation = Field(
-        description="""<what>LLM self-validation result</what>
-<when>ALWAYS required</when>
-<rule>LLM checks its inference against Step 1 output</rule>"""
+        description="""<what>Self-validation result</what>
+<when>ALWAYS</when>"""
     )

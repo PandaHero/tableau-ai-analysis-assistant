@@ -72,10 +72,13 @@ async def semantic_parser_node(
         result = await agent.parse(
             question=question,
             history=history,
-            metadata=data_model,
+            data_model=data_model,
             state=state,
             config=config,
         )
+        
+        # 获取 R1 模型的思考过程
+        thinking = getattr(agent, '_last_thinking', '')
         
         # Build return state
         return_state: Dict[str, Any] = {
@@ -83,6 +86,7 @@ async def semantic_parser_node(
             "restated_question": result.restated_question,
             "semantic_parser_complete": True,
             "current_stage": "semantic_parser",
+            "thinking": thinking,  # R1 模型的思考过程
         }
         
         # Route based on intent type
@@ -101,6 +105,13 @@ async def semantic_parser_node(
                     user_message += f"\n📊 分析维度：{', '.join(dims)}"
                 if measures:
                     user_message += f"\n📈 分析指标：{', '.join(measures)}"
+            
+            # 如果有思考过程，添加简短摘要
+            if thinking:
+                # 取思考过程的前 100 个字符作为摘要
+                thinking_summary = thinking[:100] + "..." if len(thinking) > 100 else thinking
+                return_state["thinking_summary"] = thinking_summary
+            
             return_state["user_message"] = user_message
             
             logger.info(
@@ -197,17 +208,17 @@ class SemanticParserNode:
         self,
         question: str,
         history: List[Dict[str, str]] | None = None,
-        metadata: Dict[str, Any] | None = None,
+        data_model: Any | None = None,
     ) -> SemanticParseResult:
         """Run the agent directly (without LangGraph state).
         
         Args:
             question: Current user question
             history: Conversation history
-            metadata: Data source metadata
+            data_model: Data source model (DataModel object)
             
         Returns:
             SemanticParseResult
         """
         agent = SemanticParserAgent(max_retries=self.max_retries)
-        return await agent.parse(question, history, metadata)
+        return await agent.parse(question, history, data_model)

@@ -29,6 +29,7 @@ SUPPORTED_LLM_PROVIDERS: List[str] = [
     "azure",
     "claude",
     "deepseek",
+    "deepseek-r1",  # 公司内部部署的 DeepSeek R1 推理模型
     "qwen",
     "zhipu",
 ]
@@ -47,9 +48,9 @@ def _get_service_http_clients(service_id: str):
     获取服务特定的 HTTP 客户端
     
     优先级：
-    1. Linux/Mac: 优先使用系统证书（通常足够）
-    2. Windows 或系统证书失败: 使用 cert_config.yaml 中的服务证书
-    3. 回退到 certifi
+    1. 使用 cert_config.yaml 中的服务证书（如果存在）
+    2. 回退到 certifi
+    3. 使用系统默认
     
     Args:
         service_id: 服务 ID（如 "deepseek", "zhipu-ai"）
@@ -57,22 +58,11 @@ def _get_service_http_clients(service_id: str):
     Returns:
         (http_client, http_async_client) 元组
     """
-    import platform
     from pathlib import Path
-    
-    # Linux/Mac 优先尝试系统证书（公网 API 通常不需要自定义证书）
-    if platform.system() != "Windows":
-        try:
-            client = httpx.Client(verify=True, timeout=60.0)
-            async_client = httpx.AsyncClient(verify=True, timeout=60.0)
-            logger.debug(f"{service_id}: 使用系统证书")
-            return (client, async_client)
-        except Exception as e:
-            logger.warning(f"{service_id}: 系统证书不可用，尝试自定义证书: {e}")
     
     cert_path = None
     
-    # 尝试从证书管理器获取服务特定证书
+    # 优先从证书管理器获取服务特定证书
     try:
         config = get_cert_config()
         service = config.services.get(service_id)
@@ -187,6 +177,10 @@ def select_model(
             model_name, temperature, llm_api_key,
             ds_http_client, ds_async_client
         )
+    
+    elif provider == "deepseek-r1":
+        # 公司内部部署的 DeepSeek R1 推理模型
+        return _create_deepseek_r1_model(model_name, temperature)
     
     elif provider == "qwen":
         return _create_qwen_model(
@@ -347,6 +341,36 @@ def _create_deepseek_model(
         temperature=temperature,
         http_client=http_client,
         http_async_client=http_async_client
+    )
+
+
+def _create_deepseek_r1_model(
+    model_name: str,
+    temperature: float,
+) -> "DeepSeekR1Chat":
+    """创建公司内部部署的 DeepSeek R1 推理模型
+    
+    特点：
+    - 使用自定义端点: /api/v1/offline/deep/think
+    - 使用 Apikey header 认证（不是 Authorization: Bearer）
+    - 思考过程在 <think>...</think> 标签内
+    """
+    from tableau_assistant.src.infra.config import settings
+    from tableau_assistant.src.infra.ai.deepseek_r1 import DeepSeekR1Chat
+    
+    api_base = settings.deepseek_r1_api_base
+    api_key = settings.deepseek_r1_api_key
+    
+    if not api_base:
+        raise ValueError("DEEPSEEK_R1_API_BASE must be set in .env for deepseek-r1 provider")
+    if not api_key:
+        raise ValueError("DEEPSEEK_R1_API_KEY must be set in .env for deepseek-r1 provider")
+    
+    return DeepSeekR1Chat(
+        api_base=api_base,
+        api_key=api_key,
+        model_name=model_name,
+        temperature=temperature,
     )
 
 

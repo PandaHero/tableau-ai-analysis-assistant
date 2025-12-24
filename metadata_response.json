@@ -1,0 +1,213 @@
+{
+  "data": [
+    {
+      "fieldName": "Returned",
+      "fieldCaption": "Returned",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Returns_2AA0FE4D737A4F63970131D0E7480A03",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Category",
+      "fieldCaption": "Category",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Discount",
+      "fieldCaption": "Discount",
+      "dataType": "REAL",
+      "defaultAggregation": "SUM",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Postal Code",
+      "fieldCaption": "Postal Code",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Regional Manager",
+      "fieldCaption": "Regional Manager",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "People_D73023733B004CC1B3CB1ACF62F4A965",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Order ID",
+      "fieldCaption": "Order ID",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Product Name",
+      "fieldCaption": "Product Name",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Ship Date",
+      "fieldCaption": "Ship Date",
+      "dataType": "DATE",
+      "defaultAggregation": "YEAR",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Quantity",
+      "fieldCaption": "Quantity",
+      "dataType": "INTEGER",
+      "defaultAggregation": "SUM",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "City",
+      "fieldCaption": "City",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Sub-Category",
+      "fieldCaption": "Sub-Category",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Profit (bin)",
+      "fieldCaption": "Profit (bin)",
+      "dataType": "INTEGER",
+      "defaultAggregation": "NONE",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "BIN",
+      "formula": "SYS_NUMBIN([Profit],[Profit Bin Size])"
+    },
+    {
+      "fieldName": "Segment",
+      "fieldCaption": "Segment",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "State/Province",
+      "fieldCaption": "State/Province",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Sales",
+      "fieldCaption": "Sales",
+      "dataType": "REAL",
+      "defaultAggregation": "SUM",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Product Name (group)",
+      "fieldCaption": "Manufacturer",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "GROUP"
+    },
+    {
+      "fieldName": "Region",
+      "fieldCaption": "Region",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Ship Mode",
+      "fieldCaption": "Ship Mode",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Order Date",
+      "fieldCaption": "Order Date",
+      "dataType": "DATE",
+      "defaultAggregation": "YEAR",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Profit",
+      "fieldCaption": "Profit",
+      "dataType": "REAL",
+      "defaultAggregation": "SUM",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Country/Region",
+      "fieldCaption": "Country/Region",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    },
+    {
+      "fieldName": "Calculation_1368249927221915648",
+      "fieldCaption": "Profit Ratio",
+      "dataType": "REAL",
+      "defaultAggregation": "AGG",
+      "columnClass": "CALCULATION",
+      "formula": "SUM([Profit])/SUM([Sales])"
+    },
+    {
+      "fieldName": "Customer Name",
+      "fieldCaption": "Customer Name",
+      "dataType": "STRING",
+      "defaultAggregation": "COUNT",
+      "logicalTableId": "Orders_ECFCA1FB690A41FE803BC071773BA862",
+      "columnClass": "COLUMN"
+    }
+  ],
+  "extraData": {
+    "parameters": [
+      {
+        "parameterType": "QUANTITATIVE_RANGE",
+        "parameterName": "Parameter 1",
+        "parameterCaption": "Top Customers",
+        "dataType": "INTEGER",
+        "value": 5.0,
+        "min": 5.0,
+        "max": 20.0,
+        "step": 5.0
+      },
+      {
+        "parameterType": "QUANTITATIVE_RANGE",
+        "parameterName": "Parameter 2",
+        "parameterCaption": "Profit Bin Size",
+        "dataType": "INTEGER",
+        "value": 200.0,
+        "min": 50.0,
+        "max": 200.0,
+        "step": 50.0
+      }
+    ]
+  }
+}

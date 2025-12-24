@@ -6,12 +6,29 @@ All enums are platform-agnostic and represent user intent, not platform-specific
 from enum import Enum
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Common Enums (Cross-Agent Shared)
+# ═══════════════════════════════════════════════════════════════════════════
+
 class AggregationType(str, Enum):
-    """Aggregation type for measures."""
+    """Aggregation type for basic statistical functions.
+    
+    <rule>
+    total/sum -> SUM
+    average/mean -> AVG
+    count/number of -> COUNT
+    distinct count/unique count -> COUNTD
+    minimum/lowest -> MIN
+    maximum/highest -> MAX
+    median -> MEDIAN
+    standard deviation -> STDEV
+    variance -> VAR
+    </rule>
+    """
     SUM = "SUM"
     AVG = "AVG"
     COUNT = "COUNT"
-    COUNT_DISTINCT = "COUNT_DISTINCT"
+    COUNTD = "COUNTD"
     MIN = "MIN"
     MAX = "MAX"
     MEDIAN = "MEDIAN"
@@ -20,7 +37,18 @@ class AggregationType(str, Enum):
 
 
 class DateGranularity(str, Enum):
-    """Date granularity for time dimensions."""
+    """Date granularity.
+    
+    <rule>
+    year/annual -> YEAR
+    quarter/quarterly -> QUARTER
+    month/monthly -> MONTH
+    week/weekly -> WEEK
+    day/daily -> DAY
+    hour/hourly -> HOUR
+    minute -> MINUTE
+    </rule>
+    """
     YEAR = "YEAR"
     QUARTER = "QUARTER"
     MONTH = "MONTH"
@@ -31,13 +59,28 @@ class DateGranularity(str, Enum):
 
 
 class SortDirection(str, Enum):
-    """Sort direction."""
+    """Sort direction.
+    
+    <rule>
+    ascending/low to high/bottom N -> ASC
+    descending/high to low/top N -> DESC
+    </rule>
+    """
     ASC = "ASC"
     DESC = "DESC"
 
 
 class FilterType(str, Enum):
-    """Filter type."""
+    """Filter type.
+    
+    <rule>
+    categorical values -> SET
+    time/date constraints -> DATE_RANGE
+    number range -> NUMERIC_RANGE
+    pattern match -> TEXT_MATCH
+    top/bottom N -> TOP_N
+    </rule>
+    """
     SET = "SET"
     DATE_RANGE = "DATE_RANGE"
     NUMERIC_RANGE = "NUMERIC_RANGE"
@@ -46,18 +89,31 @@ class FilterType(str, Enum):
 
 
 class DateRangeType(str, Enum):
-    """Date range type for relative date filters."""
-    CURRENT = "CURRENT"      # Current period (this month, this year)
-    PREVIOUS = "PREVIOUS"    # Previous period (last month, last year)
-    PREVIOUS_N = "PREVIOUS_N"  # Previous N periods
-    NEXT = "NEXT"            # Next period
-    NEXT_N = "NEXT_N"        # Next N periods
-    TO_DATE = "TO_DATE"      # Year to date, month to date
-    CUSTOM = "CUSTOM"        # Custom date range
+    """Date range type.
+    
+    Simplified to only CUSTOM - LLM calculates concrete start_date/end_date
+    based on user intent and current_time.
+    
+    <rule>
+    All date filtering uses concrete start_date and end_date values.
+    LLM interprets user intent (this year, last month, 2024, etc.)
+    and calculates the actual date range.
+    </rule>
+    """
+    CUSTOM = "CUSTOM"
 
 
 class TextMatchType(str, Enum):
-    """Text match type for text filters."""
+    """Text match type.
+    
+    <rule>
+    contains/includes -> CONTAINS
+    starts with/begins with -> STARTS_WITH
+    ends with -> ENDS_WITH
+    exact/equals -> EXACT
+    regex/pattern -> REGEX
+    </rule>
+    """
     CONTAINS = "CONTAINS"
     STARTS_WITH = "STARTS_WITH"
     ENDS_WITH = "ENDS_WITH"
@@ -65,90 +121,133 @@ class TextMatchType(str, Enum):
     REGEX = "REGEX"
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Semantic Parser Enums
+# ═══════════════════════════════════════════════════════════════════════════
+
 class HowType(str, Enum):
-    """Computation type (Step 1 output).
+    """Computation complexity: SIMPLE=no Step2 | COMPLEX=needs Step2
     
-    Represents the high-level analysis type detected from user question.
-    Used by LLM to classify the computation complexity.
+    <rule>
+    SIMPLE - Direct aggregation, no computation needed:
+    - Basic aggregation: total sales, average price, count of orders
+    - Simple grouping: sales by region, orders by month
+    - Top N / Bottom N filtering: "top 5 cities by sales", "bottom 10 products"
+      (returns filtered subset, NOT a rank column)
     
-    Mapping to OperationType (for LLM self-validation):
-    - RANKING → RANK, DENSE_RANK
-    - CUMULATIVE → RUNNING_SUM, RUNNING_AVG, MOVING_AVG, MOVING_SUM
-    - COMPARISON → PERCENT, DIFFERENCE, GROWTH_RATE, YEAR_AGO, PERIOD_AGO
-    - GRANULARITY → FIXED
+    COMPLEX - Needs Step 2 for computation:
+    - Ranking: "rank all provinces", "percentile ranking" (adds rank column to ALL rows)
+    - Running: "YTD", "cumulative total", "running sum"
+    - Comparison: "MoM growth", "YoY change", "difference from previous"
+    - Moving: "3-month moving average", "rolling sum"
+    - Percent: "percent of total", "share of category"
+    - LOD: "per customer X", "first purchase date", "lifetime value"
+    
+    Key distinction - Top N filtering vs Rank calculation:
+    - Top N filtering (SIMPLE): "top 5 cities" returns 5 rows (filtered subset)
+    - Rank calculation (COMPLEX): "rank all cities" returns ALL rows with rank column added
+    </rule>
+    
+    <anti_patterns>
+    X "Top 5 cities by sales" classified as COMPLEX (should be SIMPLE - filtering)
+    X "Rank all provinces" classified as SIMPLE (should be COMPLEX - adds rank column)
+    X "Cumulative sales" classified as SIMPLE (should be COMPLEX - needs RUNNING_TOTAL)
+    X "Percent of total" classified as SIMPLE (should be COMPLEX - needs PERCENT_OF_TOTAL)
+    </anti_patterns>
     """
-    SIMPLE = "SIMPLE"          # Simple aggregation, no complex computation
-    RANKING = "RANKING"        # 排名/Top N
-    CUMULATIVE = "CUMULATIVE"  # 累计/累积
-    COMPARISON = "COMPARISON"  # 占比/同比/环比
-    GRANULARITY = "GRANULARITY"  # 固定粒度聚合
+    SIMPLE = "SIMPLE"
+    COMPLEX = "COMPLEX"
 
 
-class OperationType(str, Enum):
-    """Operation type (Step 2 output).
+class CalcType(str, Enum):
+    """Calculation type (Step2 output, platform-agnostic).
     
-    Specific computation operation inferred from restated_question.
-    Must match HowType via OPERATION_TYPE_MAPPING (LLM self-validation).
+    <rule>
+    Table Calculations:
+    - ranking/Top N -> RANK, DENSE_RANK, PERCENTILE
+    - running total/YTD -> RUNNING_TOTAL
+    - moving average -> MOVING_CALC
+    - percent of total -> PERCENT_OF_TOTAL
+    - difference/change -> DIFFERENCE
+    - growth rate/MoM -> PERCENT_DIFFERENCE
+    
+    LOD (change aggregation granularity):
+    - per customer X/per product Y -> LOD_FIXED
+    - add dimension -> LOD_INCLUDE
+    - remove dimension -> LOD_EXCLUDE
+    </rule>
     """
-    # RANKING operations
-    RANK = "RANK"              # Standard ranking (1, 2, 3, ...)
-    DENSE_RANK = "DENSE_RANK"  # Dense ranking (1, 2, 2, 3, ...)
-    
-    # CUMULATIVE operations
-    RUNNING_SUM = "RUNNING_SUM"    # Cumulative sum
-    RUNNING_AVG = "RUNNING_AVG"    # Cumulative average
-    MOVING_AVG = "MOVING_AVG"      # Moving average (params: window_size)
-    MOVING_SUM = "MOVING_SUM"      # Moving sum (params: window_size)
-    
-    # COMPARISON operations
-    PERCENT = "PERCENT"            # Percentage of total
-    DIFFERENCE = "DIFFERENCE"      # Difference from reference
-    GROWTH_RATE = "GROWTH_RATE"    # Growth rate
-    YEAR_AGO = "YEAR_AGO"          # Year-over-year comparison
-    PERIOD_AGO = "PERIOD_AGO"      # Period-over-period comparison
-    
-    # GRANULARITY operations
-    FIXED = "FIXED"                # Fixed granularity aggregation (LOD)
+    # Ranking
+    RANK = "RANK"
+    DENSE_RANK = "DENSE_RANK"
+    PERCENTILE = "PERCENTILE"
+    # Running
+    RUNNING_TOTAL = "RUNNING_TOTAL"
+    MOVING_CALC = "MOVING_CALC"
+    # Percent
+    PERCENT_OF_TOTAL = "PERCENT_OF_TOTAL"
+    # Difference
+    DIFFERENCE = "DIFFERENCE"
+    PERCENT_DIFFERENCE = "PERCENT_DIFFERENCE"
+    # LOD
+    LOD_FIXED = "LOD_FIXED"
+    LOD_INCLUDE = "LOD_INCLUDE"
+    LOD_EXCLUDE = "LOD_EXCLUDE"
+
+
+class RankStyle(str, Enum):
+    """Ranking style: COMPETITION=1,2,2,4 | DENSE=1,2,2,3 | UNIQUE=1,2,3,4"""
+    COMPETITION = "COMPETITION"
+    DENSE = "DENSE"
+    UNIQUE = "UNIQUE"
+
+
+class RelativeTo(str, Enum):
+    """Difference reference: PREVIOUS=MoM | FIRST=vs start | LAST=vs end"""
+    PREVIOUS = "PREVIOUS"
+    NEXT = "NEXT"
+    FIRST = "FIRST"
+    LAST = "LAST"
+
+
+class CalcAggregation(str, Enum):
+    """Running/moving aggregation: SUM | AVG | MIN | MAX"""
+    SUM = "SUM"
+    AVG = "AVG"
+    MIN = "MIN"
+    MAX = "MAX"
 
 
 class IntentType(str, Enum):
-    """Intent type (Step 1 output).
+    """Intent type.
     
-    Classification of user question intent.
-    Determines the processing branch after Step 1.
+    <rule>
+    complete query info -> DATA_QUERY
+    needs clarification/unspecified values -> CLARIFICATION
+    metadata/field question -> GENERAL
+    off-topic/unrelated -> IRRELEVANT
+    </rule>
     """
-    DATA_QUERY = "DATA_QUERY"        # Valid data query, has queryable fields
-    CLARIFICATION = "CLARIFICATION"  # Needs clarification, references unspecified values
-    GENERAL = "GENERAL"              # General question about metadata/fields
-    IRRELEVANT = "IRRELEVANT"        # Not related to data analysis
+    DATA_QUERY = "DATA_QUERY"
+    CLARIFICATION = "CLARIFICATION"
+    GENERAL = "GENERAL"
+    IRRELEVANT = "IRRELEVANT"
 
 
 class ObserverDecision(str, Enum):
-    """Observer decision (Observer output).
+    """Observer decision.
     
-    Decision made by Observer after checking consistency between Step 1 and Step 2.
+    <rule>
+    all checks pass -> ACCEPT
+    small fixable conflict -> CORRECT
+    large structural conflict -> RETRY
+    cannot determine, need user -> CLARIFY
+    </rule>
     """
-    ACCEPT = "ACCEPT"    # All checks pass, accept Step 2 result
-    CORRECT = "CORRECT"  # Small conflict, Observer can fix it
-    RETRY = "RETRY"      # Large conflict, need to re-run Step 2
-    CLARIFY = "CLARIFY"  # Cannot determine, need user clarification
-
-
-# OPERATION_TYPE_MAPPING - Reference for LLM self-validation
-# This mapping is used by LLM (not code) to validate operation_check
-OPERATION_TYPE_MAPPING = {
-    HowType.RANKING: [OperationType.RANK, OperationType.DENSE_RANK],
-    HowType.CUMULATIVE: [
-        OperationType.RUNNING_SUM, OperationType.RUNNING_AVG,
-        OperationType.MOVING_AVG, OperationType.MOVING_SUM
-    ],
-    HowType.COMPARISON: [
-        OperationType.PERCENT, OperationType.DIFFERENCE,
-        OperationType.GROWTH_RATE, OperationType.YEAR_AGO,
-        OperationType.PERIOD_AGO
-    ],
-    HowType.GRANULARITY: [OperationType.FIXED],
-}
+    ACCEPT = "ACCEPT"
+    CORRECT = "CORRECT"
+    RETRY = "RETRY"
+    CLARIFY = "CLARIFY"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -156,11 +255,7 @@ OPERATION_TYPE_MAPPING = {
 # ═══════════════════════════════════════════════════════════════════════════
 
 class MappingSource(str, Enum):
-    """
-    Field mapping source enum
-    
-    Indicates how a field mapping was determined.
-    """
+    """Field mapping source: RAG_DIRECT | RAG_HIGH_CONFIDENCE | RAG_LLM_FALLBACK | CACHE_HIT | EXACT_MATCH | LLM_ONLY"""
     RAG_DIRECT = "rag_direct"
     RAG_HIGH_CONFIDENCE = "rag_high_confidence"
     RAG_LLM_FALLBACK = "rag_llm_fallback"
@@ -170,10 +265,17 @@ class MappingSource(str, Enum):
 
 
 class DimensionCategory(str, Enum):
-    """
-    Dimension category enum
+    """Dimension category.
     
-    Categorizes dimensions for hierarchy inference.
+    <rule>
+    - geography: location (province, city, district)
+    - time: temporal (year, month, day, quarter)
+    - product: product (product, category, brand)
+    - customer: customer (customer, customer type)
+    - organization: org structure (department, team)
+    - financial: financial (account, cost center)
+    - other: other
+    </rule>
     """
     TIME = "time"
     GEOGRAPHY = "geography"
@@ -185,11 +287,7 @@ class DimensionCategory(str, Enum):
 
 
 class DimensionLevel(str, Enum):
-    """
-    Dimension level enum
-    
-    Indicates the level within a dimension hierarchy.
-    """
+    """Dimension hierarchy level: TOP=coarsest | HIGH=coarse | MEDIUM=medium | LOW=fine | DETAIL=finest"""
     TOP = "top"
     HIGH = "high"
     MEDIUM = "medium"

@@ -510,6 +510,7 @@ class SemanticParserAgent:
     ) -> SemanticQuery:
         """Build SemanticQuery from Step 1 output and computations."""
         from ...core.models.filters import SetFilter, TopNFilter
+        from ...core.models.fields import Sort
         from ...core.models.enums import FilterType, SortDirection
         
         # Convert dimensions
@@ -566,12 +567,25 @@ class SemanticParserAgent:
                     direction=direction,
                 ))
         
+        # Convert sorts from measures with sort_direction
+        sorts = []
+        for m in step1_output.what.measures:
+            if m.sort_direction is not None:
+                sorts.append(Sort(
+                    field_name=m.field,
+                    direction=m.sort_direction,
+                    priority=m.sort_priority,
+                ))
+        
+        # Sort by priority
+        sorts.sort(key=lambda s: s.priority)
+        
         return SemanticQuery(
             dimensions=dimensions if dimensions else None,
             measures=measures if measures else None,
             computations=computations,
             filters=filters if filters else None,
-            sorts=None,
+            sorts=sorts if sorts else None,
         )
     
     def _build_clarification_result(

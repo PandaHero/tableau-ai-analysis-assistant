@@ -13,7 +13,6 @@
 ### 1.1 职责边界
 
 > **Prompt 教 LLM 如何思考，Schema 告诉 LLM 输出什么**
-> **`<rule>` 是思考与填写的桥梁**
 
 | 内容类型 | Prompt | Schema | 说明 |
 |---------|--------|--------|------|
@@ -21,63 +20,75 @@
 | 推理步骤（抽象） | ✅ | ❌ | HOW to think |
 | 字段含义 | ❌ | ✅ `<what>` | 字段代表什么 |
 | 填写条件 | ❌ | ✅ `<when>` | 何时填写 |
-| 决策规则 | ❌ | ✅ `<rule>` | 思考→填写的桥梁 |
+| 枚举选择规则 | ❌ | ✅ Enum `<rule>` | 如何选择枚举值 |
+| 依赖关系 | ❌ | ✅ `<dependency>` | 字段间依赖 |
 | 负面约束 | ❌ | ✅ `<must_not>` | 避免的错误 |
 
 ### 1.2 黄金法则
 
 - 如果提到具体字段名 → 放在 Schema
 - 如果是通用分析方法 → 放在 Prompt
-- 如果需要将思考转化为填写 → 使用 Schema 中的 `<rule>`
+- 枚举选择规则 → 只在 Enum docstring 的 `<rule>` 中
+- Field 类型是 Enum 时 → Field description 只需 `<what>` 和 `<when>`
 
-### 1.3 信息布局原则（Lost in the Middle）
+### 1.3 信息去重原则
 
-LLM 对开头和结尾的注意力最高：
-- **开头**：放 `<what>` 和 `<when>`（核心语义和条件）
-- **中间**：放 `<rule>` 和 `<dependency>`（次要信息）
-- **结尾**：放 `<must_not>`（最近的参考）
+**每种信息只在最相关位置出现一次**：
+
+| 信息类型 | 唯一位置 |
+|---------|---------|
+| 枚举选择规则 | Enum docstring `<rule>` |
+| 填写顺序 | Class docstring `<fill_order>` |
+| 完整示例 | Class docstring `<examples>` |
+| 反模式 | Class docstring `<anti_patterns>` |
+| 字段含义 | Field `<what>` |
+| 填写条件 | Field `<when>` |
+| 依赖关系 | Field `<dependency>` |
+
+### 1.4 语言规范
+
+**必须使用全英文**，不要中英文混杂。
 
 ---
 
 ## 第二部分：XML 标签规范
 
-### 2.1 字段级标签
+### 2.1 Enum Docstring 标签
 
-| 标签 | 含义 | 必填 | 位置 | Token 限制 |
-|------|------|------|------|-----------|
-| `<what>` | 字段含义 | ✅ | 开头 | ≤20 tokens |
-| `<when>` | 填写条件 | ✅ | 开头 | ≤20 tokens |
-| `<rule>` | 决策规则 | 复杂条件 | 中间 | ≤40 tokens |
-| `<dependency>` | 依赖关系 | 条件字段 | 中间 | ≤20 tokens |
-| `<must_not>` | 负面约束 | 推荐 | 结尾 | ≤20 tokens |
+**两种格式**：
 
-**总计：每个字段描述 ≤100 tokens**
+| 格式 | 适用场景 | 示例 |
+|-----|---------|------|
+| 带 `<rule>` | LLM 需要根据输入选择值 | CalcType, IntentType, ObserverDecision |
+| 一行格式 | 只解释值含义，无选择逻辑 | RankStyle, SortDirection, AggregationType |
 
 ### 2.2 Class Docstring 标签
 
-| 标签 | 含义 | 限制 |
+| 标签 | 用途 | 限制 |
 |------|------|------|
-| `<what>` | 模型含义 | 1 句话 |
 | `<fill_order>` | 填写顺序 | 编号列表 |
-| `<examples>` | 完整示例 | ≤2 个简单示例 |
-| `<anti_patterns>` | 常见错误 | ≤3 个最常见错误 |
+| `<examples>` | 完整示例 | ≤2 个 |
+| `<anti_patterns>` | 常见错误 | ≤3 个，用 X 前缀 |
 
-### 2.3 决策树格式（简单文本，非 ASCII 艺术）
+### 2.3 Field Description 标签
 
-**正确格式**：
-```
-1. type (ALWAYS first)
-2. target (ALWAYS)
-3. partition_by (ALWAYS, can be empty)
-4. operation (ALWAYS)
-   - 4.1 params.window_size (if type=MOVING_AVG)
-   - 4.2 params.n (if type=PERIOD_AGO)
-```
+| 标签 | 用途 | 必填 | 位置 |
+|------|------|------|------|
+| `<what>` | 字段含义 | ✅ | 第一 |
+| `<when>` | 填写条件 | ✅ | 第二 |
+| `<rule>` | 决策规则（非Enum相关） | 可选 | 中间 |
+| `<dependency>` | 依赖关系 | 条件字段 | 中间 |
+| `<must_not>` | 负面约束 | 推荐 | 最后 |
 
-**错误格式**（不要使用 ASCII 艺术）：
-```
-❌ 不要使用：│、├、─、►、└ 等字符
-```
+**关键规则**：如果字段类型是带 `<rule>` 的 Enum，Field description **不要重复** Enum 的规则。
+
+### 2.4 Token 限制
+
+| 位置 | 限制 |
+|------|------|
+| 每个 Field description | ≤100 tokens |
+| Class docstring examples | ≤2 个 |
+| Class docstring anti_patterns | ≤3 个 |
 
 ---
 
@@ -121,14 +132,14 @@ Process: Merge history → Extract What/Where/How → Classify intent → Genera
 Query = What × Where × How
 - What: Target measures + aggregation
 - Where: Dimensions + filters
-- How: SIMPLE | RANKING | CUMULATIVE | COMPARISON | GRANULARITY
+- How: SIMPLE (no computation) | COMPLEX (needs Step 2)
 
 **Think step by step:**
 Step 1: Understand user intent
 Step 2: Extract business entities (use exact terms from question)
 Step 3: Classify entity roles (dimension vs measure)
-Step 4: Detect analysis type from keywords
-Step 5: Preserve partition intent (每月/当月/全国 etc.)
+Step 4: Detect if complex computation needed (ranking, running total, LOD, etc.)
+Step 5: Preserve partition intent (per month/within month etc.)
 
 **Intent Classification**
 - DATA_QUERY: Has queryable fields, info complete
@@ -155,32 +166,27 @@ Expertise: Computation inference, Self-validation, Partition inference"""
     def get_task(self) -> str:
         return """Infer computation from restated_question, then validate against Step 1 output.
 
-Process: Infer target → Infer partition_by → Infer operation → Validate"""
+Process: Infer target → Infer calc_type → Infer partition_by → Fill params → Validate"""
 
     def get_specific_domain_knowledge(self) -> str:
         return """**Computation Model**
-Computation = Target × Partition × Operation
+Computation = Target × CalcType × Partition × Params
 
 **Think step by step:**
 Step 1: Infer target from restated_question (must be in what.measures)
-Step 2: Infer partition_by from keywords (must be subset of where.dimensions)
-Step 3: Infer operation.type (must match how_type via OPERATION_TYPE_MAPPING)
-Step 4: Validate all three checks
+Step 2: Infer calc_type from question keywords (see CalcType enum rules)
+Step 3: Infer partition_by from scope keywords (must be subset of where.dimensions)
+Step 4: Fill params based on calc_type
+Step 5: Validate all three checks
 
 **Partition Keywords**
-- 全局/总/无分区词 → []
-- 每月/月内/当月 → [时间维度]
-- 每省/省内 → [省份]
-
-**OPERATION_TYPE_MAPPING**
-- RANKING → RANK, DENSE_RANK
-- CUMULATIVE → RUNNING_SUM, RUNNING_AVG, MOVING_AVG, MOVING_SUM
-- COMPARISON → PERCENT, DIFFERENCE, GROWTH_RATE, YEAR_AGO, PERIOD_AGO
-- GRANULARITY → FIXED"""
+- global/total/no scope word → []
+- per month/within month → [time dimension]
+- per province → [province]"""
 
     def get_constraints(self) -> str:
         return """MUST: Infer from restated_question, Validate against Step 1, Report inconsistencies
-MUST NOT: Infer partition_by not in dimensions, Use operation.type not matching how_type"""
+MUST NOT: Infer partition_by not in dimensions, Fill params not matching calc_type"""
 ```
 
 ### 3.4 Observer Prompt 模板
@@ -218,250 +224,52 @@ MUST NOT: Accept when validation failed, Retry for minor issues, Clarify when cl
 
 ---
 
-## 第四部分：数据模型设计
+## 第四部分：数据模型设计概述
 
-### 4.1 字段描述格式（≤100 tokens）
+本部分概述数据模型设计的核心结构。详细的编写规范和完整案例请参见**第十部分**。
 
-**简单字段示例**：
-```python
-restated_question: str = Field(
-    description="""<what>Complete standalone question in natural language</what>
-<when>ALWAYS required</when>
-<rule>Must preserve partition intent (每月→"在每个月内", 当月→"当月")</rule>
-<must_not>Lose partition keywords (will cause wrong computation scope)</must_not>"""
-)
+### 4.1 核心模型关系
+
+```
+Step1Output (语义理解)
+├── restated_question: str
+├── what: What (measures)
+├── where: Where (dimensions + filters)
+├── how_type: HowType (SIMPLE | COMPLEX)
+└── intent: Intent
+
+Step2Output (计算推理) - 仅当 how_type=COMPLEX 时触发
+├── reasoning: str
+├── computations: list[Computation]
+└── validation: Step2Validation
+
+Computation (核心计算抽象)
+├── target: str
+├── calc_type: CalcType
+├── partition_by: list[str]
+├── params: CalcParams
+└── alias: str | None
+
+ObserverOutput (一致性检查) - 仅当 validation.all_valid=False 时触发
+├── is_consistent: bool
+├── conflicts: list[Conflict]
+├── decision: ObserverDecision
+├── correction: Correction | None
+└── final_result: Computation | None
 ```
 
-**条件字段示例**：
-```python
-partition_by: list[str] = Field(
-    default_factory=list,
-    description="""<what>Dimensions to partition by</what>
-<when>ALWAYS fill (can be empty list)</when>
-<rule>全局/总→[], 每月/当月→[时间维度], 每省→[省份]</rule>
-<dependency>partition_by ⊆ where.dimensions</dependency>
-<must_not>Include dimension not in where.dimensions (will cause error)</must_not>"""
-)
+### 4.2 数据流
+
+```
+用户问题 → Step1Output → (if COMPLEX) → Step2Output → (if validation failed) → ObserverOutput
 ```
 
-### 4.2 Step1Output 模型
+### 4.3 关键设计原则
 
-```python
-class Step1Output(BaseModel):
-    """Step 1 output: Semantic understanding and question restatement.
-    
-    <what>Restated question + structured What/Where/How + intent classification</what>
-    
-    <fill_order>
-    1. restated_question (ALWAYS first)
-    2. what (ALWAYS)
-    3. where (ALWAYS)
-    4. how_type (ALWAYS)
-    5. intent (ALWAYS)
-    </fill_order>
-    
-    <examples>
-    Input: "各省份销售额"
-    Output: {"restated_question": "按省份分组，计算销售额总和", "how_type": "SIMPLE", "intent": {"type": "DATA_QUERY"}}
-    
-    Input: History="各省份各月销售额", Current="每月排名呢？"
-    Output: {"restated_question": "按省份和月份分组，在每个月内按销售额降序排名", "how_type": "RANKING"}
-    </examples>
-    
-    <anti_patterns>
-    ❌ Losing partition intent: "每月排名" → "按销售额排名" (lost "每月")
-    ❌ Using technical field names: {"field": "[Sales].[Amount]"}
-    </anti_patterns>
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    restated_question: str = Field(
-        description="""<what>Complete standalone question</what>
-<when>ALWAYS required</when>
-<rule>Preserve partition intent (每月→"在每个月内")</rule>
-<must_not>Lose partition keywords (will cause wrong scope)</must_not>"""
-    )
-    
-    what: What = Field(
-        description="""<what>Target measures</what>
-<when>ALWAYS required</when>
-<rule>Extract from question, use business terms</rule>"""
-    )
-    
-    where: Where = Field(
-        description="""<what>Dimensions + filters</what>
-<when>ALWAYS required</when>
-<rule>Extract from question, use business terms</rule>"""
-    )
-    
-    how_type: HowType = Field(
-        description="""<what>Computation type</what>
-<when>ALWAYS required</when>
-<rule>排名→RANKING, 累计→CUMULATIVE, 占比/同比→COMPARISON, 固定粒度→GRANULARITY, 其他→SIMPLE</rule>"""
-    )
-    
-    intent: Intent = Field(
-        description="""<what>Intent classification + reasoning</what>
-<when>ALWAYS required</when>
-<rule>Complete info→DATA_QUERY, Unspecified values→CLARIFICATION, Metadata→GENERAL, Unrelated→IRRELEVANT</rule>"""
-    )
-```
-
-### 4.3 Step2Output 模型
-
-```python
-class Step2Output(BaseModel):
-    """Step 2 output: Computation reasoning and self-validation.
-    
-    <what>Computation definitions + validation results</what>
-    
-    <fill_order>
-    1. reasoning (ALWAYS first)
-    2. computations (ALWAYS)
-    3. validation (ALWAYS)
-    </fill_order>
-    
-    <examples>
-    Input: restated_question="按省份分组，在每个月内按销售额降序排名"
-    Output: {"computations": [{"target": "销售额", "partition_by": ["订单日期"], "operation": {"type": "RANK"}}], "validation": {"all_valid": true}}
-    </examples>
-    
-    <anti_patterns>
-    ❌ partition_by not in dimensions: where.dimensions=["省份"], partition_by=["月份"]
-    ❌ operation.type not matching how_type: how_type=RANKING, operation.type=PERCENT
-    </anti_patterns>
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    reasoning: str = Field(
-        description="""<what>Inference process description</what>
-<when>ALWAYS required</when>
-<rule>Explain how target, partition_by, operation were inferred</rule>"""
-    )
-    
-    computations: list[Computation] = Field(
-        description="""<what>Computation definitions</what>
-<when>ALWAYS required</when>
-<rule>Each has target, partition_by, operation</rule>"""
-    )
-    
-    validation: Step2Validation = Field(
-        description="""<what>Self-validation result</what>
-<when>ALWAYS required</when>
-<rule>Check target, partition_by, operation against Step 1 output</rule>"""
-    )
-```
-
-### 4.4 Computation 模型
-
-```python
-class Computation(BaseModel):
-    """Computation = Target × Partition × Operation
-    
-    <what>Core computation definition (platform-agnostic)</what>
-    
-    <examples>
-    Global ranking: {"target": "销售额", "partition_by": [], "operation": {"type": "RANK"}}
-    Monthly ranking: {"target": "销售额", "partition_by": ["订单日期"], "operation": {"type": "RANK"}}
-    </examples>
-    
-    <anti_patterns>
-    ❌ partition_by not subset of dimensions
-    ❌ operation.type not in OPERATION_TYPE_MAPPING[how_type]
-    </anti_patterns>
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    target: str = Field(
-        description="""<what>Measure field to compute</what>
-<when>ALWAYS required</when>
-<rule>Must be one of what.measures</rule>
-<must_not>Use technical field name (will cause mapping error)</must_not>"""
-    )
-    
-    partition_by: list[str] = Field(
-        default_factory=list,
-        description="""<what>Partition dimensions</what>
-<when>ALWAYS fill (can be empty)</when>
-<rule>全局→[], 每月→[时间维度], 每省→[省份]</rule>
-<dependency>partition_by ⊆ where.dimensions</dependency>
-<must_not>Include dimension not in where.dimensions (will cause error)</must_not>"""
-    )
-    
-    operation: Operation = Field(
-        description="""<what>Computation operation</what>
-<when>ALWAYS required</when>
-<rule>Must match how_type via OPERATION_TYPE_MAPPING</rule>
-<dependency>operation.type ∈ OPERATION_TYPE_MAPPING[how_type]</dependency>"""
-    )
-    
-    alias: str | None = Field(
-        default=None,
-        description="""<what>Display name for result</what>
-<when>Optional</when>"""
-    )
-```
-
-### 4.5 ObserverOutput 模型
-
-```python
-class ObserverOutput(BaseModel):
-    """Observer output: Consistency check result.
-    
-    <what>Consistency check + decision + correction</what>
-    
-    <fill_order>
-    1. is_consistent (ALWAYS first)
-    2. conflicts (ALWAYS, can be empty)
-    3. decision (ALWAYS)
-    4. correction (if decision=CORRECT)
-    5. final_result (if decision=ACCEPT or CORRECT)
-    </fill_order>
-    
-    <examples>
-    Consistent: {"is_consistent": true, "conflicts": [], "decision": "ACCEPT", "final_result": {...}}
-    Correctable: {"is_consistent": false, "conflicts": [...], "decision": "CORRECT", "correction": {...}}
-    </examples>
-    
-    <anti_patterns>
-    ❌ ACCEPT when validation failed
-    ❌ RETRY for minor fixable issues
-    </anti_patterns>
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    is_consistent: bool = Field(
-        description="""<what>Whether Step 1 and Step 2 are consistent</what>
-<when>ALWAYS required</when>
-<rule>Check restatement, structure, semantics</rule>"""
-    )
-    
-    conflicts: list[Conflict] = Field(
-        default_factory=list,
-        description="""<what>Inconsistencies found</what>
-<when>ALWAYS fill (empty if consistent)</when>"""
-    )
-    
-    decision: ObserverDecision = Field(
-        description="""<what>Action to take</what>
-<when>ALWAYS required</when>
-<rule>All pass→ACCEPT, Small conflict→CORRECT, Large conflict→RETRY, Unclear→CLARIFY</rule>"""
-    )
-    
-    correction: Correction | None = Field(
-        default=None,
-        description="""<what>Correction details</what>
-<when>ONLY when decision=CORRECT</when>
-<dependency>decision == "CORRECT"</dependency>"""
-    )
-    
-    final_result: Computation | None = Field(
-        default=None,
-        description="""<what>Final computation</what>
-<when>ONLY when decision=ACCEPT or CORRECT</when>
-<dependency>decision in ["ACCEPT", "CORRECT"]</dependency>"""
-    )
-```
+1. **信息去重**：每种信息只在最相关位置出现一次（详见第七部分）
+2. **Enum 规则集中**：枚举选择规则只在 Enum docstring 的 `<rule>` 中
+3. **Field 精简**：字段类型是 Enum 时，Field description 只需 `<what>` 和 `<when>`
+4. **全英文**：所有 docstring 和 description 使用英文
 
 ---
 
@@ -471,60 +279,61 @@ class ObserverOutput(BaseModel):
 
 ```python
 class HowType(str, Enum):
-    """Computation type (Step 1 output).
-    
-    <rule>
-    排名/Top N → RANKING
-    累计/累积 → CUMULATIVE
-    占比/同比/环比 → COMPARISON
-    固定粒度 → GRANULARITY
-    其他 → SIMPLE
-    </rule>
-    """
+    """Computation complexity: SIMPLE=no Step2 | COMPLEX=needs Step2"""
     SIMPLE = "SIMPLE"
-    RANKING = "RANKING"
-    CUMULATIVE = "CUMULATIVE"
-    COMPARISON = "COMPARISON"
-    GRANULARITY = "GRANULARITY"
+    COMPLEX = "COMPLEX"
 ```
 
-### 5.2 OperationType
+### 5.2 CalcType
 
 ```python
-class OperationType(str, Enum):
-    """Operation type (Step 2 output).
+class CalcType(str, Enum):
+    """Calculation type (Step2 output, platform-agnostic).
     
-    <dependency>Must match HowType via OPERATION_TYPE_MAPPING</dependency>
+    <rule>
+    Table Calculations:
+    - ranking/Top N -> RANK, DENSE_RANK, PERCENTILE
+    - running total/YTD -> RUNNING_TOTAL
+    - moving average -> MOVING_CALC
+    - percent of total -> PERCENT_OF_TOTAL
+    - difference/change -> DIFFERENCE
+    - growth rate/MoM -> PERCENT_DIFFERENCE
+    
+    LOD (change aggregation granularity):
+    - per customer X/per product Y -> LOD_FIXED
+    - add dimension -> LOD_INCLUDE
+    - remove dimension -> LOD_EXCLUDE
+    </rule>
     """
-    # RANKING
+    # Ranking
     RANK = "RANK"
     DENSE_RANK = "DENSE_RANK"
-    # CUMULATIVE
-    RUNNING_SUM = "RUNNING_SUM"
-    RUNNING_AVG = "RUNNING_AVG"
-    MOVING_AVG = "MOVING_AVG"
-    MOVING_SUM = "MOVING_SUM"
-    # COMPARISON
-    PERCENT = "PERCENT"
+    PERCENTILE = "PERCENTILE"
+    # Running
+    RUNNING_TOTAL = "RUNNING_TOTAL"
+    MOVING_CALC = "MOVING_CALC"
+    # Percent
+    PERCENT_OF_TOTAL = "PERCENT_OF_TOTAL"
+    # Difference
     DIFFERENCE = "DIFFERENCE"
-    GROWTH_RATE = "GROWTH_RATE"
-    YEAR_AGO = "YEAR_AGO"
-    PERIOD_AGO = "PERIOD_AGO"
-    # GRANULARITY
-    FIXED = "FIXED"
+    PERCENT_DIFFERENCE = "PERCENT_DIFFERENCE"
+    # LOD
+    LOD_FIXED = "LOD_FIXED"
+    LOD_INCLUDE = "LOD_INCLUDE"
+    LOD_EXCLUDE = "LOD_EXCLUDE"
 ```
 
 ### 5.3 IntentType
 
 ```python
 class IntentType(str, Enum):
-    """Intent type (Step 1 output).
+    """Intent type.
     
     <rule>
-    Complete info → DATA_QUERY
-    Unspecified values → CLARIFICATION
-    Metadata question → GENERAL
-    Unrelated → IRRELEVANT
+    complete query info -> DATA_QUERY
+    needs clarification/unspecified values -> CLARIFICATION
+    metadata/field question -> GENERAL
+    off-topic/unrelated -> IRRELEVANT
     </rule>
     """
     DATA_QUERY = "DATA_QUERY"
@@ -540,16 +349,61 @@ class ObserverDecision(str, Enum):
     """Observer decision.
     
     <rule>
-    All checks pass → ACCEPT
-    Small conflict, can fix → CORRECT
-    Large conflict → RETRY
-    Cannot determine → CLARIFY
+    all checks pass -> ACCEPT
+    small fixable conflict -> CORRECT
+    large structural conflict -> RETRY
+    cannot determine, need user -> CLARIFY
     </rule>
     """
     ACCEPT = "ACCEPT"
     CORRECT = "CORRECT"
     RETRY = "RETRY"
     CLARIFY = "CLARIFY"
+```
+
+### 5.5 Auxiliary Enums (One-line Format)
+
+```python
+class RankStyle(str, Enum):
+    """Ranking style: COMPETITION=1,2,2,4 | DENSE=1,2,2,3 | UNIQUE=1,2,3,4"""
+    COMPETITION = "COMPETITION"
+    DENSE = "DENSE"
+    UNIQUE = "UNIQUE"
+
+
+class RelativeTo(str, Enum):
+    """Difference reference: PREVIOUS=MoM | FIRST=vs start | LAST=vs end"""
+    PREVIOUS = "PREVIOUS"
+    NEXT = "NEXT"
+    FIRST = "FIRST"
+    LAST = "LAST"
+
+
+class CalcAggregation(str, Enum):
+    """Running/moving aggregation: SUM | AVG | MIN | MAX"""
+    SUM = "SUM"
+    AVG = "AVG"
+    MIN = "MIN"
+    MAX = "MAX"
+
+
+class SortDirection(str, Enum):
+    """Sort direction: DESC=descending (high to low) | ASC=ascending (low to high)"""
+    ASC = "ASC"
+    DESC = "DESC"
+
+
+class AggregationType(str, Enum):
+    """Aggregation type: SUM | AVG | COUNT | COUNTD (count distinct) | MIN | MAX | MEDIAN | STDEV | VAR"""
+    SUM = "SUM"
+    AVG = "AVG"
+    COUNT = "COUNT"
+    COUNTD = "COUNTD"
+    MIN = "MIN"
+    MAX = "MAX"
+    MEDIAN = "MEDIAN"
+    STDEV = "STDEV"
+    VAR = "VAR"
 ```
 
 ---
@@ -562,41 +416,58 @@ class ObserverDecision(str, Enum):
 
 ```
 Step 2 LLM 调用
-├── 推理：从 restated_question 推断 target, partition_by, operation
+├── 推理：从 restated_question 推断 target, calc_type, partition_by, params
 └── 自我验证：LLM 自己检查推理结果是否与 Step 1 输出一致
     ├── target_check: target ∈ what.measures?
     ├── partition_by_check: partition_by ⊆ where.dimensions?
-    └── operation_check: operation.type 与 how_type 匹配?
+    └── calc_type_check: calc_type 与问题意图匹配?
 ```
 
-下面的映射关系是**放在 Prompt 或 Schema 中给 LLM 参考的**，让 LLM 知道如何判断 operation.type 与 how_type 是否匹配。
-
-### 6.2 HowType → OperationType 映射（给 LLM 的参考）
-
-这个映射应该放在 **Step 2 Prompt 的领域知识**部分：
-
-```
-**OPERATION_TYPE_MAPPING（用于 operation_check 验证）**
-- RANKING → RANK, DENSE_RANK
-- CUMULATIVE → RUNNING_SUM, RUNNING_AVG, MOVING_AVG, MOVING_SUM
-- COMPARISON → PERCENT, DIFFERENCE, GROWTH_RATE, YEAR_AGO, PERIOD_AGO
-- GRANULARITY → FIXED
-```
-
-### 6.3 在 Schema 中的使用
-
-在 `Step2Validation.operation_check` 字段描述中引用：
+### 6.2 Step2Validation 模型
 
 ```python
-operation_check: ValidationCheck = Field(
-    description="""<what>Check if operation.type matches how_type</what>
-<when>ALWAYS required</when>
-<rule>Use OPERATION_TYPE_MAPPING from prompt to verify match</rule>
-<must_not>Mark as match if operation.type not in mapping[how_type]</must_not>"""
-)
+class Step2Validation(BaseModel):
+    """Step 2 self-validation (LLM validates against Step 1).
+    
+    <fill_order>
+    1. target_check
+    2. partition_by_check
+    3. calc_type_check
+    4. all_valid
+    5. inconsistencies (if any)
+    </fill_order>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    target_check: ValidationCheck = Field(
+        description="""<what>Check target in what.measures</what>
+<when>ALWAYS</when>"""
+    )
+    
+    partition_by_check: ValidationCheck = Field(
+        description="""<what>Check partition_by subset of where.dimensions</what>
+<when>ALWAYS</when>"""
+    )
+    
+    calc_type_check: ValidationCheck = Field(
+        description="""<what>Check calc_type matches question intent</what>
+<when>ALWAYS</when>"""
+    )
+    
+    all_valid: bool = Field(
+        description="""<what>All checks passed</what>
+<when>ALWAYS</when>
+<rule>True only if all is_match=True</rule>"""
+    )
+    
+    inconsistencies: list[str] = Field(
+        default_factory=list,
+        description="""<what>List of mismatches</what>
+<when>If all_valid=False</when>"""
+    )
 ```
 
-### 6.4 为什么是 LLM 验证而非代码验证？
+### 6.3 为什么是 LLM 验证而非代码验证？
 
 | 方式 | 优点 | 缺点 |
 |------|------|------|
@@ -610,7 +481,134 @@ operation_check: ValidationCheck = Field(
 
 ---
 
-## 第七部分：设计原则速查
+## 第七部分：信息去重原则
+
+### 7.1 JSON Schema 中 LLM 能看到的内容
+
+Pydantic 的 `model_json_schema()` 会将以下内容序列化到 JSON Schema：
+
+| 来源 | 是否进入 Schema | 说明 |
+|------|----------------|------|
+| Enum docstring | ✅ | 进入 `$defs.EnumName.description` |
+| Class docstring | ✅ | 进入 `$defs.ClassName.description` |
+| Field description | ✅ | 进入 `properties.fieldName.description` |
+| Python 注释 (`#`) | ❌ | 不进入 Schema |
+| 模块 docstring | ❌ | 不进入 Schema |
+
+**结论**：Enum docstring、Class docstring、Field description 都会被 LLM 看到，因此需要避免重复。
+
+### 7.2 信息分布原则
+
+每种信息只在**最相关的位置**出现一次：
+
+| 信息类型 | 应放位置 | 原因 |
+|---------|---------|------|
+| 枚举值选择规则 | Enum docstring `<rule>` | 枚举是值的"说明书" |
+| 填写顺序 | Class docstring `<fill_order>` | 类级别的指导 |
+| 完整示例 | Class docstring `<examples>` | 展示字段组合 |
+| 反模式 | Class docstring `<anti_patterns>` | 类级别的错误 |
+| 字段含义 | Field `<what>` | 字段级别 |
+| 填写条件 | Field `<when>` | 字段级别 |
+| 依赖关系 | Field `<dependency>` | 字段级别 |
+
+### 7.3 去重示例
+
+**错误**：CalcType 选择规则重复 3 次
+```python
+# 位置1: CalcType enum docstring
+class CalcType(str, Enum):
+    """<rule>ranking->RANK, running total->RUNNING_TOTAL...</rule>"""
+
+# 位置2: Computation.calc_type Field (重复!)
+calc_type: CalcType = Field(
+    description="<rule>ranking->RANK, running total->RUNNING_TOTAL...</rule>"
+)
+
+# 位置3: Step2Validation.calc_type_check Field (重复!)
+calc_type_check: ValidationCheck = Field(
+    description="<rule>CalcType mapping: ranking->RANK...</rule>"
+)
+```
+
+**正确**：只在 Enum docstring 出现一次
+```python
+# 位置1: CalcType enum docstring (唯一位置)
+class CalcType(str, Enum):
+    """<rule>
+    ranking/Top N -> RANK, DENSE_RANK, PERCENTILE
+    running total/YTD -> RUNNING_TOTAL
+    ...
+    </rule>"""
+
+# 位置2: Computation.calc_type Field (不重复规则)
+calc_type: CalcType = Field(
+    description="<what>Calculation type</what><when>ALWAYS</when>"
+)
+
+# 位置3: Step2Validation.calc_type_check Field (不重复规则)
+calc_type_check: ValidationCheck = Field(
+    description="<what>Check calc_type matches question intent</what><when>ALWAYS</when>"
+)
+```
+
+### 7.4 语言规范
+
+**必须使用全英文**，不要中英文混杂。
+
+**原因**：
+- LLM 对英文理解更准确
+- 避免编码问题
+- 保持专业性和一致性
+
+**正确**：
+```python
+class CalcType(str, Enum):
+    """<rule>
+    ranking/Top N -> RANK, DENSE_RANK, PERCENTILE
+    running total/YTD -> RUNNING_TOTAL
+    month-over-month growth -> PERCENT_DIFFERENCE
+    per customer X -> LOD_FIXED
+    </rule>"""
+```
+
+**错误**：
+```python
+class CalcType(str, Enum):
+    """<rule>
+    排名/Top N → RANK, DENSE_RANK, PERCENTILE
+    累计/YTD → RUNNING_TOTAL
+    环比增长 → PERCENT_DIFFERENCE
+    每个客户的X → LOD_FIXED
+    </rule>"""
+```
+
+### 7.5 精简原则
+
+**Enum docstring**：只放选择规则，不放示例（示例放在使用该 Enum 的 Class docstring）
+
+```python
+# 精简的 Enum docstring
+class RankStyle(str, Enum):
+    """Ranking style: COMPETITION=1,2,2,4 | DENSE=1,2,2,3 | UNIQUE=1,2,3,4"""
+    COMPETITION = "COMPETITION"
+    DENSE = "DENSE"
+    UNIQUE = "UNIQUE"
+```
+
+**Field description**：只放 `<what>` 和 `<when>`，如果 Enum 已有规则则不重复
+
+```python
+# 精简的 Field description
+rank_style: RankStyle | None = Field(
+    default=None,
+    description="""<what>Ranking style</what>
+<when>calc_type = RANK</when>"""
+)
+```
+
+---
+
+## 第八部分：设计原则速查
 
 | # | 原则 | 应用 |
 |---|------|------|
@@ -628,10 +626,13 @@ operation_check: ValidationCheck = Field(
 | 12 | 决策树简化 | 编号列表，非 ASCII 艺术 |
 | 13 | 负面约束强调 | `<must_not>` 标签 |
 | 14 | Docstring 精简 | ≤2 示例，≤3 反模式 |
+| 15 | 信息去重 | 每种信息只在最相关位置出现一次 |
+| 16 | 全英文 | 不要中英文混杂 |
+| 17 | Enum 规则集中 | 枚举选择规则只在 Enum docstring |
 
 ---
 
-## 第八部分：检查清单
+## 第九部分：检查清单
 
 ### Prompt 检查
 - [ ] 是否提到具体字段名？→ 移到 Schema
@@ -648,6 +649,16 @@ operation_check: ValidationCheck = Field(
 - [ ] 反模式是否 ≤3 个？
 - [ ] 决策树是否使用编号列表格式？
 
+### 去重检查
+- [ ] Enum 选择规则是否只在 Enum docstring 出现一次？
+- [ ] Field description 是否避免重复 Enum 的规则？
+- [ ] Class docstring 的 anti_patterns 是否与 Field 的 must_not 重复？
+- [ ] 同一约束是否在多个位置重复？
+
+### 语言检查
+- [ ] 是否全英文？
+- [ ] 是否有中英文混杂？
+
 ---
 
 ## 与原文档的差异
@@ -656,10 +667,278 @@ operation_check: ValidationCheck = Field(
 |------|--------|--------|
 | 架构 | 单步 LLM | LLM 组合（Step 1 + Step 2 + Observer） |
 | 核心模型 | AnalysisSpec | Step1Output, Step2Output, Computation |
-| 计算类型 | type 枚举 | HowType + OperationType 分离 |
+| 计算类型 | type 枚举 | HowType (SIMPLE/COMPLEX) + CalcType |
 | 核心抽象 | 无 | partition_by 统一分区 |
 | 验证机制 | Pydantic Validator | Step 2 自我验证 + Observer |
 | 意图分类 | 无 | IntentType 四分类 |
 | 字段描述 | 无限制 | ≤100 tokens |
 | 决策树格式 | ASCII 艺术 | 编号列表 |
 | 负面约束 | `<anti_patterns>` | `<must_not>` 标签 |
+| 信息去重 | 无 | 每种信息只在最相关位置出现一次 |
+
+
+---
+
+## 第十部分：数据模型编写详细规范（基于实际代码）
+
+本部分基于当前已实现的 `step2.py`、`computations.py`、`enums.py` 总结标签放置规则。
+
+### 10.1 Enum Docstring 规范
+
+**两种格式**：
+
+**格式A - 带 `<rule>` 标签**（需要选择逻辑时）：
+```python
+class CalcType(str, Enum):
+    """Calculation type (Step2 output, platform-agnostic).
+    
+    <rule>
+    Table Calculations:
+    - ranking/Top N -> RANK, DENSE_RANK, PERCENTILE
+    - running total/YTD -> RUNNING_TOTAL
+    - moving average -> MOVING_CALC
+    - percent of total -> PERCENT_OF_TOTAL
+    - difference/change -> DIFFERENCE
+    - growth rate/MoM -> PERCENT_DIFFERENCE
+    
+    LOD (change aggregation granularity):
+    - per customer X/per product Y -> LOD_FIXED
+    - add dimension -> LOD_INCLUDE
+    - remove dimension -> LOD_EXCLUDE
+    </rule>
+    """
+    RANK = "RANK"
+    # ...
+```
+
+**格式B - 一行格式**（只解释值含义，无选择逻辑）：
+```python
+class RankStyle(str, Enum):
+    """Ranking style: COMPETITION=1,2,2,4 | DENSE=1,2,2,3 | UNIQUE=1,2,3,4"""
+    COMPETITION = "COMPETITION"
+    DENSE = "DENSE"
+    UNIQUE = "UNIQUE"
+```
+
+**选择标准**：
+- LLM需要根据输入决定选哪个值 → 用 `<rule>` 标签
+- 只是解释每个值的含义 → 用一行格式
+
+### 10.2 Class Docstring 规范
+
+**标签**：
+| 标签 | 用途 | 限制 |
+|-----|------|------|
+| `<fill_order>` | 填写顺序 | 编号列表 |
+| `<examples>` | 完整示例 | ≤2 个 |
+| `<anti_patterns>` | 常见错误 | ≤3 个，用 X 前缀 |
+
+**示例**：
+```python
+class Computation(BaseModel):
+    """Computation = Target x CalcType x Partition x Params
+    
+    <fill_order>
+    1. target (ALWAYS)
+    2. calc_type (ALWAYS)
+    3. partition_by (ALWAYS, can be empty)
+    4. params (based on calc_type)
+    5. alias (optional, recommended for LOD)
+    </fill_order>
+    
+    <examples>
+    Ranking: {"target": "Sales", "calc_type": "RANK", "partition_by": ["Month"], "params": {"direction": "DESC"}}
+    LOD: {"target": "OrderDate", "calc_type": "LOD_FIXED", "params": {"lod_dimensions": ["CustomerID"], "lod_aggregation": "MIN"}, "alias": "FirstPurchase"}
+    </examples>
+    
+    <anti_patterns>
+    X partition_by not subset of where.dimensions
+    X calc_type and params mismatch
+    </anti_patterns>
+    """
+```
+
+### 10.3 Field Description 规范
+
+**标签顺序**：
+| 标签 | 用途 | 必填 | 位置 |
+|-----|------|------|------|
+| `<what>` | 字段含义 | ✅ | 第一 |
+| `<when>` | 填写条件 | ✅ | 第二 |
+| `<rule>` | 决策规则（非Enum相关） | 可选 | 中间 |
+| `<dependency>` | 依赖关系 | 条件字段 | 中间 |
+| `<must_not>` | 负面约束 | 推荐 | 最后 |
+
+**关键规则**：如果字段类型是带 `<rule>` 的 Enum，Field description **不要重复** Enum 的规则，只需 `<what>` 和 `<when>`。
+
+**示例 - 简单字段（Enum类型）**：
+```python
+calc_type: CalcType = Field(
+    description="""<what>Calculation type</what>
+<when>ALWAYS</when>"""
+)
+```
+
+**示例 - 带依赖的字段**：
+```python
+lod_dimensions: list[str] | None = Field(
+    default=None,
+    description="""<what>LOD dimension list</what>
+<when>calc_type in [LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE]</when>
+<dependency>Required for LOD types</dependency>"""
+)
+```
+
+**示例 - 带规则的字段（非Enum相关）**：
+```python
+is_match: bool = Field(
+    description="""<what>Whether inferred matches reference</what>
+<when>ALWAYS required</when>
+<rule>True if semantically equivalent, False otherwise</rule>
+<must_not>Mark as True when values are clearly different</must_not>"""
+)
+```
+
+### 10.4 完整案例：CalcParams
+
+```python
+class CalcParams(BaseModel):
+    """Calculation parameters (platform-agnostic).
+    
+    <fill_order>
+    1. lod_dimensions, lod_aggregation (if LOD_*)
+    2. direction, rank_style (if RANK/DENSE_RANK/PERCENTILE)
+    3. relative_to (if DIFFERENCE/PERCENT_DIFFERENCE)
+    4. aggregation, restart_every (if RUNNING_TOTAL)
+    5. aggregation, window_previous, window_next, include_current (if MOVING_CALC)
+    6. level_of (if PERCENT_OF_TOTAL)
+    </fill_order>
+    
+    <anti_patterns>
+    X Fill params not matching calc_type
+    X LOD type without lod_dimensions/lod_aggregation
+    </anti_patterns>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    # LOD params (first, as LOD is computed before table calcs)
+    lod_dimensions: list[str] | None = Field(
+        default=None,
+        description="""<what>LOD dimension list</what>
+<when>calc_type in [LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE]</when>
+<dependency>Required for LOD types</dependency>"""
+    )
+    
+    lod_aggregation: AggregationType | None = Field(
+        default=None,
+        description="""<what>LOD aggregation function</what>
+<when>calc_type in [LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE]</when>
+<dependency>Required for LOD types</dependency>"""
+    )
+    
+    # Ranking params
+    direction: SortDirection | None = Field(
+        default=None,
+        description="""<what>Sort direction for ranking</what>
+<when>calc_type in [RANK, DENSE_RANK, PERCENTILE]</when>"""
+    )
+    
+    rank_style: RankStyle | None = Field(
+        default=None,
+        description="""<what>Ranking style</what>
+<when>calc_type = RANK</when>"""
+    )
+    
+    # Difference params
+    relative_to: RelativeTo | None = Field(
+        default=None,
+        description="""<what>Difference reference position</what>
+<when>calc_type in [DIFFERENCE, PERCENT_DIFFERENCE]</when>"""
+    )
+    
+    # Running/Moving params
+    aggregation: CalcAggregation | None = Field(
+        default=None,
+        description="""<what>Aggregation for running/moving calc</what>
+<when>calc_type in [RUNNING_TOTAL, MOVING_CALC]</when>"""
+    )
+    
+    restart_every: str | None = Field(
+        default=None,
+        description="""<what>Dimension to restart running calc</what>
+<when>calc_type = RUNNING_TOTAL and needs restart (YTD, MTD)</when>"""
+    )
+    
+    window_previous: int | None = Field(
+        default=None,
+        description="""<what>Number of previous values in window</what>
+<when>calc_type = MOVING_CALC</when>"""
+    )
+    
+    window_next: int | None = Field(
+        default=None,
+        description="""<what>Number of next values in window</what>
+<when>calc_type = MOVING_CALC</when>"""
+    )
+    
+    include_current: bool | None = Field(
+        default=None,
+        description="""<what>Include current value in window</what>
+<when>calc_type = MOVING_CALC</when>"""
+    )
+    
+    # Percent params
+    level_of: str | None = Field(
+        default=None,
+        description="""<what>Level for percent calculation</what>
+<when>calc_type = PERCENT_OF_TOTAL and needs specific level</when>"""
+    )
+```
+
+### 10.5 完整案例：Step2Output
+
+```python
+class Step2Output(BaseModel):
+    """Step 2 output: Computation reasoning + self-validation.
+    
+    <fill_order>
+    1. reasoning (ALWAYS)
+    2. computations (ALWAYS, can be multiple)
+    3. validation (ALWAYS)
+    </fill_order>
+    
+    <examples>
+    Single: {"computations": [{"target": "Sales", "calc_type": "RANK", "partition_by": ["Month"]}]}
+    Combination: {"computations": [{"calc_type": "LOD_FIXED", ...}, {"calc_type": "RANK", ...}]}
+    </examples>
+    
+    <anti_patterns>
+    X Combination outputs only one Computation
+    X LOD after table calc (should be LOD first)
+    </anti_patterns>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    reasoning: str = Field(
+        description="""<what>Inference process</what>
+<when>ALWAYS</when>"""
+    )
+    
+    computations: list[Computation] = Field(
+        description="""<what>Computation definitions</what>
+<when>ALWAYS</when>
+<rule>Combination: LOD first, then table calc</rule>"""
+    )
+    
+    validation: Step2Validation = Field(
+        description="""<what>Self-validation result</what>
+<when>ALWAYS</when>"""
+    )
+```
+
+### 10.6 去重检查清单
+
+- [ ] Enum 选择规则只在 Enum docstring 的 `<rule>` 中出现一次？
+- [ ] Field description 引用 Enum 时不重复 Enum 的规则？
+- [ ] Class docstring 的 `<anti_patterns>` 与 Field 的 `<must_not>` 不重复？
+- [ ] 全英文，无中英文混杂？

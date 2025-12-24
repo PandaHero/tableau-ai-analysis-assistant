@@ -101,7 +101,7 @@ class TableCalcSpecification(BaseModel):
 class RankTableCalcSpecification(TableCalcSpecification):
     """Rank table calculation.
     
-    Maps from: OperationType.RANK, OperationType.DENSE_RANK
+    Maps from: CalcType.RANK, CalcType.DENSE_RANK
     """
     table_calc_type: TableCalcType = Field(default=TableCalcType.RANK, alias="tableCalcType")
     rank_type: RankType = Field(default=RankType.COMPETITION, alias="rankType")
@@ -111,7 +111,7 @@ class RankTableCalcSpecification(TableCalcSpecification):
 class PercentOfTotalTableCalcSpecification(TableCalcSpecification):
     """Percent of total table calculation.
     
-    Maps from: OperationType.PERCENT
+    Maps from: CalcType.PERCENT_OF_TOTAL
     """
     table_calc_type: TableCalcType = Field(default=TableCalcType.PERCENT_OF_TOTAL, alias="tableCalcType")
     level_address: TableCalcFieldReference | None = Field(default=None, alias="levelAddress")
@@ -121,7 +121,7 @@ class PercentOfTotalTableCalcSpecification(TableCalcSpecification):
 class RunningTotalTableCalcSpecification(TableCalcSpecification):
     """Running total table calculation.
     
-    Maps from: OperationType.RUNNING_SUM, OperationType.RUNNING_AVG
+    Maps from: CalcType.RUNNING_TOTAL
     """
     table_calc_type: TableCalcType = Field(default=TableCalcType.RUNNING_TOTAL, alias="tableCalcType")
     aggregation: TableCalcAggregation = TableCalcAggregation.SUM
@@ -132,7 +132,7 @@ class RunningTotalTableCalcSpecification(TableCalcSpecification):
 class MovingTableCalcSpecification(TableCalcSpecification):
     """Moving calculation (moving average, moving sum).
     
-    Maps from: OperationType.MOVING_AVG, OperationType.MOVING_SUM
+    Maps from: CalcType.MOVING_CALC
     """
     table_calc_type: TableCalcType = Field(default=TableCalcType.MOVING_CALCULATION, alias="tableCalcType")
     aggregation: TableCalcAggregation = TableCalcAggregation.AVG
@@ -146,7 +146,7 @@ class MovingTableCalcSpecification(TableCalcSpecification):
 class DifferenceTableCalcSpecification(TableCalcSpecification):
     """Difference from table calculation.
     
-    Maps from: OperationType.DIFFERENCE, OperationType.GROWTH_RATE
+    Maps from: CalcType.DIFFERENCE
     """
     table_calc_type: TableCalcType = Field(default=TableCalcType.DIFFERENCE_FROM, alias="tableCalcType")
     level_address: TableCalcFieldReference | None = Field(default=None, alias="levelAddress")
@@ -157,7 +157,7 @@ class DifferenceTableCalcSpecification(TableCalcSpecification):
 class PercentDifferenceTableCalcSpecification(TableCalcSpecification):
     """Percent difference from table calculation.
     
-    Maps from: OperationType.GROWTH_RATE (percentage form)
+    Maps from: CalcType.PERCENT_DIFFERENCE
     """
     table_calc_type: TableCalcType = Field(default=TableCalcType.PERCENT_DIFFERENCE_FROM, alias="tableCalcType")
     level_address: TableCalcFieldReference | None = Field(default=None, alias="levelAddress")

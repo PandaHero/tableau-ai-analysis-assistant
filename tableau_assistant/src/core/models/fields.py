@@ -18,16 +18,13 @@ class DimensionField(BaseModel):
     
     field_name: str = Field(
         description="""<what>Business term for the dimension</what>
-<when>ALWAYS required</when>
-<rule>Use exact term from user question, e.g. "省份", "订单日期"</rule>
-<must_not>Use technical field names like "[Region].[Province]"</must_not>"""
+<when>ALWAYS required</when>"""
     )
     
     date_granularity: DateGranularity | None = Field(
         default=None,
         description="""<what>Time granularity for date dimensions</what>
-<when>ONLY for date/time fields</when>
-<rule>年→YEAR, 季度→QUARTER, 月→MONTH, 周→WEEK, 日→DAY</rule>"""
+<when>ONLY for date/time fields</when>"""
     )
     
     alias: str | None = Field(
@@ -47,16 +44,13 @@ class MeasureField(BaseModel):
     
     field_name: str = Field(
         description="""<what>Business term for the measure</what>
-<when>ALWAYS required</when>
-<rule>Use exact term from user question, e.g. "销售额", "利润"</rule>
-<must_not>Use technical field names like "[Measures].[Sales]"</must_not>"""
+<when>ALWAYS required</when>"""
     )
     
     aggregation: AggregationType = Field(
         default=AggregationType.SUM,
         description="""<what>Aggregation function</what>
-<when>ALWAYS required, defaults to SUM</when>
-<rule>总和→SUM, 平均→AVG, 计数→COUNT, 去重计数→COUNT_DISTINCT</rule>"""
+<when>ALWAYS required, defaults to SUM</when>"""
     )
     
     alias: str | None = Field(
@@ -75,15 +69,13 @@ class Sort(BaseModel):
     
     field_name: str = Field(
         description="""<what>Field to sort by</what>
-<when>ALWAYS required</when>
-<rule>Can be dimension, measure, or computation alias</rule>"""
+<when>ALWAYS required</when>"""
     )
     
     direction: SortDirection = Field(
         default=SortDirection.DESC,
         description="""<what>Sort direction</what>
-<when>ALWAYS required, defaults to DESC</when>
-<rule>升序→ASC, 降序→DESC</rule>"""
+<when>ALWAYS required, defaults to DESC</when>"""
     )
     
     priority: int = Field(

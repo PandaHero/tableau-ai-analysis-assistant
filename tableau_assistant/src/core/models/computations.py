@@ -1,7 +1,7 @@
 """Computation models - Core abstraction for complex calculations.
 
 The Computation model is the heart of the platform-agnostic semantic layer.
-It represents: Computation = Target × Partition × Operation
+It represents: Computation = Target × CalcType × Partition × Params
 
 partition_by is the key abstraction that unifies:
 - Tableau: Partitioning/Addressing in Table Calculations
@@ -11,84 +11,168 @@ partition_by is the key abstraction that unifies:
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .enums import OperationType
+from .enums import (
+    AggregationType,
+    CalcAggregation,
+    CalcType,
+    RankStyle,
+    RelativeTo,
+    SortDirection,
+)
 
 
-class Operation(BaseModel):
-    """Computation operation.
+class CalcParams(BaseModel):
+    """Calculation parameters (platform-agnostic).
     
-    Defines what calculation to perform.
+    <fill_order>
+    1. lod_dimensions, lod_aggregation (if LOD_*)
+    2. direction, rank_style, top_n (if RANK/DENSE_RANK/PERCENTILE)
+    3. relative_to (if DIFFERENCE/PERCENT_DIFFERENCE)
+    4. aggregation, restart_every (if RUNNING_TOTAL)
+    5. aggregation, window_previous, window_next, include_current (if MOVING_CALC)
+    6. level_of (if PERCENT_OF_TOTAL)
+    </fill_order>
+    
+    <anti_patterns>
+    X Fill params not matching calc_type
+    X LOD type without lod_dimensions/lod_aggregation
+    X rank_style = TOP_N (use top_n field instead)
+    </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
-    type: OperationType = Field(
-        description="""<what>Type of computation operation</what>
-<when>ALWAYS required</when>
-<rule>Must match how_type via OPERATION_TYPE_MAPPING</rule>
-<must_not>Use type not in OPERATION_TYPE_MAPPING[how_type]</must_not>"""
+    # LOD params (first, as LOD is computed before table calcs)
+    lod_dimensions: list[str] | None = Field(
+        default=None,
+        description="""<what>LOD dimension list</what>
+<when>calc_type in [LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE]</when>
+<dependency>Required for LOD types</dependency>"""
     )
     
-    params: dict = Field(
-        default_factory=dict,
-        description="""<what>Operation parameters</what>
-<when>Required for some operations</when>
-<rule>
-- MOVING_AVG/MOVING_SUM: {"window_size": int}
-- PERIOD_AGO: {"n": int, "granularity": str}
-</rule>"""
+    lod_aggregation: AggregationType | None = Field(
+        default=None,
+        description="""<what>LOD aggregation function</what>
+<when>calc_type in [LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE]</when>
+<dependency>Required for LOD types</dependency>"""
+    )
+    
+    # Ranking params
+    direction: SortDirection | None = Field(
+        default=None,
+        description="""<what>Sort direction for ranking</what>
+<when>calc_type in [RANK, DENSE_RANK, PERCENTILE]</when>"""
+    )
+    
+    rank_style: RankStyle | None = Field(
+        default=None,
+        description="""<what>Ranking style</what>
+<when>calc_type = RANK</when>"""
+    )
+    
+    top_n: int | None = Field(
+        default=None,
+        description="""<what>Limit to top/bottom N results</what>
+<when>calc_type in [RANK, DENSE_RANK] and user wants top N or bottom N</when>
+<rule>top N with DESC direction, bottom N with ASC direction</rule>"""
+    )
+    
+    # Difference params
+    relative_to: RelativeTo | None = Field(
+        default=None,
+        description="""<what>Difference reference position</what>
+<when>calc_type in [DIFFERENCE, PERCENT_DIFFERENCE]</when>"""
+    )
+    
+    # Running/Moving params
+    aggregation: CalcAggregation | None = Field(
+        default=None,
+        description="""<what>Aggregation for running/moving calc</what>
+<when>calc_type in [RUNNING_TOTAL, MOVING_CALC]</when>"""
+    )
+    
+    restart_every: str | None = Field(
+        default=None,
+        description="""<what>Dimension to restart running calc</what>
+<when>calc_type = RUNNING_TOTAL and needs restart (YTD, MTD)</when>"""
+    )
+    
+    window_previous: int | None = Field(
+        default=None,
+        description="""<what>Number of previous values in window</what>
+<when>calc_type = MOVING_CALC</when>"""
+    )
+    
+    window_next: int | None = Field(
+        default=None,
+        description="""<what>Number of next values in window</what>
+<when>calc_type = MOVING_CALC</when>"""
+    )
+    
+    include_current: bool | None = Field(
+        default=None,
+        description="""<what>Include current value in window</what>
+<when>calc_type = MOVING_CALC</when>"""
+    )
+    
+    # Percent params
+    level_of: str | None = Field(
+        default=None,
+        description="""<what>Level for percent calculation</what>
+<when>calc_type = PERCENT_OF_TOTAL and needs specific level</when>"""
     )
 
 
 class Computation(BaseModel):
-    """Computation = Target × Partition × Operation
-    
-    <what>Core computation definition (platform-agnostic)</what>
+    """Computation = Target x CalcType x Partition x Params
     
     <fill_order>
     1. target (ALWAYS)
-    2. partition_by (ALWAYS, can be empty)
-    3. operation (ALWAYS)
-    4. alias (optional)
+    2. calc_type (ALWAYS)
+    3. partition_by (ALWAYS, can be empty)
+    4. params (based on calc_type)
+    5. alias (optional, recommended for LOD)
     </fill_order>
     
     <examples>
-    Global ranking: {"target": "销售额", "partition_by": [], "operation": {"type": "RANK"}}
-    Monthly ranking: {"target": "销售额", "partition_by": ["订单日期"], "operation": {"type": "RANK"}}
+    Ranking: {"target": "Sales", "calc_type": "RANK", "partition_by": ["Month"], "params": {"direction": "DESC"}}
+    LOD: {"target": "OrderDate", "calc_type": "LOD_FIXED", "params": {"lod_dimensions": ["CustomerID"], "lod_aggregation": "MIN"}, "alias": "FirstPurchase"}
     </examples>
     
     <anti_patterns>
-    ❌ partition_by not subset of where.dimensions
-    ❌ operation.type not matching how_type
+    X partition_by not subset of where.dimensions
+    X calc_type and params mismatch
     </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
     target: str = Field(
-        description="""<what>Measure field to compute on</what>
-<when>ALWAYS required</when>
-<rule>Must be one of what.measures</rule>
-<must_not>Use technical field name (will cause mapping error)</must_not>"""
+        description="""<what>Target measure field</what>
+<when>ALWAYS</when>
+<dependency>Must be in what.measures</dependency>"""
+    )
+    
+    calc_type: CalcType = Field(
+        description="""<what>Calculation type</what>
+<when>ALWAYS</when>"""
     )
     
     partition_by: list[str] = Field(
         default_factory=list,
-        description="""<what>Dimensions to partition by</what>
-<when>ALWAYS fill (can be empty list)</when>
-<rule>全局/总→[], 每月/当月→[时间维度], 每省→[省份]</rule>
-<dependency>partition_by ⊆ where.dimensions</dependency>
-<must_not>Include dimension not in where.dimensions (will cause error)</must_not>"""
+        description="""<what>Partition dimensions (computation scope)</what>
+<when>ALWAYS (can be empty for global)</when>
+<dependency>Must be subset of where.dimensions</dependency>"""
     )
     
-    operation: Operation = Field(
-        description="""<what>Computation operation</what>
-<when>ALWAYS required</when>
-<rule>Must match how_type via OPERATION_TYPE_MAPPING</rule>"""
+    params: CalcParams = Field(
+        default_factory=CalcParams,
+        description="""<what>Calculation parameters</what>
+<when>Based on calc_type</when>"""
     )
     
     alias: str | None = Field(
         default=None,
-        description="""<what>Display name for computation result</what>
-<when>Optional</when>"""
+        description="""<what>Result alias</what>
+<when>Optional, recommended for LOD</when>"""
     )
     
     @field_validator("target")

@@ -170,7 +170,7 @@ class ChunkAnalyzer:
                 config=config,
             )
             
-            insights = self._parse_insights_response(response)
+            insights = self._parse_insights_response(response.content)
             logger.info(f"分析师 LLM 分析 {chunk.chunk_type}: {len(insights)} 个洞察")
             return insights
             
@@ -252,7 +252,7 @@ class ChunkAnalyzer:
                 config=config,
             )
             
-            decision, quality = self._parse_coordinator_response(response, remaining_chunks)
+            decision, quality = self._parse_coordinator_response(response.content, remaining_chunks)
             logger.info(
                 f"主持人 LLM 决策: continue={decision.should_continue}, "
                 f"next_chunk_id={decision.next_chunk_id}, "
@@ -319,7 +319,7 @@ class ChunkAnalyzer:
                 config=config,
             )
             
-            insights = self._parse_insights_response(response)
+            insights = self._parse_insights_response(response.content)
             logger.info(f"直接分析完成: {len(insights)} 个洞察")
             return insights
             

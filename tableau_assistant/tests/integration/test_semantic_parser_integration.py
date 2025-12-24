@@ -270,7 +270,7 @@ async def test_single_question(
         if sq.computations:
             logger.info(f"  计算: {len(sq.computations)} 个")
             for comp in sq.computations:
-                logger.info(f"    - {comp.operation.type.value}: target={comp.target}, partition_by={comp.partition_by}")
+                logger.info(f"    - {comp.calc_type.value}: target={comp.target}, partition_by={comp.partition_by}")
     
     elif result.intent.type == IntentType.CLARIFICATION and result.clarification:
         logger.info(f"\n澄清问题: {result.clarification.question}")

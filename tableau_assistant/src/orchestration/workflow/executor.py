@@ -52,8 +52,8 @@ from tableau_assistant.src.platforms.tableau import (
 from tableau_assistant.src.infra.storage.langgraph_store import get_langgraph_store
 from tableau_assistant.src.infra.storage.data_model_cache import DataModelCache
 from tableau_assistant.src.infra.storage.data_model_loader import TableauDataModelLoader
-from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, Insight, ReplanDecision
-from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery, ExecuteResult
+from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, Insight, ReplanDecision, ExecuteResult
+from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery
 
 logger = logging.getLogger(__name__)
 
@@ -378,8 +378,18 @@ class WorkflowExecutor:
                     event_name = event.get("name", "")
                     event_data = event.get("data", {})
                     
+                    # LLM 流式输出 - Token 级别
+                    if event_type == "on_chat_model_stream":
+                        chunk = event_data.get("chunk")
+                        if chunk and hasattr(chunk, "content") and chunk.content:
+                            yield WorkflowEvent(
+                                type=EventType.TOKEN,
+                                node_name=current_node,
+                                content=chunk.content,
+                            )
+                    
                     # 节点开始
-                    if event_type == "on_chain_start" and event_name in self.NODES:
+                    elif event_type == "on_chain_start" and event_name in self.NODES:
                         current_node = event_name
                         
                         # 发送节点开始事件
@@ -430,9 +440,8 @@ class WorkflowExecutor:
 # 这是必要的，因为 NodeOutput 和 WorkflowResult 使用了 Pydantic 模型
 def _rebuild_models():
     """重建 Pydantic 模型以解析前向引用"""
-    from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, Insight, ReplanDecision
+    from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, Insight, ReplanDecision, ExecuteResult
     from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery
-    from tableau_assistant.src.platforms.tableau.models import ExecuteResult
     
     NodeOutput.model_rebuild()
     WorkflowEvent.model_rebuild()

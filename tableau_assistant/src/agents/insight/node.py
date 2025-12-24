@@ -25,8 +25,8 @@ from langgraph.types import RunnableConfig
 # 如果这里从 components 包导入，会触发循环
 from tableau_assistant.src.agents.insight.components.coordinator import AnalysisCoordinator
 from tableau_assistant.src.core.models import InsightResult
-from tableau_assistant.src.platforms.tableau.models import ExecuteResult
-from tableau_assistant.src.orchestration.workflow.state import VizQLState
+from tableau_assistant.src.core.models.execute_result import ExecuteResult
+from tableau_assistant.src.core.state import VizQLState
 
 logger = logging.getLogger(__name__)
 

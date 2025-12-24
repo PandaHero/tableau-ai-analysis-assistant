@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     deepseek_api_base: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
     
+    # DeepSeek R1 配置（公司内部部署）
+    deepseek_r1_api_base: str = os.getenv("DEEPSEEK_R1_API_BASE", "")
+    deepseek_r1_api_key: str = os.getenv("DEEPSEEK_R1_API_KEY", "")
+    
     # 智谱 AI 配置
     zhipuai_api_key: str = os.getenv("ZHIPUAI_API_KEY", "")
     zhipu_api_base: str = os.getenv("ZHIPU_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
