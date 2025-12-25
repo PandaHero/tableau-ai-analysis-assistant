@@ -1,192 +1,825 @@
-"""Computation models - Core abstraction for complex calculations.
+# -*- coding: utf-8 -*-
 
-The Computation model is the heart of the platform-agnostic semantic layer.
-It represents: Computation = Target × CalcType × Partition × Params
-
-partition_by is the key abstraction that unifies:
-- Tableau: Partitioning/Addressing in Table Calculations
-- Power BI: ALL/ALLEXCEPT in DAX
-- SQL: PARTITION BY in window functions
-"""
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .enums import (
     AggregationType,
-    CalcAggregation,
-    CalcType,
     RankStyle,
     RelativeTo,
     SortDirection,
+    WindowAggregation,
 )
 
 
-class CalcParams(BaseModel):
-    """Calculation parameters (platform-agnostic).
+# ═══════════════════════════════════════════════════════════════════════════
+# LOD Expression (Level of Detail)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class LODFixed(BaseModel):
+    """FIXED LOD - Compute metric at specified granularity, independent of query.
+    
+    Use when question needs metric "anchored" to specific dimensions.
     
     <fill_order>
-    1. lod_dimensions, lod_aggregation (if LOD_*)
-    2. direction, rank_style, top_n (if RANK/DENSE_RANK/PERCENTILE)
-    3. relative_to (if DIFFERENCE/PERCENT_DIFFERENCE)
-    4. aggregation, restart_every (if RUNNING_TOTAL)
-    5. aggregation, window_previous, window_next, include_current (if MOVING_CALC)
-    6. level_of (if PERCENT_OF_TOTAL)
-    </fill_order>
-    
-    <anti_patterns>
-    X Fill params not matching calc_type
-    X LOD type without lod_dimensions/lod_aggregation
-    X rank_style = TOP_N (use top_n field instead)
-    </anti_patterns>
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    # LOD params (first, as LOD is computed before table calcs)
-    lod_dimensions: list[str] | None = Field(
-        default=None,
-        description="""<what>LOD dimension list</what>
-<when>calc_type in [LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE]</when>
-<dependency>Required for LOD types</dependency>"""
-    )
-    
-    lod_aggregation: AggregationType | None = Field(
-        default=None,
-        description="""<what>LOD aggregation function</what>
-<when>calc_type in [LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE]</when>
-<dependency>Required for LOD types</dependency>"""
-    )
-    
-    # Ranking params
-    direction: SortDirection | None = Field(
-        default=None,
-        description="""<what>Sort direction for ranking</what>
-<when>calc_type in [RANK, DENSE_RANK, PERCENTILE]</when>"""
-    )
-    
-    rank_style: RankStyle | None = Field(
-        default=None,
-        description="""<what>Ranking style</what>
-<when>calc_type = RANK</when>"""
-    )
-    
-    top_n: int | None = Field(
-        default=None,
-        description="""<what>Limit to top/bottom N results</what>
-<when>calc_type in [RANK, DENSE_RANK] and user wants top N or bottom N</when>
-<rule>top N with DESC direction, bottom N with ASC direction</rule>"""
-    )
-    
-    # Difference params
-    relative_to: RelativeTo | None = Field(
-        default=None,
-        description="""<what>Difference reference position</what>
-<when>calc_type in [DIFFERENCE, PERCENT_DIFFERENCE]</when>"""
-    )
-    
-    # Running/Moving params
-    aggregation: CalcAggregation | None = Field(
-        default=None,
-        description="""<what>Aggregation for running/moving calc</what>
-<when>calc_type in [RUNNING_TOTAL, MOVING_CALC]</when>"""
-    )
-    
-    restart_every: str | None = Field(
-        default=None,
-        description="""<what>Dimension to restart running calc</what>
-<when>calc_type = RUNNING_TOTAL and needs restart (YTD, MTD)</when>"""
-    )
-    
-    window_previous: int | None = Field(
-        default=None,
-        description="""<what>Number of previous values in window</what>
-<when>calc_type = MOVING_CALC</when>"""
-    )
-    
-    window_next: int | None = Field(
-        default=None,
-        description="""<what>Number of next values in window</what>
-<when>calc_type = MOVING_CALC</when>"""
-    )
-    
-    include_current: bool | None = Field(
-        default=None,
-        description="""<what>Include current value in window</what>
-<when>calc_type = MOVING_CALC</when>"""
-    )
-    
-    # Percent params
-    level_of: str | None = Field(
-        default=None,
-        description="""<what>Level for percent calculation</what>
-<when>calc_type = PERCENT_OF_TOTAL and needs specific level</when>"""
-    )
-
-
-class Computation(BaseModel):
-    """Computation = Target x CalcType x Partition x Params
-    
-    <fill_order>
-    1. target (ALWAYS)
-    2. calc_type (ALWAYS)
-    3. partition_by (ALWAYS, can be empty)
-    4. params (based on calc_type)
-    5. alias (optional, recommended for LOD)
+    1. calc_type (ALWAYS = "LOD_FIXED")
+    2. target (ALWAYS)
+    3. dimensions (ALWAYS, can be empty for global)
+    4. aggregation (ALWAYS)
+    5. alias (recommended for combination scenarios)
     </fill_order>
     
     <examples>
-    Ranking: {"target": "Sales", "calc_type": "RANK", "partition_by": ["Month"], "params": {"direction": "DESC"}}
-    LOD: {"target": "OrderDate", "calc_type": "LOD_FIXED", "params": {"lod_dimensions": ["CustomerID"], "lod_aggregation": "MIN"}, "alias": "FirstPurchase"}
+    First purchase: {"calc_type": "LOD_FIXED", "target": "OrderDate", "dimensions": ["CustomerID"], "aggregation": "MIN", "alias": "FirstPurchase"}
+    Customer lifetime: {"calc_type": "LOD_FIXED", "target": "Sales", "dimensions": ["CustomerID"], "aggregation": "SUM", "alias": "CustomerLifetimeValue"}
     </examples>
     
     <anti_patterns>
-    X partition_by not subset of where.dimensions
-    X calc_type and params mismatch
+    X Using LOD_FIXED when query already has the needed granularity
+    X Missing alias when result is used in subsequent table calc
     </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
+    calc_type: Literal["LOD_FIXED"] = Field(
+        default="LOD_FIXED",
+        description="""<what>LOD FIXED calculation type</what>
+<when>ALWAYS = "LOD_FIXED"</when>"""
+    )
+    
     target: str = Field(
-        description="""<what>Target measure field</what>
+        description="""<what>Target measure field to aggregate</what>
 <when>ALWAYS</when>
-<dependency>Must be in what.measures</dependency>"""
+<must_not>Empty string</must_not>"""
     )
     
-    calc_type: CalcType = Field(
-        description="""<what>Calculation type</what>
-<when>ALWAYS</when>"""
-    )
-    
-    partition_by: list[str] = Field(
+    dimensions: list[str] = Field(
         default_factory=list,
-        description="""<what>Partition dimensions (computation scope)</what>
-<when>ALWAYS (can be empty for global)</when>
-<dependency>Must be subset of where.dimensions</dependency>"""
+        description="""<what>Dimensions defining the fixed aggregation granularity</what>
+<when>ALWAYS (empty list = global aggregation across entire dataset)</when>
+<rule>These dimensions define the "anchor" - metric is computed at this granularity regardless of query</rule>"""
     )
     
-    params: CalcParams = Field(
-        default_factory=CalcParams,
-        description="""<what>Calculation parameters</what>
-<when>Based on calc_type</when>"""
+    aggregation: AggregationType = Field(
+        description="""<what>Aggregation function to apply</what>
+<when>ALWAYS</when>"""
     )
     
     alias: str | None = Field(
         default=None,
-        description="""<what>Result alias</what>
-<when>Optional, recommended for LOD</when>"""
+        description="""<what>Result alias for reference in subsequent calculations</what>
+<when>Recommended when used in combination with table calc</when>"""
     )
     
     @field_validator("target")
     @classmethod
     def target_not_empty(cls, v: str) -> str:
-        """Validate target is not empty."""
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+class LODInclude(BaseModel):
+    """INCLUDE LOD - Compute at finer granularity than query (add dimensions).
+    
+    Use when query is too coarse and need to drill down first.
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "LOD_INCLUDE")
+    2. target (ALWAYS)
+    3. dimensions (ALWAYS, at least one)
+    4. aggregation (ALWAYS)
+    5. alias (optional)
+    </fill_order>
+    
+    <examples>
+    Order avg when query by Region: {"calc_type": "LOD_INCLUDE", "target": "Sales", "dimensions": ["OrderID"], "aggregation": "AVG"}
+    </examples>
+    
+    <anti_patterns>
+    X Using LOD_INCLUDE when the dimension is already in query
+    X Empty dimensions list
+    </anti_patterns>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["LOD_INCLUDE"] = Field(
+        default="LOD_INCLUDE",
+        description="""<what>LOD INCLUDE calculation type</what>
+<when>ALWAYS = "LOD_INCLUDE"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field to aggregate</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    dimensions: list[str] = Field(
+        description="""<what>Dimensions to ADD to query granularity (making it finer)</what>
+<when>ALWAYS (at least one dimension required)</when>
+<rule>Result is calculated at query_dimensions + these dimensions</rule>
+<must_not>Empty list</must_not>"""
+    )
+    
+    aggregation: AggregationType = Field(
+        description="""<what>Aggregation function to apply</what>
+<when>ALWAYS</when>"""
+    )
+    
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias</what>
+<when>Optional</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("target cannot be empty")
         return v.strip()
     
-    @field_validator("partition_by")
+    @field_validator("dimensions")
     @classmethod
-    def partition_by_is_list(cls, v: list[str]) -> list[str]:
-        """Validate partition_by is a list of strings."""
-        if not isinstance(v, list):
-            raise ValueError("partition_by must be a list")
+    def dimensions_not_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("dimensions cannot be empty for LOD_INCLUDE")
         return [s.strip() for s in v if s and s.strip()]
+
+
+class LODExclude(BaseModel):
+    """EXCLUDE LOD - Compute at coarser granularity than query (remove dimensions).
+    
+    Use when query is too fine and need to roll up.
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "LOD_EXCLUDE")
+    2. target (ALWAYS)
+    3. dimensions (ALWAYS, at least one)
+    4. aggregation (ALWAYS)
+    5. alias (optional)
+    </fill_order>
+    
+    <examples>
+    Category total when query by Subcategory: {"calc_type": "LOD_EXCLUDE", "target": "Sales", "dimensions": ["Subcategory"], "aggregation": "SUM"}
+    </examples>
+    
+    <anti_patterns>
+    X Using LOD_EXCLUDE when the dimension is not in query
+    X Empty dimensions list
+    </anti_patterns>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["LOD_EXCLUDE"] = Field(
+        default="LOD_EXCLUDE",
+        description="""<what>LOD EXCLUDE calculation type</what>
+<when>ALWAYS = "LOD_EXCLUDE"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field to aggregate</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    dimensions: list[str] = Field(
+        description="""<what>Dimensions to REMOVE from query granularity (making it coarser)</what>
+<when>ALWAYS (at least one dimension required)</when>
+<rule>Result is calculated at query_dimensions - these dimensions</rule>
+<must_not>Empty list</must_not>"""
+    )
+    
+    aggregation: AggregationType = Field(
+        description="""<what>Aggregation function to apply</what>
+<when>ALWAYS</when>"""
+    )
+    
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias</what>
+<when>Optional</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+    
+    @field_validator("dimensions")
+    @classmethod
+    def dimensions_not_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("dimensions cannot be empty for LOD_EXCLUDE")
+        return [s.strip() for s in v if s and s.strip()]
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Table Calculation - Ranking
+# ═══════════════════════════════════════════════════════════════════════════
+
+class RankCalc(BaseModel):
+    """RANK - Rank query results with possible gaps (1,2,2,4).
+    
+    Use when question asks for ranking/ordering of results.
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "RANK")
+    2. target (ALWAYS)
+    3. partition_by (ALWAYS, can be empty for global)
+    4. direction (default: DESC)
+    5. rank_style (optional, default: COMPETITION)
+    6. top_n (optional, for filtering)
+    </fill_order>
+    
+    <examples>
+    Global rank: {"calc_type": "RANK", "target": "Sales", "partition_by": [], "direction": "DESC"}
+    Rank within month: {"calc_type": "RANK", "target": "Sales", "partition_by": ["Month"], "direction": "DESC"}
+    </examples>
+    
+    <anti_patterns>
+    X Using RANK for simple Top N filtering (use filter instead)
+    X partition_by contains dimensions not in query
+    </anti_patterns>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["RANK"] = Field(
+        default="RANK",
+        description="""<what>RANK calculation type</what>
+<when>ALWAYS = "RANK"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field to rank by</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="""<what>Dimensions defining ranking scope (restart ranking within each partition)</what>
+<when>ALWAYS (empty = global ranking across all results)</when>
+<dependency>Must be subset of query dimensions</dependency>"""
+    )
+    
+    direction: SortDirection = Field(
+        default=SortDirection.DESC,
+        description="""<what>Sort direction for ranking</what>
+<when>ALWAYS (default: DESC = highest value gets rank 1)</when>"""
+    )
+    
+    rank_style: RankStyle | None = Field(
+        default=None,
+        description="""<what>Ranking style for ties</what>
+<when>Optional (default: COMPETITION = 1,2,2,4)</when>"""
+    )
+    
+    top_n: int | None = Field(
+        default=None,
+        description="""<what>Filter to top/bottom N after ranking</what>
+<when>Optional, when user wants ranked subset</when>
+<rule>Combines with direction: DESC+top_n=top N, ASC+top_n=bottom N</rule>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+class DenseRankCalc(BaseModel):
+    """DENSE_RANK - Rank query results without gaps (1,2,2,3).
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "DENSE_RANK")
+    2. target (ALWAYS)
+    3. partition_by (ALWAYS, can be empty)
+    4. direction (default: DESC)
+    5. top_n (optional)
+    </fill_order>
+    
+    <examples>
+    Dense rank: {"calc_type": "DENSE_RANK", "target": "Sales", "partition_by": [], "direction": "DESC"}
+    </examples>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["DENSE_RANK"] = Field(
+        default="DENSE_RANK",
+        description="""<what>DENSE_RANK calculation type</what>
+<when>ALWAYS = "DENSE_RANK"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field to rank by</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="""<what>Dimensions defining ranking scope</what>
+<when>ALWAYS (empty = global ranking)</when>"""
+    )
+    
+    direction: SortDirection = Field(
+        default=SortDirection.DESC,
+        description="""<what>Sort direction for ranking</what>
+<when>ALWAYS (default: DESC)</when>"""
+    )
+    
+    top_n: int | None = Field(
+        default=None,
+        description="""<what>Filter to top/bottom N</what>
+<when>Optional</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+class PercentileCalc(BaseModel):
+    """PERCENTILE - Percent rank of query results (0-100%).
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "PERCENTILE")
+    2. target (ALWAYS)
+    3. partition_by (ALWAYS, can be empty)
+    4. direction (default: DESC)
+    </fill_order>
+    
+    <examples>
+    Percentile: {"calc_type": "PERCENTILE", "target": "Sales", "partition_by": [], "direction": "DESC"}
+    </examples>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["PERCENTILE"] = Field(
+        default="PERCENTILE",
+        description="""<what>PERCENTILE calculation type</what>
+<when>ALWAYS = "PERCENTILE"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="""<what>Dimensions defining percentile scope</what>
+<when>ALWAYS (empty = global percentile)</when>"""
+    )
+    
+    direction: SortDirection = Field(
+        default=SortDirection.DESC,
+        description="""<what>Sort direction</what>
+<when>ALWAYS (default: DESC)</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Table Calculation - Difference/Comparison
+# ═══════════════════════════════════════════════════════════════════════════
+
+class DifferenceCalc(BaseModel):
+    """DIFFERENCE - Absolute difference between query result rows.
+    
+    Use when question asks for change/difference from a reference point.
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "DIFFERENCE")
+    2. target (ALWAYS)
+    3. partition_by (ALWAYS, can be empty)
+    4. relative_to (ALWAYS)
+    </fill_order>
+    
+    <examples>
+    vs Previous: {"calc_type": "DIFFERENCE", "target": "Sales", "partition_by": [], "relative_to": "PREVIOUS"}
+    vs First: {"calc_type": "DIFFERENCE", "target": "Sales", "partition_by": ["Region"], "relative_to": "FIRST"}
+    </examples>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["DIFFERENCE"] = Field(
+        default="DIFFERENCE",
+        description="""<what>DIFFERENCE calculation type</what>
+<when>ALWAYS = "DIFFERENCE"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="""<what>Dimensions defining comparison scope</what>
+<when>ALWAYS (empty = global comparison)</when>"""
+    )
+    
+    relative_to: RelativeTo = Field(
+        description="""<what>Reference point for difference</what>
+<when>ALWAYS</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+class PercentDifferenceCalc(BaseModel):
+    """PERCENT_DIFFERENCE - Percentage change between query result rows.
+    
+    Use when question asks for growth rate or percent change.
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "PERCENT_DIFFERENCE")
+    2. target (ALWAYS)
+    3. partition_by (ALWAYS, can be empty)
+    4. relative_to (ALWAYS)
+    </fill_order>
+    
+    <examples>
+    MoM growth: {"calc_type": "PERCENT_DIFFERENCE", "target": "Sales", "partition_by": [], "relative_to": "PREVIOUS"}
+    YoY within region: {"calc_type": "PERCENT_DIFFERENCE", "target": "Sales", "partition_by": ["Region"], "relative_to": "PREVIOUS"}
+    </examples>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["PERCENT_DIFFERENCE"] = Field(
+        default="PERCENT_DIFFERENCE",
+        description="""<what>PERCENT_DIFFERENCE calculation type</what>
+<when>ALWAYS = "PERCENT_DIFFERENCE"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="""<what>Dimensions defining comparison scope</what>
+<when>ALWAYS (empty = global comparison)</when>"""
+    )
+    
+    relative_to: RelativeTo = Field(
+        description="""<what>Reference point for percent change</what>
+<when>ALWAYS</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Table Calculation - Running/Cumulative
+# ═══════════════════════════════════════════════════════════════════════════
+
+class RunningTotalCalc(BaseModel):
+    """RUNNING_TOTAL - Cumulative aggregation of query results.
+    
+    Use when question asks for cumulative/running/YTD totals.
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "RUNNING_TOTAL")
+    2. target (ALWAYS)
+    3. partition_by (ALWAYS, can be empty)
+    4. aggregation (default: SUM)
+    5. restart_every (optional, for periodic restart like YTD)
+    </fill_order>
+    
+    <examples>
+    Cumulative sum: {"calc_type": "RUNNING_TOTAL", "target": "Sales", "partition_by": [], "aggregation": "SUM"}
+    YTD: {"calc_type": "RUNNING_TOTAL", "target": "Sales", "partition_by": [], "aggregation": "SUM", "restart_every": "Year"}
+    </examples>
+    
+    <anti_patterns>
+    X Missing restart_every for YTD/MTD scenarios
+    </anti_patterns>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["RUNNING_TOTAL"] = Field(
+        default="RUNNING_TOTAL",
+        description="""<what>RUNNING_TOTAL calculation type</what>
+<when>ALWAYS = "RUNNING_TOTAL"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="""<what>Dimensions defining cumulative scope</what>
+<when>ALWAYS (empty = global cumulative)</when>"""
+    )
+    
+    aggregation: WindowAggregation = Field(
+        default=WindowAggregation.SUM,
+        description="""<what>Aggregation function for running calc</what>
+<when>ALWAYS (default: SUM)</when>"""
+    )
+    
+    restart_every: str | None = Field(
+        default=None,
+        description="""<what>Dimension to restart cumulative calculation</what>
+<when>For YTD (restart_every="Year"), MTD (restart_every="Month"), etc.</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Table Calculation - Moving Window
+# ═══════════════════════════════════════════════════════════════════════════
+
+class MovingCalc(BaseModel):
+    """MOVING_CALC - Sliding window aggregation of query results.
+    
+    Use when question asks for moving average or rolling calculations.
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "MOVING_CALC")
+    2. target (ALWAYS)
+    3. partition_by (ALWAYS, can be empty)
+    4. aggregation (default: AVG)
+    5. window_previous (default: 2)
+    6. window_next (default: 0)
+    7. include_current (default: True)
+    </fill_order>
+    
+    <examples>
+    3-month MA: {"calc_type": "MOVING_CALC", "target": "Sales", "partition_by": [], "aggregation": "AVG", "window_previous": 2, "window_next": 0, "include_current": true}
+    Rolling 5-day sum: {"calc_type": "MOVING_CALC", "target": "Sales", "partition_by": [], "aggregation": "SUM", "window_previous": 4, "window_next": 0}
+    </examples>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["MOVING_CALC"] = Field(
+        default="MOVING_CALC",
+        description="""<what>MOVING_CALC calculation type</what>
+<when>ALWAYS = "MOVING_CALC"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="""<what>Dimensions defining window scope</what>
+<when>ALWAYS (empty = global window)</when>"""
+    )
+    
+    aggregation: WindowAggregation = Field(
+        default=WindowAggregation.AVG,
+        description="""<what>Aggregation function for window</what>
+<when>ALWAYS (default: AVG for moving average)</when>"""
+    )
+    
+    window_previous: int = Field(
+        default=2,
+        description="""<what>Number of previous rows in window</what>
+<when>ALWAYS (default: 2, so 3-period window with current)</when>"""
+    )
+    
+    window_next: int = Field(
+        default=0,
+        description="""<what>Number of next rows in window</what>
+<when>ALWAYS (default: 0 for trailing window)</when>"""
+    )
+    
+    include_current: bool = Field(
+        default=True,
+        description="""<what>Include current row in window</what>
+<when>ALWAYS (default: True)</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Table Calculation - Percent of Total
+# ═══════════════════════════════════════════════════════════════════════════
+
+class PercentOfTotalCalc(BaseModel):
+    """PERCENT_OF_TOTAL - Calculate proportion of query results.
+    
+    Use when question asks for share/proportion/percentage of total.
+    
+    <fill_order>
+    1. calc_type (ALWAYS = "PERCENT_OF_TOTAL")
+    2. target (ALWAYS)
+    3. partition_by (ALWAYS, can be empty for global total)
+    4. level_of (optional)
+    </fill_order>
+    
+    <examples>
+    Global percent: {"calc_type": "PERCENT_OF_TOTAL", "target": "Sales", "partition_by": []}
+    Within region: {"calc_type": "PERCENT_OF_TOTAL", "target": "Sales", "partition_by": ["Region"]}
+    </examples>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    calc_type: Literal["PERCENT_OF_TOTAL"] = Field(
+        default="PERCENT_OF_TOTAL",
+        description="""<what>PERCENT_OF_TOTAL calculation type</what>
+<when>ALWAYS = "PERCENT_OF_TOTAL"</when>"""
+    )
+    
+    target: str = Field(
+        description="""<what>Target measure field</what>
+<when>ALWAYS</when>
+<must_not>Empty string</must_not>"""
+    )
+    
+    partition_by: list[str] = Field(
+        default_factory=list,
+        description="""<what>Dimensions defining the "total" scope</what>
+<when>ALWAYS (empty = percent of grand total)</when>
+<rule>partition_by=["Region"] means percent within each Region</rule>"""
+    )
+    
+    level_of: str | None = Field(
+        default=None,
+        description="""<what>Specific level for percent calculation</what>
+<when>When specific aggregation level needed</when>"""
+    )
+    
+    @field_validator("target")
+    @classmethod
+    def target_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("target cannot be empty")
+        return v.strip()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Union Types
+# ═══════════════════════════════════════════════════════════════════════════
+
+# LOD Expression Union
+LODExpression = Annotated[
+    Union[LODFixed, LODInclude, LODExclude],
+    Field(discriminator="calc_type")
+]
+"""Union of all LOD expression types, discriminated by calc_type.
+
+<rule>
+LOD Selection (based on granularity relationship to query):
+
+LOD_FIXED - Need metric at SPECIFIC granularity, independent of query:
+  → "per customer X", "customer lifetime value", "first purchase date"
+  → dimensions = the anchor dimensions (e.g., CustomerID)
+
+LOD_INCLUDE - Need FINER granularity than query (add dimensions):
+  → "average order amount" when query is by Region
+  → dimensions = dimensions to ADD (e.g., OrderID)
+
+LOD_EXCLUDE - Need COARSER granularity than query (remove dimensions):
+  → "category total" when query is by Subcategory
+  → dimensions = dimensions to REMOVE (e.g., Subcategory)
+</rule>
+"""
+
+# Table Calculation Union
+TableCalc = Annotated[
+    Union[
+        RankCalc, DenseRankCalc, PercentileCalc,
+        DifferenceCalc, PercentDifferenceCalc,
+        RunningTotalCalc, MovingCalc, PercentOfTotalCalc
+    ],
+    Field(discriminator="calc_type")
+]
+"""Union of all table calculation types, discriminated by calc_type.
+
+<rule>
+Table Calc Selection (based on transformation type):
+
+Ranking (RANK, DENSE_RANK, PERCENTILE):
+  → "rank by sales", "top 10 with rank", "percentile position"
+
+Cumulative (RUNNING_TOTAL):
+  → "YTD sales", "cumulative total", "running sum"
+
+Moving Window (MOVING_CALC):
+  → "3-month moving average", "rolling 7-day sum"
+
+Proportion (PERCENT_OF_TOTAL):
+  → "percent of total", "share within region"
+
+Comparison (DIFFERENCE, PERCENT_DIFFERENCE):
+  → "vs previous month", "MoM growth", "YoY change"
+</rule>
+"""
+
+# Top-Level Computation Union (LOD + TableCalc)
+Computation = Annotated[
+    Union[
+        # LOD types
+        LODFixed, LODInclude, LODExclude,
+        # Table Calc types
+        RankCalc, DenseRankCalc, PercentileCalc,
+        DifferenceCalc, PercentDifferenceCalc,
+        RunningTotalCalc, MovingCalc, PercentOfTotalCalc
+    ],
+    Field(discriminator="calc_type")
+]
+"""Union of all computation types (LOD + TableCalc), discriminated by calc_type.
+
+<rule>
+Decision Framework (From Question Perspective):
+
+Step 1 - Does question need metric at DIFFERENT granularity than query?
+  YES → LOD
+    - LOD_FIXED: Metric anchored to specific dimensions
+      → "per customer X", "customer lifetime value"
+    - LOD_INCLUDE: Need finer granularity (add dimensions)
+      → "average order amount" when query by Region
+    - LOD_EXCLUDE: Need coarser granularity (remove dimensions)
+      → "category total" when query by Subcategory
+  NO → Continue to Step 2
+
+Step 2 - Does question need to TRANSFORM query results?
+  YES → Table Calc
+    - RANK/DENSE_RANK/PERCENTILE: Ranking
+    - RUNNING_TOTAL: Cumulative (YTD, running sum)
+    - MOVING_CALC: Sliding window (moving average)
+    - PERCENT_OF_TOTAL: Share/proportion
+    - DIFFERENCE/PERCENT_DIFFERENCE: Comparison (MoM, YoY)
+  NO → Basic aggregation (no Computation needed)
+
+Combination (LOD + Table Calc):
+When question needs BOTH different granularity AND transformation.
+Example: "Rank customers by first purchase date"
+→ [LOD_FIXED for first purchase, then RANK]
+Output order: LOD first, then Table Calc
+</rule>
+"""
+
+
+__all__ = [
+    # LOD types
+    "LODFixed",
+    "LODInclude", 
+    "LODExclude",
+    "LODExpression",
+    # Table Calc types
+    "RankCalc",
+    "DenseRankCalc",
+    "PercentileCalc",
+    "DifferenceCalc",
+    "PercentDifferenceCalc",
+    "RunningTotalCalc",
+    "MovingCalc",
+    "PercentOfTotalCalc",
+    "TableCalc",
+    # Combined
+    "Computation",
+]

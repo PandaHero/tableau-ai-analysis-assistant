@@ -5,19 +5,24 @@ Core Data Models - 平台无关的语义层模型
 本模块包含所有平台无关的数据模型，按领域分类：
 
 1. 基础模型 (enums, fields, filters, computations)
-2. 语义解析模型 (step1, step2, observer, parse_result, query)
+2. 查询模型 (query)
 3. 数据模型 (data_model)
 4. 验证模型 (validation)
 5. 维度层级模型 (dimension_hierarchy)
 6. 字段映射模型 (field_mapping)
 7. 洞察模型 (insight)
 8. 重规划模型 (replan)
+
+注意：以下模型已迁移到 agents/semantic_parser/models/：
+- Step1 模型 (step1)
+- Step2 模型 (step2)
+- Observer 模型 (observer)
+- ParseResult 模型 (parse_result)
 """
 
 # Enums
 from .enums import (
     AggregationType,
-    CalcAggregation,
     CalcType,
     DateGranularity,
     DateRangeType,
@@ -32,18 +37,34 @@ from .enums import (
     RelativeTo,
     SortDirection,
     TextMatchType,
+    WindowAggregation,
 )
 
 # Fields
 from .fields import (
     DimensionField,
     MeasureField,
-    Sort,
+    SortSpec,
 )
 
 # Computations
 from .computations import (
-    CalcParams,
+    # LOD types
+    LODFixed,
+    LODInclude,
+    LODExclude,
+    LODExpression,
+    # Table Calc types
+    RankCalc,
+    DenseRankCalc,
+    PercentileCalc,
+    DifferenceCalc,
+    PercentDifferenceCalc,
+    RunningTotalCalc,
+    MovingCalc,
+    PercentOfTotalCalc,
+    TableCalc,
+    # Union type
     Computation,
 )
 
@@ -59,41 +80,6 @@ from .filters import (
 
 # Query
 from .query import SemanticQuery
-
-# Step 1
-from .step1 import (
-    DimensionSpec,
-    FilterSpec,
-    FilterValidationCheck,
-    Intent,
-    MeasureSpec,
-    Step1Output,
-    Step1Validation,
-    What,
-    Where,
-)
-
-# Step 2
-from .step2 import (
-    Step2Output,
-    Step2Validation,
-    ValidationCheck,
-)
-
-# Observer
-from .observer import (
-    Conflict,
-    Correction,
-    ObserverInput,
-    ObserverOutput,
-    Step1Correction,
-)
-
-# Parse Result
-from .parse_result import (
-    ClarificationQuestion,
-    SemanticParseResult,
-)
 
 # Validation
 from .validation import (
@@ -170,7 +156,6 @@ from .query_request import (
 __all__ = [
     # Enums
     "AggregationType",
-    "CalcAggregation",
     "CalcType",
     "DateGranularity",
     "DateRangeType",
@@ -185,12 +170,28 @@ __all__ = [
     "RelativeTo",
     "SortDirection",
     "TextMatchType",
+    "WindowAggregation",
     # Fields
     "DimensionField",
     "MeasureField",
-    "Sort",
+    "SortSpec",
     # Computations
-    "CalcParams",
+    # LOD types
+    "LODFixed",
+    "LODInclude",
+    "LODExclude",
+    "LODExpression",
+    # Table Calc types
+    "RankCalc",
+    "DenseRankCalc",
+    "PercentileCalc",
+    "DifferenceCalc",
+    "PercentDifferenceCalc",
+    "RunningTotalCalc",
+    "MovingCalc",
+    "PercentOfTotalCalc",
+    "TableCalc",
+    # Union type
     "Computation",
     # Filters
     "DateRangeFilter",
@@ -201,29 +202,6 @@ __all__ = [
     "TopNFilter",
     # Query
     "SemanticQuery",
-    # Step 1
-    "DimensionSpec",
-    "FilterSpec",
-    "FilterValidationCheck",
-    "Intent",
-    "MeasureSpec",
-    "Step1Output",
-    "Step1Validation",
-    "What",
-    "Where",
-    # Step 2
-    "Step2Output",
-    "Step2Validation",
-    "ValidationCheck",
-    # Observer
-    "Conflict",
-    "Correction",
-    "ObserverInput",
-    "ObserverOutput",
-    "Step1Correction",
-    # Parse Result
-    "ClarificationQuestion",
-    "SemanticParseResult",
     # Validation
     "ColumnInfo",
     "QueryResult",

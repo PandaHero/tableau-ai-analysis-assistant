@@ -6,94 +6,71 @@ It infers computation from restated_question and validates against Step 1 output
 
 IMPORTANT: Validation is done by LLM itself, NOT by code.
 
-Design principles (from appendix-e-prompt-model-guide.md):
-- Prompt teaches LLM HOW to think (领域概念、分析方法)
-- Schema tells LLM WHAT to output (字段含义、填写规则、决策规则)
-- Uses VizQLPrompt base class for automatic JSON Schema injection
+Design principles (from prompt_and_models规范文档.md):
+- Prompt teaches LLM HOW to think (domain concepts, analysis methods)
+- Schema tells LLM WHAT to output (field meanings, fill rules, decision rules)
+- Examples belong in Schema <examples> tags, NOT in Prompt
+- Enum selection rules only in Enum docstring <rule> tag
 """
 
 from typing import Type
 from pydantic import BaseModel
 
 from tableau_assistant.src.agents.base.prompt import VizQLPrompt
-from tableau_assistant.src.core.models import Step2Output
+from tableau_assistant.src.agents.semantic_parser.models import Step2Output
 
 
 class Step2Prompt(VizQLPrompt):
     """Step 2: Computation reasoning and LLM self-validation.
     
-    Uses 4-section structure:
-    - ROLE: Define the AI's role
-    - TASK: Define the task
-    - DOMAIN KNOWLEDGE: Provide domain concepts (not field-specific rules)
-    - CONSTRAINTS: Define boundaries
+    Uses 4-section structure per spec section 3.3:
+    - ROLE: 2-3 sentences defining expertise
+    - TASK: 1 sentence + Process flow
+    - DOMAIN KNOWLEDGE: Domain concepts + abstract thinking steps (NO field-specific rules)
+    - CONSTRAINTS: MUST/MUST NOT format
     """
     
     def get_role(self) -> str:
         return """Computation reasoning expert for data analysis.
-You infer computation definitions from restated questions and validate against Step 1 output.
 
-Expertise: CalcType inference, Partition semantics, LOD vs Table Calc selection, Self-validation"""
+Expertise: LOD vs Table Calc decision, Partition inference, Self-validation"""
 
     def get_task(self) -> str:
         return """Infer computation from restated_question, then validate against Step 1 output.
 
-Process: Infer target → Select calc_type → Determine partition_by → Fill params → Self-validate"""
+Process: Infer target → Decide LOD vs Table Calc → Infer partition/dimensions → Fill params → Validate"""
 
     def get_specific_domain_knowledge(self) -> str:
         return """**Computation Model**
-
 Computation = Target × CalcType × Partition × Params
 
 **Think step by step:**
-1. Infer target from restated_question
-2. Infer calc_type from question keywords
-3. Infer partition_by from scope keywords
-4. Fill params based on calc_type
-5. Validate against Step 1 output
+Step 1: Infer target from restated_question (must be in what.measures)
+Step 2: Decide LOD vs Table Calc based on question semantics
+Step 3: Select specific calc_type (see computation class docstrings)
+Step 4: Infer partition_by (Table Calc) or dimensions (LOD) based on scope keywords
+Step 5: Fill remaining fields per class fill_order
+Step 6: Validate all three checks
 
-**Partition Semantics**
+**LOD vs Table Calc - Core Distinction**
+- LOD = Question needs metric at DIFFERENT granularity than query dimensions
+  → "per customer X", "customer lifetime value", "first purchase date"
+- Table Calc = Question needs to TRANSFORM query results
+  → rank, cumulate, compare, calculate proportion
 
-Partition defines the scope of computation:
-- Empty [] = Global computation (across all data)
-- Non-empty = Compute within each group independently
+**Partition/Dimensions Keywords**
+- global/total/overall → partition_by: [] or dimensions: []
+- per month/within month → [time dimension]
+- per customer/each customer → [CustomerID]
+- per region → [region dimension]
 
-Keywords to partition mapping:
-- "global/total/overall" → []
-- "per month/within each month/monthly" → [time dimension]
-- "per region/by region/within region" → [region dimension]
-
-**LOD vs Table Calc Decision**
-
-LOD (change aggregation granularity):
-- Use when need atomic metric independent of view
-- Example: "per customer first purchase date" → LOD_FIXED
-
-Table Calc (operate on aggregated view data):
-- Use when need to transform already aggregated data
-- Example: "rank by sales" → RANK
-
-**Combination Scenarios (LOD + Table Calc)**
-
-When to use combination:
-1. Need atomic metric independent of view, then transform it
-   Example: "Rank customers by their first purchase date"
-   → First LOD_FIXED to get first purchase date per customer
-   → Then RANK to rank customers by that date
-
-Output order for combinations:
-- computations: [LOD first, then Table Calc]
-- LOD creates the base metric, Table Calc transforms it
-
-**Self-Validation**
-
-After inference, validate your results against Step 1 output to ensure consistency."""
+**Combination Scenarios**
+When question needs BOTH different granularity AND transformation:
+→ Output order: [LOD first, then Table Calc]"""
 
     def get_constraints(self) -> str:
-        return """MUST: Infer from restated_question, Validate against Step 1, Report all inconsistencies
-MUST: Output LOD computations before Table Calc computations in combination scenarios
-MUST NOT: Skip validation, Mark as valid when any check fails
-MUST NOT: Use partition_by dimensions not in Step 1's where.dimensions"""
+        return """MUST: Infer from restated_question, Validate against Step 1, Report inconsistencies
+MUST NOT: Infer partition_by not in dimensions, Skip validation, Mark valid when check fails"""
 
     def get_user_template(self) -> str:
         return """**Restated Question:** {restated_question}

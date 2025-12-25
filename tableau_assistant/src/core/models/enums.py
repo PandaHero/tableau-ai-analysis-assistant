@@ -1,6 +1,13 @@
+# -*- coding: utf-8 -*-
 """Core enumerations for the semantic layer.
 
 All enums are platform-agnostic and represent user intent, not platform-specific concepts.
+
+Organization:
+1. Common Enums (Cross-Agent Shared)
+2. Computation Parameter Enums (grouped by calc type)
+3. Semantic Parser Enums
+4. Field Mapper Enums
 """
 
 from enum import Enum
@@ -11,7 +18,7 @@ from enum import Enum
 # ═══════════════════════════════════════════════════════════════════════════
 
 class AggregationType(str, Enum):
-    """Aggregation type for basic statistical functions.
+    """Aggregation function for measures and LOD expressions.
     
     <rule>
     total/sum -> SUM
@@ -37,18 +44,7 @@ class AggregationType(str, Enum):
 
 
 class DateGranularity(str, Enum):
-    """Date granularity.
-    
-    <rule>
-    year/annual -> YEAR
-    quarter/quarterly -> QUARTER
-    month/monthly -> MONTH
-    week/weekly -> WEEK
-    day/daily -> DAY
-    hour/hourly -> HOUR
-    minute -> MINUTE
-    </rule>
-    """
+    """Date granularity: YEAR | QUARTER | MONTH | WEEK | DAY | HOUR | MINUTE"""
     YEAR = "YEAR"
     QUARTER = "QUARTER"
     MONTH = "MONTH"
@@ -59,28 +55,13 @@ class DateGranularity(str, Enum):
 
 
 class SortDirection(str, Enum):
-    """Sort direction.
-    
-    <rule>
-    ascending/low to high/bottom N -> ASC
-    descending/high to low/top N -> DESC
-    </rule>
-    """
+    """Sort direction: DESC=descending (high to low) | ASC=ascending (low to high)"""
     ASC = "ASC"
     DESC = "DESC"
 
 
 class FilterType(str, Enum):
-    """Filter type.
-    
-    <rule>
-    categorical values -> SET
-    time/date constraints -> DATE_RANGE
-    number range -> NUMERIC_RANGE
-    pattern match -> TEXT_MATCH
-    top/bottom N -> TOP_N
-    </rule>
-    """
+    """Filter type: SET | DATE_RANGE | NUMERIC_RANGE | TEXT_MATCH | TOP_N"""
     SET = "SET"
     DATE_RANGE = "DATE_RANGE"
     NUMERIC_RANGE = "NUMERIC_RANGE"
@@ -89,31 +70,12 @@ class FilterType(str, Enum):
 
 
 class DateRangeType(str, Enum):
-    """Date range type.
-    
-    Simplified to only CUSTOM - LLM calculates concrete start_date/end_date
-    based on user intent and current_time.
-    
-    <rule>
-    All date filtering uses concrete start_date and end_date values.
-    LLM interprets user intent (this year, last month, 2024, etc.)
-    and calculates the actual date range.
-    </rule>
-    """
+    """Date range type: CUSTOM (LLM calculates concrete start_date/end_date)"""
     CUSTOM = "CUSTOM"
 
 
 class TextMatchType(str, Enum):
-    """Text match type.
-    
-    <rule>
-    contains/includes -> CONTAINS
-    starts with/begins with -> STARTS_WITH
-    ends with -> ENDS_WITH
-    exact/equals -> EXACT
-    regex/pattern -> REGEX
-    </rule>
-    """
+    """Text match type: CONTAINS | STARTS_WITH | ENDS_WITH | EXACT | REGEX"""
     CONTAINS = "CONTAINS"
     STARTS_WITH = "STARTS_WITH"
     ENDS_WITH = "ENDS_WITH"
@@ -122,78 +84,10 @@ class TextMatchType(str, Enum):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Semantic Parser Enums
+# Computation Parameter Enums (Grouped by Calc Type)
 # ═══════════════════════════════════════════════════════════════════════════
 
-class HowType(str, Enum):
-    """Computation complexity: SIMPLE=no Step2 | COMPLEX=needs Step2
-    
-    <rule>
-    SIMPLE - Direct aggregation, no computation needed:
-    - Basic aggregation: total sales, average price, count of orders
-    - Simple grouping: sales by region, orders by month
-    - Top N / Bottom N filtering: "top 5 cities by sales", "bottom 10 products"
-      (returns filtered subset, NOT a rank column)
-    
-    COMPLEX - Needs Step 2 for computation:
-    - Ranking: "rank all provinces", "percentile ranking" (adds rank column to ALL rows)
-    - Running: "YTD", "cumulative total", "running sum"
-    - Comparison: "MoM growth", "YoY change", "difference from previous"
-    - Moving: "3-month moving average", "rolling sum"
-    - Percent: "percent of total", "share of category"
-    - LOD: "per customer X", "first purchase date", "lifetime value"
-    
-    Key distinction - Top N filtering vs Rank calculation:
-    - Top N filtering (SIMPLE): "top 5 cities" returns 5 rows (filtered subset)
-    - Rank calculation (COMPLEX): "rank all cities" returns ALL rows with rank column added
-    </rule>
-    
-    <anti_patterns>
-    X "Top 5 cities by sales" classified as COMPLEX (should be SIMPLE - filtering)
-    X "Rank all provinces" classified as SIMPLE (should be COMPLEX - adds rank column)
-    X "Cumulative sales" classified as SIMPLE (should be COMPLEX - needs RUNNING_TOTAL)
-    X "Percent of total" classified as SIMPLE (should be COMPLEX - needs PERCENT_OF_TOTAL)
-    </anti_patterns>
-    """
-    SIMPLE = "SIMPLE"
-    COMPLEX = "COMPLEX"
-
-
-class CalcType(str, Enum):
-    """Calculation type (Step2 output, platform-agnostic).
-    
-    <rule>
-    Table Calculations:
-    - ranking/Top N -> RANK, DENSE_RANK, PERCENTILE
-    - running total/YTD -> RUNNING_TOTAL
-    - moving average -> MOVING_CALC
-    - percent of total -> PERCENT_OF_TOTAL
-    - difference/change -> DIFFERENCE
-    - growth rate/MoM -> PERCENT_DIFFERENCE
-    
-    LOD (change aggregation granularity):
-    - per customer X/per product Y -> LOD_FIXED
-    - add dimension -> LOD_INCLUDE
-    - remove dimension -> LOD_EXCLUDE
-    </rule>
-    """
-    # Ranking
-    RANK = "RANK"
-    DENSE_RANK = "DENSE_RANK"
-    PERCENTILE = "PERCENTILE"
-    # Running
-    RUNNING_TOTAL = "RUNNING_TOTAL"
-    MOVING_CALC = "MOVING_CALC"
-    # Percent
-    PERCENT_OF_TOTAL = "PERCENT_OF_TOTAL"
-    # Difference
-    DIFFERENCE = "DIFFERENCE"
-    PERCENT_DIFFERENCE = "PERCENT_DIFFERENCE"
-    # LOD
-    LOD_FIXED = "LOD_FIXED"
-    LOD_INCLUDE = "LOD_INCLUDE"
-    LOD_EXCLUDE = "LOD_EXCLUDE"
-
+# --- Ranking Parameters ---
 
 class RankStyle(str, Enum):
     """Ranking style: COMPETITION=1,2,2,4 | DENSE=1,2,2,3 | UNIQUE=1,2,3,4"""
@@ -202,20 +96,56 @@ class RankStyle(str, Enum):
     UNIQUE = "UNIQUE"
 
 
+# --- Difference Parameters ---
+
 class RelativeTo(str, Enum):
-    """Difference reference: PREVIOUS=MoM | FIRST=vs start | LAST=vs end"""
+    """Difference reference point: PREVIOUS | NEXT | FIRST | LAST"""
     PREVIOUS = "PREVIOUS"
     NEXT = "NEXT"
     FIRST = "FIRST"
     LAST = "LAST"
 
 
-class CalcAggregation(str, Enum):
-    """Running/moving aggregation: SUM | AVG | MIN | MAX"""
+# --- Running/Moving Parameters ---
+
+class WindowAggregation(str, Enum):
+    """Window aggregation function for RUNNING_TOTAL and MOVING_CALC: SUM | AVG | MIN | MAX | COUNT"""
     SUM = "SUM"
     AVG = "AVG"
     MIN = "MIN"
     MAX = "MAX"
+    COUNT = "COUNT"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Semantic Parser Enums
+# ═══════════════════════════════════════════════════════════════════════════
+
+class HowType(str, Enum):
+    """Computation complexity: SIMPLE=no Step2 | COMPLEX=needs Step2.
+    
+    <rule>
+    SIMPLE - Direct aggregation, no computation needed:
+    - Basic aggregation: total sales, average price, count of orders
+    - Simple grouping: sales by region, orders by month
+    - Top N filtering: top 5 cities by sales (returns filtered subset, NOT rank column)
+    
+    COMPLEX - Needs Step 2 for computation:
+    - Ranking: rank all provinces (adds rank column to ALL rows)
+    - Running: YTD, cumulative total, running sum
+    - Comparison: MoM growth, YoY change, difference from previous
+    - Moving: 3-month moving average, rolling sum
+    - Percent: percent of total, share of category
+    - LOD: per customer X, first purchase date, lifetime value
+    </rule>
+    
+    <anti_patterns>
+    X Top 5 cities by sales classified as COMPLEX (should be SIMPLE - filtering)
+    X Rank all provinces classified as SIMPLE (should be COMPLEX - adds rank column)
+    </anti_patterns>
+    """
+    SIMPLE = "SIMPLE"
+    COMPLEX = "COMPLEX"
 
 
 class IntentType(str, Enum):
@@ -265,18 +195,7 @@ class MappingSource(str, Enum):
 
 
 class DimensionCategory(str, Enum):
-    """Dimension category.
-    
-    <rule>
-    - geography: location (province, city, district)
-    - time: temporal (year, month, day, quarter)
-    - product: product (product, category, brand)
-    - customer: customer (customer, customer type)
-    - organization: org structure (department, team)
-    - financial: financial (account, cost center)
-    - other: other
-    </rule>
-    """
+    """Dimension category: TIME | GEOGRAPHY | PRODUCT | CUSTOMER | ORGANIZATION | FINANCIAL | OTHER"""
     TIME = "time"
     GEOGRAPHY = "geography"
     PRODUCT = "product"
@@ -293,3 +212,34 @@ class DimensionLevel(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     DETAIL = "detail"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Backward Compatibility (Deprecated - will be removed)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# CalcType is deprecated, use Literal types in computations.py instead
+class CalcType(str, Enum):
+    """DEPRECATED: Use specific computation classes in computations.py instead.
+    
+    Kept for backward compatibility during migration.
+    """
+    # Ranking
+    RANK = "RANK"
+    DENSE_RANK = "DENSE_RANK"
+    PERCENTILE = "PERCENTILE"
+    # Running
+    RUNNING_TOTAL = "RUNNING_TOTAL"
+    MOVING_CALC = "MOVING_CALC"
+    # Percent
+    PERCENT_OF_TOTAL = "PERCENT_OF_TOTAL"
+    # Difference
+    DIFFERENCE = "DIFFERENCE"
+    PERCENT_DIFFERENCE = "PERCENT_DIFFERENCE"
+    # LOD
+    LOD_FIXED = "LOD_FIXED"
+    LOD_INCLUDE = "LOD_INCLUDE"
+    LOD_EXCLUDE = "LOD_EXCLUDE"
+
+
+# CalcAggregation has been removed - use WindowAggregation instead
