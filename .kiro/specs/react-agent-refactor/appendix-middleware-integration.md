@@ -435,7 +435,7 @@ async def stream_semantic_parser(
         - {"type": "retry", "reason": "...", "hint": "..."} - 重试
         - {"type": "complete", "result": {...}} - 完成
     """
-    react_graph = create_react_decision_graph(get_llm())
+    semantic_parser_graph = create_semantic_parser_graph(get_llm())
     
     initial_state = {
         "question": question,
@@ -447,7 +447,7 @@ async def stream_semantic_parser(
         "files": {},
     }
     
-    async for event in react_graph.astream_events(initial_state, config, version="v2"):
+    async for event in semantic_parser_graph.astream_events(initial_state, config, version="v2"):
         event_type = event.get("event")
         
         if event_type == "on_chat_model_stream":
@@ -513,7 +513,7 @@ async def stream_semantic_parser(
 │    - dimension_index: {省份: {广东: rows 0-5, 江苏: rows 6-10, ...}}        │
 │                                    │                                         │
 │                                    ▼                                         │
-│  Coordinator Node (主持人 LLM):                                              │
+│  Director Node (总监 LLM):                                                   │
 │  - 决策: {action: "analyze_dimension", target: "广东"}                       │
 │                                    │                                         │
 │                                    ▼                                         │
