@@ -20,7 +20,7 @@ from typing import Dict, Optional, List, Union, Any
 from langgraph.types import RunnableConfig
 from langchain_core.language_models import BaseChatModel
 
-from tableau_assistant.src.core.state import VizQLState
+from tableau_assistant.src.orchestration.workflow.state import VizQLState
 
 # Use new core/models
 from tableau_assistant.src.core.models import (
@@ -30,12 +30,24 @@ from tableau_assistant.src.core.models import (
     Computation,
     AggregationType,
     DateGranularity,
-    Sort,
+    SortSpec,
     SetFilter,
     DateRangeFilter,
     NumericRangeFilter,
     TextMatchFilter,
     TopNFilter,
+    # Computation subtypes for field mapping
+    LODFixed,
+    LODInclude,
+    LODExclude,
+    RankCalc,
+    DenseRankCalc,
+    PercentileCalc,
+    DifferenceCalc,
+    PercentDifferenceCalc,
+    RunningTotalCalc,
+    MovingCalc,
+    PercentOfTotalCalc,
 )
 from tableau_assistant.src.core.models import MappedQuery
 from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQueryModel
@@ -134,6 +146,7 @@ class QueryBuilderNode:
                     field_name=get_tech_field(d.field_name),
                     date_granularity=d.date_granularity,
                     alias=d.alias,
+                    sort=d.sort,  # 保留排序信息
                 )
                 for d in semantic_query.dimensions
             ]
@@ -146,22 +159,20 @@ class QueryBuilderNode:
                     field_name=get_tech_field(m.field_name),
                     aggregation=m.aggregation,
                     alias=m.alias,
+                    sort=m.sort,  # 保留排序信息
                 )
                 for m in semantic_query.measures
             ]
         
         # Map computations
+        # Note: Computation is a Union type (discriminated by calc_type), so we need to
+        # map field names within each specific computation type, not create new instances
         mapped_computations = None
         if semantic_query.computations:
-            mapped_computations = [
-                Computation(
-                    target=get_tech_field(c.target),
-                    partition_by=[get_tech_field(p) for p in c.partition_by],
-                    operation=c.operation,
-                    alias=c.alias,
-                )
-                for c in semantic_query.computations
-            ]
+            mapped_computations = []
+            for c in semantic_query.computations:
+                mapped_comp = self._map_computation_fields(c, get_tech_field)
+                mapped_computations.append(mapped_comp)
         
         # Map filters
         mapped_filters = None
@@ -204,27 +215,123 @@ class QueryBuilderNode:
                     # Unknown filter type, keep as is
                     mapped_filters.append(f)
         
-        # Map sorts
-        mapped_sorts = None
-        if semantic_query.sorts:
-            mapped_sorts = [
-                Sort(
-                    field_name=get_tech_field(s.field_name),
-                    direction=s.direction,
-                    priority=s.priority,
-                )
-                for s in semantic_query.sorts
-            ]
-        
         # Create new SemanticQuery with mapped fields
+        # 注意：排序信息已嵌入在 DimensionField.sort 和 MeasureField.sort 中
         return SemanticQuery(
             dimensions=mapped_dimensions,
             measures=mapped_measures,
             computations=mapped_computations,
             filters=mapped_filters,
-            sorts=mapped_sorts,
             row_limit=semantic_query.row_limit,
         )
+    
+    def _map_computation_fields(
+        self,
+        comp: Computation,
+        get_tech_field: callable,
+    ) -> Computation:
+        """Map field names within a Computation object.
+        
+        Computation is a Union type with different subtypes (LOD, TableCalc).
+        Each subtype has different fields that need mapping.
+        
+        Args:
+            comp: Original computation object
+            get_tech_field: Function to map business term to technical field
+            
+        Returns:
+            New computation object with mapped field names
+        """
+        # LOD types - have target, dimensions, aggregation
+        if isinstance(comp, LODFixed):
+            return LODFixed(
+                target=get_tech_field(comp.target),
+                dimensions=[get_tech_field(d) for d in comp.dimensions],
+                aggregation=comp.aggregation,
+                alias=comp.alias,
+            )
+        elif isinstance(comp, LODInclude):
+            return LODInclude(
+                target=get_tech_field(comp.target),
+                dimensions=[get_tech_field(d) for d in comp.dimensions],
+                aggregation=comp.aggregation,
+                alias=comp.alias,
+            )
+        elif isinstance(comp, LODExclude):
+            return LODExclude(
+                target=get_tech_field(comp.target),
+                dimensions=[get_tech_field(d) for d in comp.dimensions],
+                aggregation=comp.aggregation,
+                alias=comp.alias,
+            )
+        
+        # Ranking types - have target, partition_by, direction
+        elif isinstance(comp, RankCalc):
+            return RankCalc(
+                target=get_tech_field(comp.target),
+                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                direction=comp.direction,
+                rank_style=comp.rank_style,
+                top_n=comp.top_n,
+            )
+        elif isinstance(comp, DenseRankCalc):
+            return DenseRankCalc(
+                target=get_tech_field(comp.target),
+                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                direction=comp.direction,
+                top_n=comp.top_n,
+            )
+        elif isinstance(comp, PercentileCalc):
+            return PercentileCalc(
+                target=get_tech_field(comp.target),
+                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                direction=comp.direction,
+            )
+        
+        # Difference types - have target, partition_by, relative_to
+        elif isinstance(comp, DifferenceCalc):
+            return DifferenceCalc(
+                target=get_tech_field(comp.target),
+                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                relative_to=comp.relative_to,
+            )
+        elif isinstance(comp, PercentDifferenceCalc):
+            return PercentDifferenceCalc(
+                target=get_tech_field(comp.target),
+                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                relative_to=comp.relative_to,
+            )
+        
+        # Running/Moving types
+        elif isinstance(comp, RunningTotalCalc):
+            return RunningTotalCalc(
+                target=get_tech_field(comp.target),
+                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                aggregation=comp.aggregation,
+                restart_every=comp.restart_every,
+            )
+        elif isinstance(comp, MovingCalc):
+            return MovingCalc(
+                target=get_tech_field(comp.target),
+                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                aggregation=comp.aggregation,
+                window_previous=comp.window_previous,
+                window_next=comp.window_next,
+                include_current=comp.include_current,
+            )
+        
+        # Percent of total
+        elif isinstance(comp, PercentOfTotalCalc):
+            return PercentOfTotalCalc(
+                target=get_tech_field(comp.target),
+                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                level_of=comp.level_of,
+            )
+        
+        # Unknown type - return as is (shouldn't happen with proper typing)
+        else:
+            logger.warning(f"Unknown computation type: {type(comp)}, returning as-is")
+            return comp
 
 
 async def query_builder_node(

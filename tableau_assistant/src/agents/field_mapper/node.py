@@ -977,47 +977,45 @@ def _extract_terms_from_semantic_query(
 ) -> Dict[str, Optional[str]]:
     """Extract business terms from SemanticQuery Pydantic object.
     
+    注意：不再基于 Step1 的语义分类（measure/dimension）来限制字段搜索范围。
+    因为：
+    1. 对维度字段使用 COUNT/COUNTD 是完全合法的（如 COUNT(Order ID)）
+    2. 用户语义上的"度量"可能在数据源中是维度字段
+    3. VizQL 和 SQL 都支持对维度字段进行聚合计算
+    
+    所以字段映射时应该在整个元数据中搜索最匹配的字段，而不是限制在特定角色中。
+    
     Args:
         semantic_query: SemanticQuery Pydantic object
         
     Returns:
-        Dict mapping business term to role (measure/dimension/None)
-        
-    Note:
-        对于 COUNT/COUNTD 聚合，不设置 role_filter，因为被计数的字段
-        在数据源中通常是 dimension（如 Order ID），而不是 measure。
+        Dict mapping business term to None (no role filter)
     """
     terms = {}
     
-    # 直接访问 Pydantic 对象属性
+    # 提取 measures - 不限制角色
     for measure in semantic_query.measures or []:
         if measure.field_name:
-            # COUNT/COUNTD 聚合通常作用于 dimension 字段（如 Order ID）
-            # 不应该限制为 measure，否则会过滤掉正确的字段
-            aggregation = getattr(measure, 'aggregation', None)
-            agg_value = aggregation.value if hasattr(aggregation, 'value') else str(aggregation).lower()
-            if agg_value in ('count', 'countd', 'count_distinct'):
-                # 不设置 role_filter，允许匹配 dimension 和 measure
-                terms[measure.field_name] = None
-            else:
-                terms[measure.field_name] = "measure"
+            terms[measure.field_name] = None  # 不限制角色，在整个元数据中搜索
     
+    # 提取 dimensions - 不限制角色
     for dimension in semantic_query.dimensions or []:
         if dimension.field_name:
-            terms[dimension.field_name] = "dimension"
+            terms[dimension.field_name] = None  # 不限制角色，在整个元数据中搜索
     
+    # 提取 filters - 不限制角色
     for filter_spec in semantic_query.filters or []:
         if filter_spec.field_name and filter_spec.field_name not in terms:
             terms[filter_spec.field_name] = None
     
-    # 处理 computations 中的 target 字段
+    # 提取 computations 中的字段 - 不限制角色
     for computation in semantic_query.computations or []:
         if computation.target and computation.target not in terms:
-            terms[computation.target] = "measure"
-        # partition_by 中的字段是维度
+            terms[computation.target] = None
+        # partition_by 中的字段
         for partition_field in computation.partition_by or []:
             if partition_field and partition_field not in terms:
-                terms[partition_field] = "dimension"
+                terms[partition_field] = None
     
     return terms
 

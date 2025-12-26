@@ -16,9 +16,6 @@ from typing import Any
 from ...core.interfaces import BaseQueryBuilder
 from ...core.models import (
     AggregationType,
-    CalcAggregation,
-    CalcParams,
-    CalcType,
     Computation,
     DateRangeFilter,
     DimensionField,
@@ -29,7 +26,6 @@ from ...core.models import (
     RelativeTo,
     SemanticQuery,
     SetFilter,
-    Sort,
     SortDirection,
     TextMatchFilter,
     TopNFilter,
@@ -37,6 +33,7 @@ from ...core.models import (
     ValidationErrorType,
     ValidationResult,
     DateGranularity,
+    WindowAggregation,
 )
 from .models import (
     LODExpression,
@@ -63,10 +60,6 @@ AGGREGATION_TO_VIZQL: dict[AggregationType, VizQLFunction] = {
 }
 
 
-# LOD CalcTypes
-LOD_CALC_TYPES = {CalcType.LOD_FIXED, CalcType.LOD_INCLUDE, CalcType.LOD_EXCLUDE}
-
-
 class TableauQueryBuilder(BaseQueryBuilder):
     """Tableau query builder - converts SemanticQuery to VizQL request.
     
@@ -78,7 +71,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
     DEFAULT_RANK_STYLE = RankStyle.COMPETITION
     DEFAULT_DIRECTION = SortDirection.DESC
     DEFAULT_RELATIVE_TO = RelativeTo.PREVIOUS
-    DEFAULT_AGGREGATION = CalcAggregation.SUM
+    DEFAULT_AGGREGATION = WindowAggregation.SUM
     DEFAULT_WINDOW_PREVIOUS = 2
     DEFAULT_WINDOW_NEXT = 0
     DEFAULT_INCLUDE_CURRENT = True
@@ -127,7 +120,8 @@ class TableauQueryBuilder(BaseQueryBuilder):
         # Build Top N filters from computations with top_n parameter
         if semantic_query.computations:
             for comp in semantic_query.computations:
-                if comp.calc_type in (CalcType.RANK, CalcType.DENSE_RANK) and comp.params.top_n:
+                # Check for RANK or DENSE_RANK with top_n attribute
+                if comp.calc_type in ("RANK", "DENSE_RANK") and getattr(comp, 'top_n', None):
                     top_n_filter = self._build_top_n_filter_from_computation(comp, semantic_query)
                     if top_n_filter:
                         filters.append(top_n_filter)
@@ -140,9 +134,10 @@ class TableauQueryBuilder(BaseQueryBuilder):
         if filters:
             request["filters"] = filters
         
-        # Build sorts
-        if semantic_query.sorts:
-            sorts = self._build_sorts(semantic_query.sorts)
+        # Build sorts - 排序嵌入在字段的 sort 属性中，使用 get_sorts() 获取
+        sorts_list = semantic_query.get_sorts()
+        if sorts_list:
+            sorts = self._build_sorts_from_tuples(sorts_list)
             if sorts:
                 request["sorts"] = sorts
         
@@ -162,6 +157,9 @@ class TableauQueryBuilder(BaseQueryBuilder):
         warnings = []
         auto_fixed = []
         
+        # LOD calc_type values (as strings)
+        lod_calc_types = {"LOD_FIXED", "LOD_INCLUDE", "LOD_EXCLUDE"}
+        
         # Check for empty query
         if not semantic_query.dimensions and not semantic_query.measures:
             errors.append(ValidationError(
@@ -177,7 +175,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
             
             for i, comp in enumerate(semantic_query.computations):
                 # Check target is in measures (for non-LOD) or valid field
-                if comp.calc_type not in LOD_CALC_TYPES and comp.target not in measures:
+                if comp.calc_type not in lod_calc_types and comp.target not in measures:
                     errors.append(ValidationError(
                         error_type=ValidationErrorType.FIELD_NOT_FOUND,
                         field_path=f"computations[{i}].target",
@@ -296,6 +294,26 @@ class TableauQueryBuilder(BaseQueryBuilder):
         
         return vizql_sorts
     
+    def _build_sorts_from_tuples(self, sorts: list[tuple[str, "SortSpec"]]) -> list[dict]:
+        """Build VizQL sort specifications from (field_name, SortSpec) tuples.
+        
+        Args:
+            sorts: List of (field_name, SortSpec) tuples, already sorted by priority
+            
+        Returns:
+            List of VizQL sort dictionaries
+        """
+        vizql_sorts = []
+        
+        for field_name, sort_spec in sorts:
+            vizql_sort = {
+                "field": {"fieldCaption": field_name},
+                "sortDirection": sort_spec.direction.value,
+            }
+            vizql_sorts.append(vizql_sort)
+        
+        return vizql_sorts
+    
     def _build_computation_fields(
         self,
         computations: list[Computation],
@@ -306,11 +324,14 @@ class TableauQueryBuilder(BaseQueryBuilder):
         Important: LOD fields must be generated before table calc fields
         because table calcs may reference LOD results.
         """
+        # LOD calc_type values (as strings, not CalcType enum)
+        lod_calc_types = {"LOD_FIXED", "LOD_INCLUDE", "LOD_EXCLUDE"}
+        
         lod_fields = []
         table_calc_fields = []
         
         for comp in computations:
-            if comp.calc_type in LOD_CALC_TYPES:
+            if comp.calc_type in lod_calc_types:
                 lod_fields.append(self._build_lod_field(comp))
             else:
                 table_calc_fields.append(self._build_table_calc_field(comp, view_dimensions))
@@ -323,34 +344,37 @@ class TableauQueryBuilder(BaseQueryBuilder):
         comp: Computation,
         view_dimensions: list[str],
     ) -> dict:
-        """Build VizQL table calculation field."""
-        params = comp.params
+        """Build VizQL table calculation field.
         
+        Note: Computation is a Union type with different subtypes.
+        Each subtype has its attributes directly on the object (not via params).
+        """
         # Build partitioning dimensions
         partition_dims = [{"fieldCaption": d} for d in comp.partition_by]
         
         # Build table calc specification based on calc_type
         table_calc: dict
+        calc_type = comp.calc_type  # This is a Literal string like "RANK", "PERCENT_OF_TOTAL", etc.
         
-        if comp.calc_type in (CalcType.RANK, CalcType.DENSE_RANK):
+        if calc_type in ("RANK", "DENSE_RANK"):
             table_calc = self._build_rank_spec(comp, partition_dims)
         
-        elif comp.calc_type == CalcType.PERCENTILE:
+        elif calc_type == "PERCENTILE":
             table_calc = self._build_percentile_spec(comp, partition_dims)
         
-        elif comp.calc_type == CalcType.RUNNING_TOTAL:
+        elif calc_type == "RUNNING_TOTAL":
             table_calc = self._build_running_total_spec(comp, partition_dims)
         
-        elif comp.calc_type == CalcType.MOVING_CALC:
+        elif calc_type == "MOVING_CALC":
             table_calc = self._build_moving_calc_spec(comp, partition_dims)
         
-        elif comp.calc_type == CalcType.PERCENT_OF_TOTAL:
+        elif calc_type == "PERCENT_OF_TOTAL":
             table_calc = self._build_percent_of_total_spec(comp, partition_dims)
         
-        elif comp.calc_type == CalcType.DIFFERENCE:
+        elif calc_type == "DIFFERENCE":
             table_calc = self._build_difference_spec(comp, partition_dims)
         
-        elif comp.calc_type == CalcType.PERCENT_DIFFERENCE:
+        elif calc_type == "PERCENT_DIFFERENCE":
             table_calc = self._build_percent_difference_spec(comp, partition_dims)
         
         else:
@@ -372,23 +396,25 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return field
     
     def _build_rank_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """Build rank table calculation spec."""
-        params = comp.params
+        """Build rank table calculation spec.
         
+        Supports both RankCalc and DenseRankCalc types.
+        """
         # Determine rank type
-        if comp.calc_type == CalcType.DENSE_RANK:
+        if comp.calc_type == "DENSE_RANK":
             rank_type = "DENSE"
         else:
-            rank_style = params.rank_style or self.DEFAULT_RANK_STYLE
-            rank_type = rank_style.value
+            # RankCalc has rank_style attribute
+            rank_style = getattr(comp, 'rank_style', None) or self.DEFAULT_RANK_STYLE
+            rank_type = rank_style.value if hasattr(rank_style, 'value') else str(rank_style)
         
-        direction = params.direction or self.DEFAULT_DIRECTION
+        direction = getattr(comp, 'direction', None) or self.DEFAULT_DIRECTION
         
         return {
             "tableCalcType": "RANK",
             "dimensions": partition_dims,
             "rankType": rank_type,
-            "direction": direction.value,
+            "direction": direction.value if hasattr(direction, 'value') else str(direction),
         }
     
     def _build_top_n_filter_from_computation(
@@ -399,13 +425,14 @@ class TableauQueryBuilder(BaseQueryBuilder):
         """Build Top N filter from computation with top_n parameter.
         
         Args:
-            comp: Computation with top_n parameter
+            comp: Computation with top_n parameter (RankCalc or DenseRankCalc)
             semantic_query: Full semantic query for context
             
         Returns:
             VizQL Top N filter dict or None
         """
-        if not comp.params.top_n:
+        top_n = getattr(comp, 'top_n', None)
+        if not top_n:
             return None
         
         # Determine the dimension to filter on (first partition dimension or first query dimension)
@@ -420,55 +447,59 @@ class TableauQueryBuilder(BaseQueryBuilder):
             return None
         
         # Direction: ASC means bottom N, DESC means top N
-        direction = comp.params.direction or self.DEFAULT_DIRECTION
+        direction = getattr(comp, 'direction', None) or self.DEFAULT_DIRECTION
         
         return {
             "field": {"fieldCaption": filter_dimension},
             "filterType": "TOP",
-            "howMany": comp.params.top_n,
+            "howMany": top_n,
             "fieldToMeasure": {"fieldCaption": comp.target},
-            "direction": direction.value,
+            "direction": direction.value if hasattr(direction, 'value') else str(direction),
         }
     
     def _build_percentile_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
         """Build percentile table calculation spec."""
-        params = comp.params
-        direction = params.direction or self.DEFAULT_DIRECTION
+        direction = getattr(comp, 'direction', None) or self.DEFAULT_DIRECTION
         
         return {
             "tableCalcType": "PERCENTILE",
             "dimensions": partition_dims,
-            "direction": direction.value,
+            "direction": direction.value if hasattr(direction, 'value') else str(direction),
         }
     
     def _build_running_total_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
         """Build running total table calculation spec."""
-        params = comp.params
-        aggregation = params.aggregation or self.DEFAULT_AGGREGATION
+        aggregation = getattr(comp, 'aggregation', None) or self.DEFAULT_AGGREGATION
         
         spec = {
             "tableCalcType": "RUNNING_TOTAL",
             "dimensions": partition_dims,
-            "aggregation": aggregation.value,
+            "aggregation": aggregation.value if hasattr(aggregation, 'value') else str(aggregation),
         }
         
-        if params.restart_every:
-            spec["restartEvery"] = {"fieldCaption": params.restart_every}
+        restart_every = getattr(comp, 'restart_every', None)
+        if restart_every:
+            spec["restartEvery"] = {"fieldCaption": restart_every}
         
         return spec
     
     def _build_moving_calc_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
         """Build moving calculation spec."""
-        params = comp.params
-        aggregation = params.aggregation or self.DEFAULT_AGGREGATION
-        previous = params.window_previous if params.window_previous is not None else self.DEFAULT_WINDOW_PREVIOUS
-        next_val = params.window_next if params.window_next is not None else self.DEFAULT_WINDOW_NEXT
-        include_current = params.include_current if params.include_current is not None else self.DEFAULT_INCLUDE_CURRENT
+        aggregation = getattr(comp, 'aggregation', None) or self.DEFAULT_AGGREGATION
+        previous = getattr(comp, 'window_previous', None)
+        if previous is None:
+            previous = self.DEFAULT_WINDOW_PREVIOUS
+        next_val = getattr(comp, 'window_next', None)
+        if next_val is None:
+            next_val = self.DEFAULT_WINDOW_NEXT
+        include_current = getattr(comp, 'include_current', None)
+        if include_current is None:
+            include_current = self.DEFAULT_INCLUDE_CURRENT
         
         return {
             "tableCalcType": "MOVING_CALCULATION",
             "dimensions": partition_dims,
-            "aggregation": aggregation.value,
+            "aggregation": aggregation.value if hasattr(aggregation, 'value') else str(aggregation),
             "previous": previous,
             "next": next_val,
             "includeCurrent": include_current,
@@ -476,56 +507,59 @@ class TableauQueryBuilder(BaseQueryBuilder):
     
     def _build_percent_of_total_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
         """Build percent of total table calculation spec."""
-        params = comp.params
-        
         spec = {
             "tableCalcType": "PERCENT_OF_TOTAL",
             "dimensions": partition_dims,
         }
         
-        if params.level_of:
-            spec["levelAddress"] = {"fieldCaption": params.level_of}
+        level_of = getattr(comp, 'level_of', None)
+        if level_of:
+            spec["levelAddress"] = {"fieldCaption": level_of}
         
         return spec
     
     def _build_difference_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
         """Build difference table calculation spec."""
-        params = comp.params
-        relative_to = params.relative_to or self.DEFAULT_RELATIVE_TO
+        relative_to = getattr(comp, 'relative_to', None) or self.DEFAULT_RELATIVE_TO
         
         return {
             "tableCalcType": "DIFFERENCE_FROM",
             "dimensions": partition_dims,
-            "relativeTo": relative_to.value,
+            "relativeTo": relative_to.value if hasattr(relative_to, 'value') else str(relative_to),
         }
     
     def _build_percent_difference_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
         """Build percent difference table calculation spec."""
-        params = comp.params
-        relative_to = params.relative_to or self.DEFAULT_RELATIVE_TO
+        relative_to = getattr(comp, 'relative_to', None) or self.DEFAULT_RELATIVE_TO
         
         return {
             "tableCalcType": "PERCENT_DIFFERENCE_FROM",
             "dimensions": partition_dims,
-            "relativeTo": relative_to.value,
+            "relativeTo": relative_to.value if hasattr(relative_to, 'value') else str(relative_to),
         }
     
     def _build_lod_field(self, comp: Computation) -> dict:
-        """Build VizQL LOD expression field."""
-        params = comp.params
+        """Build VizQL LOD expression field.
         
-        # Determine LOD type
+        Supports LODFixed, LODInclude, LODExclude types.
+        These types have 'dimensions' and 'aggregation' attributes directly.
+        """
+        # Determine LOD type from calc_type string
         lod_type_map = {
-            CalcType.LOD_FIXED: "FIXED",
-            CalcType.LOD_INCLUDE: "INCLUDE",
-            CalcType.LOD_EXCLUDE: "EXCLUDE",
+            "LOD_FIXED": "FIXED",
+            "LOD_INCLUDE": "INCLUDE",
+            "LOD_EXCLUDE": "EXCLUDE",
         }
-        lod_type = lod_type_map[comp.calc_type]
+        lod_type = lod_type_map.get(comp.calc_type, "FIXED")
         
         # Build LOD expression string
-        lod_dims = params.lod_dimensions or []
+        # LOD types have 'dimensions' attribute (not lod_dimensions)
+        lod_dims = getattr(comp, 'dimensions', []) or []
         dims_str = ", ".join(f"[{d}]" for d in lod_dims)
-        agg = (params.lod_aggregation or AggregationType.SUM).value
+        
+        # LOD types have 'aggregation' attribute (not lod_aggregation)
+        aggregation = getattr(comp, 'aggregation', None) or AggregationType.SUM
+        agg = aggregation.value if hasattr(aggregation, 'value') else str(aggregation)
         
         if dims_str:
             calculation = f"{{{lod_type} {dims_str} : {agg}([{comp.target}])}}"
