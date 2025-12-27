@@ -1,11 +1,12 @@
-"""
-SemanticParser Agent 数据模型包
+"""SemanticParser Agent data models package.
 
-包含 Step1、Step2、Observer、ParseResult、Pipeline 和 ReAct 相关模型。
+Contains Step1, Step2, ParseResult, Pipeline and ReAct related models.
 
-核心层模型直接使用：
-- MeasureField, DimensionField: 从 core.models.fields 导入
-- Filter 及其子类: 从 core.models.filters 导入
+Core layer models are used directly:
+- MeasureField, DimensionField: from core.models.fields
+- Filter and subclasses: from core.models.filters
+
+Note: Observer models have been removed. ReAct error handling replaces Observer.
 """
 
 from tableau_assistant.src.agents.semantic_parser.models.step1 import (
@@ -21,14 +22,6 @@ from tableau_assistant.src.agents.semantic_parser.models.step2 import (
     ValidationCheck,
     Step2Validation,
     Step2Output,
-)
-
-from tableau_assistant.src.agents.semantic_parser.models.observer import (
-    Conflict,
-    Correction,
-    Step1Correction,
-    ObserverInput,
-    ObserverOutput,
 )
 
 from tableau_assistant.src.agents.semantic_parser.models.parse_result import (
@@ -48,6 +41,7 @@ from tableau_assistant.src.agents.semantic_parser.models.react import (
     ReActActionType,
     ReActObservation,
     ReActOutput,
+    RetryTarget,
 )
 
 
@@ -63,12 +57,6 @@ __all__ = [
     "ValidationCheck",
     "Step2Validation",
     "Step2Output",
-    # Observer models
-    "Conflict",
-    "Correction",
-    "Step1Correction",
-    "ObserverInput",
-    "ObserverOutput",
     # ParseResult models
     "ClarificationQuestion",
     "SemanticParseResult",
@@ -82,4 +70,5 @@ __all__ = [
     "ReActActionType",
     "ReActObservation",
     "ReActOutput",
+    "RetryTarget",
 ]

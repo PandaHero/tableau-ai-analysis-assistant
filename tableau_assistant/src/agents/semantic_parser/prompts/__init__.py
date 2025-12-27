@@ -4,28 +4,21 @@ Prompt templates follow the design principles from appendix-e-prompt-model-guide
 - Prompt teaches LLM how to think (4-section structure: ROLE, TASK, DOMAIN KNOWLEDGE, CONSTRAINTS)
 - Schema tells LLM what to output (XML tags in Field descriptions)
 - Uses VizQLPrompt base class for automatic JSON Schema injection
+
+Note: Observer prompts have been removed. ReAct error handling replaces Observer.
 """
 
 from .step1 import Step1Prompt, STEP1_PROMPT
 from .step2 import Step2Prompt, STEP2_PROMPT
-from .observer import (
-    Step1ObserverPrompt,
-    Step2ObserverPrompt,
-    STEP1_OBSERVER_PROMPT,
-    STEP2_OBSERVER_PROMPT,
-    OBSERVER_PROMPT,
-)
+from .react_error import ReActErrorHandlerPrompt, REACT_ERROR_PROMPT
 
 __all__ = [
     # Prompt classes
     "Step1Prompt",
     "Step2Prompt",
-    "Step1ObserverPrompt",
-    "Step2ObserverPrompt",
+    "ReActErrorHandlerPrompt",
     # Prompt instances
     "STEP1_PROMPT",
     "STEP2_PROMPT",
-    "STEP1_OBSERVER_PROMPT",
-    "STEP2_OBSERVER_PROMPT",
-    "OBSERVER_PROMPT",  # Backward compatibility alias for STEP2_OBSERVER_PROMPT
+    "REACT_ERROR_PROMPT",
 ]

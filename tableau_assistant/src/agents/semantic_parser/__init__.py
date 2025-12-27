@@ -1,23 +1,20 @@
-"""Semantic Parser Agent - LLM combination architecture.
+"""SemanticParser Agent - Semantic understanding and query generation.
 
-This agent implements the LLM combination pattern:
-- Step 1: Semantic understanding and question restatement (Intuition)
-- Step 2: Computation reasoning and self-validation (Reasoning)
-- Observer: Consistency checking (Metacognition, on-demand)
+This module provides the SemanticParser agent which:
+1. Understands user questions (Step 1)
+2. Performs computation reasoning (Step 2)
+3. Generates and executes VizQL queries (Pipeline)
+4. Handles errors with ReAct pattern (via LangGraph node routing loop)
 
-The agent outputs SemanticParseResult containing:
-- restated_question: Complete standalone question
-- intent: Intent classification (DATA_QUERY, CLARIFICATION, GENERAL, IRRELEVANT)
-- semantic_query: Platform-agnostic query (for DATA_QUERY intent)
-- clarification: Clarification question (for CLARIFICATION intent)
-- general_response: General response (for GENERAL intent)
+Main exports:
+- semantic_parser_node: LangGraph node function for main graph integration
+- create_semantic_parser_subgraph: Factory function to create the subgraph
 """
 
-from .agent import SemanticParserAgent
-from .node import SemanticParserNode, semantic_parser_node
+from .node import semantic_parser_node
+from .subgraph import create_semantic_parser_subgraph
 
 __all__ = [
-    "SemanticParserAgent",
-    "SemanticParserNode",
     "semantic_parser_node",
+    "create_semantic_parser_subgraph",
 ]

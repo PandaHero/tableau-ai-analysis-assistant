@@ -4,21 +4,30 @@ Step 1 is the "Intuition" phase of the LLM combination architecture.
 It understands the user question, restates it as a complete standalone question,
 extracts structured What/Where/How, and classifies intent.
 
-直接使用核心层模型：
-- MeasureField: 度量字段（包含排序）
-- DimensionField: 维度字段
-- Filter 及其子类: 过滤器（SetFilter, DateRangeFilter, TopNFilter 等）
+Uses core layer models directly:
+- MeasureField: Measure field (includes sort)
+- DimensionField: Dimension field
+- Filter subclasses: SetFilter, DateRangeFilter, NumericRangeFilter, TextMatchFilter, TopNFilter
 """
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from tableau_assistant.src.core.models.fields import MeasureField, DimensionField
-from tableau_assistant.src.core.models.filters import Filter
+from tableau_assistant.src.core.models.filters import (
+    SetFilter,
+    DateRangeFilter,
+    NumericRangeFilter,
+    TextMatchFilter,
+    TopNFilter,
+)
 from tableau_assistant.src.core.models.enums import (
     FilterType,
     HowType,
     IntentType,
 )
+
+# Union type for all filter subclasses (same as SemanticQuery.filters)
+FilterUnion = SetFilter | DateRangeFilter | NumericRangeFilter | TextMatchFilter | TopNFilter
 
 
 class What(BaseModel):
@@ -40,9 +49,9 @@ class Where(BaseModel):
         description="List of dimensions for grouping"
     )
     
-    filters: list[Filter] = Field(
+    filters: list[FilterUnion] = Field(
         default_factory=list,
-        description="List of filter conditions (SetFilter, DateRangeFilter, TopNFilter, etc.)"
+        description="List of filter conditions"
     )
 
 

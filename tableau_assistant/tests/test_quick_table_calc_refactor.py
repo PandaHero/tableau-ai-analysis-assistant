@@ -2,9 +2,9 @@
 """Quick Table Calc Refactor - Validation Tests.
 
 Tests for Task 7: 检查点 - 完整功能验证
-"""
 
-import pytest
+Updated for new Computation model structure:
+- Computation is now a Union type, not a
 from pydantic import ValidationError
 
 from tableau_assistant.src.core.models import (
@@ -19,9 +19,12 @@ from tableau_assistant.src.core.models import (
     # Models
     CalcParams,
     Computation,
-    Step2Output,
 )
-from tableau_assistant.src.core.models.step2 import Step2Validation, ValidationCheck
+from tableau_assistant.src.agents.semantic_parser.models import (
+    Step2Output,
+    Step2Validation,
+    ValidationCheck,
+)
 
 
 class TestHowTypeEnum:

@@ -40,9 +40,9 @@ class ToolError(BaseModel):
 T = TypeVar("T")
 
 
-class ToolResponse(BaseModel, Generic[T]):
+class ToolResult(BaseModel, Generic[T]):
     """
-    通用工具响应模型
+    通用工具返回类型
     
     所有工具应返回此格式，确保一致的错误处理。
     
@@ -56,7 +56,7 @@ class ToolResponse(BaseModel, Generic[T]):
     error: Optional[ToolError] = Field(default=None, description="失败时的错误信息")
     
     @classmethod
-    def ok(cls, data: T) -> "ToolResponse[T]":
+    def ok(cls, data: T) -> "ToolResult[T]":
         """创建成功响应"""
         return cls(success=True, data=data)
     
@@ -68,7 +68,7 @@ class ToolResponse(BaseModel, Generic[T]):
         details: Optional[Dict[str, str]] = None,
         recoverable: bool = True,
         suggestion: Optional[str] = None
-    ) -> "ToolResponse[T]":
+    ) -> "ToolResult[T]":
         """创建失败响应"""
         return cls(
             success=False,
@@ -82,27 +82,27 @@ class ToolResponse(BaseModel, Generic[T]):
         )
 
 
-def format_tool_response(response: ToolResponse) -> str:
+def format_tool_result(result: ToolResult) -> str:
     """
-    格式化工具响应为 LLM 友好的字符串
+    格式化工具结果为 LLM 友好的字符串
     
     Args:
-        response: 工具响应
+        result: 工具结果
     
     Returns:
         格式化的字符串
     """
-    if response.success:
-        if isinstance(response.data, str):
-            return response.data
-        elif isinstance(response.data, dict):
-            return _format_dict_for_llm(response.data)
-        elif isinstance(response.data, list):
-            return _format_list_for_llm(response.data)
+    if result.success:
+        if isinstance(result.data, str):
+            return result.data
+        elif isinstance(result.data, dict):
+            return _format_dict_for_llm(result.data)
+        elif isinstance(result.data, list):
+            return _format_list_for_llm(result.data)
         else:
-            return str(response.data)
+            return str(result.data)
     else:
-        error = response.error
+        error = result.error
         parts = [f"<error code=\"{error.code.value}\">"]
         parts.append(f"  <message>{error.message}</message>")
         if error.details:
@@ -149,7 +149,7 @@ def safe_tool_execution(func):
     """
     工具安全执行装饰器
     
-    捕获异常并转换为结构化错误响应。
+    捕获异常并转换为结构化错误结果。
     
     Usage:
         @safe_tool_execution
@@ -162,40 +162,40 @@ def safe_tool_execution(func):
             return func(*args, **kwargs)
         except ValueError as e:
             logger.warning(f"Tool validation error in {func.__name__}: {e}")
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.VALIDATION_ERROR,
                 message=str(e),
                 recoverable=True,
                 suggestion="请检查输入参数是否正确"
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
         except PermissionError as e:
             logger.warning(f"Tool permission error in {func.__name__}: {e}")
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.PERMISSION_ERROR,
                 message=str(e),
                 recoverable=False,
                 suggestion="请检查权限配置"
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
         except TimeoutError as e:
             logger.warning(f"Tool timeout in {func.__name__}: {e}")
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.TIMEOUT_ERROR,
                 message=str(e),
                 recoverable=True,
                 suggestion="请稍后重试"
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
         except Exception as e:
             logger.error(f"Tool execution error in {func.__name__}: {e}\n{traceback.format_exc()}")
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.INTERNAL_ERROR,
                 message=f"工具执行失败: {str(e)}",
                 details={"exception_type": type(e).__name__},
                 recoverable=False
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
     
     return wrapper
 
@@ -204,7 +204,7 @@ def safe_async_tool_execution(func):
     """
     异步工具安全执行装饰器
     
-    捕获异常并转换为结构化错误响应。
+    捕获异常并转换为结构化错误结果。
     
     Usage:
         @safe_async_tool_execution
@@ -217,40 +217,40 @@ def safe_async_tool_execution(func):
             return await func(*args, **kwargs)
         except ValueError as e:
             logger.warning(f"Tool validation error in {func.__name__}: {e}")
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.VALIDATION_ERROR,
                 message=str(e),
                 recoverable=True,
                 suggestion="请检查输入参数是否正确"
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
         except PermissionError as e:
             logger.warning(f"Tool permission error in {func.__name__}: {e}")
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.PERMISSION_ERROR,
                 message=str(e),
                 recoverable=False,
                 suggestion="请检查权限配置"
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
         except TimeoutError as e:
             logger.warning(f"Tool timeout in {func.__name__}: {e}")
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.TIMEOUT_ERROR,
                 message=str(e),
                 recoverable=True,
                 suggestion="请稍后重试"
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
         except Exception as e:
             logger.error(f"Tool execution error in {func.__name__}: {e}\n{traceback.format_exc()}")
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.INTERNAL_ERROR,
                 message=f"工具执行失败: {str(e)}",
                 details={"exception_type": type(e).__name__},
                 recoverable=False
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
     
     return wrapper
 
@@ -268,9 +268,9 @@ class ToolInputBase(BaseModel):
 __all__ = [
     "ToolErrorCode",
     "ToolError",
-    "ToolResponse",
+    "ToolResult",
     "ToolInputBase",
-    "format_tool_response",
+    "format_tool_result",
     "safe_tool_execution",
     "safe_async_tool_execution",
 ]

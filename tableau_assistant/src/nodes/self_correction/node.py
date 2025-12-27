@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 
 from langgraph.types import RunnableConfig
 
-from tableau_assistant.src.core.state import VizQLState
+from tableau_assistant.src.orchestration.workflow.state import VizQLState
 from .corrector import QueryCorrector, CorrectionResult, ErrorCategory
 
 logger = logging.getLogger(__name__)

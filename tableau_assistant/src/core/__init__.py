@@ -4,9 +4,12 @@ This is the heart of the system, defining platform-independent semantic models
 that can be adapted to any BI platform (Tableau, Power BI, Superset, etc.).
 
 Modules:
-    models: Core data models (SemanticQuery, Computation, Step1Output, etc.)
+    models: Core data models (SemanticQuery, Computation, etc.)
     interfaces: Abstract base classes for platform adapters
-    state: Workflow state types (VizQLState, etc.)
+
+Note:
+    - State types (VizQLState, etc.) are in orchestration/workflow/state.py
+    - Agent-specific models (Step1, Step2, ParseResult) are in agents/{agent}/models/
 """
 
 from .interfaces import (
@@ -17,7 +20,6 @@ from .interfaces import (
 from .models import (
     # Enums
     AggregationType,
-    CalcAggregation,
     CalcType,
     DateGranularity,
     DateRangeType,
@@ -29,12 +31,12 @@ from .models import (
     RelativeTo,
     SortDirection,
     TextMatchType,
+    WindowAggregation,
     # Fields
     DimensionField,
     MeasureField,
-    Sort,
+    SortSpec,
     # Computations
-    CalcParams,
     Computation,
     # Filters
     DateRangeFilter,
@@ -45,26 +47,6 @@ from .models import (
     TopNFilter,
     # Query
     SemanticQuery,
-    # Step 1
-    DimensionSpec,
-    FilterSpec,
-    Intent,
-    MeasureSpec,
-    Step1Output,
-    What,
-    Where,
-    # Step 2
-    Step2Output,
-    Step2Validation,
-    ValidationCheck,
-    # Observer
-    Conflict,
-    Correction,
-    ObserverInput,
-    ObserverOutput,
-    # Parse Result
-    ClarificationQuestion,
-    SemanticParseResult,
     # Validation
     ColumnInfo,
     QueryResult,
@@ -76,14 +58,6 @@ from .models import (
     # Query Request
     QueryRequest,
 )
-from .state import (
-    VizQLState,
-    VizQLInput,
-    VizQLOutput,
-    create_initial_state,
-    ErrorRecord,
-    WarningRecord,
-)
 
 __all__ = [
     # Interfaces
@@ -92,7 +66,6 @@ __all__ = [
     "BaseQueryBuilder",
     # Enums
     "AggregationType",
-    "CalcAggregation",
     "CalcType",
     "DateGranularity",
     "DateRangeType",
@@ -104,12 +77,12 @@ __all__ = [
     "RelativeTo",
     "SortDirection",
     "TextMatchType",
+    "WindowAggregation",
     # Fields
     "DimensionField",
     "MeasureField",
-    "Sort",
+    "SortSpec",
     # Computations
-    "CalcParams",
     "Computation",
     # Filters
     "DateRangeFilter",
@@ -120,26 +93,6 @@ __all__ = [
     "TopNFilter",
     # Query
     "SemanticQuery",
-    # Step 1
-    "DimensionSpec",
-    "FilterSpec",
-    "Intent",
-    "MeasureSpec",
-    "Step1Output",
-    "What",
-    "Where",
-    # Step 2
-    "Step2Output",
-    "Step2Validation",
-    "ValidationCheck",
-    # Observer
-    "Conflict",
-    "Correction",
-    "ObserverInput",
-    "ObserverOutput",
-    # Parse Result
-    "ClarificationQuestion",
-    "SemanticParseResult",
     # Validation
     "ColumnInfo",
     "QueryResult",
@@ -148,11 +101,6 @@ __all__ = [
     "ValidationResult",
     # Execute Result
     "ExecuteResult",
-    # State
-    "VizQLState",
-    "VizQLInput",
-    "VizQLOutput",
-    "create_initial_state",
-    "ErrorRecord",
-    "WarningRecord",
+    # Query Request
+    "QueryRequest",
 ]

@@ -32,6 +32,13 @@ class Filter(BaseModel):
         description="""<what>Type of filter</what>
 <when>ALWAYS required</when>"""
     )
+    
+    values: list[Any] = Field(
+        default_factory=list,
+        description="""<what>Filter values</what>
+<when>Required for most filter types</when>
+<rule>Use exact values from user question</rule>"""
+    )
 
 
 class SetFilter(Filter):
@@ -43,12 +50,6 @@ class SetFilter(Filter):
     </examples>
     """
     filter_type: FilterType = Field(default=FilterType.SET)
-    
-    values: list[Any] = Field(
-        description="""<what>Values to include/exclude</what>
-<when>ALWAYS required</when>
-<rule>Use exact values from user question</rule>"""
-    )
     
     exclude: bool = Field(
         default=False,

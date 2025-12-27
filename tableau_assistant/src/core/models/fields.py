@@ -8,6 +8,24 @@ from pydantic import BaseModel, ConfigDict, Field
 from .enums import AggregationType, DateGranularity, SortDirection
 
 
+class SortSpec(BaseModel):
+    """Sort specification for a field.
+    
+    Embedded in DimensionField or MeasureField when sorting is needed.
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    direction: SortDirection = Field(
+        default=SortDirection.DESC,
+        description="Sort direction"
+    )
+    
+    priority: int = Field(
+        default=0,
+        description="Sort priority (lower = higher priority, 0 = primary sort)"
+    )
+
+
 class DimensionField(BaseModel):
     """Dimension field specification.
     
@@ -17,20 +35,22 @@ class DimensionField(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     field_name: str = Field(
-        description="""<what>Business term for the dimension</what>
-<when>ALWAYS required</when>"""
+        description="Business term for the dimension"
     )
     
     date_granularity: DateGranularity | None = Field(
         default=None,
-        description="""<what>Time granularity for date dimensions</what>
-<when>ONLY for date/time fields</when>"""
+        description="Time granularity for date dimensions"
     )
     
     alias: str | None = Field(
         default=None,
-        description="""<what>Display name for the field</what>
-<when>Optional, when different from field_name</when>"""
+        description="Display name for the field"
+    )
+    
+    sort: SortSpec | None = Field(
+        default=None,
+        description="Sort specification (if this field is used for sorting)"
     )
 
 
@@ -43,43 +63,20 @@ class MeasureField(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     field_name: str = Field(
-        description="""<what>Business term for the measure</what>
-<when>ALWAYS required</when>"""
+        description="Business term for the measure"
     )
     
     aggregation: AggregationType = Field(
         default=AggregationType.SUM,
-        description="""<what>Aggregation function</what>
-<when>ALWAYS required, defaults to SUM</when>"""
+        description="Aggregation function"
     )
     
     alias: str | None = Field(
         default=None,
-        description="""<what>Display name for the field</what>
-<when>Optional, when different from field_name</when>"""
-    )
-
-
-class Sort(BaseModel):
-    """Sort specification.
-    
-    Defines sorting order for query results.
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    field_name: str = Field(
-        description="""<what>Field to sort by</what>
-<when>ALWAYS required</when>"""
+        description="Display name for the field"
     )
     
-    direction: SortDirection = Field(
-        default=SortDirection.DESC,
-        description="""<what>Sort direction</what>
-<when>ALWAYS required, defaults to DESC</when>"""
-    )
-    
-    priority: int = Field(
-        default=0,
-        description="""<what>Sort priority (lower = higher priority)</what>
-<when>Optional, for multi-column sorting</when>"""
+    sort: SortSpec | None = Field(
+        default=None,
+        description="Sort specification (if this field is used for sorting)"
     )

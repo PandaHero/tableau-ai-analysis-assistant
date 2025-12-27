@@ -29,7 +29,7 @@ from tableau_assistant.src.platforms.tableau.vizql_client import VizQLClient
 from tableau_assistant.src.core.models.execute_result import ExecuteResult
 from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery
 from tableau_assistant.src.infra.exceptions import VizQLError
-from tableau_assistant.src.core.state import VizQLState
+from tableau_assistant.src.orchestration.workflow.state import VizQLState
 
 logger = logging.getLogger(__name__)
 

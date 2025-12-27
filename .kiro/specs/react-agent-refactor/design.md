@@ -1085,36 +1085,74 @@ Thought → Action → Observation → Thought → Action → Observation → ..
 ### ReAct 数据模型
 
 ```python
+class RetryTarget(str, Enum):
+    """Target step to retry from."""
+    STEP1 = "step1"              # Retry semantic understanding
+    STEP2 = "step2"              # Retry computation reasoning
+    MAP_FIELDS = "map_fields"    # Retry field mapping
+    BUILD_QUERY = "build_query"  # Retry query building
+
 class ReActThought(BaseModel):
-    """ReAct 思考输出"""
+    """ReAct 思考输出 - LLM 分析错误根因"""
     error_analysis: str  # 错误分析
+    root_cause: str  # 根因识别 - 哪个步骤导致了错误
     can_retry: bool  # 是否可以重试
     needs_clarification: bool  # 是否需要澄清
     reasoning: str  # 推理过程
 
 class ReActAction(BaseModel):
-    """ReAct 动作"""
+    """ReAct 动作 - 基于 Thought 决定下一步"""
     action_type: Literal["RETRY", "CLARIFY", "ABORT"]
     
-    # RETRY 时的修正参数
-    corrected_params: Optional[Dict[str, Any]] = None
+    # RETRY: 从哪个步骤重试
+    retry_from: Optional[RetryTarget] = None
     
-    # CLARIFY 时的澄清问题
+    # RETRY: 传递给重试步骤的错误反馈
+    error_feedback: Optional[str] = None
+    
+    # CLARIFY: 澄清问题（LLM 生成）
     clarification_question: Optional[str] = None
     
-    # ABORT 时的错误信息
-    error_message: Optional[str] = None
+    # ABORT: 用户友好消息（LLM 生成）
+    user_message: Optional[str] = None
 
 class ReActObservation(BaseModel):
-    """ReAct 观察结果"""
+    """ReAct 观察结果 - 步骤执行结果"""
     success: bool
+    step: str  # 哪个步骤产生的结果
     result: Optional[Any] = None  # 成功时的结果
-    error: Optional[QueryError] = None  # 失败时的错误
+    error_type: Optional[str] = None  # 失败时的错误类型
+    error_message: Optional[str] = None  # 失败时的错误消息
+    error_details: Optional[Dict[str, Any]] = None  # 额外错误详情
 
 class ReActOutput(BaseModel):
     """ReAct 完整输出（单轮）"""
     thought: ReActThought
     action: ReActAction
+```
+
+### 错误处理流程示例
+
+```
+场景：execute_query 返回 LOD 表达式错误
+
+1. QueryPipeline 执行到 execute_query
+2. Tableau 服务器返回错误: "FIXED requires at least one dimension"
+3. ReActErrorHandler 分析错误:
+   - Thought: 
+     - error_analysis: "LOD 表达式缺少维度"
+     - root_cause: "step2"  # 计算推理阶段设计的 LOD 有问题
+     - can_retry: True
+     - reasoning: "LOD 表达式需要至少一个维度，需要回到 step2 重新设计计算"
+   - Action:
+     - action_type: RETRY
+     - retry_from: "step2"
+     - error_feedback: "LOD 表达式需要至少一个维度，请确保 FIXED 计算包含维度字段"
+4. DecisionHandler 准备重试:
+   - 保留 step1_output
+   - 清除 step2_output, mapped_query, vizql_query
+   - 将 error_feedback 传递给 step2
+5. QueryPipeline 从 step2 重新执行
 ```
 
 ### ReAct Prompt

@@ -22,13 +22,18 @@ Error handling:
 - All errors (Pydantic or semantic) are propagated to the Agent
 - Agent routes errors to Observer for correction
 - ValidationError carries original LLM output for Observer to analyze
+
+Architecture:
+- Step1Component: Pure business logic, no VizQLState knowledge
+- step1_node: State orchestration, defined in node.py to properly import VizQLState
+- This separation avoids circular imports (core/state.py imports from agents/semantic_parser/models/)
 """
 
 import logging
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
-from ....core.models import Step1Output
+from ..models import Step1Output
 from ....core.models.data_model import DataModel
 from ....core.exceptions import ValidationError
 from ..prompts.step1 import STEP1_PROMPT
@@ -77,6 +82,7 @@ class Step1Component:
         data_model: DataModel | None = None,
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
+        error_feedback: Optional[str] = None,
     ) -> Tuple[Step1Output, str]:
         """Execute Step 1: Semantic understanding and question restatement.
         
@@ -86,6 +92,7 @@ class Step1Component:
             data_model: Data source model (DataModel object with fields, tables, relationships)
             state: Current workflow state (for middleware)
             config: LangGraph RunnableConfig (contains middleware)
+            error_feedback: Feedback from previous error (for retry)
             
         Returns:
             Tuple of (Step1Output, thinking_process)
@@ -93,7 +100,7 @@ class Step1Component:
             - thinking_process: R1 model's thinking process (if available)
             
         Raises:
-            ValueError: When Pydantic validation fails (handled by Agent via Observer)
+            ValueError: When Pydantic validation fails (handled by Agent via ReAct)
         """
         # Format history for prompt
         history_str = self._format_history(history)
@@ -104,9 +111,15 @@ class Step1Component:
         # Get current time for date-related questions
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
+        # Build question with error feedback if present (for retry)
+        effective_question = question
+        if error_feedback:
+            effective_question = f"{question}\n\n[系统提示：上次语义理解出现问题，请注意：{error_feedback}]"
+            logger.info(f"Step 1 retry with feedback: {error_feedback[:100]}...")
+        
         # Use STEP1_PROMPT to format messages (auto-injects JSON Schema)
         messages = STEP1_PROMPT.format_messages(
-            question=question,
+            question=effective_question,
             history=history_str,
             data_model=data_model_str,
             current_time=current_time,
@@ -209,3 +222,6 @@ class Step1Component:
                 result.append(f"Measures: {', '.join(measures)}")
         
         return "\n".join(result) if result else "(No fields available)"
+
+
+__all__ = ["Step1Component"]

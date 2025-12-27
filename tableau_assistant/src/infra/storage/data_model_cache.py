@@ -78,15 +78,25 @@ class DataModelCache:
         
         # 1. 尝试从缓存获取
         cached = self._get_from_cache(datasource_luid)
-        if cached is not None:
+        if cached is not None and cached.field_count > 0:
             duration = (time.time() - start_time) * 1000
-            logger.info(f"缓存命中: {datasource_luid}, 耗时: {duration:.1f}ms")
+            logger.info(f"缓存命中: {datasource_luid}, {cached.field_count} 个字段, 耗时: {duration:.1f}ms")
             return cached, True
         
-        # 2. 缓存未命中，加载数据
-        logger.info(f"缓存未命中: {datasource_luid}, 开始加载...")
+        # 2. 缓存未命中或缓存数据无效，加载数据
+        if cached is not None and cached.field_count == 0:
+            logger.warning(f"缓存数据无效（0个字段），重新加载: {datasource_luid}")
+            self.invalidate(datasource_luid)
+        else:
+            logger.info(f"缓存未命中: {datasource_luid}, 开始加载...")
         
         data_model = await loader.load_data_model(datasource_luid)
+        
+        # 检查加载的数据是否有效
+        if not data_model.fields or data_model.field_count == 0:
+            logger.error(f"加载的数据模型为空: {datasource_luid}")
+            # 返回空模型但不缓存
+            return data_model, False
         
         # 3. 推断维度层级（如果需要）
         if not data_model.dimension_hierarchy:
@@ -97,7 +107,7 @@ class DataModelCache:
         self._put_to_cache(datasource_luid, data_model)
         
         duration = (time.time() - start_time) * 1000
-        logger.info(f"缓存未命中: {datasource_luid}, 加载完成, 耗时: {duration:.1f}ms")
+        logger.info(f"数据加载完成: {datasource_luid}, {data_model.field_count} 个字段, 耗时: {duration:.1f}ms")
         
         return data_model, False
 
@@ -150,6 +160,11 @@ class DataModelCache:
         Returns:
             是否成功
         """
+        # 检查数据模型是否有效（必须有字段）
+        if not data_model.fields or data_model.field_count == 0:
+            logger.warning(f"数据模型为空，跳过缓存: {datasource_luid}")
+            return False
+        
         try:
             # 存储 data_model（不含维度层级）
             data_model_dict = data_model.model_dump(exclude={"dimension_hierarchy"})

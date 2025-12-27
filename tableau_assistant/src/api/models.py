@@ -149,7 +149,7 @@ class ChatResponse(BaseModel):
     )
     
     # 非分析响应字段（当 is_analysis_question=False 时使用）
-    clarification: Optional[str] = Field(
+    clarification_question: Optional[str] = Field(
         default=None,
         description="澄清问题（当需要用户提供更多信息时）"
     )

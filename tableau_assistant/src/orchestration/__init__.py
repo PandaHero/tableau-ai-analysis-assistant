@@ -1,40 +1,36 @@
 """
-Orchestration Layer - 编排层
+Orchestration Layer.
 
-统一管理工作流编排、工具定义和中间件。
+This package provides workflow orchestration, tools, and middleware.
 
-子模块：
-- workflow/: LangGraph 工作流编排
-- tools/: LangGraph 工具定义（Agent 能力扩展）
-- middleware/: 中间件（横切关注点）
+Usage:
+    # State types (safe to import from workflow)
+    from tableau_assistant.src.orchestration.workflow import VizQLState, create_initial_state
+    
+    # Tools
+    from tableau_assistant.src.orchestration.tools import get_tools_for_node, NodeType
+    
+    # Middleware
+    from tableau_assistant.src.orchestration.middleware import FilesystemMiddleware
+    
+    # Factory and Executor (import directly from module)
+    from tableau_assistant.src.orchestration.workflow.factory import create_workflow
+    from tableau_assistant.src.orchestration.workflow.executor import WorkflowExecutor
 
-使用示例:
-    from tableau_assistant.src.orchestration.workflow import (
-        WorkflowExecutor,
-        create_workflow,
-    )
-    from tableau_assistant.src.orchestration.tools import (
-        get_tools_for_node,
-        NodeType,
-    )
-    from tableau_assistant.src.orchestration.middleware import (
-        FilesystemMiddleware,
-        PatchToolCallsMiddleware,
-    )
+Note:
+    factory.py and executor.py are NOT exported from __init__.py to avoid circular imports.
+    Import them directly from their modules.
 """
 
-# Re-export from submodules for convenience
+# State types (re-export from workflow for convenience)
 from tableau_assistant.src.orchestration.workflow import (
-    WorkflowExecutor,
-    WorkflowResult,
-    WorkflowEvent,
-    EventType,
-    WorkflowPrinter,
-    create_workflow,
-    create_middleware_stack,
-    create_sqlite_checkpointer,
-    get_default_config,
-    get_workflow_info,
+    VizQLState,
+    create_initial_state,
+    ErrorRecord,
+    WarningRecord,
+    ReplanHistoryRecord,
+    PerformanceMetrics,
+    VisualizationData,
     route_after_replanner,
     route_after_semantic_parser,
     calculate_completeness_score,
@@ -45,6 +41,7 @@ from tableau_assistant.src.orchestration.workflow import (
     get_context_or_raise,
 )
 
+# Tools
 from tableau_assistant.src.orchestration.tools import (
     ToolRegistry,
     ToolMetadata,
@@ -54,13 +51,14 @@ from tableau_assistant.src.orchestration.tools import (
     register_tool,
     ToolErrorCode,
     ToolError,
-    ToolResponse,
+    ToolResult,
     ToolInputBase,
-    format_tool_response,
+    format_tool_result,
     safe_tool_execution,
     safe_async_tool_execution,
 )
 
+# Middleware
 from tableau_assistant.src.orchestration.middleware import (
     FilesystemMiddleware,
     FilesystemState,
@@ -79,20 +77,19 @@ from tableau_assistant.src.orchestration.middleware import (
 )
 
 __all__ = [
-    # Workflow
-    "WorkflowExecutor",
-    "WorkflowResult",
-    "WorkflowEvent",
-    "EventType",
-    "WorkflowPrinter",
-    "create_workflow",
-    "create_middleware_stack",
-    "create_sqlite_checkpointer",
-    "get_default_config",
-    "get_workflow_info",
+    # State types
+    "VizQLState",
+    "create_initial_state",
+    "ErrorRecord",
+    "WarningRecord",
+    "ReplanHistoryRecord",
+    "PerformanceMetrics",
+    "VisualizationData",
+    # Routes
     "route_after_replanner",
     "route_after_semantic_parser",
     "calculate_completeness_score",
+    # Context
     "WorkflowContext",
     "MetadataLoadStatus",
     "create_workflow_config",
@@ -107,9 +104,9 @@ __all__ = [
     "register_tool",
     "ToolErrorCode",
     "ToolError",
-    "ToolResponse",
+    "ToolResult",
     "ToolInputBase",
-    "format_tool_response",
+    "format_tool_result",
     "safe_tool_execution",
     "safe_async_tool_execution",
     # Middleware

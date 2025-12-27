@@ -26,7 +26,7 @@ from langgraph.types import RunnableConfig
 from tableau_assistant.src.agents.insight.components.coordinator import AnalysisCoordinator
 from tableau_assistant.src.core.models import InsightResult
 from tableau_assistant.src.core.models.execute_result import ExecuteResult
-from tableau_assistant.src.core.state import VizQLState
+from tableau_assistant.src.orchestration.workflow.state import VizQLState
 
 logger = logging.getLogger(__name__)
 

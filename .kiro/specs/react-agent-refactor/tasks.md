@@ -28,17 +28,22 @@
 ### Task 1.1: 创建 Tool 基础设施
 **文件**: `orchestration/tools/__init__.py`, `base.py`, `registry.py`
 
-- [ ] 创建 `orchestration/tools/` 目录结构
-- [ ] 创建 `base.py`:
-  - 定义 `BaseTool` 抽象基类
-  - 定义 `ToolResult` 通用返回类型
-- [ ] 创建 `registry.py`:
-  - 实现 Tool 注册机制 (`@register_tool` 装饰器)
-  - 实现 `get_tools()` 获取所有注册工具
-- [ ] 更新 `__init__.py` 导出所有工具
+- [x] 创建 `orchestration/tools/` 目录结构
+- [x] 创建 `base.py`:
+  - 使用 `langchain_core.tools.BaseTool` 作为工具基类（LangChain 标准）
+  - 定义 `ToolResult` 通用返回类型（包含 `success`, `data`, `error`）
+  - 定义 `ToolError` 和 `ToolErrorCode` 错误模型
+  - 实现 `format_tool_result()` 格式化函数
+  - 实现 `safe_tool_execution` 和 `safe_async_tool_execution` 装饰器
+- [x] 创建 `registry.py`:
+  - 实现 `ToolRegistry` 单例类
+  - 实现 `register_tool()` 注册函数
+  - 实现 `get_tools_for_node()` 按节点获取工具
+  - 定义 `NodeType` 枚举（SEMANTIC_PARSER, INSIGHT, REPLANNER）
+- [x] 更新 `__init__.py` 导出所有工具
 
 **验收标准**: 
-- `BaseTool` 包含 `name`, `description`, `input_schema`, `run()` 方法
+- 使用 LangChain 标准 `BaseTool`（包含 `name`, `description`, `args_schema`）
 - `ToolResult` 包含 `success`, `data`, `error` 字段
 - 注册机制正常工作
 
@@ -47,17 +52,20 @@
 ### Task 1.2: 实现 map_fields Tool 包
 **文件**: `orchestration/tools/map_fields/__init__.py`, `tool.py`, `models.py`
 
-- [ ] 创建 `orchestration/tools/map_fields/` 包目录
-- [ ] 创建 `models.py`:
+- [x] 创建 `orchestration/tools/map_fields/` 包目录
+- [x] 创建 `models.py`:
   - `MapFieldsInput` 模型
   - `MapFieldsOutput` 模型
-  - `FieldMappingError` 模型 (type: field_not_found | ambiguous_field)
-- [ ] 创建 `tool.py`:
-  - 从 `agents/field_mapper/` 提取核心映射逻辑
-  - 使用 `@tool` 装饰器定义 LangChain Tool
-  - 实现 RAG + LLM 混合映射逻辑
+  - `FieldMappingError` 模型 (type: field_not_found | ambiguous_field | no_metadata | mapping_failed)
+  - `FieldSuggestion` 模型（字段建议）
+  - `MappingResultItem` 模型（单个字段映射结果）
+- [x] 创建 `tool.py`:
+  - 从 `agents/field_mapper/` 调用核心映射逻辑
+  - 使用 `@tool` 装饰器定义 LangChain Tool (`map_fields`)
+  - 实现 `map_fields_async` 异步版本
+  - 保留 RAG + LLM 混合映射逻辑
   - 返回结构化错误
-- [ ] 更新 `__init__.py` 导出 Tool 和模型
+- [x] 更新 `__init__.py` 导出 Tool 和模型
 
 **依赖**: Task 1.1
 
@@ -72,17 +80,17 @@
 ### Task 1.3: 实现 build_query Tool 包
 **文件**: `orchestration/tools/build_query/__init__.py`, `tool.py`, `models.py`
 
-- [ ] 创建 `orchestration/tools/build_query/` 包目录
-- [ ] 创建 `models.py`:
+- [x] 创建 `orchestration/tools/build_query/` 包目录
+- [x] 创建 `models.py`:
   - `BuildQueryInput` 模型
   - `BuildQueryOutput` 模型
   - `QueryBuildError` 模型 (type: invalid_computation | unsupported_operation)
-- [ ] 创建 `tool.py`:
+- [x] 创建 `tool.py`:
   - 从 `nodes/query_builder/` 提取核心构建逻辑
   - 使用 `@tool` 装饰器定义 LangChain Tool
   - 保留现有 QueryBuilder 的计算转换逻辑
   - 返回结构化错误
-- [ ] 更新 `__init__.py` 导出 Tool 和模型
+- [x] 更新 `__init__.py` 导出 Tool 和模型
 
 **依赖**: Task 1.1
 
@@ -97,18 +105,18 @@
 ### Task 1.4: 实现 execute_query Tool 包
 **文件**: `orchestration/tools/execute_query/__init__.py`, `tool.py`, `models.py`
 
-- [ ] 创建 `orchestration/tools/execute_query/` 包目录
-- [ ] 创建 `models.py`:
+- [x] 创建 `orchestration/tools/execute_query/` 包目录
+- [x] 创建 `models.py`:
   - `ExecuteQueryInput` 模型
   - `ExecuteQueryOutput` 模型
   - `ExecutionError` 模型 (type: execution_failed | timeout | auth_error | invalid_query)
-- [ ] 创建 `tool.py`:
+- [x] 创建 `tool.py`:
   - 从 `nodes/execute/` 提取核心执行逻辑
   - 使用 `@tool` 装饰器定义 LangChain Tool
   - 保留现有 VizQL API 调用逻辑
   - 集成 FilesystemMiddleware 大结果处理
   - 返回结构化错误
-- [ ] 更新 `__init__.py` 导出 Tool 和模型
+- [x] 更新 `__init__.py` 导出 Tool 和模型
 
 **依赖**: Task 1.1
 
@@ -123,59 +131,44 @@
 
 ## Phase 2: SemanticParser Subgraph 实现
 
-### Task 2.1: 创建 SemanticParser models 包
-**文件**: `agents/semantic_parser/models/__init__.py`, `step1.py`, `step2.py`, `parse_result.py`, `pipeline.py`, `react.py`
+### Task 2.1: 创建 SemanticParser models 包 ✅
+**文件**: `agents/semantic_parser/models/__init__.py`, `step1.py`, `step2.py`, `parse_result.py`, `observer.py`, `pipeline.py`, `react.py`
 
-- [ ] 创建 `agents/semantic_parser/models/` 包目录
-- [ ] 创建 `step1.py`: 
+- [x] 创建 `agents/semantic_parser/models/` 包目录
+- [x] 创建 `step1.py`: 
   - 从 `core/models/step1.py` 迁移 `Step1Output` 模型
-  - **★统一继承关系**：
-    - `MeasureSpec` 继承 `core.models.fields.MeasureField`
-    - `DimensionSpec` 继承 `core.models.fields.DimensionField`
-    - `FilterSpec` 继承 `core.models.filters.Filter`
+  - **★设计决策**：Step1 直接使用核心层 `MeasureField`, `DimensionField`, `Filter`，不定义 `MeasureSpec`, `DimensionSpec`, `FilterSpec`
+  - **★排序设计**：排序嵌入字段定义（`SortSpec` 在 `MeasureField.sort` 和 `DimensionField.sort`），`SemanticQuery` 使用 `get_sorts()` 方法
   - 更新导入路径
-- [ ] 创建 `step2.py`: 
+- [x] 创建 `step2.py`: 
   - 从 `core/models/step2.py` 迁移 `Step2Output` 模型
   - 更新导入路径
-- [ ] 创建 `parse_result.py`:
+- [x] 创建 `observer.py`:
+  - 从 `core/models/observer.py` 迁移 `ObserverOutput` 等模型
+  - 更新导入路径
+- [x] 创建 `parse_result.py`:
   - 从 `core/models/parse_result.py` 迁移 `SemanticParseResult`, `ClarificationQuestion` 模型
   - 更新导入路径
-- [ ] 创建 `pipeline.py`: 定义 `QueryResult`, `QueryError` 模型
-- [ ] 创建 `react.py`: 定义 `ReActThought`, `ReActAction`, `ReActObservation`, `ReActOutput` 模型
-- [ ] 更新 `__init__.py` 导出所有模型
-- [ ] 更新所有引用 `core/models/step1.py`、`core/models/step2.py`、`core/models/parse_result.py` 的文件
+- [x] 创建 `pipeline.py`: 定义 `QueryResult`, `QueryError` 模型
+- [x] 创建 `react.py`: 定义 `ReActThought`, `ReActAction`, `ReActObservation`, `ReActOutput` 模型
+- [x] 更新 `__init__.py` 导出所有模型
+- [x] 更新所有引用 `core/models/step1.py`、`core/models/step2.py`、`core/models/parse_result.py`、`core/models/observer.py` 的文件
+- [x] 删除原 `core/models/step1.py`、`core/models/step2.py`、`core/models/parse_result.py`、`core/models/observer.py`
+- [x] 更新 `core/models/__init__.py` 和 `core/__init__.py` 移除已迁移模型的导出
 
 **模型迁移说明**:
-- `core/models/step1.py` → `agents/semantic_parser/models/step1.py`
-- `core/models/step2.py` → `agents/semantic_parser/models/step2.py`
-- `core/models/parse_result.py` → `agents/semantic_parser/models/parse_result.py`
-- 迁移后删除原文件
+- `core/models/step1.py` → `agents/semantic_parser/models/step1.py` ✅ 已完成
+- `core/models/step2.py` → `agents/semantic_parser/models/step2.py` ✅ 已完成
+- `core/models/parse_result.py` → `agents/semantic_parser/models/parse_result.py` ✅ 已完成
+- `core/models/observer.py` → `agents/semantic_parser/models/observer.py` ✅ 已完成
+- 迁移后已删除原文件 ✅
 
-**★模型继承关系统一（本次重构范围）**:
-```python
-# agents/semantic_parser/models/step1.py
-from core.models.fields import MeasureField, DimensionField
-from core.models.filters import Filter
-from core.models.enums import SortDirection
-
-class MeasureSpec(MeasureField):
-    """Step1 特有的度量规格，继承自核心层 MeasureField"""
-    sort_direction: SortDirection | None = None
-    sort_priority: int = 0
-
-class DimensionSpec(DimensionField):
-    """Step1 特有的维度规格，继承自核心层 DimensionField"""
-    pass  # 如有 Step1 特有字段，在此添加
-
-class FilterSpec(Filter):
-    """Step1 特有的过滤器规格，继承自核心层 Filter"""
-    n: int | None = None
-    by_field: str | None = None
-    direction: SortDirection | None = None
-    values: list[str] | None = None
-    start_date: str | None = None
-    end_date: str | None = None
-```
+**★设计决策（用户确认）**:
+1. **不使用继承**：Step1 直接使用核心层 `MeasureField`, `DimensionField`, `Filter`，不定义 `MeasureSpec`, `DimensionSpec`, `FilterSpec`
+2. **排序嵌入字段**：`SortSpec` 嵌入 `MeasureField.sort` 和 `DimensionField.sort`，`SemanticQuery` 使用 `get_sorts()` 方法而非 `sorts` 字段
+3. **不使用别名**：不使用 `ToolResult = ToolResponse` 等别名，必须正确重命名
+4. **不需要兼容旧字段**：迁移后不保留向后兼容字段
+5. **彻底解决循环导入**：不使用 `TYPE_CHECKING` 或 `Any` 类型绕过
 
 **验收标准**:
 - 所有模型通过 Pydantic 验证
@@ -185,62 +178,97 @@ class FilterSpec(Filter):
 
 ---
 
-### Task 2.2: 定义 SemanticParser 内部状态
+### Task 2.2: 定义 SemanticParser 内部状态 ✅
 **文件**: `agents/semantic_parser/state.py`
 
-- [ ] 创建 `SemanticParserState(TypedDict)`:
-  - 输入字段: question, history, data_model
-  - Step1 输出: step1_output
-  - Step2 输出: step2_output
-  - Pipeline 状态: semantic_query, pipeline_result
-  - 最终输出: mapped_query, vizql_query, query_result, error
+**★设计决策变更**：创建 `SemanticParserState` 继承自 `VizQLState`，遵循金字塔结构原则。
+
+**金字塔结构**：
+1. **核心层 (VizQLState)**：只包含高度抽象的核心类型（SemanticQuery, MappedQuery 等）
+2. **Agent 层 (SemanticParserState)**：继承核心层，添加 Agent 特有的类型：
+   - `semantic_parse_result`: SemanticParseResult（完整解析结果）
+   - `step1_output`: Step1Output（意图 + what/where/how）
+   - `step2_output`: Step2Output（计算推理）
+
+**关键修改**：
+- 从 `core/state.py` 移除 `SemanticParseResult` 导入（核心层不导入 Agent 层）
+- 从 `VizQLState` 移除 `semantic_parse_result` 字段
+- `SemanticParserState` 继承 `VizQLState` 并添加 Agent 特有字段
+- `semantic_parser_node` 只返回核心层字段（semantic_query, restated_question 等）
+
+**实现方式**：
+- Subgraph 内部节点使用 `SemanticParserState` 类型
+- 主工作流节点返回核心层字段到 `VizQLState`
+- 无循环导入问题
+
+- [x] 创建 `SemanticParserState(VizQLState)` 继承核心层状态
+- [x] 添加 `semantic_parse_result` 字段（Agent 层特有）
+- [x] 添加 `step1_output`, `step2_output` 字段（Subgraph 内部）
+- [x] 从 `core/state.py` 移除 `SemanticParseResult` 导入
+- [x] 更新 `semantic_parser_node` 只返回核心层字段
 
 **依赖**: Task 2.1
 
 **验收标准**:
-- State 定义完整
-- 类型注解正确，引用 models 包中的模型
+- 金字塔结构正确：Agent 层继承核心层 ✅
+- 无循环导入 ✅
+- 类型安全（不使用 Any 或 TYPE_CHECKING 绕过）✅
 
 ---
 
-### Task 2.3: 实现 Step1 节点
-**文件**: `agents/semantic_parser/components/step1.py`
+### Task 2.3: 实现 Step1 节点 ✅
+**文件**: `agents/semantic_parser/node.py`, `agents/semantic_parser/components/step1.py`
 
-- [ ] 提取现有 Step1 逻辑到独立模块
-- [ ] 实现 `step1_node(state: SemanticParserState) -> Dict`
-- [ ] 使用 `models.step1.Step1Output` 作为输出类型
-- [ ] 保持现有 Prompt 和输出格式
+- [x] 提取现有 Step1 逻辑到独立模块
+- [x] 实现 `step1_node(state: VizQLState) -> Dict`
+- [x] 使用 `models.step1.Step1Output` 作为输出类型
+- [x] 保持现有 Prompt 和输出格式
+- [x] 更新 `current_stage` 为 `semantic_parser.step1`
+
+**★实现说明**：
+- `Step1Component` 在 `components/step1.py`：纯业务逻辑，不依赖 `VizQLState`
+- `step1_node` 在 `node.py`：状态编排层，正确导入并使用 `VizQLState` 类型
+- 这种分离避免了循环导入问题（`core/state.py` 导入 `agents/semantic_parser/models/`）
+
+**依赖**: Task 2.1
+
+**验收标准**:
+- Step1 逻辑保持不变 ✅
+- 输出 Step1Output 正确 ✅
+- `step1_node` 使用 `VizQLState` 类型注解 ✅
+
+---
+
+### Task 2.4: 实现 Step2 节点 ✅
+**文件**: `agents/semantic_parser/components/step2.py`, `agents/semantic_parser/node.py`
+
+- [x] 提取现有 Step2 逻辑到独立模块
+- [x] 实现 `step2_node(state: VizQLState) -> Dict`
+- [x] 使用 `models.step2.Step2Output` 作为输出类型
+- [x] 更新 `current_stage` 为 `semantic_parser.step2`
+- [x] 保持现有 Prompt 和输出格式
+
+**★实现说明**：
+- `Step2Component` 在 `components/step2.py`：纯业务逻辑，不依赖 `VizQLState`
+- `step2_node` 在 `node.py`：状态编排层，正确导入并使用 `VizQLState` 类型
+- 这种分离避免了循环导入问题（`core/state.py` 导入 `agents/semantic_parser/models/`）
+- Step2 只在 `step1_output.how_type != SIMPLE` 时调用
 
 **依赖**: Task 2.1, Task 2.2
 
 **验收标准**:
-- Step1 逻辑保持不变
-- 输出 Step1Output 正确
+- Step2 逻辑保持不变 ✅
+- 输出 Step2Output 正确 ✅
+- `step2_node` 使用 `VizQLState` 类型注解 ✅
 
 ---
 
-### Task 2.4: 实现 Step2 节点
-**文件**: `agents/semantic_parser/components/step2.py`
-
-- [ ] 提取现有 Step2 逻辑到独立模块
-- [ ] 实现 `step2_node(state: SemanticParserState) -> Dict`
-- [ ] 使用 `models.step2.Step2Output` 作为输出类型
-- [ ] 保持现有 Prompt 和输出格式
-
-**依赖**: Task 2.1, Task 2.2
-
-**验收标准**:
-- Step2 逻辑保持不变
-- 输出 Step2Output 正确
-
----
-
-### Task 2.5: 实现 QueryPipeline（核心）
+### Task 2.5: 实现 QueryPipeline（核心）✅
 **文件**: `agents/semantic_parser/components/query_pipeline.py`
 
 **重要**：这是语义解析的核心组件，保证执行顺序并集成中间件
 
-- [ ] 实现 `QueryPipeline` 类：
+- [x] 实现 `QueryPipeline` 类：
   - `__init__`: 接收 MiddlewareRunner 和 Runtime
   - `execute()`: 执行完整 Pipeline
   - `_execute_step1()`: 使用 `call_model_with_middleware`
@@ -248,7 +276,9 @@ class FilterSpec(Filter):
   - `_execute_map_fields()`: 使用 `call_tool_with_middleware`（内部已有 RAG+LLM 混合策略）
   - `_execute_build_query()`: 纯逻辑，无中间件
   - `_execute_query()`: 使用 `call_tool_with_middleware`，处理 FilesystemMiddleware 返回的 Command
-- [ ] 使用 `models.pipeline.QueryResult`, `QueryError` 作为返回类型
+- [x] 使用 `models.pipeline.QueryResult`, `QueryError` 作为返回类型
+- [x] 更新 `pipeline.py` 添加 `step1_output`, `step2_output`, `intent_type` 字段
+- [x] 更新 `components/__init__.py` 导出 `QueryPipeline`
 
 **字段映射说明**：
 - `map_fields` 封装现有 `FieldMapperNode`，保留完整的 RAG+LLM 混合策略
@@ -283,125 +313,186 @@ class FilterSpec(Filter):
 
 ---
 
-### Task 2.6: 实现 ReAct 错误处理
+### Task 2.6: 实现 ReAct 错误处理 ✅
 **文件**: `agents/semantic_parser/components/react_error_handler.py`, `agents/semantic_parser/prompts/react_error.py`
 
 **说明**：当 QueryPipeline 中任意工具返回错误时，进入 ReAct 错误处理模式
 
-- [ ] 创建 `prompts/react_error.py`:
+- [x] 创建 `prompts/react_error.py`:
   - 实现 `ReActErrorHandlerPrompt` 类
   - 定义 `get_task()` 说明 ReAct 动作选项
   - 定义 `get_user_template()` 包含错误信息和重试次数
   - 使用 `ReActOutput` 作为输出模型
-- [ ] 创建 `components/react_error_handler.py`:
+- [x] 创建 `components/react_error_handler.py`:
   - 使用 `models.react` 中的数据模型（ReActThought, ReActAction, ReActObservation, ReActOutput）
   - 实现 `ReActErrorHandler` 类：
     - `__init__`: 接收 LLM 和 max_retries
     - `handle_error()`: 处理工具错误
-    - `_generate_thought_and_action()`: 调用 LLM 生成 Thought + Action
-    - `_execute_retry()`: 执行 RETRY 动作
-    - `_execute_clarify()`: 执行 CLARIFY 动作
-    - `_execute_abort()`: 执行 ABORT 动作
-- [ ] 更新 `prompts/__init__.py` 导出 ReActErrorHandlerPrompt
+    - `_call_llm_for_analysis()`: 调用 LLM 生成 Thought + Action
+    - `_create_max_retry_output()`: 创建最大重试次数达到时的 ABORT 输出
+    - `_create_fallback_output()`: 创建 LLM 失败时的兜底输出
+    - `create_observation()`: 从步骤执行结果创建 Observation
+- [x] 更新 `prompts/__init__.py` 导出 ReActErrorHandlerPrompt
+- [x] 更新 `components/__init__.py` 导出 ReActErrorHandler
+- [x] 更新 `models/react.py` docstrings 为英文
+
+**★关键设计决策（用户确认）**：
+1. **RETRY 可以回到任意步骤**：`RetryTarget` 枚举定义 `step1`, `step2`, `map_fields`, `build_query`
+2. **LLM 分析根因**：`ReActThought.root_cause` 字段让 LLM 识别哪个步骤导致了错误
+3. **error_feedback 传递给重试步骤**：帮助重试步骤理解之前出了什么问题
+4. **所有用户消息由 LLM 生成**：`user_message` 和 `clarification_question` 都由 LLM 生成
+5. **兜底消息**：当 LLM 本身失败或达到最大重试次数时，使用简单的兜底消息（这是必要的设计权衡）
 
 **ReAct 流程**：
-- 工具返回错误（初始 Observation）→ Thought（分析错误）→ Action（RETRY/CLARIFY/ABORT）
-- RETRY 后执行工具 → Observation（观察结果）→ 成功则结束，失败则回到 Thought
-- 最多重试 max_retries 次
+- 错误发生 → LLM 分析根因 → 决定 RETRY/CLARIFY/ABORT
+- RETRY: 回到指定步骤（step1/step2/map_fields/build_query），带上 error_feedback
+- CLARIFY: 返回 LLM 生成的澄清问题给用户
+- ABORT: 返回 LLM 生成的用户友好消息
 
 **依赖**: Task 2.1, Task 2.5
 
 **验收标准**:
-- ReAct 正确分析错误并决策
-- RETRY 能使用修正参数重试工具
-- CLARIFY 能返回澄清问题给用户
-- ABORT 能返回友好错误信息
-- 重试次数限制正常工作
+- [x] ReAct 正确分析错误并决策
+- [x] RETRY 能指定回到哪个步骤（step1/step2/map_fields/build_query）
+- [x] RETRY 带有 error_feedback 帮助重试步骤理解问题
+- [x] CLARIFY 能返回 LLM 生成的澄清问题给用户
+- [x] ABORT 能返回 LLM 生成的友好错误信息
+- [x] 重试次数限制正常工作
 
 ---
 
-### Task 2.7: 实现外层决策逻辑
+### Task 2.7: 实现外层决策逻辑 ✅
 **文件**: `agents/semantic_parser/components/decision_handler.py`
 
 **说明**：整合 QueryPipeline 和 ReAct 错误处理
 
-- [ ] 定义 `DecisionState(TypedDict)` 状态
-- [ ] 实现 `pipeline_node`: 调用 QueryPipeline
-- [ ] 实现 `react_error_node`: 调用 ReActErrorHandler
-- [ ] 实现 `handle_result`: 根据结果处理
-  - success=True → 结束，进入 Insight
-  - error + can_retry → ReAct 错误处理
-  - error + ABORT → 返回错误信息给用户
-  - CLARIFY → 返回澄清问题给用户
-- [ ] 实现 `route_after_pipeline` 路由函数
-- [ ] 实现 `route_after_react` 路由函数
-- [ ] 创建 `create_semantic_parser_graph()` 构建 StateGraph
-- [ ] 实现 `execute_semantic_parser()` 同步执行函数
-- [ ] 实现 `stream_semantic_parser()` 流式执行函数
-  - 使用 `astream_events` 获取 token 级别流式输出
+- [x] 定义 `DecisionResult` 数据类（包含 success, query_result, action_type, clarification_question, user_message, retry_history）
+- [x] 实现 `DecisionHandler` 类：
+  - `__init__`: 接收 QueryPipeline, ReActErrorHandler, max_total_retries
+  - `execute()`: 执行完整的错误处理循环
+  - `_build_pipeline_context()`: 构建 pipeline 上下文供错误分析
+  - `_prepare_retry_state()`: 准备重试状态（清除指定步骤及后续步骤的输出）
+- [x] 更新 `QueryPipeline.execute()` 支持从指定步骤开始执行：
+  - 检查 state 中是否有现有输出，有则跳过对应步骤
+  - 支持 `error_feedback` 通过 state 传递给各步骤
+- [x] 更新 `_execute_step1()` 支持 error_feedback 参数
+- [x] 更新 `_execute_step2()` 支持 error_feedback 参数
+- [x] 更新 `_execute_build_query()` 支持 error_feedback 参数
+- [x] 更新 `Step2Component.execute()` 支持 error_feedback 参数
+- [x] 更新 `components/__init__.py` 导出 DecisionHandler, DecisionResult
+
+**错误处理流程**：
+```
+1. 执行 QueryPipeline
+2. 成功 → 返回 DecisionResult(success=True)
+3. 失败 → 调用 ReActErrorHandler
+4. ABORT → 返回 DecisionResult(user_message=LLM生成的消息)
+5. CLARIFY → 返回 DecisionResult(clarification_question=LLM生成的问题)
+6. RETRY → 准备重试状态，回到步骤1
+   - 清除 retry_from 及后续步骤的输出
+   - 将 error_feedback 传递给重试步骤
+```
 
 **依赖**: Task 2.5, Task 2.6
 
 **验收标准**:
-- Pipeline 执行正常
-- 错误触发 ReAct 处理
-- Token 级别流式输出正常工作
+- [x] Pipeline 执行正常
+- [x] 错误触发 ReAct 处理
+- [x] RETRY 能从指定步骤重新执行
+- [x] error_feedback 正确传递给重试步骤
+- [x] 最大重试次数限制正常工作
 
 ---
 
-### Task 2.8: 创建 SemanticParser Subgraph
-**文件**: `agents/semantic_parser/subgraph.py`
+### Task 2.8: 创建 SemanticParser Subgraph ✅
+**文件**: `agents/semantic_parser/subgraph.py`, `agents/semantic_parser/state.py`
 
-- [ ] 实现 `create_semantic_parser_subgraph() -> StateGraph`
-- [ ] 添加节点: step1, step2, pipeline, react_error_handler
-- [ ] 添加边:
+**★重要设计变更**：使用 LangGraph 节点路由循环实现 ReAct 错误处理，而非 Python while 循环
+
+- [x] 实现 `create_semantic_parser_subgraph() -> StateGraph`
+- [x] 添加节点: step1, step2, pipeline, react_error_handler
+- [x] 添加边 (LangGraph 节点路由循环):
   - START → step1
   - step1 → (conditional) → step2 | pipeline | END
-  - step2 → pipeline
+  - step2 → (conditional) → pipeline | END
   - pipeline → (conditional) → react_error_handler | END
-  - react_error_handler → (conditional) → pipeline | END
-- [ ] 实现 `route_after_step1()` 路由函数
-- [ ] 实现 `route_after_pipeline()` 路由函数
-- [ ] 实现 `route_after_react()` 路由函数
+  - react_error_handler → (conditional) → step1 | step2 | pipeline | END
+- [x] 实现路由函数:
+  - `route_after_step1()`: step2 | pipeline | END
+  - `route_after_step2()`: pipeline | END
+  - `route_after_pipeline()`: react_error_handler | END
+  - `route_after_react()`: step1 | step2 | pipeline | END (基于 retry_from)
+- [x] 更新 `SemanticParserState` 添加 LangGraph 路由循环字段:
+  - `retry_from: Optional[RetryTarget]` - 重试目标步骤
+  - `error_feedback: Optional[str]` - 错误反馈
+  - `react_action: Optional[ReActActionType]` - ReAct 动作类型
+  - `pipeline_error: Optional[QueryError]` - Pipeline 错误
+  - `retry_count: Optional[int]` - 重试次数
+  - `clarification_question: Optional[str]` - 澄清问题 (CLARIFY)
+  - `user_message: Optional[str]` - 用户消息 (ABORT)
 
-**依赖**: Task 2.3, Task 2.4, Task 2.7
+**架构 (LangGraph 节点路由循环)**:
+```
+START → step1 → (conditional) → step2 | pipeline | END
+step2 → (conditional) → pipeline | END
+pipeline → (conditional) → react_error_handler | END
+react_error_handler → (conditional) → step1 | step2 | pipeline | END
+```
+
+**ReAct 重试流程**:
+1. pipeline 失败 → 路由到 react_error_handler
+2. react_error_handler 分析错误，决定 RETRY from step2
+3. 路由到 step2 (带 error_feedback)
+4. step2 执行 → 路由到 pipeline
+5. pipeline 成功 → END
+
+**关键设计决策**:
+- ReAct 错误处理是独立的 LangGraph 节点，不是 Python while 循环
+- 重试循环通过 LangGraph 条件边实现
+- State 携带 retry_from 和 error_feedback 用于重试逻辑
+- 最大重试次数 (MAX_RETRIES=3) 在 route_after_react 中检查
+
+**依赖**: Task 2.3, Task 2.4, Task 2.6, Task 2.7
 
 **验收标准**:
-- Subgraph 编译成功
-- 正常流程正确执行
-- 错误流程触发 ReAct 处理
+- [x] Subgraph 编译成功
+- [x] 正常流程正确执行 (step1 → step2 → pipeline → END)
+- [x] 错误流程触发 ReAct 处理 (pipeline → react_error_handler)
+- [x] RETRY 通过 LangGraph 路由回到正确步骤
+- [x] CLARIFY/ABORT 正确结束并返回消息
+- [x] 最大重试次数限制正常工作
 
 ---
 
-### Task 2.9: 更新 SemanticParser Node 适配
+### Task 2.9: 更新 SemanticParser Node 适配 ✅
 **文件**: `agents/semantic_parser/node.py`
 
-- [ ] 修改 `semantic_parser_node()` 函数
-- [ ] 调用 Subgraph 而非直接执行
-- [ ] 映射 Subgraph 输出到主 State
+- [x] 修改 `semantic_parser_node()` 函数
+- [x] 调用 Subgraph 而非直接执行
+- [x] 映射 Subgraph 输出到主 State
 
 **依赖**: Task 2.8
 
 **验收标准**:
-- Node 正确调用 Subgraph
-- State 输出字段正确填充
+- Node 正确调用 Subgraph ✅
+- State 输出字段正确填充 ✅
 
 ---
 
-### Task 2.10: 移除 Observer 组件（由 ReAct 替代）
+### Task 2.10: 移除 Observer 组件（由 ReAct 替代）✅
 **文件**: 删除 `agents/semantic_parser/components/observer.py`, `prompts/observer.py`
 
-- [ ] 删除 Observer 相关文件
-- [ ] 更新 `__init__.py` 移除导出
-- [ ] 搜索并移除所有 Observer 相关导入
-- [ ] 确认 ReAct 错误处理已承担 Observer 功能
+- [x] 删除 Observer 相关文件
+- [x] 更新 `__init__.py` 移除导出
+- [x] 搜索并移除所有 Observer 相关导入
+- [x] 确认 ReAct 错误处理已承担 Observer 功能
 
 **依赖**: Task 2.8
 
 **验收标准**:
-- Observer 相关文件已删除
-- 无残留导入错误
-- ReAct 错误处理正常工作
+- Observer 相关文件已删除 ✅
+- 无残留导入错误 ✅
+- ReAct 错误处理正常工作 ✅
 
 ---
 

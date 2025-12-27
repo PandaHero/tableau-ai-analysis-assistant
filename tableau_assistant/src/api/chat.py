@@ -283,8 +283,8 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
         # 处理非分析问题（澄清、通用响应等）
         if not result.is_analysis_question:
             return ChatResponse(
-                executive_summary=result.non_analysis_response or result.general_response or result.clarification or "",
-                clarification=result.clarification,
+                executive_summary=result.non_analysis_response or result.general_response or result.clarification_question or "",
+                clarification_question=result.clarification_question,
                 general_response=result.general_response,
                 metadata={
                     "duration": result.duration,

@@ -20,12 +20,17 @@ Error handling:
 - All errors (Pydantic or semantic) are propagated to the Agent
 - Agent routes errors to Observer for correction
 - ValidationError carries original LLM output for Observer to analyze
+
+Architecture:
+- Step2Component: Pure business logic, no VizQLState knowledge
+- step2_node: State orchestration, defined in node.py to properly import VizQLState
+- This separation avoids circular imports (core/state.py imports from agents/semantic_parser/models/)
 """
 
 import logging
 from typing import Any, Dict, Optional
 
-from ....core.models import Step1Output, Step2Output
+from ..models import Step1Output, Step2Output
 from ....core.exceptions import ValidationError
 from ..prompts.step2 import STEP2_PROMPT
 from tableau_assistant.src.agents.base import (
@@ -67,6 +72,7 @@ class Step2Component:
         step1_output: Step1Output,
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
+        error_feedback: Optional[str] = None,
     ) -> Step2Output:
         """Execute Step 2: Computation reasoning and self-validation.
         
@@ -76,17 +82,24 @@ class Step2Component:
             step1_output: Output from Step 1
             state: Current workflow state (for middleware)
             config: LangGraph RunnableConfig (contains middleware)
+            error_feedback: Feedback from previous error (for retry)
             
         Returns:
             Step2Output with computations, reasoning, and LLM self-validation
         """
         # Extract measures and dimensions for validation reference
-        measures = [m.field for m in step1_output.what.measures]
-        dimensions = [d.field for d in step1_output.where.dimensions]
+        measures = [m.field_name for m in step1_output.what.measures]
+        dimensions = [d.field_name for d in step1_output.where.dimensions]
+        
+        # Build restated question with error feedback if present
+        restated_question = step1_output.restated_question
+        if error_feedback:
+            restated_question = f"{restated_question}\n\n[系统提示：上次计算推理出现问题，请注意：{error_feedback}]"
+            logger.info(f"Step 2 retry with feedback: {error_feedback[:100]}...")
         
         # Use STEP2_PROMPT to format messages (auto-injects JSON Schema)
         messages = STEP2_PROMPT.format_messages(
-            restated_question=step1_output.restated_question,
+            restated_question=restated_question,
             measures=measures,
             dimensions=dimensions,
             how_type=step1_output.how_type.value,

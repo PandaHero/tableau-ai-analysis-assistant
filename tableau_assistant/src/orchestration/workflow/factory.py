@@ -51,13 +51,13 @@ from tableau_assistant.src.orchestration.workflow.routes import (
     route_after_semantic_parser,
 )
 
-# Import Node implementations
-from tableau_assistant.src.agents.field_mapper import field_mapper_node as _field_mapper_node
-from tableau_assistant.src.nodes.query_builder import query_builder_node as _query_builder_node
-from tableau_assistant.src.nodes.execute import execute_node as _execute_node
-from tableau_assistant.src.nodes.self_correction import self_correction_node as _self_correction_node
+# Import Node implementations (import directly from node.py to avoid circular imports)
+from tableau_assistant.src.agents.field_mapper.node import field_mapper_node as _field_mapper_node
+from tableau_assistant.src.nodes.query_builder.node import query_builder_node as _query_builder_node
+from tableau_assistant.src.nodes.execute.node import execute_node as _execute_node
+from tableau_assistant.src.nodes.self_correction.node import self_correction_node as _self_correction_node
 
-# Import Agent implementations
+# Import Agent implementations (import directly from node.py to avoid circular imports)
 from tableau_assistant.src.agents.semantic_parser.node import semantic_parser_node as _semantic_parser_node
 from tableau_assistant.src.agents.insight.node import insight_node as _insight_node
 
@@ -271,8 +271,8 @@ def create_workflow(
         ... )
         >>> result = workflow.invoke({"question": "2024年各地区销售额"})
     """
-    # Import state from core (avoid circular import)
-    from tableau_assistant.src.core.state import VizQLState
+    # Import state from orchestration layer (state belongs here)
+    from tableau_assistant.src.orchestration.workflow.state import VizQLState
     
     config = {**get_default_config(), **(config or {})}
     

@@ -15,7 +15,7 @@ from typing import Type
 from pydantic import BaseModel
 
 from tableau_assistant.src.agents.base.prompt import VizQLPrompt
-from tableau_assistant.src.core.models import Step1Output
+from tableau_assistant.src.agents.semantic_parser.models import Step1Output
 
 
 class Step1Prompt(VizQLPrompt):

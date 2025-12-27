@@ -25,9 +25,9 @@ from langchain_core.runnables import RunnableConfig
 import logging
 
 from tableau_assistant.src.orchestration.tools.base import (
-    ToolResponse,
+    ToolResult,
     ToolErrorCode,
-    format_tool_response,
+    format_tool_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -170,14 +170,14 @@ async def get_metadata(
     try:
         # 验证 filter_role 参数
         if filter_role and filter_role.lower() not in ['dimension', 'measure']:
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.VALIDATION_ERROR,
                 message=f"无效的 filter_role 值: {filter_role}",
                 details={"valid_values": ["dimension", "measure"]},
                 recoverable=True,
                 suggestion="请使用 'dimension' 或 'measure'"
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
         
         # 从 WorkflowContext 获取数据模型
         data_model = None
@@ -191,13 +191,13 @@ async def get_metadata(
         
         # 检查是否获取到数据模型
         if data_model is None:
-            response = ToolResponse.fail(
+            result = ToolResult.fail(
                 code=ToolErrorCode.DEPENDENCY_ERROR,
                 message="无法获取数据模型：WorkflowContext 中没有 data_model",
                 recoverable=False,
                 suggestion="请确保工作流已正确初始化，并调用了 ensure_metadata_loaded()"
             )
-            return format_tool_response(response)
+            return format_tool_result(result)
         
         # 应用过滤
         # **Validates: Requirements 5.5**
@@ -229,13 +229,13 @@ async def get_metadata(
         
     except Exception as e:
         logger.error(f"get_metadata failed: {e}")
-        response = ToolResponse.fail(
+        result = ToolResult.fail(
             code=ToolErrorCode.EXECUTION_ERROR,
             message=f"获取元数据失败: {str(e)}",
             recoverable=True,
             suggestion="请检查数据源连接是否正常"
         )
-        return format_tool_response(response)
+        return format_tool_result(result)
 
 
 __all__ = [

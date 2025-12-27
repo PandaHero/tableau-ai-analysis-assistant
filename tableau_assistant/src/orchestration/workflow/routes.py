@@ -17,7 +17,7 @@ from typing import Dict, List, Literal, Optional, Union
 
 # VizQLState must be imported at runtime because LangGraph's add_conditional_edges
 # calls get_type_hints() to infer the output schema
-from tableau_assistant.src.core.state import VizQLState, ErrorRecord
+from tableau_assistant.src.orchestration.workflow.state import VizQLState, ErrorRecord
 from tableau_assistant.src.core.models import ReplanDecision
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ def route_after_semantic_parser(state: VizQLState) -> Literal["field_mapper", "e
     """
     Route after SemanticParser node.
     
-    Decision rules based on intent type from SemanticParseResult:
+    Decision rules based on intent type:
     - DATA_QUERY -> field_mapper (continue with data analysis)
     - CLARIFICATION -> end (return clarification question)
     - GENERAL -> end (return general response)
@@ -43,17 +43,9 @@ def route_after_semantic_parser(state: VizQLState) -> Literal["field_mapper", "e
     
     question = state.get("question", "")[:50]  # Truncate for logging
 
-    # New architecture: check semantic_parse_result.intent.type
-    semantic_parse_result = state.get("semantic_parse_result")
-    if semantic_parse_result is not None:
-        # Handle both Pydantic object and dict
-        if hasattr(semantic_parse_result, "intent"):
-            intent = semantic_parse_result.intent
-            intent_type = intent.type if hasattr(intent, "type") else intent.get("type")
-        else:
-            intent = semantic_parse_result.get("intent", {})
-            intent_type = intent.get("type") if isinstance(intent, dict) else None
-        
+    # Check intent_type (flattened field from SemanticParseResult)
+    intent_type = state.get("intent_type")
+    if intent_type is not None:
         if intent_type == IntentType.DATA_QUERY:
             logger.debug(f"Routing to field_mapper (DATA_QUERY): question='{question}...'")
             return "field_mapper"
@@ -61,7 +53,7 @@ def route_after_semantic_parser(state: VizQLState) -> Literal["field_mapper", "e
             logger.info(f"Non-DATA_QUERY intent ({intent_type}), routing to END: '{question}...'")
             return "end"
     
-    # Legacy: check is_analysis_question
+    # Fallback: check is_analysis_question
     is_analysis_question = state.get("is_analysis_question", True)
     
     if is_analysis_question:

@@ -11,32 +11,29 @@ Agent 模块
 - insight/: 洞察生成 Agent（Prompt 定义）
 - replanner/: 重规划 Agent（多问题并行执行）
 
-工作流定义在 src/workflow/ 目录：
+工作流定义在 src/orchestration/workflow/ 目录：
 - factory.py: 创建工作流
 - routes.py: 路由逻辑
+- state.py: 工作流状态定义
 
 使用示例：
+    # Import directly from submodules to avoid circular imports
     from tableau_assistant.src.agents.semantic_parser import semantic_parser_node
     from tableau_assistant.src.agents.dimension_hierarchy import dimension_hierarchy_node
     from tableau_assistant.src.agents.field_mapper import field_mapper_node
     from tableau_assistant.src.agents.replanner import ReplannerAgent
     from tableau_assistant.src.orchestration.workflow.factory import create_workflow
+
+Note:
+    This module does NOT re-export agent nodes at the package level.
+    This is intentional to avoid circular imports with orchestration/workflow/state.py.
+    Always import directly from the specific agent submodule.
 """
 
-# 导出主要 Agent 节点
-from .semantic_parser import semantic_parser_node
-from .dimension_hierarchy import dimension_hierarchy_node
-from .field_mapper import field_mapper_node, FieldMapperNode
+# No imports here to avoid circular imports
+# Import directly from submodules:
+#   from tableau_assistant.src.agents.semantic_parser import semantic_parser_node
+#   from tableau_assistant.src.agents.field_mapper import field_mapper_node
+#   etc.
 
-# 导出 Replanner Agent
-from .replanner import ReplannerAgent, REPLANNER_PROMPT
-
-__all__ = [
-    "semantic_parser_node",
-    "dimension_hierarchy_node",
-    "field_mapper_node",
-    "FieldMapperNode",
-    # Replanner
-    "ReplannerAgent",
-    "REPLANNER_PROMPT",
-]
+__all__: list[str] = []

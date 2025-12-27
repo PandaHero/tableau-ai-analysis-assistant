@@ -121,7 +121,7 @@ class WorkflowResult:
     error: Optional[str] = None
     
     # 非分析响应（当 is_analysis_question=False 时使用）
-    clarification: Optional[str] = None
+    clarification_question: Optional[str] = None
     general_response: Optional[str] = None
     non_analysis_response: Optional[str] = None
     
@@ -142,7 +142,7 @@ class WorkflowResult:
             replan_count=state.get("replan_count", 0),
             error=state.get("errors", [{}])[0].get("error") if state.get("errors") else None,
             # 非分析响应
-            clarification=state.get("clarification"),
+            clarification_question=state.get("clarification_question"),
             general_response=state.get("general_response"),
             non_analysis_response=state.get("non_analysis_response"),
         )

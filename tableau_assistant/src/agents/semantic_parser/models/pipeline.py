@@ -1,146 +1,165 @@
-"""Pipeline models - QueryPipeline 执行结果模型。
+"""Pipeline models - QueryPipeline execution result models.
 
-定义 QueryPipeline 的输出模型，包括成功结果和错误类型。
+Defines QueryPipeline output models including success results and error types.
 """
 
 from typing import Any, Dict, List, Optional
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 
+from .step1 import Step1Output
+from .step2 import Step2Output
+from ....core.models import IntentType
+
 
 class QueryErrorType(str, Enum):
-    """查询错误类型"""
-    # Step1/Step2 错误
+    """Query error types."""
+    # Step1/Step2 errors
     STEP1_FAILED = "step1_failed"
     STEP2_FAILED = "step2_failed"
     
-    # 字段映射错误
+    # Field mapping errors
     FIELD_NOT_FOUND = "field_not_found"
     AMBIGUOUS_FIELD = "ambiguous_field"
     NO_METADATA = "no_metadata"
     MAPPING_FAILED = "mapping_failed"
     
-    # 查询构建错误
+    # Query build errors
     INVALID_COMPUTATION = "invalid_computation"
     UNSUPPORTED_OPERATION = "unsupported_operation"
     BUILD_FAILED = "build_failed"
     
-    # 执行错误
+    # Execution errors
     EXECUTION_FAILED = "execution_failed"
     TIMEOUT = "timeout"
     AUTH_ERROR = "auth_error"
     INVALID_QUERY = "invalid_query"
     
-    # 通用错误
+    # Generic errors
     UNKNOWN = "unknown"
 
 
 class QueryError(BaseModel):
-    """查询错误模型
+    """Query error model.
     
-    当 QueryPipeline 中任意步骤失败时返回此结构化错误。
+    Returned as structured error when any step in QueryPipeline fails.
     """
     model_config = ConfigDict(extra="forbid")
     
     type: QueryErrorType = Field(
-        description="错误类型"
+        description="Error type"
     )
     
     message: str = Field(
-        description="用户友好的错误信息"
+        description="User-friendly error message"
     )
     
     step: str = Field(
-        description="发生错误的步骤 (step1, step2, map_fields, build_query, execute_query)"
+        description="Step where error occurred (step1, step2, map_fields, build_query, execute_query)"
     )
     
     details: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="详细错误信息（如字段建议、原始错误等）"
+        description="Detailed error info (e.g., field suggestions, original error)"
     )
     
     can_retry: bool = Field(
         default=False,
-        description="是否可以重试（用于 ReAct 决策）"
+        description="Whether retry is possible (used for ReAct decision)"
     )
     
     suggestion: Optional[str] = Field(
         default=None,
-        description="修复建议"
+        description="Fix suggestion"
     )
     
     def to_user_message(self) -> str:
-        """生成用户友好的错误消息"""
+        """Generate user-friendly error message."""
         msg = self.message
         if self.suggestion:
-            msg += f" 建议: {self.suggestion}"
+            msg += f" Suggestion: {self.suggestion}"
         return msg
 
 
 class QueryResult(BaseModel):
-    """QueryPipeline 执行结果
+    """QueryPipeline execution result.
     
-    成功时包含查询结果数据，失败时包含错误信息。
+    Contains query result data on success, error info on failure.
     """
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")  # Allow extra fields for intermediate results
     
     success: bool = Field(
-        description="是否成功"
+        description="Whether execution succeeded"
     )
     
-    # 成功时的数据
+    # Success data
     data: Optional[List[Dict[str, Any]]] = Field(
         default=None,
-        description="查询结果数据（成功时）"
+        description="Query result data (on success)"
     )
     
     columns: Optional[List[Dict[str, Any]]] = Field(
         default=None,
-        description="列元数据"
+        description="Column metadata"
     )
     
     row_count: int = Field(
         default=0,
-        description="返回的行数"
+        description="Number of rows returned"
     )
     
-    # 中间结果（用于调试和 ReAct）
+    # Intermediate results (for debugging and ReAct)
+    step1_output: Optional["Step1Output"] = Field(
+        default=None,
+        description="Step 1 output (semantic understanding)"
+    )
+    
+    step2_output: Optional["Step2Output"] = Field(
+        default=None,
+        description="Step 2 output (computation reasoning)"
+    )
+    
+    intent_type: Optional["IntentType"] = Field(
+        default=None,
+        description="Intent type from Step 1"
+    )
+    
     semantic_query: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Step1/Step2 生成的 SemanticQuery"
+        description="SemanticQuery generated from Step1/Step2"
     )
     
     mapped_query: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="字段映射后的 MappedQuery"
+        description="MappedQuery after field mapping"
     )
     
     vizql_query: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="构建的 VizQL 查询"
+        description="Built VizQL query"
     )
     
-    # 大结果集处理
+    # Large result handling
     file_path: Optional[str] = Field(
         default=None,
-        description="大结果集保存的文件路径"
+        description="File path for large result set"
     )
     
     is_large_result: bool = Field(
         default=False,
-        description="是否为大结果集"
+        description="Whether result is large"
     )
     
-    # 错误信息
+    # Error info
     error: Optional[QueryError] = Field(
         default=None,
-        description="错误信息（失败时）"
+        description="Error info (on failure)"
     )
     
-    # 执行统计
+    # Execution stats
     execution_time_ms: int = Field(
         default=0,
-        description="总执行耗时（毫秒）"
+        description="Total execution time (milliseconds)"
     )
     
     @classmethod
@@ -156,7 +175,7 @@ class QueryResult(BaseModel):
         is_large_result: bool = False,
         execution_time_ms: int = 0
     ) -> "QueryResult":
-        """创建成功响应"""
+        """Create success response."""
         return cls(
             success=True,
             data=data,
@@ -179,7 +198,7 @@ class QueryResult(BaseModel):
         vizql_query: Optional[Dict[str, Any]] = None,
         execution_time_ms: int = 0
     ) -> "QueryResult":
-        """创建失败响应"""
+        """Create failure response."""
         return cls(
             success=False,
             error=error,
