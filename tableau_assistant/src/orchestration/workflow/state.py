@@ -29,10 +29,13 @@ from langchain_core.messages import BaseMessage
 # Core models (platform-agnostic)
 # Orchestration layer only imports from core layer - no agent layer imports
 from tableau_assistant.src.core.models import SemanticQuery
-from tableau_assistant.src.core.models import MappedQuery, ReplanDecision, Insight
+from tableau_assistant.src.core.models import MappedQuery, ReplanDecision
 from tableau_assistant.src.core.models.execute_result import ExecuteResult
 from tableau_assistant.src.core.models.query_request import QueryRequest
 from tableau_assistant.src.core.models.enums import IntentType
+
+# Insight models (migrated to agents/insight/models)
+from tableau_assistant.src.agents.insight.models import Insight
 
 
 # ═══════════════════════════════════════════════════════════════════════════

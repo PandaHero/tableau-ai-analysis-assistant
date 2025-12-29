@@ -10,20 +10,19 @@ Core Data Models - 平台无关的语义层模型
 4. 验证模型 (validation)
 5. 维度层级模型 (dimension_hierarchy)
 6. 字段映射模型 (field_mapping)
-7. 洞察模型 (insight)
-8. 重规划模型 (replan)
+7. 重规划模型 (replan)
 
-注意：以下模型已迁移到 agents/semantic_parser/models/：
-- Step1 模型 (step1)
-- Step2 模型 (step2)
-- Observer 模型 (observer)
-- ParseResult 模型 (parse_result)
+注意：以下模型已迁移到 agents/ 层：
+- Step1 模型 → agents/semantic_parser/models/step1.py
+- Step2 模型 → agents/semantic_parser/models/step2.py
+- Observer 模型 → agents/semantic_parser/models/observer.py
+- ParseResult 模型 → agents/semantic_parser/models/parse_result.py
+- Insight 模型 → agents/insight/models/insight.py
 """
 
 # Enums
 from .enums import (
     AggregationType,
-    CalcType,
     DateGranularity,
     DateRangeType,
     DimensionCategory,
@@ -113,26 +112,6 @@ from .field_mapping import (
     MappedQuery,
 )
 
-# Insight
-from .insight import (
-    ChunkPriority,
-    ColumnStats,
-    SemanticGroup,
-    DataProfile,
-    AnomalyDetail,
-    AnomalyResult,
-    DataChunk,
-    PriorityChunk,
-    TailDataSummary,
-    InsightEvidence,
-    Insight,
-    InsightQuality,
-    InsightResult,
-    NextBiteDecision,
-    ClusterInfo,
-    DataInsightProfile,
-)
-
 # Replan
 from .replan import (
     ExplorationQuestion,
@@ -156,7 +135,6 @@ from .query_request import (
 __all__ = [
     # Enums
     "AggregationType",
-    "CalcType",
     "DateGranularity",
     "DateRangeType",
     "DimensionCategory",
@@ -222,23 +200,6 @@ __all__ = [
     "AlternativeMapping",
     "FieldMapping",
     "MappedQuery",
-    # Insight
-    "ChunkPriority",
-    "ColumnStats",
-    "SemanticGroup",
-    "DataProfile",
-    "AnomalyDetail",
-    "AnomalyResult",
-    "DataChunk",
-    "PriorityChunk",
-    "TailDataSummary",
-    "InsightEvidence",
-    "Insight",
-    "InsightQuality",
-    "InsightResult",
-    "NextBiteDecision",
-    "ClusterInfo",
-    "DataInsightProfile",
     # Replan
     "ExplorationQuestion",
     "ReplanDecision",

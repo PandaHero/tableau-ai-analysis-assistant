@@ -498,63 +498,64 @@ react_error_handler → (conditional) → step1 | step2 | pipeline | END
 
 ## Phase 3: InsightAgent Subgraph 实现
 
-### Task 3.1: 创建 InsightAgent models 包
+### Task 3.1: 创建 InsightAgent models 包 ✅
 **文件**: `agents/insight/models/__init__.py`, `profile.py`, `insight.py`, `director.py`, `analyst.py`
 
-- [ ] 创建 `agents/insight/models/` 包目录
-- [ ] 创建 `profile.py`: 定义 EnhancedDataProfile, ContributorAnalysis, ConcentrationRisk, PeriodChangeAnalysis, TrendAnalysis, DimensionIndex, AnomalyIndex 模型
-- [ ] 创建 `insight.py`: 
+- [x] 创建 `agents/insight/models/` 包目录
+- [x] 创建 `profile.py`: 定义 EnhancedDataProfile, ContributorAnalysis, ConcentrationRisk, PeriodChangeAnalysis, TrendAnalysis, DimensionIndex, AnomalyIndex 模型
+- [x] 创建 `insight.py`: 
   - 从 `core/models/insight.py` 迁移 `Insight`, `InsightQuality` 模型
   - 更新导入路径
-- [ ] 创建 `director.py`: 定义 DirectorInput, DirectorDecision, DirectorOutputWithAccumulation 模型
-- [ ] 创建 `analyst.py`: 定义 AnalystOutputWithHistory, HistoricalInsightAction 模型
-- [ ] 更新 `__init__.py` 导出所有模型
-- [ ] 更新所有引用 `core/models/insight.py` 的文件
+- [x] 创建 `director.py`: 定义 DirectorInput, DirectorDecision, DirectorOutputWithAccumulation 模型
+- [x] 创建 `analyst.py`: 定义 AnalystOutputWithHistory, HistoricalInsightAction 模型
+- [x] 更新 `__init__.py` 导出所有模型
+- [x] 更新所有引用 `core/models/insight.py` 的文件
+- [x] 删除原 `core/models/insight.py` 文件
 
 **模型迁移说明**:
-- `core/models/insight.py` → `agents/insight/models/insight.py`
-- 迁移后删除原文件
+- `core/models/insight.py` → `agents/insight/models/insight.py` ✅ 已完成
+- 迁移后已删除原文件 ✅
 
 **规范要求**: 遵循 `PROMPT_AND_MODEL_GUIDE.md`
 
 **验收标准**:
-- 所有模型通过 Pydantic 验证
-- 模型定义与 design.md 一致
-- 无导入错误
+- 所有模型通过 Pydantic 验证 ✅
+- 模型定义与 design.md 一致 ✅
+- 无导入错误 ✅
 
 ---
 
-### Task 3.2: 定义 Insight 内部状态
+### Task 3.2: 定义 Insight 内部状态 ✅
 **文件**: `agents/insight/state.py`
 
-- [ ] 创建 `InsightState(TypedDict)`:
+- [x] 创建 `InsightState(TypedDict)`:
   - 输入: query_result, files, context
-  - Phase 1: enhanced_profile
-  - Phase 2: director_decisions, current_action
-  - Phase 3: chunks, analyzed_chunks, chunk_insights
-  - Phase 4: final_insights, summary
-  - 控制: iteration_count, should_continue
+  - Phase 1: enhanced_profile, chunks
+  - Phase 2: director_decision, current_action, current_target
+  - Phase 3: analyzed_chunk_ids, analyst_output
+  - Phase 4: accumulated_insights, final_summary, insight_result
+  - 控制: iteration_count, should_continue, max_iterations, error_message
 
-**依赖**: Task 3.1
+**依赖**: Task 3.1 ✅
 
 **验收标准**:
-- State 定义完整
-- 类型注解正确，引用 models 包中的模型
+- State 定义完整 ✅
+- 类型注解正确，引用 models 包中的模型 ✅
 
 ---
 
 ### Task 3.3: 实现 EnhancedDataProfiler
 **文件**: `agents/insight/components/profiler.py`
 
-- [ ] 增强 `DataProfiler` 类为 `EnhancedDataProfiler`
-- [ ] 实现 `_analyze_contributors()`: Top/Bottom 贡献者分析
-- [ ] 实现 `_analyze_concentration()`: 集中度风险检测
-- [ ] 实现 `_analyze_period_changes()`: 同环比分析
-- [ ] 实现 `_analyze_trends()`: 趋势检测
-- [ ] 实现 `_build_dimension_index()`: 维度索引构建
-- [ ] 实现 `_build_anomaly_index()`: 异常索引构建
-- [ ] 实现 `_recommend_strategy()`: 分块策略推荐
-- [ ] 使用 `models.profile` 中的数据模型
+- [x] 增强 `DataProfiler` 类为 `EnhancedDataProfiler`
+- [x] 实现 `_analyze_contributors()`: Top/Bottom 贡献者分析
+- [x] 实现 `_analyze_concentration()`: 集中度风险检测
+- [x] 实现 `_analyze_period_changes()`: 同环比分析
+- [x] 实现 `_analyze_trends()`: 趋势检测
+- [x] 实现 `_build_dimension_index()`: 维度索引构建
+- [x] 实现 `_build_anomaly_index()`: 异常索引构建
+- [x] 实现 `_recommend_strategy()`: 分块策略推荐
+- [x] 使用 `models.profile` 中的数据模型
 
 **依赖**: Task 3.1
 
@@ -562,6 +563,179 @@ react_error_handler → (conditional) → step1 | step2 | pipeline | END
 - 生成 Tableau Pulse 风格洞察
 - 索引构建正确
 - 策略推荐合理
+
+---
+
+### Task 3.3.1: 合并 Profiler 和 StatisticalAnalyzer（P0 优化）✅
+**文件**: `agents/insight/components/profiler.py`, `agents/insight/components/coordinator.py`
+
+**问题**: `EnhancedDataProfiler` 和 `StatisticalAnalyzer` 存在严重功能重复：
+- 趋势检测：两者都有 `_analyze_trends()` / `_detect_trend()`
+- 异常检测：两者都有 `_build_anomaly_index()` / `_detect_anomalies()`
+- 策略推荐：两者都有 `_recommend_strategy()` / `_recommend_chunking_strategy()`
+
+**解决方案**: `EnhancedDataProfiler` 成为单一入口，内部委托给 `StatisticalAnalyzer` 和 `AnomalyDetector`
+
+- [x] 重构 `EnhancedDataProfiler.__init__()`:
+  - 接收 `StatisticalAnalyzer` 和 `AnomalyDetector` 作为构造函数依赖
+  - 默认创建实例（向后兼容）
+- [x] 重构 `EnhancedDataProfiler.profile()`:
+  - 移除重复的 `_analyze_trends()` - 委托给 `StatisticalAnalyzer._detect_trend()`
+  - 移除重复的异常检测 - 委托给 `AnomalyDetector.detect()`
+  - 统一策略推荐（只保留一处）
+- [x] 更新 `AnalysisCoordinator.analyze()`:
+  - 只调用 `EnhancedDataProfiler.profile()` 而非 3 个独立组件
+  - 移除对 `StatisticalAnalyzer.analyze()` 的直接调用
+  - 移除对 `AnomalyDetector.detect()` 的直接调用
+- [x] 添加 `get_insight_profile()` 方法:
+  - 提供 `DataInsightProfile` 访问（向后兼容）
+  - 内部委托给 `StatisticalAnalyzer.analyze()`
+- [x] 更新 `analyze_streaming()` 方法:
+  - 使用 `EnhancedDataProfiler` 作为单一入口
+  - 移除对 `self.statistical_analyzer` 和 `self.anomaly_detector` 的直接调用
+- [x] 更新所有中文注释和消息为英文
+
+**设计决策**:
+- 保留 `DataInsightProfile` 模型（用于分块策略）
+- `EnhancedDataProfile` 用于 UI 展示，`DataInsightProfile` 用于内部分块逻辑
+- 两者都需要，但通过 `EnhancedDataProfiler` 统一入口访问
+
+**依赖**: Task 3.3
+
+**验收标准**:
+- [x] 无重复代码
+- [x] `AnalysisCoordinator` 只调用一个入口
+- [x] 所有现有功能保持不变
+- [x] 导入验证通过
+- [x] 功能测试通过
+
+---
+
+### Task 3.3.2: 从 Step2 获取同环比（P1 优化）
+**文件**: `agents/insight/components/profiler.py`, `agents/insight/state.py`
+
+**问题**: Step2 已经做了表计算推理（YoY, MoM 等），Profiler 不应重复计算
+
+**解决方案**: 
+- [ ] 更新 `InsightState` 添加 `step2_output: Optional[Step2Output]` 字段
+- [ ] 更新 `EnhancedDataProfiler.profile()` 添加 `step2_output` 可选参数
+- [ ] 更新 `_analyze_period_changes()`:
+  - 如果 `step2_output` 存在且包含表计算信息，直接使用
+  - 否则回退到当前的自动检测逻辑
+- [ ] 更新 `AnalysisCoordinator.analyze()` 传递 `step2_output`
+
+**依赖**: Task 3.3.1
+
+**验收标准**:
+- 有 Step2 输出时不重复计算同环比
+- 无 Step2 输出时回退到自动检测
+
+---
+
+### Task 3.3.3: 鲁棒变点检测（P1 优化）
+**文件**: `agents/insight/components/profiler.py`
+
+**问题**: 当前变点检测过于简单（基于滚动均值 + 2σ），容易误报
+
+**解决方案**: 使用 `ruptures` 库的 PELT 算法，带简单回退
+
+- [ ] 添加 `ruptures` 到 `requirements.txt`（可选依赖）
+- [ ] 实现 `_detect_change_points_robust()`:
+  - 尝试使用 `ruptures.Pelt` 算法
+  - 如果 `ruptures` 未安装或失败，回退到当前简单方法
+- [ ] 更新 `_analyze_single_trend()` 使用新的变点检测方法
+- [ ] 添加变点检测方法到 `TrendAnalysis` 模型（`change_point_method: str`）
+
+**依赖**: Task 3.3.1
+
+**验收标准**:
+- 有 `ruptures` 时使用 PELT 算法
+- 无 `ruptures` 时优雅回退
+- 变点检测更准确
+
+---
+
+### Task 3.3.4: 性能优化 - pandas 向量化（P0 优化）
+**文件**: `agents/insight/components/profiler.py`
+
+**问题**: `_build_dimension_indices()` 使用 Python 循环，大数据集性能差
+
+**解决方案**: 使用 pandas `groupby` 向量化操作
+
+- [ ] 重构 `_build_single_dimension_index()`:
+  - 使用 `df.groupby(col).groups` 获取索引映射
+  - 使用 `df[col].value_counts()` 获取计数
+- [ ] 重构 `_build_anomaly_index()`:
+  - 使用向量化的 IQR 计算
+  - 使用 `np.where` 替代循环
+- [ ] 添加性能基准测试（可选）
+
+**依赖**: Task 3.3.1
+
+**验收标准**:
+- 大数据集（>10000 行）性能提升 >50%
+- 功能保持不变
+
+---
+
+### Task 3.3.5: 缓存机制（P1 优化）
+**文件**: `agents/insight/components/profiler.py`
+
+**问题**: 相同数据集可能被多次分析，浪费计算资源
+
+**解决方案**: 添加基于数据哈希的缓存
+
+- [ ] 实现 `_compute_data_hash()`:
+  - 基于 DataFrame 内容计算哈希
+  - 考虑列名、数据类型、行数
+- [ ] 添加 `_profile_cache: Dict[str, EnhancedDataProfile]` 类属性
+- [ ] 更新 `profile()` 方法:
+  - 计算数据哈希
+  - 检查缓存命中
+  - 缓存未命中时计算并存储
+- [ ] 添加 `clear_cache()` 方法
+- [ ] 添加缓存大小限制（LRU 策略）
+
+**依赖**: Task 3.3.1
+
+**验收标准**:
+- 相同数据第二次调用直接返回缓存
+- 缓存大小可配置
+- 不影响正确性
+
+---
+
+### Task 3.3.6: 相关性和季节性检测（P1 优化）
+**文件**: `agents/insight/components/profiler.py`, `agents/insight/models/profile.py`
+
+**问题**: 当前缺少相关性分析和季节性检测
+
+**解决方案**: 
+- [ ] 添加 `CorrelationAnalysis` 模型到 `profile.py`:
+  - `column_pair: Tuple[str, str]`
+  - `correlation: float`
+  - `correlation_type: str` (positive/negative/none)
+  - `is_significant: bool`
+- [ ] 添加 `SeasonalityAnalysis` 模型到 `profile.py`:
+  - `measure: str`
+  - `period: int` (周期长度)
+  - `strength: float`
+  - `pattern_type: str` (weekly/monthly/quarterly/yearly)
+- [ ] 实现 `_analyze_correlations()`:
+  - 计算数值列之间的皮尔逊相关系数
+  - 过滤显著相关（|r| > 0.5）
+- [ ] 实现 `_analyze_seasonality()`:
+  - 使用 FFT 或自相关检测周期性
+  - 识别常见周期（7天、30天、90天、365天）
+- [ ] 更新 `EnhancedDataProfile` 添加新字段
+- [ ] 更新 `_generate_summary()` 包含相关性和季节性信息
+
+**依赖**: Task 3.3.1
+
+**验收标准**:
+- 正确检测强相关列对
+- 正确识别季节性模式
+- 性能可接受（<1s for 10000 rows）
 
 ---
 
@@ -1299,8 +1473,14 @@ Phase 2: SemanticParser Subgraph
 Phase 3: InsightAgent Subgraph
 ├── Task 3.1: models 包 ★含模型迁移
 ├── Task 3.2: 内部状态定义 (依赖 3.1)
-├── Task 3.3: EnhancedDataProfiler (依赖 3.1)
-├── Task 3.4: Profiler 节点 (依赖 3.3)
+├── Task 3.3: EnhancedDataProfiler (依赖 3.1) ✅
+│   ├── Task 3.3.1: 合并 Profiler 和 StatisticalAnalyzer (依赖 3.3) ✅ P0 优化
+│   ├── Task 3.3.2: 从 Step2 获取同环比 (依赖 3.3.1) ★P1 优化
+│   ├── Task 3.3.3: 鲁棒变点检测 ruptures (依赖 3.3.1) ★P1 优化
+│   ├── Task 3.3.4: 性能优化 pandas 向量化 (依赖 3.3.1) ★P0 优化
+│   ├── Task 3.3.5: 缓存机制 (依赖 3.3.1) ★P1 优化
+│   └── Task 3.3.6: 相关性和季节性检测 (依赖 3.3.1) ★P1 优化
+├── Task 3.4: Profiler 节点 (依赖 3.3.1)
 ├── Task 3.5: AnalysisDirector 增强 (依赖 3.1)
 ├── Task 3.6: Director 节点 (依赖 3.5)
 ├── Task 3.7: 分析师 Prompt 增强 (依赖 3.1) ★新增
@@ -1365,11 +1545,11 @@ Phase 6: 文档与清理
 |-------|--------|---------|------|
 | Phase 1 | 4 | 1-1.5 天 | Tool 包实现，提取现有逻辑 |
 | Phase 2 | 10 | 3-3.5 天 | SemanticParser Subgraph + models 包迁移 + ReAct 错误处理 + 继承关系统一 |
-| Phase 3 | 16 | 4-5 天 | InsightAgent Subgraph + models 包迁移 + 渐进式累积 + 累积辅助模块 |
+| Phase 3 | 22 | 5-6 天 | InsightAgent Subgraph + models 包迁移 + 渐进式累积 + Profiler 优化（6 个子任务） |
 | Phase 4 | 9 | 2.5-3 天 | 主工作流重构 + 并行执行 + core/models 大规模迁移 + infra/platforms 清理 |
 | Phase 5 | 7 | 3-3.5 天 | 测试覆盖（含 ReAct + 渐进式累积测试） |
 | Phase 6 | 4 | 0.5-1 天 | 文档更新 |
-| **总计** | **50** | **14-18 天** | |
+| **总计** | **56** | **15-20 天** | |
 
 ---
 
@@ -1385,6 +1565,8 @@ Phase 6: 文档与清理
 | Subgraph 调试困难 | 中 | 添加 execution_path 追踪，详细日志 |
 | 洞察累积 LLM 决策不一致 | 中 | 提供清晰的处理规则，使用结构化输出 |
 | 历史洞察处理建议解析失败 | 中 | 提供默认 KEEP 策略，确保不丢失洞察 |
+| **ruptures 库兼容性** | **低** | **提供简单回退方案** |
+| **缓存内存占用** | **低** | **LRU 策略 + 可配置大小限制** |
 | ReAct 重试死循环 | 中 | max_retries 限制 + ABORT 兜底 |
 
 ---
@@ -1421,6 +1603,13 @@ Phase 6: 文档与清理
 - [ ] models 包迁移完成（insight.py 从 core/models 迁移）
 - [ ] EnhancedDataProfile 数据模型完成
 - [ ] EnhancedDataProfiler 实现完成（含 Tableau Pulse 洞察）
+- [ ] **Profiler 优化完成（Task 3.3.x）**：
+  - [x] Task 3.3.1: Profiler 和 StatisticalAnalyzer 合并完成
+  - [ ] Task 3.3.2: 从 Step2 获取同环比完成
+  - [ ] Task 3.3.3: 鲁棒变点检测（ruptures）完成
+  - [ ] Task 3.3.4: pandas 向量化性能优化完成
+  - [ ] Task 3.3.5: 缓存机制完成
+  - [ ] Task 3.3.6: 相关性和季节性检测完成
 - [ ] Director 支持按维度/异常精准分析
 - [ ] 循环决策正确执行
 - [ ] 渐进式洞察累积数据模型完成（HistoricalInsightAction, AnalystOutputWithHistory, DirectorOutputWithAccumulation）

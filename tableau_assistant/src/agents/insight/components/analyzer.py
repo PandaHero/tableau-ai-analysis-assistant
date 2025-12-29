@@ -21,7 +21,7 @@ import json
 import re
 from typing import Dict, List, Any, Optional, Tuple
 
-from tableau_assistant.src.core.models import (
+from tableau_assistant.src.agents.insight.models import (
     Insight,
     InsightEvidence,
     PriorityChunk,

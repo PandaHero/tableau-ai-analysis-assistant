@@ -19,7 +19,7 @@ from typing import Type, List
 from pydantic import BaseModel, Field, ConfigDict
 
 from tableau_assistant.src.agents.base.prompt import VizQLPrompt
-from tableau_assistant.src.core.models import (
+from tableau_assistant.src.agents.insight.models import (
     Insight,
     NextBiteDecision,
     InsightQuality,

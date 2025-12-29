@@ -17,7 +17,7 @@ import logging
 from typing import List, Set, Optional
 import hashlib
 
-from tableau_assistant.src.core.models import Insight
+from tableau_assistant.src.agents.insight.models import Insight
 
 logger = logging.getLogger(__name__)
 

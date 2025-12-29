@@ -24,7 +24,7 @@ from langgraph.types import RunnableConfig
 # analyzer.py 导入 agents/insight/prompt.py
 # 如果这里从 components 包导入，会触发循环
 from tableau_assistant.src.agents.insight.components.coordinator import AnalysisCoordinator
-from tableau_assistant.src.core.models import InsightResult
+from tableau_assistant.src.agents.insight.models import InsightResult
 from tableau_assistant.src.core.models.execute_result import ExecuteResult
 from tableau_assistant.src.orchestration.workflow.state import VizQLState
 

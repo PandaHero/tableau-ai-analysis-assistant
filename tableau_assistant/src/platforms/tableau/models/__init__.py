@@ -49,7 +49,8 @@ from .lod import (
     determine_lod_type,
 )
 
-from .execute_result import (
+# ExecuteResult is defined in core.models, re-export for convenience
+from tableau_assistant.src.core.models.execute_result import (
     ExecuteResult,
     ColumnMetadata,
     RowData,

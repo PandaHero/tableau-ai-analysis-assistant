@@ -479,7 +479,7 @@ class VizQLPrompt(DataAnalysisPrompt):
     
     def format_messages(self, **kwargs) -> list:
         """
-        Override to inject VizQL context into kwargs for backward compatibility
+        Override to inject VizQL context into kwargs.
         
         Args:
             **kwargs: Template variables
@@ -487,7 +487,7 @@ class VizQLPrompt(DataAnalysisPrompt):
         Returns:
             Formatted messages with VizQL context injected
         """
-        # Add VizQL context to kwargs for backward compatibility (if not empty)
+        # Add VizQL context to kwargs (if not empty)
         vizql_context = self.get_vizql_capabilities()
         if vizql_context:
             kwargs['vizql_context'] = vizql_context

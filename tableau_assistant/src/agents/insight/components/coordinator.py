@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-AnalysisCoordinator Component - AI 驱动的渐进式分析协调器
+AnalysisCoordinator Component - AI-driven progressive analysis coordinator.
 
-基于设计文档 progressive-insight-analysis/design.md 实现：
-- AI 驱动的渐进式分析主循环
-- 智能优先级分块
-- AI 决定下一口吃什么
-- AI 决定什么时候停
-- 流式输出
+Based on design document progressive-insight-analysis/design.md:
+- AI-driven progressive analysis main loop
+- Intelligent priority chunking
+- AI decides what to analyze next
+- AI decides when to stop
+- Streaming output
 
-核心理念："AI 宝宝吃饭"
-- AI 决定如何累积洞察
-- AI 决定下一口吃什么
-- AI 决定什么时候停
+Core concept: "AI baby eating"
+- AI decides how to accumulate insights
+- AI decides what to eat next
+- AI decides when to stop
+
+Architecture (Task 3.3.1):
+- Uses EnhancedDataProfiler as single entry point for profiling
+- EnhancedDataProfiler internally delegates to StatisticalAnalyzer and AnomalyDetector
+- No direct calls to StatisticalAnalyzer or AnomalyDetector from coordinator
 """
 
 import logging
@@ -20,7 +25,7 @@ import time
 from typing import Dict, List, Any, Optional, AsyncGenerator
 import pandas as pd
 
-from tableau_assistant.src.core.models import (
+from tableau_assistant.src.agents.insight.models import (
     DataProfile,
     DataInsightProfile,
     InsightResult,
@@ -30,77 +35,79 @@ from tableau_assistant.src.core.models import (
     InsightQuality,
     ChunkPriority,
     InsightEvidence,
+    AnomalyResult,
+    AnomalyDetail,
 )
-from .profiler import DataProfiler
-from .anomaly_detector import AnomalyDetector
+from tableau_assistant.src.agents.insight.models.profile import EnhancedDataProfile
+from .profiler import EnhancedDataProfiler
 from .chunker import SemanticChunker
 from .analyzer import ChunkAnalyzer
 from .accumulator import InsightAccumulator
 from .synthesizer import InsightSynthesizer
-from .statistical_analyzer import StatisticalAnalyzer
 
 logger = logging.getLogger(__name__)
 
 
 class AnalysisCoordinator:
     """
-    AI 驱动的渐进式分析协调器
+    AI-driven progressive analysis coordinator.
     
-    核心流程（来自设计文档）：
-    1. 初始化：准备所有数据块（智能优先级分块）
-    2. 循环：
-       a. AI 选择下一个数据块（基于已有洞察）
-       b. AI 分析数据块并累积洞察
-       c. 流式输出新洞察
-       d. AI 判断是否继续
-    3. 结束：合成最终洞察
+    Core flow (from design document):
+    1. Initialize: Prepare all data chunks (intelligent priority chunking)
+    2. Loop:
+       a. AI selects next data chunk (based on existing insights)
+       b. AI analyzes data chunk and accumulates insights
+       c. Stream output new insights
+       d. AI decides whether to continue
+    3. End: Synthesize final insights
     
-    策略选择：
-    - < 100 行: direct（直接分析）
-    - 100-1000 行: progressive（渐进式分析）
-    - > 1000 行: progressive with priority（带优先级的渐进式）
+    Strategy selection:
+    - < 100 rows: direct (direct analysis)
+    - 100-1000 rows: progressive (progressive analysis)
+    - > 1000 rows: progressive with priority (progressive with priority)
+    
+    Architecture (Task 3.3.1):
+    - Uses EnhancedDataProfiler as single entry point
+    - EnhancedDataProfiler internally delegates to StatisticalAnalyzer and AnomalyDetector
+    - No duplicate profiling/anomaly detection code
     """
     
-    # 策略阈值
+    # Strategy thresholds
     DIRECT_THRESHOLD = 100
     PROGRESSIVE_THRESHOLD = 1000
     
     def __init__(
         self,
         dimension_hierarchy: Optional[Dict[str, Any]] = None,
-        profiler: Optional[DataProfiler] = None,
-        statistical_analyzer: Optional[StatisticalAnalyzer] = None,
-        anomaly_detector: Optional[AnomalyDetector] = None,
+        profiler: Optional[EnhancedDataProfiler] = None,
         chunker: Optional[SemanticChunker] = None,
         analyzer: Optional[ChunkAnalyzer] = None,
         accumulator: Optional[InsightAccumulator] = None,
         synthesizer: Optional[InsightSynthesizer] = None,
     ):
         """
-        初始化协调器
+        Initialize coordinator.
         
         Args:
-            dimension_hierarchy: 维度层级信息
-            profiler: 数据画像器
-            statistical_analyzer: 统计/ML 分析器（Phase 1）
-            anomaly_detector: 异常检测器
-            chunker: 分块器
-            analyzer: 分析器（Phase 2 LLM）
-            accumulator: 累积器
-            synthesizer: 合成器
+            dimension_hierarchy: Dimension hierarchy info
+            profiler: EnhancedDataProfiler instance (single entry point for profiling)
+            chunker: SemanticChunker instance
+            analyzer: ChunkAnalyzer instance (Phase 2 LLM)
+            accumulator: InsightAccumulator instance
+            synthesizer: InsightSynthesizer instance
         """
         self._dimension_hierarchy = dimension_hierarchy or {}
         
-        self.profiler = profiler or DataProfiler(dimension_hierarchy=self._dimension_hierarchy)
-        self.statistical_analyzer = statistical_analyzer or StatisticalAnalyzer()
-        self.anomaly_detector = anomaly_detector or AnomalyDetector()
+        # EnhancedDataProfiler is the single entry point for profiling
+        # It internally delegates to StatisticalAnalyzer and AnomalyDetector
+        self.profiler = profiler or EnhancedDataProfiler(dimension_hierarchy=self._dimension_hierarchy)
         self.chunker = chunker or SemanticChunker(dimension_hierarchy=self._dimension_hierarchy)
         self.analyzer = analyzer or ChunkAnalyzer()
         self.accumulator = accumulator or InsightAccumulator()
         self.synthesizer = synthesizer or InsightSynthesizer()
     
     def set_dimension_hierarchy(self, hierarchy: Dict[str, Any]):
-        """设置维度层级信息"""
+        """Set dimension hierarchy info."""
         self._dimension_hierarchy = hierarchy or {}
         self.profiler.set_dimension_hierarchy(self._dimension_hierarchy)
         self.chunker.set_dimension_hierarchy(self._dimension_hierarchy)
@@ -113,88 +120,146 @@ class AnalysisCoordinator:
         config: Optional[Dict[str, Any]] = None,
     ) -> InsightResult:
         """
-        主分析入口 - 两阶段分析架构
+        Main analysis entry point - two-phase analysis architecture.
         
-        Phase 1: 统计/ML 整体分析（不需要 LLM）
-        Phase 2: 智能分块 + 渐进式分析（主持人 + 分析师 LLM 协作）
+        Phase 1: Statistical/ML overall analysis (via EnhancedDataProfiler)
+        Phase 2: Intelligent chunking + progressive analysis (Director + Analyst LLM collaboration)
+        
+        Architecture (Task 3.3.1):
+        - EnhancedDataProfiler is the single entry point for Phase 1
+        - It internally delegates to StatisticalAnalyzer and AnomalyDetector
+        - No duplicate code in coordinator
         
         Args:
-            data: 输入数据
-            context: 分析上下文（question, dimensions, measures）
-            state: 当前工作流状态（用于中间件）
-            config: LangGraph RunnableConfig（包含中间件）
+            data: Input data
+            context: Analysis context (question, dimensions, measures)
+            state: Current workflow state (for middleware)
+            config: LangGraph RunnableConfig (contains middleware)
             
         Returns:
-            InsightResult（包含 data_insight_profile）
+            InsightResult (contains data_insight_profile)
         """
         start_time = time.time()
         
-        # 转换数据
+        # Normalize data
         data_list = self._normalize_data(data)
         
         if not data_list:
             return InsightResult(
-                summary="无数据可分析",
+                summary="No data to analyze",
                 findings=[],
                 confidence=0.0,
                 execution_time=time.time() - start_time,
             )
         
-        # ========== Phase 1: 统计/ML 整体分析 ==========
+        # ========== Phase 1: Statistical/ML Analysis via EnhancedDataProfiler ==========
         logger.info("=" * 50)
-        logger.info("Phase 1: 统计/ML 整体分析")
-        logger.info("=" * 50)
-        
-        # 1.1 数据画像
-        profile = self.profiler.profile(data_list)
-        logger.info(f"数据画像: {profile.row_count} 行, {profile.column_count} 列")
-        
-        # 1.2 统计/ML 分析（生成 DataInsightProfile）
-        insight_profile = self.statistical_analyzer.analyze(data_list, profile)
-        logger.info(f"分布类型: {insight_profile.distribution_type}, 偏度: {insight_profile.skewness:.2f}")
-        logger.info(f"帕累托: Top 20% 贡献 {insight_profile.pareto_ratio:.1%}")
-        logger.info(f"异常值: {len(insight_profile.anomaly_indices)} 个 ({insight_profile.anomaly_ratio:.1%})")
-        logger.info(f"聚类: {len(insight_profile.clusters)} 个")
-        logger.info(f"推荐分块策略: {insight_profile.recommended_chunking_strategy}")
-        
-        # 1.3 异常检测（使用 Phase 1 的结果）
-        anomalies = self.anomaly_detector.detect(data_list)
-        
-        # ========== Phase 2: 智能分块 + 渐进式分析 ==========
-        logger.info("=" * 50)
-        logger.info("Phase 2: 智能分块 + 渐进式分析")
+        logger.info("Phase 1: Statistical/ML Analysis (via EnhancedDataProfiler)")
         logger.info("=" * 50)
         
-        # 2.1 选择策略
-        strategy = self._select_strategy(profile)
-        logger.info(f"分析策略: {strategy}")
+        # EnhancedDataProfiler is the single entry point
+        # It internally calls StatisticalAnalyzer and AnomalyDetector
+        enhanced_profile = self.profiler.profile(data_list)
         
-        # 2.2 构建分析上下文
+        # Get DataInsightProfile for chunking strategy
+        insight_profile = self.profiler.get_insight_profile(data_list)
+        
+        logger.info(f"Data profile: {enhanced_profile.row_count} rows, {enhanced_profile.column_count} columns")
+        logger.info(f"Distribution type: {insight_profile.distribution_type}, skewness: {insight_profile.skewness:.2f}")
+        logger.info(f"Pareto: Top 20% contribute {insight_profile.pareto_ratio:.1%}")
+        logger.info(f"Anomalies: {len(insight_profile.anomaly_indices)} ({insight_profile.anomaly_ratio:.1%})")
+        logger.info(f"Clusters: {len(insight_profile.clusters)}")
+        logger.info(f"Recommended chunking strategy: {insight_profile.recommended_chunking_strategy}")
+        
+        # Build basic DataProfile for strategy selection
+        basic_profile = DataProfile(
+            row_count=enhanced_profile.row_count,
+            column_count=enhanced_profile.column_count,
+            density=1.0,  # Simplified
+            statistics=enhanced_profile.statistics,
+            semantic_groups=[],
+        )
+        
+        # ========== Phase 2: Intelligent Chunking + Progressive Analysis ==========
+        logger.info("=" * 50)
+        logger.info("Phase 2: Intelligent Chunking + Progressive Analysis")
+        logger.info("=" * 50)
+        
+        # Select strategy
+        strategy = self._select_strategy(basic_profile)
+        logger.info(f"Analysis strategy: {strategy}")
+        
+        # Build analysis context with anomaly info from enhanced_profile
+        anomaly_result = self._build_anomaly_result_from_profile(enhanced_profile)
+        
         analysis_context = {
             **context,
-            "anomalies": anomalies,
-            "profile": profile,
+            "anomalies": anomaly_result,
+            "profile": basic_profile,
             "insight_profile": insight_profile,
             "top_n_summary": insight_profile.top_n_summary,
         }
         
-        # 2.3 执行分析
+        # Execute analysis
         if strategy == "direct":
-            result = await self._direct_analysis(data_list, analysis_context, profile, state, config)
+            result = await self._direct_analysis(data_list, analysis_context, basic_profile, state, config)
         else:
             result = await self._progressive_analysis_two_phase(
-                data_list, analysis_context, profile, insight_profile, state, config
+                data_list, analysis_context, basic_profile, insight_profile, state, config
             )
         
-        # 更新结果
+        # Update result
         result.execution_time = time.time() - start_time
         result.strategy_used = strategy
-        result.total_rows_analyzed = profile.row_count
+        result.total_rows_analyzed = basic_profile.row_count
         result.data_insight_profile = insight_profile
         
-        logger.info(f"分析完成: {len(result.findings)} 个洞察, 耗时 {result.execution_time:.2f}s")
+        logger.info(f"Analysis complete: {len(result.findings)} insights, took {result.execution_time:.2f}s")
         
         return result
+    
+    def _build_anomaly_result_from_profile(self, enhanced_profile: EnhancedDataProfile) -> Any:
+        """Build anomaly result from EnhancedDataProfile for analysis context."""
+        if not enhanced_profile.anomaly_index:
+            return AnomalyResult(outliers=[], anomaly_ratio=0.0, anomaly_details=[])
+        
+        anomaly_index = enhanced_profile.anomaly_index
+        
+        # Collect all outlier indices
+        all_outliers = []
+        for severity_list in anomaly_index.by_severity.values():
+            all_outliers.extend(severity_list)
+        all_outliers = list(set(all_outliers))
+        
+        # Build anomaly details (simplified)
+        details = []
+        for idx in all_outliers[:10]:  # Limit to 10
+            # Determine severity
+            severity = 0.0
+            for sev_name, indices in anomaly_index.by_severity.items():
+                if idx in indices:
+                    if sev_name == "critical":
+                        severity = 0.9
+                    elif sev_name == "high":
+                        severity = 0.7
+                    elif sev_name == "medium":
+                        severity = 0.5
+                    else:
+                        severity = 0.3
+                    break
+            
+            details.append(AnomalyDetail(
+                index=idx,
+                values={},
+                reason="Anomaly detected",
+                severity=severity,
+            ))
+        
+        return AnomalyResult(
+            outliers=all_outliers,
+            anomaly_ratio=anomaly_index.anomaly_ratio,
+            anomaly_details=details,
+        )
 
     
     async def analyze_streaming(
@@ -205,51 +270,68 @@ class AnalysisCoordinator:
         config: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        流式分析（带进度更新）- 双 LLM 协作模式
+        Streaming analysis with progress updates - dual LLM collaboration mode.
+        
+        Architecture (Task 3.3.1):
+        - Uses EnhancedDataProfiler as single entry point
+        - No direct calls to StatisticalAnalyzer or AnomalyDetector
         
         Args:
-            data: 输入数据
-            context: 分析上下文
-            state: 当前工作流状态（用于中间件）
-            config: LangGraph RunnableConfig（包含中间件）
+            data: Input data
+            context: Analysis context
+            state: Current workflow state (for middleware)
+            config: LangGraph RunnableConfig (contains middleware)
         """
         start_time = time.time()
         
         data_list = self._normalize_data(data)
         
         if not data_list:
-            yield {"event": "complete", "result": InsightResult(summary="无数据可分析")}
+            yield {"event": "complete", "result": InsightResult(summary="No data to analyze")}
             return
         
-        profile = self.profiler.profile(data_list)
-        insight_profile = self.statistical_analyzer.analyze(data_list, profile)
-        anomalies = self.anomaly_detector.detect(data_list)
+        # EnhancedDataProfiler is the single entry point
+        enhanced_profile = self.profiler.profile(data_list)
+        insight_profile = self.profiler.get_insight_profile(data_list)
         
-        strategy = self._select_strategy(profile)
+        # Build basic DataProfile for strategy selection
+        basic_profile = DataProfile(
+            row_count=enhanced_profile.row_count,
+            column_count=enhanced_profile.column_count,
+            density=1.0,
+            statistics=enhanced_profile.statistics,
+            semantic_groups=[],
+        )
+        
+        # Build anomaly result from enhanced_profile
+        anomaly_result = self._build_anomaly_result_from_profile(enhanced_profile)
+        
+        strategy = self._select_strategy(basic_profile)
         
         yield {
             "event": "start",
-            "total_rows": profile.row_count,
+            "total_rows": enhanced_profile.row_count,
             "strategy": strategy,
-            "anomaly_count": len(anomalies.outliers),
+            "anomaly_count": len(anomaly_result.outliers) if anomaly_result else 0,
         }
         
         analysis_context = {
             **context,
-            "anomalies": anomalies,
-            "profile": profile,
+            "anomalies": anomaly_result,
+            "profile": basic_profile,
             "insight_profile": insight_profile,
+            "top_n_summary": insight_profile.top_n_summary,
         }
         
         if strategy == "direct":
-            result = await self._direct_analysis(data_list, analysis_context, profile, state, config)
+            result = await self._direct_analysis(data_list, analysis_context, basic_profile, state, config)
             result.execution_time = time.time() - start_time
             result.data_insight_profile = insight_profile
             yield {"event": "complete", "result": result}
             return
         
         async for event in self._progressive_analysis_streaming(
-            data_list, analysis_context, profile, insight_profile, start_time, state, config
+            data_list, analysis_context, basic_profile, insight_profile, start_time, state, config
         ):
             yield event
     
@@ -262,7 +344,7 @@ class AnalysisCoordinator:
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> InsightResult:
-        """两阶段渐进式分析 - 双 LLM 协作模式"""
+        """Two-phase progressive analysis - dual LLM collaboration mode."""
         chunks = self.chunker.chunk_by_strategy(
             data=data,
             strategy=insight_profile.recommended_chunking_strategy,
@@ -270,10 +352,10 @@ class AnalysisCoordinator:
             semantic_groups=profile.semantic_groups,
         )
         
-        logger.info(f"分块完成: {len(chunks)} 个块, 策略={insight_profile.recommended_chunking_strategy}")
+        logger.info(f"Chunking complete: {len(chunks)} chunks, strategy={insight_profile.recommended_chunking_strategy}")
         
         if not chunks:
-            return InsightResult(summary="无法分块数据")
+            return InsightResult(summary="Unable to chunk data")
         
         accumulated_insights: List[Insight] = []
         remaining_chunks = chunks.copy()
@@ -283,13 +365,13 @@ class AnalysisCoordinator:
             next_chunk = self._select_next_chunk(remaining_chunks, accumulated_insights)
             
             if next_chunk is None:
-                logger.info("没有更多数据块需要分析")
+                logger.info("No more chunks to analyze")
                 break
             
             remaining_chunks.remove(next_chunk)
             analyzed_count += 1
             
-            logger.info(f"分析第 {analyzed_count} 块: {next_chunk.chunk_type} (优先级 {next_chunk.priority})")
+            logger.info(f"Analyzing chunk {analyzed_count}: {next_chunk.chunk_type} (priority {next_chunk.priority})")
             
             new_insights = await self.analyzer.analyze_chunk_with_analyst(
                 chunk=next_chunk,
@@ -303,7 +385,7 @@ class AnalysisCoordinator:
             for insight in new_insights:
                 if not self._is_duplicate(insight, accumulated_insights):
                     accumulated_insights.append(insight)
-                    logger.info(f"新洞察: {insight.title}")
+                    logger.info(f"New insight: {insight.title}")
             
             next_decision, quality = await self.analyzer.decide_next_with_coordinator(
                 context=context,
@@ -316,7 +398,7 @@ class AnalysisCoordinator:
             )
             
             if not next_decision.should_continue:
-                logger.info(f"主持人决定早停: {next_decision.reason}")
+                logger.info(f"Coordinator decided early stop: {next_decision.reason}")
                 break
             
             if next_decision.next_chunk_id is not None:
@@ -325,8 +407,8 @@ class AnalysisCoordinator:
                 )
             
             logger.info(
-                f"主持人决策: 继续分析 chunk_id={next_decision.next_chunk_id}, "
-                f"完成度 {next_decision.completeness_estimate:.2f}"
+                f"Coordinator decision: continue analyzing chunk_id={next_decision.next_chunk_id}, "
+                f"completeness {next_decision.completeness_estimate:.2f}"
             )
         
         return self.synthesizer.synthesize(
@@ -346,7 +428,7 @@ class AnalysisCoordinator:
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """流式渐进式分析 - 双 LLM 协作模式"""
+        """Streaming progressive analysis - dual LLM collaboration mode."""
         chunks = self.chunker.chunk_by_strategy(
             data=data,
             strategy=insight_profile.recommended_chunking_strategy,
@@ -355,7 +437,7 @@ class AnalysisCoordinator:
         )
         
         if not chunks:
-            yield {"event": "complete", "result": InsightResult(summary="无法分块数据")}
+            yield {"event": "complete", "result": InsightResult(summary="Unable to chunk data")}
             return
         
         yield {
@@ -453,7 +535,7 @@ class AnalysisCoordinator:
         remaining_chunks: List[PriorityChunk],
         accumulated_insights: List[Insight],
     ) -> Optional[PriorityChunk]:
-        """选择下一个数据块"""
+        """Select next data chunk to analyze."""
         if not remaining_chunks:
             return None
         
@@ -465,14 +547,14 @@ class AnalysisCoordinator:
         chunks: List[PriorityChunk],
         preferred_chunk_id: int,
     ) -> List[PriorityChunk]:
-        """根据主持人 LLM 推荐的 chunk_id 重新排序数据块"""
+        """Reorder chunks based on coordinator LLM's recommended chunk_id."""
         preferred = [c for c in chunks if c.chunk_id == preferred_chunk_id]
         others = [c for c in chunks if c.chunk_id != preferred_chunk_id]
         
         return preferred + sorted(others, key=lambda x: x.priority)
     
     def _is_duplicate(self, insight: Insight, existing: List[Insight]) -> bool:
-        """检查洞察是否重复"""
+        """Check if insight is a duplicate."""
         for e in existing:
             if e.type == insight.type and e.title == insight.title:
                 return True
@@ -486,7 +568,7 @@ class AnalysisCoordinator:
         return False
     
     def _normalize_data(self, data: Any) -> List[Dict[str, Any]]:
-        """转换各种数据格式为 list of dicts"""
+        """Convert various data formats to list of dicts."""
         if isinstance(data, list):
             if not data:
                 return []
@@ -507,7 +589,7 @@ class AnalysisCoordinator:
         return []
     
     def _select_strategy(self, profile: DataProfile) -> str:
-        """选择分析策略"""
+        """Select analysis strategy."""
         if profile.row_count < self.DIRECT_THRESHOLD:
             return "direct"
         elif profile.row_count < self.PROGRESSIVE_THRESHOLD:
@@ -523,7 +605,7 @@ class AnalysisCoordinator:
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> InsightResult:
-        """直接分析（小数据集）"""
+        """Direct analysis for small datasets."""
         insights = await self.analyzer.analyze_full(data, context, state, config)
         
         anomaly_insights = self._create_anomaly_insights(context.get("anomalies"))
@@ -537,7 +619,7 @@ class AnalysisCoordinator:
         )
     
     def _create_anomaly_insights(self, anomalies) -> List[Insight]:
-        """从检测到的异常创建洞察"""
+        """Create insights from detected anomalies."""
         if not anomalies or not anomalies.anomaly_details:
             return []
         
@@ -547,7 +629,7 @@ class AnalysisCoordinator:
             importance = 0.9 if anomalies.anomaly_ratio > 0.1 else 0.7
             
             evidence = InsightEvidence(
-                metric_name="异常值数量",
+                metric_name="Anomaly count",
                 metric_value=float(len(anomalies.outliers)),
                 percentage=anomalies.anomaly_ratio,
                 additional_data={
@@ -557,8 +639,8 @@ class AnalysisCoordinator:
             
             insights.append(Insight(
                 type="anomaly",
-                title=f"检测到 {len(anomalies.outliers)} 个异常值",
-                description=f"数据中有 {anomalies.anomaly_ratio:.1%} 的记录存在异常值，可能需要进一步调查。",
+                title=f"Detected {len(anomalies.outliers)} anomalies",
+                description=f"{anomalies.anomaly_ratio:.1%} of records contain anomalies that may require further investigation.",
                 importance=importance,
                 evidence=evidence,
             ))

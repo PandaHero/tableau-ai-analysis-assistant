@@ -185,7 +185,7 @@ class TableauFieldMapper(BaseFieldMapper):
                         )
                         new_partition_by.append(new_p)
                     else:
-                        # Backward compatibility: it's a string
+                        # String fallback: map directly
                         new_partition_by.append(mapping.get(p, p))
                 new_comp.partition_by = new_partition_by
                 new_computations.append(new_comp)

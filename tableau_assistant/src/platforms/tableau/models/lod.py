@@ -35,7 +35,7 @@ class LODExpression(BaseModel):
     from the view granularity in ways that table calculations cannot handle.
     
     Mapping from SemanticQuery.Computation:
-    - CalcType.LOD_FIXED/LOD_INCLUDE/LOD_EXCLUDE → LOD expression
+    - LODFixed/LODInclude/LODExclude → LOD expression
     - partition_by determines LOD type:
       - partition_by ⊂ view_dims → EXCLUDE
       - partition_by ⊃ view_dims → INCLUDE  

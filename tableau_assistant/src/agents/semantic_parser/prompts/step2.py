@@ -42,7 +42,7 @@ Process: Infer target → Decide LOD vs Table Calc → Infer partition/dimension
 
     def get_specific_domain_knowledge(self) -> str:
         return """**Computation Model**
-Computation = Target × CalcType × Partition × Params
+Computation = Target × calc_type × Partition × Params
 
 **Think step by step:**
 Step 1: Infer target from restated_question (must be in what.measures)

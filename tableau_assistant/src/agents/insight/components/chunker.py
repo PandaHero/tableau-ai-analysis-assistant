@@ -16,7 +16,7 @@ from typing import Dict, List, Any, Optional
 import pandas as pd
 import numpy as np
 
-from tableau_assistant.src.core.models import (
+from tableau_assistant.src.agents.insight.models import (
     PriorityChunk,
     TailDataSummary,
     ChunkPriority,

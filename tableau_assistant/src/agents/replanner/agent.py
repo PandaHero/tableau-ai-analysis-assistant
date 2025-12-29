@@ -19,7 +19,8 @@ import logging
 import json
 from typing import Dict, List, Any, Optional
 
-from tableau_assistant.src.core.models import ReplanDecision, ExplorationQuestion, Insight
+from tableau_assistant.src.core.models import ReplanDecision, ExplorationQuestion
+from tableau_assistant.src.agents.insight.models import Insight
 from tableau_assistant.src.agents.base import clean_json_output, get_llm, call_llm_with_tools
 from .prompt import REPLANNER_PROMPT
 

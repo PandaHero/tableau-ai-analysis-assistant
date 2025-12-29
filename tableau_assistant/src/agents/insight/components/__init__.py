@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Insight Components - 洞察分析组件
+Insight Components - Progressive insight analysis components.
 
-渐进式洞察分析系统的三层架构：
-- 协调层: AnalysisCoordinator (编排和策略选择)
-- 处理层: DataProfiler, AnomalyDetector, SemanticChunker, ChunkAnalyzer
-- 合成层: InsightAccumulator, InsightSynthesizer
+Three-layer architecture for progressive insight analysis:
+- Coordination layer: AnalysisCoordinator (orchestration and strategy selection)
+- Processing layer: EnhancedDataProfiler, SemanticChunker, ChunkAnalyzer
+- Synthesis layer: InsightAccumulator, InsightSynthesizer
+
+Architecture (Task 3.3.1):
+- EnhancedDataProfiler is the single entry point for profiling
+- It internally delegates to StatisticalAnalyzer and AnomalyDetector
+- AnalysisCoordinator only calls EnhancedDataProfiler, not individual analyzers
 
 Requirements:
 - R8.1: Progressive insight analysis
@@ -17,15 +22,15 @@ Requirements:
 - R8.7: Streaming output support
 
 Import Order Note:
-为避免循环导入，导入顺序很重要：
-1. models（无依赖）
-2. 无 LLM 依赖的组件（profiler, anomaly_detector, chunker, accumulator, synthesizer, statistical_analyzer）
-3. analyzer（依赖 agents/insight/prompt.py）
-4. coordinator（依赖 analyzer）
+To avoid circular imports, import order matters:
+1. models (no dependencies)
+2. Components without LLM dependencies (profiler, anomaly_detector, chunker, accumulator, synthesizer, statistical_analyzer)
+3. analyzer (depends on agents/insight/prompt.py)
+4. coordinator (depends on analyzer)
 """
 
-# 1. Import models from core/models
-from tableau_assistant.src.core.models import (
+# 1. Import models from agents/insight/models
+from tableau_assistant.src.agents.insight.models import (
     DataProfile,
     ColumnStats,
     SemanticGroup,
@@ -44,7 +49,7 @@ from tableau_assistant.src.core.models import (
 )
 
 # 2. Import components without LLM dependencies
-from .profiler import DataProfiler
+from .profiler import EnhancedDataProfiler
 from .anomaly_detector import AnomalyDetector
 from .chunker import SemanticChunker
 from .accumulator import InsightAccumulator
@@ -67,17 +72,17 @@ __all__ = [
     "DataChunk",
     "Insight",
     "InsightResult",
-    # Phase 1 统计分析模型
+    # Phase 1 statistical analysis models
     "ClusterInfo",
     "DataInsightProfile",
-    # 优先级相关
+    # Priority related
     "ChunkPriority",
     "PriorityChunk",
     "TailDataSummary",
     "NextBiteDecision",
     "InsightQuality",
     # Components
-    "DataProfiler",
+    "EnhancedDataProfiler",
     "AnomalyDetector",
     "SemanticChunker",
     "ChunkAnalyzer",

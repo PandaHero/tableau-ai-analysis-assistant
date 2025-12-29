@@ -20,7 +20,6 @@ from .interfaces import (
 from .models import (
     # Enums
     AggregationType,
-    CalcType,
     DateGranularity,
     DateRangeType,
     FilterType,
@@ -66,7 +65,6 @@ __all__ = [
     "BaseQueryBuilder",
     # Enums
     "AggregationType",
-    "CalcType",
     "DateGranularity",
     "DateRangeType",
     "FilterType",

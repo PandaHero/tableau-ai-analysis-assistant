@@ -255,7 +255,7 @@ class QueryBuilderNode:
                         sort=p.sort,
                     ))
                 else:
-                    # Backward compatibility: if it's a string, just map it
+                    # String fallback: convert to DimensionField
                     result.append(DimensionField(field_name=get_tech_field(p)))
             return result
         

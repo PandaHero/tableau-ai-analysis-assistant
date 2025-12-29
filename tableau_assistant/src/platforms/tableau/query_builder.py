@@ -5,7 +5,7 @@ to Tableau-specific VizQL API format.
 
 Key translations:
 - Computation.partition_by → Table Calculation dimensions (partitioning)
-- CalcType → TableCalcType
+- Computation subtypes (RankCalc, etc.) → TableCalcType
 - CalcParams → VizQL specific parameters
 - Filter types → VizQL filter types
 """
@@ -400,7 +400,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
                         dim_ref["function"] = trunc_func
                 partition_dims.append(dim_ref)
             else:
-                # Backward compatibility: if it's a string, just use fieldCaption
+                # String fallback: use fieldCaption directly
                 partition_dims.append({"fieldCaption": p})
         
         # Build table calc specification based on calc_type

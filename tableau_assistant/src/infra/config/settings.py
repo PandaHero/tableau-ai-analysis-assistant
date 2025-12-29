@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     filesystem_token_limit: int = int(os.getenv("FILESYSTEM_TOKEN_LIMIT", "20000"))
     _interrupt_on_str: str = os.getenv("INTERRUPT_ON", "")
     
+    # SemanticParser ReAct error handling configuration
+    semantic_parser_max_retries: int = int(os.getenv("SEMANTIC_PARSER_MAX_RETRIES", "3"))
+    
     @property
     def interrupt_on(self) -> list[str] | None:
         if not self._interrupt_on_str:

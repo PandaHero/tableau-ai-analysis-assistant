@@ -55,25 +55,32 @@ class Where(BaseModel):
     
     <fill_order>
     1. dimensions (grouping fields)
-    2. filters (specific conditions)
+    2. filters (value constraints)
     </fill_order>
     
-    <rule>
-    grouping/slicing -> dimension
-    specific value/range -> filter
-    </rule>
+    <examples>
+    Grouping: {"dimensions": [{"field_name": "City"}], "filters": []}
+    Filtering: {"dimensions": [], "filters": [{"field_name": "City", "filter_type": "SET", "values": ["Beijing"]}]}
+    </examples>
+    
+    <anti_patterns>
+    X Adding values to DimensionField
+    X Confusing grouping with filtering
+    </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
     dimensions: list[DimensionField] = Field(
         default_factory=list,
-        description="""<what>Categorical fields for grouping</what>
-<when>Question asks "by X" or "for each X"</when>"""
+        description="""<what>Grouping fields for slicing data</what>
+<when>Question asks "by X", "for each X", "per X"</when>
+<must_not>Add values field - DimensionField has no values</must_not>"""
     )
     filters: list[FilterUnion] = Field(
         default_factory=list,
-        description="""<what>Conditions to filter data</what>
-<when>Question specifies values, ranges, or conditions</when>"""
+        description="""<what>Value constraints to filter data</what>
+<when>Question specifies values: "in Beijing", "= X", date ranges</when>
+<rule>Specific value -> SetFilter, date range -> DateRangeFilter</rule>"""
     )
 
 

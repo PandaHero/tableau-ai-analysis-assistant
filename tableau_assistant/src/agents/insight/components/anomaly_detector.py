@@ -12,7 +12,7 @@ from typing import Dict, List, Any, Optional
 import pandas as pd
 import numpy as np
 
-from tableau_assistant.src.core.models import AnomalyResult, AnomalyDetail
+from tableau_assistant.src.agents.insight.models import AnomalyResult, AnomalyDetail
 
 logger = logging.getLogger(__name__)
 

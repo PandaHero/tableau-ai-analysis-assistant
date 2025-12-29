@@ -40,6 +40,7 @@ from .components import (
 )
 from .components.react_error_handler import RetryRecord
 from ...core.models import IntentType, HowType
+from ...infra.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -261,13 +262,13 @@ async def pipeline_node(
                 user_values = clarification.get("user_values", [])
                 
                 clarification_question = (
-                    f"{clarification.get('message', '筛选值未找到匹配结果')}\n"
-                    f"您输入的值: {', '.join(user_values)}\n"
+                    f"{clarification.get('message', 'Filter value not found')}\n"
+                    f"Your input: {', '.join(user_values)}\n"
                 )
                 if available_values:
-                    clarification_question += f"可用的值包括: {', '.join(available_values[:10])}"
+                    clarification_question += f"Available values include: {', '.join(available_values[:10])}"
                     if len(available_values) > 10:
-                        clarification_question += f" 等 {len(available_values)} 个"
+                        clarification_question += f" and {len(available_values) - 10} more"
                 
                 return {
                     "pipeline_success": True,  # Query executed successfully, just no results
@@ -359,7 +360,7 @@ async def react_error_handler_node(
         logger.warning("ReAct handler called without pipeline_error")
         return {
             "react_action": ReActActionType.ABORT,
-            "user_message": "发生未知错误，请稍后重试。",
+            "user_message": "An unknown error occurred. Please try again later.",
             "current_stage": "semantic_parser.react_error_handler",
         }
     
@@ -370,18 +371,18 @@ async def react_error_handler_node(
         "vizql_query": state.get("vizql_query"),
     }
     
-    # Convert retry history dicts to RetryRecord objects
-    retry_records = []
+    # Convert retry history to RetryRecord objects (unified type handling)
+    retry_records: List[RetryRecord] = []
     for record in retry_history:
-        if isinstance(record, dict):
+        if isinstance(record, RetryRecord):
+            retry_records.append(record)
+        elif isinstance(record, dict):
             retry_records.append(RetryRecord(
                 step=record.get("step", ""),
                 error_message=record.get("error_message", ""),
                 action_taken=record.get("action_taken", ""),
                 success=record.get("success", False),
             ))
-        elif isinstance(record, RetryRecord):
-            retry_records.append(record)
     
     # Call ReAct error handler with new signature
     handler = ReActErrorHandler()
@@ -471,7 +472,7 @@ async def react_error_handler_node(
         return {
             "react_action": ReActActionType.ABORT,
             "pipeline_aborted": True,
-            "user_message": f"处理错误时发生问题：{pipeline_error.message}",
+            "user_message": f"Error occurred while processing: {pipeline_error.message}",
             "current_stage": "semantic_parser.react_error_handler",
         }
 
@@ -563,17 +564,17 @@ def route_after_react(
     - ABORT: END (return error message to user)
     
     Max retry check:
-    - If retry_count >= MAX_RETRIES: END (abort)
+    - If retry_count >= max_retries (from settings): END (abort)
     """
-    MAX_RETRIES = 3
+    max_retries = settings.semantic_parser_max_retries
     
     react_action = state.get("react_action")
     retry_from = state.get("retry_from")
     retry_count = state.get("retry_count") or 0
     
     # Check max retries
-    if retry_count >= MAX_RETRIES:
-        logger.warning(f"Route after react: END (max retries {MAX_RETRIES} reached)")
+    if retry_count >= max_retries:
+        logger.warning(f"Route after react: END (max retries {max_retries} reached)")
         return "__end__"
     
     if react_action == ReActActionType.CORRECT:

@@ -18,7 +18,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
 
-from tableau_assistant.src.core.models import (
+from tableau_assistant.src.agents.insight.models import (
     DataProfile,
     DataInsightProfile,
     ClusterInfo,
@@ -69,8 +69,8 @@ class StatisticalAnalyzer:
         整体分析，生成数据洞察画像。
         
         Args:
-            data: 数据列表
-            profile: 数据画像（来自 DataProfiler）
+            data: Data list
+            profile: Data profile (from EnhancedDataProfiler)
             
         Returns:
             DataInsightProfile 整体洞察画像

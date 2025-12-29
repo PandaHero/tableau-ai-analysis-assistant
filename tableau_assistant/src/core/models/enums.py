@@ -211,32 +211,4 @@ class DimensionLevel(str, Enum):
     DETAIL = "detail"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Backward Compatibility (Deprecated - will be removed)
-# ═══════════════════════════════════════════════════════════════════════════
-
-# CalcType is deprecated, use Literal types in computations.py instead
-class CalcType(str, Enum):
-    """DEPRECATED: Use specific computation classes in computations.py instead.
-    
-    Kept for backward compatibility during migration.
-    """
-    # Ranking
-    RANK = "RANK"
-    DENSE_RANK = "DENSE_RANK"
-    PERCENTILE = "PERCENTILE"
-    # Running
-    RUNNING_TOTAL = "RUNNING_TOTAL"
-    MOVING_CALC = "MOVING_CALC"
-    # Percent
-    PERCENT_OF_TOTAL = "PERCENT_OF_TOTAL"
-    # Difference
-    DIFFERENCE = "DIFFERENCE"
-    PERCENT_DIFFERENCE = "PERCENT_DIFFERENCE"
-    # LOD
-    LOD_FIXED = "LOD_FIXED"
-    LOD_INCLUDE = "LOD_INCLUDE"
-    LOD_EXCLUDE = "LOD_EXCLUDE"
-
-
-# CalcAggregation has been removed - use WindowAggregation instead
+# CalcType has been removed - use specific computation classes in computations.py instead

@@ -52,7 +52,8 @@ from tableau_assistant.src.platforms.tableau import (
 from tableau_assistant.src.infra.storage.langgraph_store import get_langgraph_store
 from tableau_assistant.src.infra.storage.data_model_cache import DataModelCache
 from tableau_assistant.src.infra.storage.data_model_loader import TableauDataModelLoader
-from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, Insight, ReplanDecision, ExecuteResult
+from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, ReplanDecision, ExecuteResult
+from tableau_assistant.src.agents.insight.models import Insight
 from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery
 
 logger = logging.getLogger(__name__)
@@ -436,14 +437,3 @@ class WorkflowExecutor:
             )
 
 
-# 解析前向引用 - 在模块加载完成后重建模型
-# 这是必要的，因为 NodeOutput 和 WorkflowResult 使用了 Pydantic 模型
-def _rebuild_models():
-    """重建 Pydantic 模型以解析前向引用"""
-    from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, Insight, ReplanDecision, ExecuteResult
-    from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery
-    
-    NodeOutput.model_rebuild()
-    WorkflowEvent.model_rebuild()
-
-_rebuild_models()
