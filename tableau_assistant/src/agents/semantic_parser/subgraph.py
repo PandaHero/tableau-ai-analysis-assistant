@@ -31,13 +31,14 @@ from langgraph.types import RunnableConfig
 from .state import SemanticParserState
 from .models import Step1Output, Step2Output
 from .models.pipeline import QueryResult, QueryError, QueryErrorType
-from .models.react import ReActActionType, ReActObservation, ReActOutput, RetryTarget
+from .models.react import ReActActionType, ReActOutput
 from .components import (
     QueryPipeline,
     ReActErrorHandler,
     Step1Component,
     Step2Component,
 )
+from .components.react_error_handler import RetryRecord
 from ...core.models import IntentType, HowType
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ async def step1_node(
             data_model=data_model,
             state=dict(state),
             config=config,
-            error_feedback=error_feedback if retry_from == RetryTarget.STEP1 else None,
+            error_feedback=error_feedback if retry_from == "step1" else None,
         )
         
         logger.info(
@@ -152,7 +153,7 @@ async def step2_node(
             step1_output=step1_output,
             state=dict(state),
             config=config,
-            error_feedback=error_feedback if retry_from == RetryTarget.STEP2 else None,
+            error_feedback=error_feedback if retry_from == "step2" else None,
         )
         
         logger.info(
@@ -221,9 +222,9 @@ async def pipeline_node(
     }
     
     # Add error feedback if retrying from map_fields or build_query
-    if retry_from in (RetryTarget.MAP_FIELDS, RetryTarget.BUILD_QUERY) and error_feedback:
+    if retry_from in ("map_fields", "build_query") and error_feedback:
         pipeline_state["error_feedback"] = {
-            "step": retry_from.value,
+            "step": retry_from,
             "feedback": error_feedback,
         }
     
@@ -247,6 +248,45 @@ async def pipeline_node(
                 f"row_count={result.row_count}, "
                 f"execution_time_ms={result.execution_time_ms}"
             )
+            
+            # Check if clarification is needed (filter value not found)
+            if result.needs_clarification and result.clarification:
+                logger.info(
+                    f"Pipeline needs clarification: {result.clarification.get('type')}"
+                )
+                
+                # Build clarification question from clarification info
+                clarification = result.clarification
+                available_values = clarification.get("available_values", [])
+                user_values = clarification.get("user_values", [])
+                
+                clarification_question = (
+                    f"{clarification.get('message', '筛选值未找到匹配结果')}\n"
+                    f"您输入的值: {', '.join(user_values)}\n"
+                )
+                if available_values:
+                    clarification_question += f"可用的值包括: {', '.join(available_values[:10])}"
+                    if len(available_values) > 10:
+                        clarification_question += f" 等 {len(available_values)} 个"
+                
+                return {
+                    "pipeline_success": True,  # Query executed successfully, just no results
+                    "current_stage": "semantic_parser.pipeline",
+                    "semantic_query": result.semantic_query,
+                    "mapped_query": result.mapped_query,
+                    "vizql_query": result.vizql_query,
+                    "query_result": result.data,
+                    "columns": result.columns,
+                    "row_count": result.row_count,
+                    "execution_time_ms": result.execution_time_ms,
+                    # Clarification info
+                    "needs_clarification": True,
+                    "clarification_question": clarification_question,
+                    # Clear retry state
+                    "retry_from": None,
+                    "error_feedback": None,
+                    "pipeline_error": None,
+                }
             
             return {
                 "pipeline_success": True,
@@ -299,8 +339,9 @@ async def react_error_handler_node(
     
     This node is called when pipeline_node fails. It uses LLM to:
     1. Analyze the error and identify root cause
-    2. Decide action: RETRY (from which step), CLARIFY, or ABORT
-    3. Generate error_feedback for retry, or user message for abort
+    2. Decide action: CORRECT, RETRY, CLARIFY, or ABORT
+    3. For CORRECT: Apply corrections directly to Step1/Step2 output
+    4. For RETRY: Generate error_feedback for retry step
     
     The routing function will use react_action and retry_from to route
     back to the appropriate step.
@@ -324,37 +365,57 @@ async def react_error_handler_node(
     
     # Build pipeline context for error analysis
     pipeline_context: Dict[str, Any] = {
-        "step1_output": step1_output,
-        "step2_output": step2_output,
         "semantic_query": state.get("semantic_query"),
         "mapped_query": state.get("mapped_query"),
         "vizql_query": state.get("vizql_query"),
     }
     
-    # Call ReAct error handler
+    # Convert retry history dicts to RetryRecord objects
+    retry_records = []
+    for record in retry_history:
+        if isinstance(record, dict):
+            retry_records.append(RetryRecord(
+                step=record.get("step", ""),
+                error_message=record.get("error_message", ""),
+                action_taken=record.get("action_taken", ""),
+                success=record.get("success", False),
+            ))
+        elif isinstance(record, RetryRecord):
+            retry_records.append(record)
+    
+    # Call ReAct error handler with new signature
     handler = ReActErrorHandler()
     
     try:
-        output = await handler.handle_error(
+        output, corrected_step1, corrected_step2 = await handler.handle_error(
             error=pipeline_error,
             question=question,
+            step1_output=step1_output,
+            step2_output=step2_output,
             pipeline_context=pipeline_context,
-            retry_history=retry_history,
+            retry_history=retry_records,
             config=config,
         )
         
         logger.info(
             f"ReAct decision: action={output.action.action_type}, "
-            f"retry_from={output.action.retry_from}, "
-            f"root_cause={output.thought.root_cause}"
+            f"error_category={output.thought.error_category}, "
+            f"can_correct={output.thought.can_correct}"
         )
         
-        # Create observation for retry history
-        observation = handler.create_observation(
+        # Create retry record for history
+        new_record = handler.create_retry_record(
             step=pipeline_error.step,
-            error=pipeline_error,
+            error_message=pipeline_error.message,
+            action_taken=output.action.action_type.value,
+            success=False,
         )
-        new_retry_history = retry_history + [observation]
+        new_retry_history = retry_history + [{
+            "step": new_record.step,
+            "error_message": new_record.error_message,
+            "action_taken": new_record.action_taken,
+            "success": new_record.success,
+        }]
         
         # Build result based on action type
         result: Dict[str, Any] = {
@@ -364,26 +425,35 @@ async def react_error_handler_node(
             "current_stage": "semantic_parser.react_error_handler",
         }
         
-        if output.action.action_type == ReActActionType.RETRY:
+        if output.action.action_type == ReActActionType.CORRECT:
+            # Apply corrections and continue to pipeline
+            result["step1_output"] = corrected_step1
+            result["step2_output"] = corrected_step2
+            # Clear error state and retry from pipeline
+            result["pipeline_error"] = None
+            result["retry_from"] = "pipeline"  # Re-run pipeline with corrected outputs
+            logger.info("CORRECT action: Applied corrections, will re-run pipeline")
+            
+        elif output.action.action_type == ReActActionType.RETRY:
             result["retry_from"] = output.action.retry_from
-            result["error_feedback"] = output.action.error_feedback
+            result["error_feedback"] = output.action.retry_guidance
             
             # Clear outputs from retry_from step onwards
-            if output.action.retry_from == RetryTarget.STEP1:
+            if output.action.retry_from == "step1":
                 result["step1_output"] = None
                 result["step2_output"] = None
                 result["semantic_query"] = None
                 result["mapped_query"] = None
                 result["vizql_query"] = None
-            elif output.action.retry_from == RetryTarget.STEP2:
+            elif output.action.retry_from == "step2":
                 result["step2_output"] = None
                 result["semantic_query"] = None
                 result["mapped_query"] = None
                 result["vizql_query"] = None
-            elif output.action.retry_from == RetryTarget.MAP_FIELDS:
+            elif output.action.retry_from == "map_fields":
                 result["mapped_query"] = None
                 result["vizql_query"] = None
-            elif output.action.retry_from == RetryTarget.BUILD_QUERY:
+            elif output.action.retry_from == "build_query":
                 result["vizql_query"] = None
                 
         elif output.action.action_type == ReActActionType.CLARIFY:
@@ -464,12 +534,17 @@ def route_after_pipeline(state: SemanticParserState) -> Literal["react_error_han
     
     Routing logic:
     - If pipeline succeeded: END
+    - If pipeline needs clarification: END (return clarification to user)
     - If pipeline failed: react_error_handler
     """
     pipeline_success = state.get("pipeline_success")
+    needs_clarification = state.get("needs_clarification")
     
     if pipeline_success:
-        logger.info("Route after pipeline: END (success)")
+        if needs_clarification:
+            logger.info("Route after pipeline: END (needs clarification)")
+        else:
+            logger.info("Route after pipeline: END (success)")
         return "__end__"
     else:
         logger.info("Route after pipeline: react_error_handler")
@@ -482,6 +557,7 @@ def route_after_react(
     """Route after ReAct error handler node.
     
     Routing logic based on react_action:
+    - CORRECT: Route to pipeline (re-run with corrected outputs)
     - RETRY: Route to retry_from step (step1, step2, or pipeline for map_fields/build_query)
     - CLARIFY: END (return clarification question to user)
     - ABORT: END (return error message to user)
@@ -500,14 +576,19 @@ def route_after_react(
         logger.warning(f"Route after react: END (max retries {MAX_RETRIES} reached)")
         return "__end__"
     
+    if react_action == ReActActionType.CORRECT:
+        # CORRECT action: re-run pipeline with corrected outputs
+        logger.info("Route after react: pipeline (CORRECT)")
+        return "pipeline"
+    
     if react_action == ReActActionType.RETRY:
-        if retry_from == RetryTarget.STEP1:
+        if retry_from == "step1":
             logger.info("Route after react: step1 (RETRY)")
             return "step1"
-        elif retry_from == RetryTarget.STEP2:
+        elif retry_from == "step2":
             logger.info("Route after react: step2 (RETRY)")
             return "step2"
-        elif retry_from in (RetryTarget.MAP_FIELDS, RetryTarget.BUILD_QUERY):
+        elif retry_from in ("map_fields", "build_query", "pipeline"):
             # map_fields and build_query are inside pipeline_node
             logger.info(f"Route after react: pipeline (RETRY from {retry_from})")
             return "pipeline"

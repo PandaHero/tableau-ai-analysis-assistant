@@ -17,11 +17,12 @@ Note:
 from .step1 import Step1Component
 from .step2 import Step2Component
 from .query_pipeline import QueryPipeline
-from .react_error_handler import ReActErrorHandler
+from .react_error_handler import ReActErrorHandler, RetryRecord
 
 __all__ = [
     "QueryPipeline",
     "ReActErrorHandler",
+    "RetryRecord",
     "Step1Component",
     "Step2Component",
 ]

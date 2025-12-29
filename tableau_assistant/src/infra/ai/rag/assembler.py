@@ -8,6 +8,7 @@
 - 支持多种分块策略（by-field, by-table, by-category）
 - 创建配置好的检索器实例
 - 支持强制重建索引
+- 使用 LangGraph SqliteStore 缓存向量索引
 """
 import logging
 from dataclasses import dataclass, field
@@ -79,6 +80,7 @@ class KnowledgeAssembler:
     
 
     负责加载元数据、构建索引、创建检索器。
+    使用 LangGraph SqliteStore 缓存向量索引。
     
     Usage:
         # 创建组装器
@@ -96,7 +98,7 @@ class KnowledgeAssembler:
         # 检索
         results = retriever.retrieve("销售额")
     
-    Requirements: 6.1, 6.2, 6.4, 6.5
+    Requirements: 6.1, 6.2, 6.3, 6.4, 6.5
     """
     
     def __init__(
@@ -141,6 +143,15 @@ class KnowledgeAssembler:
             use_cache=self.config.use_cache,
         )
         
+        # 获取 LangGraph SqliteStore 用于缓存
+        self._index_cache = None
+        try:
+            from tableau_assistant.src.infra.storage import get_langgraph_store, FieldIndexCache
+            store = get_langgraph_store()
+            self._index_cache = FieldIndexCache(store)
+        except Exception as e:
+            logger.warning(f"无法获取 FieldIndexCache，将不使用缓存: {e}")
+        
         # 元数据存储
         self._fields: List[FieldMetadata] = []
         self._chunks: List[FieldChunk] = []
@@ -154,6 +165,8 @@ class KnowledgeAssembler:
         """
         加载元数据并构建索引
         
+        优先从 SqliteStore 缓存加载，如果缓存命中且元数据未变化则跳过重建。
+        
         Args:
             fields: FieldMetadata 列表
             force_rebuild: 是否强制重建索引
@@ -161,13 +174,45 @@ class KnowledgeAssembler:
         Returns:
             索引的字段/分块数量
         
-        Requirements: 6.1, 6.5
+        Requirements: 6.1, 6.3, 6.5
         """
         if not fields:
             logger.warning("字段列表为空")
             return 0
         
         self._fields = fields
+        
+        # 计算当前元数据哈希
+        import hashlib
+        import json
+        field_data = []
+        for f in sorted(fields, key=lambda x: x.name):
+            field_data.append({
+                "name": f.name,
+                "caption": f.fieldCaption,
+                "role": f.role,
+                "dataType": f.dataType,
+            })
+        content = json.dumps(field_data, sort_keys=True)
+        current_hash = hashlib.md5(content.encode()).hexdigest()
+        
+        # 尝试从 SqliteStore 缓存加载（如果不是强制重建）
+        if not force_rebuild and self._index_cache:
+            cached_data = self._index_cache.get(self.datasource_luid)
+            if cached_data:
+                cached_hash = cached_data.get("metadata_hash")
+                if cached_hash == current_hash:
+                    # 缓存命中且元数据未变化，恢复索引
+                    if self._indexer.restore_from_cache(cached_data):
+                        self._is_loaded = True
+                        self._chunks = self._indexer.get_all_chunks()
+                        logger.info(
+                            f"从 SqliteStore 缓存恢复索引: {len(self._chunks)} 个字段, "
+                            f"策略: {self.config.chunk_strategy.value}"
+                        )
+                        return len(self._chunks)
+                else:
+                    logger.info(f"元数据已变化，需要重建索引 (cached_hash={cached_hash[:8]}..., current_hash={current_hash[:8]}...)")
         
         # 根据分块策略处理字段
         if self.config.chunk_strategy == ChunkStrategy.BY_FIELD:
@@ -182,6 +227,11 @@ class KnowledgeAssembler:
         
         self._is_loaded = True
         self._chunks = self._indexer.get_all_chunks()
+        
+        # 保存到 SqliteStore 缓存
+        if self._index_cache and chunk_count > 0:
+            cache_data = self._indexer.export_for_cache()
+            self._index_cache.put(self.datasource_luid, cache_data)
         
         logger.info(
             f"元数据加载完成: {len(fields)} 个字段, "
@@ -390,6 +440,10 @@ class KnowledgeAssembler:
         if not self._fields:
             logger.warning("没有已加载的字段，无法重建索引")
             return 0
+        
+        # 先使缓存失效
+        if self._index_cache:
+            self._index_cache.invalidate(self.datasource_luid)
         
         return self.load_metadata(self._fields, force_rebuild=True)
     

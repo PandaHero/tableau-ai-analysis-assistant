@@ -3,13 +3,19 @@
 
 When QueryPipeline encounters an error, this prompt guides the LLM to:
 1. Analyze the error and identify root cause (Thought)
-2. Decide on action: RETRY (from which step), CLARIFY, or ABORT (Action)
-3. Generate appropriate feedback/message
+2. Decide on action: CORRECT, RETRY, CLARIFY, or ABORT (Action)
+3. Generate specific corrections or guidance
 
-Design principles (from appendix-e-prompt-model-guide.md):
-- Prompt teaches LLM HOW to think (4-section structure)
-- Schema tells LLM WHAT to output (XML tags in Field descriptions)
+Design principles (from prompt_and_models规范文档.md):
+- Prompt teaches LLM HOW to think (domain concepts, analysis methods)
+- Schema tells LLM WHAT to output (field meanings, fill rules, decision rules)
 - Uses VizQLPrompt base class for automatic JSON Schema injection
+
+Key Design:
+- CORRECT: Directly fix Step1/Step2 output without re-running LLM
+- RETRY: Go back to a step with specific guidance
+- CLARIFY: Ask user for clarification
+- ABORT: Give up and explain to user
 """
 
 from typing import Type
@@ -22,98 +28,78 @@ from tableau_assistant.src.agents.semantic_parser.models.react import ReActOutpu
 class ReActErrorHandlerPrompt(VizQLPrompt):
     """ReAct Error Handler: Analyze errors and decide recovery action.
     
-    Uses 4-section structure:
-    - ROLE: Define the AI's role
-    - TASK: Define the task with implicit CoT
-    - DOMAIN KNOWLEDGE: Provide domain-specific rules
-    - CONSTRAINTS: Define boundaries
+    Uses 4-section structure per spec:
+    - ROLE: VizQL semantic understanding supervisor
+    - TASK: Analyze error and decide recovery action
+    - DOMAIN KNOWLEDGE: VizQL capabilities and error analysis framework
+    - CONSTRAINTS: Decision rules and output requirements
     """
     
     def get_role(self) -> str:
-        return """Error analysis expert for data query pipeline.
+        return """VizQL semantic understanding supervisor and error recovery expert.
 
-Expertise: Root cause analysis, Error recovery strategy, User communication"""
+Expertise: 
+- VizQL query capabilities (table calculations, LOD expressions)
+- Semantic parsing error diagnosis and correction
+- Guiding Step1/Step2 to produce correct, executable output
+
+Background:
+- VizQL supports table calculations that can derive measures from base measures
+- PERCENT_DIFFERENCE can compute YoY/MoM growth from a single base measure
+- LOD expressions (FIXED/INCLUDE/EXCLUDE) change aggregation granularity
+- Each field_name in a query must be unique"""
 
     def get_task(self) -> str:
         return """Analyze pipeline error and decide the best recovery action.
 
-**Pipeline Steps:**
-- step1: Semantic understanding (extracts What/Where/How from user question)
-- step2: Computation reasoning (designs complex calculations like LOD, ranking, YoY)
-- map_fields: Field mapping (maps semantic fields to actual data source fields)
-- build_query: Query building (converts to VizQL query)
-- execute_query: Query execution (runs query on Tableau server)
-
-**Available Actions:**
-- RETRY: Go back to a specific step and retry with error feedback
-- CLARIFY: Ask user for more information
-- ABORT: Give up and explain the issue to user
-
-**Think step by step:**
-Step 1: Identify which step the error occurred in
-Step 2: Analyze the error message to find root cause
-Step 3: Determine if root cause is in current step or earlier step
-Step 4: Decide action based on error type and recoverability
-Step 5: Generate appropriate feedback/message in Chinese"""
+Process: Identify error source → Categorize error → Analyze root cause → Decide action → Generate correction/guidance"""
 
     def get_specific_domain_knowledge(self) -> str:
-        return """**Decision Guidelines:**
+        return """**VizQL Query Execution Model**
+Query = Step1(semantic) → Step2(computation) → map_fields → build_query → execute
 
-1. Error from execute_query (Tableau server error):
-   - Query logic issue → RETRY from step1 or step2
-   - Field reference issue → RETRY from map_fields
-   - Server/permission issue → ABORT
+**Think step by step:**
+Step 1: Identify error source (which step caused the error?)
+Step 2: Understand error semantics (what does the error mean?)
+Step 3: Determine root cause (why did this happen?)
+Step 4: Decide action type:
+  - Can I directly fix the output? → CORRECT
+  - Does LLM need to re-think? → RETRY with guidance
+  - Need user clarification? → CLARIFY
+  - Cannot recover? → ABORT
+Step 5: Generate specific correction or guidance
 
-2. Error from build_query:
-   - Computation logic issue → RETRY from step2
-   - If step2 output looks correct → RETRY from build_query with feedback
+**Error Source Analysis**
+- execute_query error with "field not unique" → Usually Step1 duplicate measures
+- execute_query error with "unknown field" → Usually map_fields issue
+- build_query error → Usually Step2 computation design issue
+- map_fields error → Field reference or mapping issue
+- step1/step2 parsing error → Output format issue
 
-3. Error from map_fields:
-   - Field not found after RAG+LLM fallback → ABORT (explain to user)
-   - Ambiguous field → CLARIFY (ask user which field)
+**VizQL Constraints**
+- Each field_name must be unique in query
+- Table calculations derive from base measures (no need for duplicate measures)
+- LOD dimensions must exist in data source
+- Partition dimensions must be subset of query dimensions
 
-4. Error from step1/step2:
-   - Output parsing error → RETRY same step
-   - Logic error → RETRY with error feedback
-
-**Common Error Patterns:**
-
-1. LOD Expression Error:
-   - Message: "FIXED requires at least one dimension"
-   - Root cause: step2 computation design missing dimension
-   - Action: RETRY from step2, feedback about dimension requirement
-
-2. Invalid Field Reference:
-   - Message: "Unknown field 'xxx'"
-   - Root cause: map_fields mapped to wrong field
-   - Action: RETRY from map_fields, or ABORT if field doesn't exist
-
-3. Aggregation Mismatch:
-   - Message: "Cannot mix aggregate and non-aggregate"
-   - Root cause: step1 or step2 incorrectly classified aggregation
-   - Action: RETRY from step1 with feedback
-
-4. Field Not Found (from map_fields):
-   - RAG+LLM both failed to find matching field
-   - Action: ABORT with helpful user message
-
-5. Computation Not Supported:
-   - Query builder doesn't support the computation type
-   - Action: RETRY from step2 with feedback about supported operations
-
-**Error Feedback Guidelines:**
-When setting error_feedback for RETRY, include:
-- What went wrong (specific error)
-- What the step should do differently (specific suggestion)
-- Constraints to consider (if any)"""
+**Common Error Patterns**
+1. "Field X isn't unique" → Step1 has duplicate measures with same field_name
+   → CORRECT: remove_duplicate_measures, keep base measure only
+2. "Unknown field X" → Field doesn't exist or wrong mapping
+   → RETRY map_fields or ABORT if field truly doesn't exist
+3. "Invalid computation" → Step2 computation logic error
+   → RETRY step2 with specific guidance
+4. "Permission denied" → Access issue
+   → ABORT with explanation"""
 
     def get_constraints(self) -> str:
-        return """MUST: Identify root cause step accurately
-MUST: Provide clear error_feedback in Chinese when retrying
-MUST: Generate user-friendly user_message in Chinese when aborting
-MUST: Generate clear clarification_question in Chinese when clarifying
+        return """MUST: Identify root cause accurately, not just where error occurred
+MUST: Provide specific, actionable corrections or guidance in Chinese
+MUST: Use CORRECT when output can be directly fixed (faster, no LLM call)
+MUST: Use RETRY only when LLM re-thinking is truly needed
+MUST NOT: Use RETRY for errors that can be directly corrected
 MUST NOT: Retry the same step more than 2 times
-MUST NOT: Retry if error is clearly a data/permission issue"""
+MUST NOT: Retry if error is clearly a permission/data issue"""
 
     def get_user_template(self) -> str:
         return """## User Question
@@ -127,6 +113,12 @@ MUST NOT: Retry if error is clearly a data/permission issue"""
 - Type: {error_type}
 - Message: {error_message}
 - Details: {error_details}
+
+## Step1 Output (if available)
+{step1_output}
+
+## Step2 Output (if available)
+{step2_output}
 
 ## Retry History
 {retry_history}

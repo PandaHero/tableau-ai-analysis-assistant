@@ -4,9 +4,11 @@ FieldMapper Node - RAG + LLM Hybrid Node
 Maps business terms from SemanticQuery to technical field names.
 
 Strategy:
-1. RAG retrieval: SemanticMapper.search()
-2. Fast path: confidence >= 0.9, return directly (no LLM)
-3. LLM fallback: confidence < 0.9, use LLM to select from top-k candidates
+1. Cache lookup: check LangGraph SqliteStore cache
+2. Exact match: if term matches field_name or field_caption exactly, return directly (skip RAG)
+3. RAG retrieval: SemanticMapper.search()
+4. Fast path: confidence >= 0.9, return directly (no LLM)
+5. LLM fallback: confidence < 0.9, use LLM to select from top-k candidates
 
 Middleware 集成：
 - 从 config 获取 middleware 栈
@@ -38,6 +40,7 @@ from tableau_assistant.src.infra.ai.rag.assembler import (
     ChunkStrategy,
 )
 from tableau_assistant.src.infra.ai.rag.reranker import LLMReranker
+from tableau_assistant.src.infra.ai.rag.models import FieldChunk
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +156,7 @@ class FieldMapperNode:
         # Statistics
         self._total_mappings = 0
         self._cache_hits = 0
+        self._exact_match_hits = 0
         self._fast_path_hits = 0
         self._llm_fallback_count = 0
         self._rerank_count = 0
@@ -249,6 +253,7 @@ class FieldMapperNode:
         return {
             "total_mappings": self._total_mappings,
             "cache_hits": self._cache_hits,
+            "exact_match_hits": self._exact_match_hits,
             "fast_path_hits": self._fast_path_hits,
             "llm_fallback_count": self._llm_fallback_count,
             "rerank_count": self._rerank_count,
@@ -334,6 +339,54 @@ class FieldMapperNode:
     
     # ========== Core Mapping Methods ==========
     
+    def _try_exact_match(
+        self,
+        term: str,
+        role_filter: Optional[str] = None
+    ) -> Optional["FieldChunk"]:
+        """
+        Try exact match against field_name or field_caption.
+        
+        This is a fast path that skips RAG when the LLM returns actual technical field names.
+        
+        Args:
+            term: Business term to match
+            role_filter: Optional role filter ("dimension" or "measure")
+        
+        Returns:
+            FieldChunk if exact match found, None otherwise
+        """
+        if self._semantic_mapper is None:
+            return None
+        
+        # Get all field chunks from the indexer
+        if not hasattr(self._semantic_mapper, 'field_indexer'):
+            return None
+        
+        all_chunks = self._semantic_mapper.field_indexer.get_all_chunks()
+        if not all_chunks:
+            return None
+        
+        term_lower = term.lower().strip()
+        
+        # First pass: exact match on field_name (case-insensitive)
+        for chunk in all_chunks:
+            if chunk.field_name.lower() == term_lower:
+                # Apply role filter if specified
+                if role_filter and chunk.role and chunk.role.lower() != role_filter.lower():
+                    continue
+                return chunk
+        
+        # Second pass: exact match on field_caption (case-insensitive)
+        for chunk in all_chunks:
+            if chunk.field_caption.lower() == term_lower:
+                # Apply role filter if specified
+                if role_filter and chunk.role and chunk.role.lower() != role_filter.lower():
+                    continue
+                return chunk
+        
+        return None
+    
     async def map_field(
         self,
         term: str,
@@ -387,14 +440,44 @@ class FieldMapperNode:
                     latency_ms=latency
                 )
         
-        # 2. Check if RAG is available
+        # 2. Exact match fast path - skip RAG if term matches field_name or field_caption exactly
+        exact_match = self._try_exact_match(term, role_filter)
+        if exact_match:
+            self._exact_match_hits += 1
+            latency = int((time.time() - start_time) * 1000)
+            logger.info(f"Exact match: {term} -> {exact_match.field_name} (skipped RAG)")
+            
+            # Cache the exact match
+            if self.config.enable_cache:
+                self._put_to_cache(
+                    term=term,
+                    datasource_luid=datasource_luid,
+                    technical_field=exact_match.field_name,
+                    confidence=1.0,
+                    category=exact_match.category,
+                    level=exact_match.metadata.get("level") if exact_match.metadata else None,
+                    granularity=exact_match.metadata.get("granularity") if exact_match.metadata else None
+                )
+            
+            return MappingResult(
+                business_term=term,
+                technical_field=exact_match.field_name,
+                confidence=1.0,
+                mapping_source="exact_match",
+                category=exact_match.category,
+                level=exact_match.metadata.get("level") if exact_match.metadata else None,
+                granularity=exact_match.metadata.get("granularity") if exact_match.metadata else None,
+                latency_ms=latency
+            )
+        
+        # 3. Check if RAG is available
         rag_available = (
             self._semantic_mapper is not None and 
             hasattr(self._semantic_mapper, 'rag_available') and 
             self._semantic_mapper.rag_available
         )
         
-        # 3. If RAG not available, use LLM directly
+        # 4. If RAG not available, use LLM directly
         if not rag_available:
             logger.info(f"RAG 不可用，使用 LLM 直接匹配: {term}")
             return await self._map_field_with_llm_only(
@@ -407,7 +490,7 @@ class FieldMapperNode:
                 config=config,
             )
         
-        # 4. RAG retrieval
+        # 5. RAG retrieval
         try:
             rag_result = self.semantic_mapper.map_field(
                 term=term,
@@ -426,7 +509,7 @@ class FieldMapperNode:
                 config=config,
             )
         
-        # 5. High confidence fast path
+        # 6. High confidence fast path
         if rag_result.confidence >= self.config.high_confidence_threshold:
             self._fast_path_hits += 1
             latency = int((time.time() - start_time) * 1000)
@@ -462,7 +545,7 @@ class FieldMapperNode:
                 latency_breakdown=latency_breakdown
             )
         
-        # 6. LLM fallback for low confidence
+        # 7. LLM fallback for low confidence
         if self.config.enable_llm_fallback and rag_result.retrieval_results:
             return await self._map_field_with_llm_fallback(
                 term=term,
@@ -474,7 +557,7 @@ class FieldMapperNode:
                 config=config,
             )
         
-        # 7. Use RAG result as fallback
+        # 8. Use RAG result as fallback
         latency = int((time.time() - start_time) * 1000)
         category, level, granularity = self._extract_hierarchy_info(rag_result)
         latency_breakdown = self._extract_latency_breakdown(rag_result, latency)
@@ -1012,10 +1095,11 @@ def _extract_terms_from_semantic_query(
     for computation in semantic_query.computations or []:
         if computation.target and computation.target not in terms:
             terms[computation.target] = None
-        # partition_by 中的字段
-        for partition_field in computation.partition_by or []:
-            if partition_field and partition_field not in terms:
-                terms[partition_field] = None
+        # partition_by is now list[DimensionField], extract field_name from each
+        for partition_dim in computation.partition_by or []:
+            field_name = partition_dim.field_name if hasattr(partition_dim, 'field_name') else partition_dim
+            if field_name and field_name not in terms:
+                terms[field_name] = None
     
     return terms
 
@@ -1045,6 +1129,7 @@ def _get_field_mapper(state: Dict[str, Any], config: Optional[RunnableConfig] = 
     if data_model:
         try:
             if hasattr(data_model, 'fields') and data_model.fields:
+                # load_metadata 内部会使用 SqliteStore 缓存
                 mapper.load_metadata(
                     fields=data_model.fields,
                     datasource_luid=datasource_luid
@@ -1052,11 +1137,17 @@ def _get_field_mapper(state: Dict[str, Any], config: Optional[RunnableConfig] = 
                 logger.info(f"两阶段架构已启用: {len(data_model.fields)} 个字段已索引")
             
             from tableau_assistant.src.infra.ai.rag.semantic_mapper import SemanticMapper
-            from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
             
-            field_indexer = FieldIndexer(datasource_luid=datasource_luid)
-            if hasattr(data_model, 'fields'):
-                field_indexer.index_fields(data_model.fields)
+            # 复用 KnowledgeAssembler 的 FieldIndexer，避免重复构建索引
+            if mapper.assembler is not None and hasattr(mapper.assembler, '_indexer'):
+                field_indexer = mapper.assembler._indexer
+                logger.debug(f"复用 KnowledgeAssembler 的 FieldIndexer: {field_indexer.field_count} 个字段")
+            else:
+                # 回退：创建新的 FieldIndexer
+                from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
+                field_indexer = FieldIndexer(datasource_luid=datasource_luid)
+                if hasattr(data_model, 'fields'):
+                    field_indexer.index_fields(data_model.fields)
             
             semantic_mapper = SemanticMapper(field_indexer=field_indexer)
             mapper.set_semantic_mapper(semantic_mapper)

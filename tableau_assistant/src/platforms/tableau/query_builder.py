@@ -106,7 +106,11 @@ class TableauQueryBuilder(BaseQueryBuilder):
         # Important: LOD fields must come before table calc fields
         if semantic_query.computations:
             view_dims = [d.field_name for d in (semantic_query.dimensions or [])]
-            comp_fields = self._build_computation_fields(semantic_query.computations, view_dims)
+            comp_fields = self._build_computation_fields(
+                semantic_query.computations, 
+                view_dims,
+                measures=semantic_query.measures,
+            )
             fields.extend(comp_fields)
         
         # Build filters
@@ -184,13 +188,15 @@ class TableauQueryBuilder(BaseQueryBuilder):
                     ))
                 
                 # Check partition_by is subset of dimensions
+                # partition_by is now list[DimensionField], extract field_name from each
                 for p in comp.partition_by:
-                    if p not in view_dims:
+                    p_field_name = p.field_name if hasattr(p, 'field_name') else p
+                    if p_field_name not in view_dims:
                         errors.append(ValidationError(
                             error_type=ValidationErrorType.FIELD_NOT_FOUND,
                             field_path=f"computations[{i}].partition_by",
-                            message=f"Partition dimension '{p}' not in query dimensions",
-                            suggestion=f"Add '{p}' to dimensions or remove from partition_by",
+                            message=f"Partition dimension '{p_field_name}' not in query dimensions",
+                            suggestion=f"Add '{p_field_name}' to dimensions or remove from partition_by",
                         ))
         
         # Auto-fix: fill default aggregation for measures without one
@@ -318,14 +324,26 @@ class TableauQueryBuilder(BaseQueryBuilder):
         self,
         computations: list[Computation],
         view_dimensions: list[str],
+        measures: list[MeasureField] | None = None,
     ) -> list[dict]:
         """Build computation fields list (LOD first, then table calcs).
         
         Important: LOD fields must be generated before table calc fields
         because table calcs may reference LOD results.
+        
+        Args:
+            computations: List of computation objects
+            view_dimensions: List of dimension field names in the query
+            measures: List of measure fields (for table calc aggregation lookup)
         """
         # LOD calc_type values (as strings, not CalcType enum)
         lod_calc_types = {"LOD_FIXED", "LOD_INCLUDE", "LOD_EXCLUDE"}
+        
+        # Build measure lookup for aggregation
+        measure_agg_map: dict[str, AggregationType] = {}
+        if measures:
+            for m in measures:
+                measure_agg_map[m.field_name] = m.aggregation or AggregationType.SUM
         
         lod_fields = []
         table_calc_fields = []
@@ -334,7 +352,9 @@ class TableauQueryBuilder(BaseQueryBuilder):
             if comp.calc_type in lod_calc_types:
                 lod_fields.append(self._build_lod_field(comp))
             else:
-                table_calc_fields.append(self._build_table_calc_field(comp, view_dimensions))
+                table_calc_fields.append(
+                    self._build_table_calc_field(comp, view_dimensions, measure_agg_map)
+                )
         
         # LOD first, then table calcs
         return lod_fields + table_calc_fields
@@ -343,14 +363,45 @@ class TableauQueryBuilder(BaseQueryBuilder):
         self,
         comp: Computation,
         view_dimensions: list[str],
+        measure_agg_map: dict[str, AggregationType] | None = None,
     ) -> dict:
         """Build VizQL table calculation field.
         
         Note: Computation is a Union type with different subtypes.
         Each subtype has its attributes directly on the object (not via params).
+        
+        VizQL API requires table calculation fields to have both:
+        - function: The aggregation function (SUM, AVG, etc.)
+        - tableCalculation: The table calculation specification
+        
+        Args:
+            comp: Computation object
+            view_dimensions: List of dimension field names in the query
+            measure_agg_map: Mapping from measure field names to their aggregation types
         """
         # Build partitioning dimensions
-        partition_dims = [{"fieldCaption": d} for d in comp.partition_by]
+        # partition_by is now list[DimensionField], need to handle date_granularity
+        partition_dims = []
+        for p in comp.partition_by:
+            if hasattr(p, 'field_name'):
+                # It's a DimensionField object
+                dim_ref = {"fieldCaption": p.field_name}
+                # If has date_granularity, add function to match the query field
+                if hasattr(p, 'date_granularity') and p.date_granularity:
+                    trunc_map = {
+                        DateGranularity.YEAR: "TRUNC_YEAR",
+                        DateGranularity.QUARTER: "TRUNC_QUARTER",
+                        DateGranularity.MONTH: "TRUNC_MONTH",
+                        DateGranularity.WEEK: "TRUNC_WEEK",
+                        DateGranularity.DAY: "TRUNC_DAY",
+                    }
+                    trunc_func = trunc_map.get(p.date_granularity)
+                    if trunc_func:
+                        dim_ref["function"] = trunc_func
+                partition_dims.append(dim_ref)
+            else:
+                # Backward compatibility: if it's a string, just use fieldCaption
+                partition_dims.append({"fieldCaption": p})
         
         # Build table calc specification based on calc_type
         table_calc: dict
@@ -384,14 +435,25 @@ class TableauQueryBuilder(BaseQueryBuilder):
                 "dimensions": partition_dims,
             }
         
-        # Build the field
+        # Get aggregation function for the target measure
+        # Default to SUM if not found in measure_agg_map
+        agg_type = AggregationType.SUM
+        if measure_agg_map and comp.target in measure_agg_map:
+            agg_type = measure_agg_map[comp.target]
+        
+        vizql_func = AGGREGATION_TO_VIZQL.get(agg_type, VizQLFunction.SUM)
+        
+        # Build the field - VizQL API requires both function and tableCalculation
         field = {
             "fieldCaption": comp.target,
+            "function": vizql_func.value,
             "tableCalculation": table_calc,
         }
         
-        if comp.alias:
-            field["fieldAlias"] = comp.alias
+        # 安全访问 alias 属性（不是所有 Computation 类型都有 alias）
+        alias = getattr(comp, 'alias', None)
+        if alias:
+            field["fieldAlias"] = alias
         
         return field
     
@@ -436,9 +498,11 @@ class TableauQueryBuilder(BaseQueryBuilder):
             return None
         
         # Determine the dimension to filter on (first partition dimension or first query dimension)
+        # partition_by is now list[DimensionField]
         filter_dimension = None
         if comp.partition_by:
-            filter_dimension = comp.partition_by[0]
+            first_partition = comp.partition_by[0]
+            filter_dimension = first_partition.field_name if hasattr(first_partition, 'field_name') else first_partition
         elif semantic_query.dimensions:
             filter_dimension = semantic_query.dimensions[0].field_name
         
@@ -574,9 +638,13 @@ class TableauQueryBuilder(BaseQueryBuilder):
     def _build_filter(self, f: Any, field_metadata: dict[str, dict] | None = None) -> dict | None:
         """Build VizQL filter from core filter model.
         
-        For date filters:
-        - DATE/DATETIME type: filterType: "QUANTITATIVE_DATE" with minDate/maxDate
-        - STRING type: Same but with field: {calculation: "DATEPARSE('yyyy-MM-dd', [Field])"}
+        For date filters (DateRangeFilter):
+        - DATE/DATETIME 类型：QuantitativeDateFilter + fieldCaption
+        - STRING 类型：QuantitativeDateFilter + DATEPARSE 计算字段
+        
+        VizQL API 限制：
+        - SetFilter、MatchFilter、RelativeDateFilter 不支持 CalculatedFilterField
+        - 但 QuantitativeDateFilter 支持 CalculatedFilterField
         """
         field_metadata = field_metadata or {}
         
@@ -592,15 +660,15 @@ class TableauQueryBuilder(BaseQueryBuilder):
             meta = field_metadata.get(f.field_name, {})
             data_type = meta.get("dataType", "").upper()
             
-            # Build field reference based on data type
+            # 统一使用 QuantitativeDateFilter
+            # STRING 类型需要用 DATEPARSE 转换
             if data_type == "STRING":
-                # STRING type - use DATEPARSE calculation
+                # STRING 类型 - 使用 CalculatedFilterField + DATEPARSE
                 field_ref = {
-                    "fieldCaption": f"{f.field_name}_parsed",
                     "calculation": f"DATEPARSE('yyyy-MM-dd', [{f.field_name}])"
                 }
             else:
-                # DATE/DATETIME type - direct field reference
+                # DATE/DATETIME 类型 - 直接使用字段名
                 field_ref = {"fieldCaption": f.field_name}
             
             filter_dict = {
@@ -629,14 +697,24 @@ class TableauQueryBuilder(BaseQueryBuilder):
             return filter_dict
         
         elif isinstance(f, TextMatchFilter):
-            return {
+            filter_dict = {
                 "field": {"fieldCaption": f.field_name},
                 "filterType": "MATCH",
-                "contains": f.pattern if f.match_type.value == "CONTAINS" else None,
-                "startsWith": f.pattern if f.match_type.value == "STARTS_WITH" else None,
-                "endsWith": f.pattern if f.match_type.value == "ENDS_WITH" else None,
-                "exactMatch": f.pattern if f.match_type.value == "EXACT" else None,
             }
+            # 只添加匹配类型对应的字段，避免发送 None 值
+            match_type_value = f.match_type.value if hasattr(f.match_type, 'value') else str(f.match_type)
+            if match_type_value == "CONTAINS":
+                filter_dict["contains"] = f.pattern
+            elif match_type_value == "STARTS_WITH":
+                filter_dict["startsWith"] = f.pattern
+            elif match_type_value == "ENDS_WITH":
+                filter_dict["endsWith"] = f.pattern
+            elif match_type_value == "EXACT":
+                filter_dict["exactMatch"] = f.pattern
+            else:
+                # 默认使用 contains
+                filter_dict["contains"] = f.pattern
+            return filter_dict
         
         elif isinstance(f, TopNFilter):
             return {

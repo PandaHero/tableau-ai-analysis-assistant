@@ -36,12 +36,13 @@ from tableau_assistant.src.agents.semantic_parser.models.pipeline import (
 )
 
 from tableau_assistant.src.agents.semantic_parser.models.react import (
+    ReActActionType,
+    ErrorCategory,
+    CorrectionOperation,
+    Correction,
     ReActThought,
     ReActAction,
-    ReActActionType,
-    ReActObservation,
     ReActOutput,
-    RetryTarget,
 )
 
 
@@ -65,10 +66,11 @@ __all__ = [
     "QueryError",
     "QueryErrorType",
     # ReAct models
+    "ReActActionType",
+    "ErrorCategory",
+    "CorrectionOperation",
+    "Correction",
     "ReActThought",
     "ReActAction",
-    "ReActActionType",
-    "ReActObservation",
     "ReActOutput",
-    "RetryTarget",
 ]

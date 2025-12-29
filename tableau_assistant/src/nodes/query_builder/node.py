@@ -242,6 +242,23 @@ class QueryBuilderNode:
         Returns:
             New computation object with mapped field names
         """
+        def map_partition_by(partition_by: list) -> list:
+            """Map partition_by which is now list[DimensionField]."""
+            result = []
+            for p in partition_by:
+                if isinstance(p, DimensionField):
+                    # Create new DimensionField with mapped field_name
+                    result.append(DimensionField(
+                        field_name=get_tech_field(p.field_name),
+                        date_granularity=p.date_granularity,
+                        alias=p.alias,
+                        sort=p.sort,
+                    ))
+                else:
+                    # Backward compatibility: if it's a string, just map it
+                    result.append(DimensionField(field_name=get_tech_field(p)))
+            return result
+        
         # LOD types - have target, dimensions, aggregation
         if isinstance(comp, LODFixed):
             return LODFixed(
@@ -269,7 +286,7 @@ class QueryBuilderNode:
         elif isinstance(comp, RankCalc):
             return RankCalc(
                 target=get_tech_field(comp.target),
-                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                partition_by=map_partition_by(comp.partition_by),
                 direction=comp.direction,
                 rank_style=comp.rank_style,
                 top_n=comp.top_n,
@@ -277,14 +294,14 @@ class QueryBuilderNode:
         elif isinstance(comp, DenseRankCalc):
             return DenseRankCalc(
                 target=get_tech_field(comp.target),
-                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                partition_by=map_partition_by(comp.partition_by),
                 direction=comp.direction,
                 top_n=comp.top_n,
             )
         elif isinstance(comp, PercentileCalc):
             return PercentileCalc(
                 target=get_tech_field(comp.target),
-                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                partition_by=map_partition_by(comp.partition_by),
                 direction=comp.direction,
             )
         
@@ -292,13 +309,13 @@ class QueryBuilderNode:
         elif isinstance(comp, DifferenceCalc):
             return DifferenceCalc(
                 target=get_tech_field(comp.target),
-                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                partition_by=map_partition_by(comp.partition_by),
                 relative_to=comp.relative_to,
             )
         elif isinstance(comp, PercentDifferenceCalc):
             return PercentDifferenceCalc(
                 target=get_tech_field(comp.target),
-                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                partition_by=map_partition_by(comp.partition_by),
                 relative_to=comp.relative_to,
             )
         
@@ -306,14 +323,14 @@ class QueryBuilderNode:
         elif isinstance(comp, RunningTotalCalc):
             return RunningTotalCalc(
                 target=get_tech_field(comp.target),
-                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                partition_by=map_partition_by(comp.partition_by),
                 aggregation=comp.aggregation,
                 restart_every=comp.restart_every,
             )
         elif isinstance(comp, MovingCalc):
             return MovingCalc(
                 target=get_tech_field(comp.target),
-                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                partition_by=map_partition_by(comp.partition_by),
                 aggregation=comp.aggregation,
                 window_previous=comp.window_previous,
                 window_next=comp.window_next,
@@ -324,7 +341,7 @@ class QueryBuilderNode:
         elif isinstance(comp, PercentOfTotalCalc):
             return PercentOfTotalCalc(
                 target=get_tech_field(comp.target),
-                partition_by=[get_tech_field(p) for p in comp.partition_by],
+                partition_by=map_partition_by(comp.partition_by),
                 level_of=comp.level_of,
             )
         

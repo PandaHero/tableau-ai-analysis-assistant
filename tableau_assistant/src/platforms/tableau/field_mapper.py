@@ -78,7 +78,10 @@ class TableauFieldMapper(BaseFieldMapper):
         if semantic_query.computations:
             for comp in semantic_query.computations:
                 terms_to_map.append(comp.target)
-                terms_to_map.extend(comp.partition_by)
+                # partition_by is now list[DimensionField], extract field_name from each
+                for p in comp.partition_by:
+                    field_name = p.field_name if hasattr(p, 'field_name') else p
+                    terms_to_map.append(field_name)
         
         # Remove duplicates while preserving order
         unique_terms = list(dict.fromkeys(terms_to_map))
@@ -168,9 +171,23 @@ class TableauFieldMapper(BaseFieldMapper):
             for comp in query.computations:
                 new_comp = comp.model_copy(deep=True)
                 new_comp.target = mapping.get(comp.target, comp.target)
-                new_comp.partition_by = [
-                    mapping.get(p, p) for p in comp.partition_by
-                ]
+                # partition_by is now list[DimensionField], map field_name within each
+                new_partition_by = []
+                for p in comp.partition_by:
+                    if hasattr(p, 'field_name'):
+                        # It's a DimensionField, create a new one with mapped field_name
+                        from ...core.models import DimensionField
+                        new_p = DimensionField(
+                            field_name=mapping.get(p.field_name, p.field_name),
+                            date_granularity=p.date_granularity,
+                            alias=p.alias,
+                            sort=p.sort,
+                        )
+                        new_partition_by.append(new_p)
+                    else:
+                        # Backward compatibility: it's a string
+                        new_partition_by.append(mapping.get(p, p))
+                new_comp.partition_by = new_partition_by
                 new_computations.append(new_comp)
         
         # Create new query with mapped fields

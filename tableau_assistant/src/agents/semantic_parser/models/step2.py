@@ -7,6 +7,8 @@ IMPORTANT: validation is LLM self-validation, NOT code validation.
 The LLM fills in the validation fields based on the rules in field descriptions.
 """
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from tableau_assistant.src.core.models.computations import Computation
@@ -19,16 +21,16 @@ class ValidationCheck(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     
-    inferred_value: str | list[str] = Field(
+    inferred_value: Any = Field(
         description="""<what>Value inferred from restated_question</what>
 <when>ALWAYS required</when>
-<rule>Extract what you inferred in Step 2</rule>"""
+<rule>Extract what you inferred in Step 2 (can be string, list, or object)</rule>"""
     )
     
-    reference_value: str | list[str] = Field(
+    reference_value: Any = Field(
         description="""<what>Value from Step 1 structured output</what>
 <when>ALWAYS required</when>
-<rule>Extract what Step 1 extracted</rule>"""
+<rule>Extract what Step 1 extracted (can be string, list, or object)</rule>"""
     )
     
     is_match: bool = Field(
@@ -98,12 +100,12 @@ class Step2Output(BaseModel):
     </fill_order>
     
     <examples>
-    Ranking: {"computations": [{"calc_type": "RANK", "target": "Sales", "partition_by": ["Month"], "direction": "DESC"}]}
+    Ranking by month: {"computations": [{"calc_type": "RANK", "target": "Sales", "partition_by": [{"field_name": "Order Date", "date_granularity": "MONTH"}], "direction": "DESC"}]}
     LOD: {"computations": [{"calc_type": "LOD_FIXED", "target": "OrderDate", "dimensions": ["CustomerID"], "aggregation": "MIN", "alias": "FirstPurchase"}]}
-    Combination: {"computations": [{"calc_type": "LOD_FIXED", ...}, {"calc_type": "RANK", ...}]}
     </examples>
     
     <anti_patterns>
+    X partition_by using string like "Month" instead of DimensionField object
     X Combination outputs only one Computation
     X LOD after table calc (should be LOD first)
     </anti_patterns>

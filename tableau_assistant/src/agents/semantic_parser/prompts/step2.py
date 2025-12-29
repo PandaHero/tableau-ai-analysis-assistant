@@ -48,21 +48,22 @@ Computation = Target × CalcType × Partition × Params
 Step 1: Infer target from restated_question (must be in what.measures)
 Step 2: Decide LOD vs Table Calc based on question semantics
 Step 3: Select specific calc_type (see computation class docstrings)
-Step 4: Infer partition_by (Table Calc) or dimensions (LOD) based on scope keywords
+Step 4: Infer partition from scope keywords (must be subset of where.dimensions)
 Step 5: Fill remaining fields per class fill_order
-Step 6: Validate all three checks
+Step 6: Check if computation covers derived measures in Step1
+Step 7: Validate all three checks
 
 **LOD vs Table Calc - Core Distinction**
 - LOD = Question needs metric at DIFFERENT granularity than query dimensions
-  → "per customer X", "customer lifetime value", "first purchase date"
 - Table Calc = Question needs to TRANSFORM query results
-  → rank, cumulate, compare, calculate proportion
 
-**Partition/Dimensions Keywords**
-- global/total/overall → partition_by: [] or dimensions: []
-- per month/within month → [time dimension]
-- per customer/each customer → [CustomerID]
-- per region → [region dimension]
+**Partition Keywords**
+- global/total/no scope word → empty partition
+- per month/within month → time dimension from where.dimensions
+- per province/per region → corresponding dimension from where.dimensions
+
+**Measure Coverage**
+When Step1 has duplicate measures with aliases, check if your computation can derive the aliased measure. If yes, only keep base measure as target.
 
 **Combination Scenarios**
 When question needs BOTH different granularity AND transformation:

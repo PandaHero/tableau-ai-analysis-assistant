@@ -11,6 +11,7 @@ from .enums import (
     SortDirection,
     WindowAggregation,
 )
+from .fields import DimensionField
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -235,16 +236,18 @@ class RankCalc(BaseModel):
     4. direction (default: DESC)
     5. rank_style (optional, default: COMPETITION)
     6. top_n (optional, for filtering)
+    7. alias (optional)
     </fill_order>
     
     <examples>
     Global rank: {"calc_type": "RANK", "target": "Sales", "partition_by": [], "direction": "DESC"}
-    Rank within month: {"calc_type": "RANK", "target": "Sales", "partition_by": ["Month"], "direction": "DESC"}
+    Rank within month: {"calc_type": "RANK", "target": "Sales", "partition_by": [{"field_name": "Order Date", "date_granularity": "MONTH"}], "direction": "DESC"}
     </examples>
     
     <anti_patterns>
     X Using RANK for simple Top N filtering (use filter instead)
     X partition_by contains dimensions not in query
+    X Inventing field names like "Month" instead of using DimensionField with date_granularity
     </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
@@ -261,11 +264,12 @@ class RankCalc(BaseModel):
 <must_not>Empty string</must_not>"""
     )
     
-    partition_by: list[str] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="""<what>Dimensions defining ranking scope (restart ranking within each partition)</what>
 <when>ALWAYS (empty = global ranking across all results)</when>
-<dependency>Must be subset of query dimensions</dependency>"""
+<rule>Copy from Step 1 where.dimensions, preserving field_name and date_granularity</rule>
+<must_not>Invent field names - use exact DimensionField from Step 1</must_not>"""
     )
     
     direction: SortDirection = Field(
@@ -287,6 +291,12 @@ class RankCalc(BaseModel):
 <rule>Combines with direction: DESC+top_n=top N, ASC+top_n=bottom N</rule>"""
     )
     
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias for the calculation</what>
+<when>Optional</when>"""
+    )
+    
     @field_validator("target")
     @classmethod
     def target_not_empty(cls, v: str) -> str:
@@ -304,6 +314,7 @@ class DenseRankCalc(BaseModel):
     3. partition_by (ALWAYS, can be empty)
     4. direction (default: DESC)
     5. top_n (optional)
+    6. alias (optional)
     </fill_order>
     
     <examples>
@@ -324,10 +335,11 @@ class DenseRankCalc(BaseModel):
 <must_not>Empty string</must_not>"""
     )
     
-    partition_by: list[str] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="""<what>Dimensions defining ranking scope</what>
-<when>ALWAYS (empty = global ranking)</when>"""
+<when>ALWAYS (empty = global ranking)</when>
+<rule>Copy from Step 1 where.dimensions</rule>"""
     )
     
     direction: SortDirection = Field(
@@ -339,6 +351,12 @@ class DenseRankCalc(BaseModel):
     top_n: int | None = Field(
         default=None,
         description="""<what>Filter to top/bottom N</what>
+<when>Optional</when>"""
+    )
+    
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias for the calculation</what>
 <when>Optional</when>"""
     )
     
@@ -358,6 +376,7 @@ class PercentileCalc(BaseModel):
     2. target (ALWAYS)
     3. partition_by (ALWAYS, can be empty)
     4. direction (default: DESC)
+    5. alias (optional)
     </fill_order>
     
     <examples>
@@ -378,16 +397,23 @@ class PercentileCalc(BaseModel):
 <must_not>Empty string</must_not>"""
     )
     
-    partition_by: list[str] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="""<what>Dimensions defining percentile scope</what>
-<when>ALWAYS (empty = global percentile)</when>"""
+<when>ALWAYS (empty = global percentile)</when>
+<rule>Copy from Step 1 where.dimensions</rule>"""
     )
     
     direction: SortDirection = Field(
         default=SortDirection.DESC,
         description="""<what>Sort direction</what>
 <when>ALWAYS (default: DESC)</when>"""
+    )
+    
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias for the calculation</what>
+<when>Optional</when>"""
     )
     
     @field_validator("target")
@@ -412,11 +438,17 @@ class DifferenceCalc(BaseModel):
     2. target (ALWAYS)
     3. partition_by (ALWAYS, can be empty)
     4. relative_to (ALWAYS)
+    5. alias (optional)
     </fill_order>
+    
+    <rule>
+    Covers derived measures: "X Change", "X vs Last", "X Difference"
+    If Step1 has duplicate measures for comparison, target should be base measure only
+    </rule>
     
     <examples>
     vs Previous: {"calc_type": "DIFFERENCE", "target": "Sales", "partition_by": [], "relative_to": "PREVIOUS"}
-    vs First: {"calc_type": "DIFFERENCE", "target": "Sales", "partition_by": ["Region"], "relative_to": "FIRST"}
+    vs First within Region: {"calc_type": "DIFFERENCE", "target": "Sales", "partition_by": [{"field_name": "Region"}], "relative_to": "FIRST"}
     </examples>
     """
     model_config = ConfigDict(extra="forbid")
@@ -433,15 +465,22 @@ class DifferenceCalc(BaseModel):
 <must_not>Empty string</must_not>"""
     )
     
-    partition_by: list[str] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="""<what>Dimensions defining comparison scope</what>
-<when>ALWAYS (empty = global comparison)</when>"""
+<when>ALWAYS (empty = global comparison)</when>
+<rule>Copy from Step 1 where.dimensions</rule>"""
     )
     
     relative_to: RelativeTo = Field(
         description="""<what>Reference point for difference</what>
 <when>ALWAYS</when>"""
+    )
+    
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias for the calculation</what>
+<when>Optional</when>"""
     )
     
     @field_validator("target")
@@ -462,11 +501,17 @@ class PercentDifferenceCalc(BaseModel):
     2. target (ALWAYS)
     3. partition_by (ALWAYS, can be empty)
     4. relative_to (ALWAYS)
+    5. alias (optional)
     </fill_order>
     
+    <rule>
+    Covers derived measures: "Last Year X", "X Growth", "YoY X", "MoM X"
+    If Step1 has [Sales, Sales(alias="Last Year Sales")], target should be "Sales" only
+    </rule>
+    
     <examples>
-    MoM growth: {"calc_type": "PERCENT_DIFFERENCE", "target": "Sales", "partition_by": [], "relative_to": "PREVIOUS"}
-    YoY within region: {"calc_type": "PERCENT_DIFFERENCE", "target": "Sales", "partition_by": ["Region"], "relative_to": "PREVIOUS"}
+    YoY within region: {"calc_type": "PERCENT_DIFFERENCE", "target": "Sales", "partition_by": [{"field_name": "Region"}], "relative_to": "PREVIOUS"}
+    By month: {"calc_type": "PERCENT_DIFFERENCE", "target": "Sales", "partition_by": [{"field_name": "Order Date", "date_granularity": "MONTH"}], "relative_to": "PREVIOUS"}
     </examples>
     """
     model_config = ConfigDict(extra="forbid")
@@ -483,15 +528,23 @@ class PercentDifferenceCalc(BaseModel):
 <must_not>Empty string</must_not>"""
     )
     
-    partition_by: list[str] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="""<what>Dimensions defining comparison scope</what>
-<when>ALWAYS (empty = global comparison)</when>"""
+<when>ALWAYS (empty = global comparison)</when>
+<rule>Copy from Step 1 where.dimensions, preserving field_name and date_granularity</rule>
+<must_not>Invent field names like "Month" - use "Order Date" with date_granularity instead</must_not>"""
     )
     
     relative_to: RelativeTo = Field(
         description="""<what>Reference point for percent change</what>
 <when>ALWAYS</when>"""
+    )
+    
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias for the calculation</what>
+<when>Optional</when>"""
     )
     
     @field_validator("target")
@@ -517,7 +570,13 @@ class RunningTotalCalc(BaseModel):
     3. partition_by (ALWAYS, can be empty)
     4. aggregation (default: SUM)
     5. restart_every (optional, for periodic restart like YTD)
+    6. alias (optional)
     </fill_order>
+    
+    <rule>
+    Covers derived measures: "Cumulative X", "YTD X", "Running X"
+    If Step1 has duplicate measures for cumulative, target should be base measure only
+    </rule>
     
     <examples>
     Cumulative sum: {"calc_type": "RUNNING_TOTAL", "target": "Sales", "partition_by": [], "aggregation": "SUM"}
@@ -542,10 +601,11 @@ class RunningTotalCalc(BaseModel):
 <must_not>Empty string</must_not>"""
     )
     
-    partition_by: list[str] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="""<what>Dimensions defining cumulative scope</what>
-<when>ALWAYS (empty = global cumulative)</when>"""
+<when>ALWAYS (empty = global cumulative)</when>
+<rule>Copy from Step 1 where.dimensions</rule>"""
     )
     
     aggregation: WindowAggregation = Field(
@@ -558,6 +618,12 @@ class RunningTotalCalc(BaseModel):
         default=None,
         description="""<what>Dimension to restart cumulative calculation</what>
 <when>For YTD (restart_every="Year"), MTD (restart_every="Month"), etc.</when>"""
+    )
+    
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias for the calculation</what>
+<when>Optional</when>"""
     )
     
     @field_validator("target")
@@ -585,6 +651,7 @@ class MovingCalc(BaseModel):
     5. window_previous (default: 2)
     6. window_next (default: 0)
     7. include_current (default: True)
+    8. alias (optional)
     </fill_order>
     
     <examples>
@@ -606,10 +673,11 @@ class MovingCalc(BaseModel):
 <must_not>Empty string</must_not>"""
     )
     
-    partition_by: list[str] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="""<what>Dimensions defining window scope</what>
-<when>ALWAYS (empty = global window)</when>"""
+<when>ALWAYS (empty = global window)</when>
+<rule>Copy from Step 1 where.dimensions</rule>"""
     )
     
     aggregation: WindowAggregation = Field(
@@ -636,6 +704,12 @@ class MovingCalc(BaseModel):
 <when>ALWAYS (default: True)</when>"""
     )
     
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias for the calculation</what>
+<when>Optional</when>"""
+    )
+    
     @field_validator("target")
     @classmethod
     def target_not_empty(cls, v: str) -> str:
@@ -658,11 +732,12 @@ class PercentOfTotalCalc(BaseModel):
     2. target (ALWAYS)
     3. partition_by (ALWAYS, can be empty for global total)
     4. level_of (optional)
+    5. alias (optional)
     </fill_order>
     
     <examples>
     Global percent: {"calc_type": "PERCENT_OF_TOTAL", "target": "Sales", "partition_by": []}
-    Within region: {"calc_type": "PERCENT_OF_TOTAL", "target": "Sales", "partition_by": ["Region"]}
+    Within region: {"calc_type": "PERCENT_OF_TOTAL", "target": "Sales", "partition_by": [{"field_name": "Region"}]}
     </examples>
     """
     model_config = ConfigDict(extra="forbid")
@@ -679,17 +754,23 @@ class PercentOfTotalCalc(BaseModel):
 <must_not>Empty string</must_not>"""
     )
     
-    partition_by: list[str] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="""<what>Dimensions defining the "total" scope</what>
 <when>ALWAYS (empty = percent of grand total)</when>
-<rule>partition_by=["Region"] means percent within each Region</rule>"""
+<rule>Copy from Step 1 where.dimensions</rule>"""
     )
     
     level_of: str | None = Field(
         default=None,
         description="""<what>Specific level for percent calculation</what>
 <when>When specific aggregation level needed</when>"""
+    )
+    
+    alias: str | None = Field(
+        default=None,
+        description="""<what>Result alias for the calculation</what>
+<when>Optional</when>"""
     )
     
     @field_validator("target")

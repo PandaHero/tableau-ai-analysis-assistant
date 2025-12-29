@@ -122,40 +122,37 @@ class WindowAggregation(str, Enum):
 # ═══════════════════════════════════════════════════════════════════════════
 
 class HowType(str, Enum):
-    """Computation complexity: SIMPLE=no Step2 | COMPLEX=needs Step2.
+    """Computation complexity classification.
     
     <rule>
-    SIMPLE - Direct aggregation, no computation needed:
-    - Basic aggregation: total sales, average price, count of orders
-    - Simple grouping: sales by region, orders by month
-    - Top N filtering: top 5 cities by sales (returns filtered subset, NOT rank column)
+    COMPLEX (needs Step2 computation) - check these keywords FIRST:
+    - ranking/rank/position/leaderboard -> COMPLEX (assigns rank number to each row)
+    - percent/percentage/share/proportion/contribution -> COMPLEX
+    - running/cumulative/YTD/MTD -> COMPLEX
+    - moving/rolling/sliding window -> COMPLEX
+    - difference/change/growth/MoM/YoY -> COMPLEX
+    - LOD/per customer/per product -> COMPLEX
     
-    COMPLEX - Needs Step 2 for computation:
-    - Ranking: rank all provinces (adds rank column to ALL rows)
-    - Running: YTD, cumulative total, running sum
-    - Comparison: MoM growth, YoY change, difference from previous
-    - Moving: 3-month moving average, rolling sum
-    - Percent: percent of total, share of category
-    - LOD: per customer X, first purchase date, lifetime value
+    SIMPLE (direct aggregation, no Step2) - only if NO complex keywords:
+    - sum/total, average, count, min, max
+    - grouping by dimension
+    - Top N filtering (returns top rows, NOT ranking)
+    
+    CRITICAL: "percentage" or "ranking" means COMPLEX, not simple aggregation!
     </rule>
-    
-    <anti_patterns>
-    X Top 5 cities by sales classified as COMPLEX (should be SIMPLE - filtering)
-    X Rank all provinces classified as SIMPLE (should be COMPLEX - adds rank column)
-    </anti_patterns>
     """
     SIMPLE = "SIMPLE"
     COMPLEX = "COMPLEX"
 
 
 class IntentType(str, Enum):
-    """Intent type.
+    """Intent classification.
     
     <rule>
-    complete query info -> DATA_QUERY
-    needs clarification/unspecified values -> CLARIFICATION
-    metadata/field question -> GENERAL
-    off-topic/unrelated -> IRRELEVANT
+    DATA_QUERY: complete query with all fields specified
+    CLARIFICATION: needs info, references unspecified values
+    GENERAL: asks about metadata/fields/schema
+    IRRELEVANT: off-topic, not about data analysis
     </rule>
     """
     DATA_QUERY = "DATA_QUERY"
@@ -168,10 +165,10 @@ class ObserverDecision(str, Enum):
     """Observer decision.
     
     <rule>
-    all checks pass -> ACCEPT
-    small fixable conflict -> CORRECT
-    large structural conflict -> RETRY
-    cannot determine, need user -> CLARIFY
+    ACCEPT: all checks pass
+    CORRECT: small fixable conflict
+    RETRY: large structural conflict
+    CLARIFY: cannot determine, need user input
     </rule>
     """
     ACCEPT = "ACCEPT"

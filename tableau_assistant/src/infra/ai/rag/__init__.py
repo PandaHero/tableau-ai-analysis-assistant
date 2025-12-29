@@ -48,6 +48,11 @@ from tableau_assistant.src.infra.ai.rag.field_indexer import (
     FieldIndexer,
     IndexConfig,
 )
+from tableau_assistant.src.infra.ai.rag.field_value_indexer import (
+    FieldValueIndexer,
+    ValueMatchResult,
+    DistinctValuesResult,
+)
 from tableau_assistant.src.infra.ai.rag.semantic_mapper import (
     SemanticMapper,
     MappingConfig,

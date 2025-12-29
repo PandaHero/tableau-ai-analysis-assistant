@@ -12,11 +12,12 @@ build_query Tool 实现
 """
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 
 from langchain_core.tools import tool
 from langgraph.types import RunnableConfig
 
+from tableau_assistant.src.core.models.field_mapping import MappedQuery
 from tableau_assistant.src.orchestration.tools.build_query.models import (
     BuildQueryInput,
     BuildQueryOutput,
@@ -70,7 +71,7 @@ def build_query(
 
 
 async def build_query_async(
-    mapped_query: Dict[str, Any],
+    mapped_query: Union[MappedQuery, Dict[str, Any], None],
     datasource_luid: str = "default",
     field_metadata: Optional[Dict[str, Any]] = None,
     config: Optional[RunnableConfig] = None,
@@ -79,7 +80,7 @@ async def build_query_async(
     异步版本的 build_query Tool。
     
     Args:
-        mapped_query: MappedQuery 的字典表示
+        mapped_query: MappedQuery 对象或字典表示
         datasource_luid: 数据源标识符
         field_metadata: 字段元数据
         config: LangGraph 运行时配置
@@ -96,7 +97,7 @@ async def build_query_async(
 
 
 async def _build_query_impl(
-    mapped_query: Dict[str, Any],
+    mapped_query: Union[MappedQuery, Dict[str, Any], None],
     datasource_luid: str,
     field_metadata: Optional[Dict[str, Any]],
     config: Optional[RunnableConfig],
@@ -105,15 +106,16 @@ async def _build_query_impl(
     build_query 核心实现。
     
     调用 QueryBuilderNode 进行查询构建。
+    
+    Args:
+        mapped_query: MappedQuery 对象或字典表示
     """
     start_time = time.time()
     
     try:
-        # 延迟导入避免循环依赖
-        from tableau_assistant.src.core.models.field_mapping import MappedQuery
         from tableau_assistant.src.nodes.query_builder.node import QueryBuilderNode
         
-        # 解析 MappedQuery
+        # 解析 MappedQuery - 支持对象或字典
         if not mapped_query:
             latency_ms = int((time.time() - start_time) * 1000)
             return BuildQueryOutput.fail(
@@ -124,18 +126,23 @@ async def _build_query_impl(
                 latency_ms=latency_ms
             )
         
-        try:
-            mq = MappedQuery.model_validate(mapped_query)
-        except Exception as e:
-            logger.error(f"Invalid mapped_query: {e}")
-            latency_ms = int((time.time() - start_time) * 1000)
-            return BuildQueryOutput.fail(
-                error=QueryBuildError(
-                    type=QueryBuildErrorType.VALIDATION_FAILED,
-                    message=f"无效的 MappedQuery: {e}",
-                ),
-                latency_ms=latency_ms
-            )
+        # 如果已经是 MappedQuery 对象，直接使用
+        if isinstance(mapped_query, MappedQuery):
+            mq = mapped_query
+        else:
+            # 否则从 dict 解析
+            try:
+                mq = MappedQuery.model_validate(mapped_query)
+            except Exception as e:
+                logger.error(f"Invalid mapped_query: {e}")
+                latency_ms = int((time.time() - start_time) * 1000)
+                return BuildQueryOutput.fail(
+                    error=QueryBuildError(
+                        type=QueryBuildErrorType.VALIDATION_FAILED,
+                        message=f"无效的 MappedQuery: {e}",
+                    ),
+                    latency_ms=latency_ms
+                )
         
         # 从 config 获取 datasource_luid
         if config:

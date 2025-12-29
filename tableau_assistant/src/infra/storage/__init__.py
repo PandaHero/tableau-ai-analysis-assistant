@@ -40,6 +40,10 @@ from tableau_assistant.src.infra.storage.data_model_cache import (
     DATA_MODEL_NAMESPACE,
     HIERARCHY_NAMESPACE,
 )
+from tableau_assistant.src.infra.storage.field_index_cache import (
+    FieldIndexCache,
+    FIELD_INDEX_NAMESPACE,
+)
 from tableau_assistant.src.infra.storage.data_model_loader import (
     DataModelLoader,
     TableauDataModelLoader,
@@ -62,6 +66,9 @@ __all__ = [
     "DataModelCache",
     "DATA_MODEL_NAMESPACE",
     "HIERARCHY_NAMESPACE",
+    # FieldIndexCache
+    "FieldIndexCache",
+    "FIELD_INDEX_NAMESPACE",
     # DataModelLoader
     "DataModelLoader",
     "TableauDataModelLoader",

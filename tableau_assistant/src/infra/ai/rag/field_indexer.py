@@ -631,6 +631,93 @@ class FieldIndexer:
     def field_count(self) -> int:
         """索引的字段数量"""
         return len(self._chunks)
+    
+    # ========== SqliteStore 缓存方法 ==========
+    
+    def export_for_cache(self) -> Dict[str, Any]:
+        """
+        导出索引数据用于 SqliteStore 缓存
+        
+        Returns:
+            包含 metadata_hash, field_names, chunks, vectors 的字典
+        """
+        chunks_data = {}
+        for name, chunk in self._chunks.items():
+            chunks_data[name] = {
+                "field_name": chunk.field_name,
+                "field_caption": chunk.field_caption,
+                "role": chunk.role,
+                "data_type": chunk.data_type,
+                "index_text": chunk.index_text,
+                "column_class": chunk.column_class,
+                "category": chunk.category,
+                "formula": chunk.formula,
+                "logical_table_id": chunk.logical_table_id,
+                "logical_table_caption": chunk.logical_table_caption,
+                "sample_values": chunk.sample_values,
+                "metadata": chunk.metadata,
+            }
+        
+        return {
+            "metadata_hash": self._metadata_hash,
+            "field_names": self._field_names.copy(),
+            "chunks": chunks_data,
+            "vectors": {name: vec for name, vec in self._vectors.items()},
+        }
+    
+    def restore_from_cache(self, cache_data: Dict[str, Any]) -> bool:
+        """
+        从 SqliteStore 缓存恢复索引
+        
+        Args:
+            cache_data: export_for_cache() 导出的数据
+        
+        Returns:
+            是否恢复成功
+        """
+        try:
+            self._metadata_hash = cache_data.get("metadata_hash")
+            self._field_names = cache_data.get("field_names", [])
+            self._chunks.clear()
+            self._vectors.clear()
+            
+            for name, chunk_data in cache_data.get("chunks", {}).items():
+                self._chunks[name] = FieldChunk(
+                    field_name=chunk_data["field_name"],
+                    field_caption=chunk_data["field_caption"],
+                    role=chunk_data["role"],
+                    data_type=chunk_data["data_type"],
+                    index_text=chunk_data["index_text"],
+                    column_class=chunk_data.get("column_class"),
+                    category=chunk_data.get("category"),
+                    formula=chunk_data.get("formula"),
+                    logical_table_id=chunk_data.get("logical_table_id"),
+                    logical_table_caption=chunk_data.get("logical_table_caption"),
+                    sample_values=chunk_data.get("sample_values"),
+                    metadata=chunk_data.get("metadata", {}),
+                )
+            
+            for name, vector in cache_data.get("vectors", {}).items():
+                self._vectors[name] = vector
+            
+            # 重建 FAISS 索引
+            if self._vectors and FAISS_AVAILABLE:
+                all_vectors = [self._vectors[name] for name in self._field_names if name in self._vectors]
+                self._build_faiss_index(all_vectors)
+            else:
+                self._faiss_index = None
+            
+            logger.info(f"从缓存恢复索引: {len(self._chunks)} 个字段")
+            return True
+            
+        except Exception as e:
+            logger.error(f"从缓存恢复索引失败: {e}")
+            return False
+    
+    @property
+    def metadata_hash(self) -> Optional[str]:
+        """获取当前元数据哈希"""
+        return self._metadata_hash
 
     def save_index(self, filename: Optional[str] = None) -> bool:
         """

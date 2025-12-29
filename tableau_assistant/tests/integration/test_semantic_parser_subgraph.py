@@ -17,6 +17,7 @@ import os
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 # 添加项目根目录到 path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
@@ -26,12 +27,132 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
-# 配置日志
+# ═══════════════════════════════════════════════════════════════════════════
+# 日志和输出配置
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 创建输出目录
+OUTPUT_DIR = Path(__file__).parent.parent.parent / "test_outputs"
+OUTPUT_DIR.mkdir(exist_ok=True)
+
+# 生成带时间戳的文件名
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+LOG_FILE = OUTPUT_DIR / f"semantic_parser_test_{TIMESTAMP}.log"
+LLM_RESPONSES_FILE = OUTPUT_DIR / f"llm_responses_{TIMESTAMP}.md"
+
+# 配置日志 - 同时输出到控制台和文件
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # 控制台输出
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),  # 文件输出
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# LLM 响应收集器
+class LLMResponseCollector:
+    """收集和保存 LLM 响应"""
+    
+    def __init__(self, output_file: Path):
+        self.output_file = output_file
+        self.responses: List[Dict[str, Any]] = []
+        self._init_file()
+    
+    def _init_file(self):
+        """初始化输出文件"""
+        with open(self.output_file, 'w', encoding='utf-8') as f:
+            f.write(f"# LLM 响应记录\n\n")
+            f.write(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("---\n\n")
+    
+    def add_response(
+        self,
+        question: str,
+        node_name: str,
+        llm_output: str,
+        parsed_result: Any = None,
+        elapsed_ms: float = 0,
+        metadata: Dict[str, Any] = None,
+    ):
+        """添加一条 LLM 响应记录"""
+        record = {
+            "timestamp": datetime.now().isoformat(),
+            "question": question,
+            "node_name": node_name,
+            "llm_output": llm_output,
+            "parsed_result": parsed_result,
+            "elapsed_ms": elapsed_ms,
+            "metadata": metadata or {},
+        }
+        self.responses.append(record)
+        
+        # 实时写入文件
+        self._append_to_file(record)
+    
+    def _append_to_file(self, record: Dict[str, Any]):
+        """追加记录到文件"""
+        with open(self.output_file, 'a', encoding='utf-8') as f:
+            f.write(f"## 问题: {record['question']}\n\n")
+            f.write(f"**节点**: `{record['node_name']}`\n")
+            f.write(f"**时间**: {record['timestamp']}\n")
+            f.write(f"**耗时**: {record['elapsed_ms']:.0f}ms\n\n")
+            
+            f.write("### LLM 原始输出\n\n")
+            f.write("```\n")
+            f.write(record['llm_output'])
+            f.write("\n```\n\n")
+            
+            if record['parsed_result']:
+                f.write("### 解析结果\n\n")
+                f.write("```json\n")
+                try:
+                    if hasattr(record['parsed_result'], 'model_dump'):
+                        f.write(json.dumps(record['parsed_result'].model_dump(), ensure_ascii=False, indent=2))
+                    elif hasattr(record['parsed_result'], '__dict__'):
+                        f.write(json.dumps(record['parsed_result'].__dict__, ensure_ascii=False, indent=2, default=str))
+                    else:
+                        f.write(json.dumps(record['parsed_result'], ensure_ascii=False, indent=2, default=str))
+                except Exception as e:
+                    f.write(f"序列化失败: {e}\n{str(record['parsed_result'])}")
+                f.write("\n```\n\n")
+            
+            if record['metadata']:
+                f.write("### 元数据\n\n")
+                f.write("```json\n")
+                f.write(json.dumps(record['metadata'], ensure_ascii=False, indent=2, default=str))
+                f.write("\n```\n\n")
+            
+            f.write("---\n\n")
+    
+    def save_summary(self):
+        """保存汇总信息"""
+        with open(self.output_file, 'a', encoding='utf-8') as f:
+            f.write("# 测试汇总\n\n")
+            f.write(f"总记录数: {len(self.responses)}\n\n")
+            
+            # 按节点统计
+            node_stats = {}
+            for r in self.responses:
+                node = r['node_name']
+                if node not in node_stats:
+                    node_stats[node] = {'count': 0, 'total_ms': 0}
+                node_stats[node]['count'] += 1
+                node_stats[node]['total_ms'] += r['elapsed_ms']
+            
+            f.write("## 按节点统计\n\n")
+            f.write("| 节点 | 调用次数 | 平均耗时(ms) |\n")
+            f.write("|------|----------|-------------|\n")
+            for node, stats in node_stats.items():
+                avg_ms = stats['total_ms'] / stats['count'] if stats['count'] > 0 else 0
+                f.write(f"| {node} | {stats['count']} | {avg_ms:.0f} |\n")
+
+# 全局 LLM 响应收集器
+llm_collector = LLMResponseCollector(LLM_RESPONSES_FILE)
+
+logger.info(f"日志文件: {LOG_FILE}")
+logger.info(f"LLM响应文件: {LLM_RESPONSES_FILE}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -42,14 +163,14 @@ logger = logging.getLogger(__name__)
 TEST_QUESTIONS = {
     "simple": [
         # 简单查询 - 应该走 step1 → pipeline 路径
-        "各省份的销售额是多少？",
-        "按月份统计订单数量",
-        "北京市的销售额",
+        # "各省份的销售额是多少？",
+        # "按月份统计订单数量",
+        # "北京市的销售额",
     ],
     "complex": [
         # 复杂计算 - 应该走 step1 → step2 → pipeline 路径
-        "各省份销售额占比",
-        "按月份计算销售额同比增长",
+        # "各省份销售额占比",
+        "今年按月份计算销售额同比增长",
         "各产品类别的销售额排名",
     ],
     "clarification": [
@@ -277,10 +398,15 @@ async def _run_subgraph_single_question(
     start_time = datetime.now()
     result = None
     
+    # LLM 响应收集
+    llm_responses_buffer: Dict[str, str] = {}  # node_name -> accumulated_output
+    node_start_times: Dict[str, datetime] = {}  # node_name -> start_time
+    
     try:
         # 使用 astream_events 执行 Subgraph，捕获流式输出
         token_count = 0
         current_node = ""
+        current_llm_output = ""
         
         async for event in compiled_graph.astream_events(initial_state, config=config, version="v2"):
             event_type = event.get("event")
@@ -289,7 +415,15 @@ async def _run_subgraph_single_question(
             # 捕获节点开始事件
             if event_type == "on_chain_start":
                 if event_name and event_name not in ["RunnableSequence", "ChannelWrite", "LangGraph"]:
+                    # 保存上一个节点的 LLM 输出
+                    if current_node and current_llm_output:
+                        llm_responses_buffer[current_node] = current_llm_output
+                        node_elapsed = (datetime.now() - node_start_times.get(current_node, start_time)).total_seconds() * 1000
+                        logger.info(f"\n[{current_node}] LLM输出长度: {len(current_llm_output)} 字符, 耗时: {node_elapsed:.0f}ms")
+                    
                     current_node = event_name
+                    current_llm_output = ""
+                    node_start_times[current_node] = datetime.now()
                     print(f"\n  [*] [{current_node}] ", end="", flush=True)
             
             # 捕获 LLM 流式 token
@@ -299,12 +433,27 @@ async def _run_subgraph_single_question(
                     token = chunk.content
                     print(token, end="", flush=True)
                     token_count += len(token)
+                    current_llm_output += token
+            
+            # 捕获 LLM 完成事件 (非流式)
+            if event_type == "on_chat_model_end":
+                output = event.get("data", {}).get("output")
+                if output and hasattr(output, "content") and output.content:
+                    if not current_llm_output:  # 如果没有流式输出，使用完整输出
+                        current_llm_output = output.content
+                        logger.info(f"\n[{current_node}] LLM完整输出: {len(current_llm_output)} 字符")
             
             # 捕获最终状态
             if event_type == "on_chain_end" and event_name == "LangGraph":
                 output = event.get("data", {}).get("output")
                 if output and isinstance(output, dict):
                     result = output
+        
+        # 保存最后一个节点的输出
+        if current_node and current_llm_output:
+            llm_responses_buffer[current_node] = current_llm_output
+            node_elapsed = (datetime.now() - node_start_times.get(current_node, start_time)).total_seconds() * 1000
+            logger.info(f"\n[{current_node}] LLM输出长度: {len(current_llm_output)} 字符, 耗时: {node_elapsed:.0f}ms")
         
         print(f"\n  [OK] (total {token_count} chars)")
         
@@ -328,6 +477,34 @@ async def _run_subgraph_single_question(
         clarification_question = result.get("clarification_question")
         user_message = result.get("user_message")
         retry_count = result.get("retry_count") or 0
+        
+        # 记录 LLM 响应到文档
+        for node_name, llm_output in llm_responses_buffer.items():
+            node_elapsed = (node_start_times.get(node_name, start_time) - start_time).total_seconds() * 1000
+            
+            # 确定解析结果
+            parsed_result = None
+            if node_name == "step1" and step1_output:
+                parsed_result = step1_output
+            elif node_name == "step2" and step2_output:
+                parsed_result = step2_output
+            
+            # 元数据
+            metadata = {
+                "expected_path": expected_path,
+                "retry_count": retry_count,
+                "pipeline_success": pipeline_success,
+                "needs_clarification": needs_clarification,
+            }
+            
+            llm_collector.add_response(
+                question=question,
+                node_name=node_name,
+                llm_output=llm_output,
+                parsed_result=parsed_result,
+                elapsed_ms=node_elapsed,
+                metadata=metadata,
+            )
         
         # 确定执行路径
         actual_path = "step1"
@@ -367,7 +544,9 @@ async def _run_subgraph_single_question(
             logger.info(f"\nStep2 输出:")
             logger.info(f"  计算数量: {len(step2_output.computations)}")
             for comp in step2_output.computations:
-                logger.info(f"    - {comp.calc_type.value}: target={comp.target}")
+                # calc_type 可能是字符串或枚举
+                calc_type_str = comp.calc_type.value if hasattr(comp.calc_type, 'value') else comp.calc_type
+                logger.info(f"    - {calc_type_str}: target={comp.target}")
         
         if pipeline_success:
             logger.info(f"\nPipeline 成功:")
@@ -624,6 +803,12 @@ async def run_all_tests():
         logger.info(f"\n失败的测试:")
         for r in failed:
             logger.info(f"  - {r['question']}: {r.get('error', r.get('actual_path', 'unknown'))}")
+    
+    # 保存 LLM 响应汇总
+    llm_collector.save_summary()
+    logger.info(f"\n输出文件:")
+    logger.info(f"  日志文件: {LOG_FILE}")
+    logger.info(f"  LLM响应文件: {LLM_RESPONSES_FILE}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -122,9 +122,10 @@ You must output ONLY valid JSON that strictly follows this schema:
         
         This method:
         1. Generates JSON Schema from the output model
-        2. Injects schema into kwargs
-        3. Builds system message (instructions + schema)
-        4. Builds user message from template
+        2. Injects Enum docstrings into schema (for <rule> tags)
+        3. Injects schema into kwargs
+        4. Builds system message (instructions + schema)
+        5. Builds user message from template
         
         Args:
             **kwargs: Variables to fill in the templates
@@ -141,6 +142,10 @@ You must output ONLY valid JSON that strictly follows this schema:
         # Generate JSON schema from output model
         output_model = self.get_output_model()
         json_schema = output_model.model_json_schema()
+        
+        # Inject Enum docstrings into schema $defs
+        # This ensures <rule> tags in Enum docstrings are visible to LLM
+        self._inject_enum_docstrings(json_schema, output_model)
         
         # Add schema to kwargs for template formatting
         kwargs_with_schema = {
@@ -165,6 +170,111 @@ You must output ONLY valid JSON that strictly follows this schema:
             {"role": "system", "content": system_content},
             {"role": "user", "content": user_content}
         ]
+    
+    def _inject_enum_docstrings(self, schema: dict, model: Type[BaseModel]) -> None:
+        """
+        Inject Enum docstrings into JSON Schema $defs (only for Enums with <rule> tag)
+        
+        Pydantic doesn't include Enum docstrings in JSON Schema by default.
+        This method finds Enum types with <rule> tags and adds their
+        docstrings to the schema, making selection rules visible to LLM.
+        
+        Only injects docstrings containing <rule> tag to minimize token usage.
+        
+        Args:
+            schema: JSON Schema dict to modify in place
+            model: Pydantic model class to extract Enum types from
+        """
+        from enum import Enum as PyEnum
+        import typing
+        
+        if "$defs" not in schema:
+            return
+        
+        # Collect all Enum types from model fields recursively
+        enum_types = self._collect_enum_types(model)
+        
+        # Add docstrings to $defs (only if has <rule> tag)
+        for enum_cls in enum_types:
+            enum_name = enum_cls.__name__
+            if enum_name in schema["$defs"] and enum_cls.__doc__:
+                # Only inject if docstring contains <rule> tag
+                if "<rule>" in enum_cls.__doc__:
+                    schema["$defs"][enum_name]["description"] = enum_cls.__doc__.strip()
+    
+    def _collect_enum_types(self, model: Type[BaseModel], visited: set = None) -> set:
+        """
+        Recursively collect all Enum types used in a Pydantic model
+        
+        Args:
+            model: Pydantic model class
+            visited: Set of already visited models (to avoid infinite recursion)
+        
+        Returns:
+            Set of Enum classes
+        """
+        from enum import Enum as PyEnum
+        import typing
+        
+        if visited is None:
+            visited = set()
+        
+        if model in visited:
+            return set()
+        visited.add(model)
+        
+        enum_types = set()
+        
+        for field_name, field_info in model.model_fields.items():
+            annotation = field_info.annotation
+            enum_types.update(self._extract_enums_from_type(annotation, visited))
+        
+        return enum_types
+    
+    def _extract_enums_from_type(self, type_hint, visited: set) -> set:
+        """
+        Extract Enum types from a type hint (handles Union, Optional, List, etc.)
+        
+        Args:
+            type_hint: Type annotation to analyze
+            visited: Set of already visited models
+        
+        Returns:
+            Set of Enum classes found in the type hint
+        """
+        from enum import Enum as PyEnum
+        import typing
+        
+        enum_types = set()
+        
+        # Handle None type
+        if type_hint is None or type_hint is type(None):
+            return enum_types
+        
+        # Check if it's an Enum
+        try:
+            if isinstance(type_hint, type) and issubclass(type_hint, PyEnum):
+                enum_types.add(type_hint)
+                return enum_types
+        except TypeError:
+            pass
+        
+        # Check if it's a Pydantic model
+        try:
+            if isinstance(type_hint, type) and issubclass(type_hint, BaseModel):
+                enum_types.update(self._collect_enum_types(type_hint, visited))
+                return enum_types
+        except TypeError:
+            pass
+        
+        # Handle generic types (Union, Optional, List, etc.)
+        origin = typing.get_origin(type_hint)
+        if origin is not None:
+            args = typing.get_args(type_hint)
+            for arg in args:
+                enum_types.update(self._extract_enums_from_type(arg, visited))
+        
+        return enum_types
     
 
 

@@ -162,6 +162,17 @@ class QueryResult(BaseModel):
         description="Total execution time (milliseconds)"
     )
     
+    # Clarification (when filter values not found)
+    needs_clarification: bool = Field(
+        default=False,
+        description="Whether clarification is needed (e.g., filter value not found)"
+    )
+    
+    clarification: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Clarification info (type, message, field, user_values, available_values)"
+    )
+    
     @classmethod
     def ok(
         cls,

@@ -81,8 +81,10 @@ def _get_requests_verify(target_domain: Optional[str] = None):
     
     cert_dir = Path(cert_config.cert_dir)
     
-    # 尝试多种可能的证书文件名
+    # 尝试多种可能的证书文件名（优先使用完整证书链）
     possible_cert_files = [
+        cert_dir / f"{safe_hostname_with_port}_full_chain.pem",  # 完整证书链（带端口）
+        cert_dir / f"{safe_hostname_no_port}_full_chain.pem",    # 完整证书链（不带端口）
         cert_dir / f"{safe_hostname_with_port}_cert.pem",  # 带端口
         cert_dir / f"{safe_hostname_no_port}_cert.pem",    # 不带端口
         cert_dir / f"{safe_hostname_with_port}.pem",

@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 from ...orchestration.workflow.state import VizQLState
 from .models import Step1Output, Step2Output
 from .models.pipeline import QueryError
-from .models.react import ReActActionType, ReActObservation, RetryTarget
+from .models.react import ReActActionType
 
 
 class SemanticParserState(VizQLState):
@@ -50,7 +50,7 @@ class SemanticParserState(VizQLState):
     LangGraph Node Routing Loop fields:
     - retry_from: Which step to retry from (set by react_error_handler_node)
     - error_feedback: Feedback to pass to retry step
-    - react_action: ReAct action type (RETRY/CLARIFY/ABORT)
+    - react_action: ReAct action type (CORRECT/RETRY/CLARIFY/ABORT)
     - pipeline_error: Error from pipeline execution
     - retry_count: Number of retries attempted
     
@@ -76,12 +76,12 @@ class SemanticParserState(VizQLState):
     pipeline_aborted: Optional[bool]  # Whether pipeline was aborted
     
     # ReAct error handling - LangGraph node routing loop
-    retry_from: Optional[RetryTarget]  # Which step to retry from
+    retry_from: Optional[str]  # Which step to retry from (step1, step2, map_fields, build_query)
     error_feedback: Optional[str]  # Feedback to pass to retry step
-    react_action: Optional[ReActActionType]  # ReAct action type
+    react_action: Optional[ReActActionType]  # ReAct action type (CORRECT/RETRY/CLARIFY/ABORT)
     pipeline_error: Optional[QueryError]  # Error from pipeline execution
     retry_count: Optional[int]  # Number of retries attempted
-    retry_history: Optional[List[ReActObservation]]  # History of retry attempts
+    retry_history: Optional[List[Dict[str, Any]]]  # History of retry attempts (RetryRecord dicts)
     
     # User-facing messages (from ReAct)
     clarification_question: Optional[str]  # Question to ask user (CLARIFY)

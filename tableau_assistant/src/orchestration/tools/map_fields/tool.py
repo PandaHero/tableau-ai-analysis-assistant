@@ -324,9 +324,11 @@ def _extract_terms_from_semantic_query(
     for computation in semantic_query.computations or []:
         if computation.target and computation.target not in terms:
             terms[computation.target] = None
-        for partition_field in computation.partition_by or []:
-            if partition_field and partition_field not in terms:
-                terms[partition_field] = None
+        # partition_by is now list[DimensionField], extract field_name from each
+        for partition_dim in computation.partition_by or []:
+            field_name = partition_dim.field_name if hasattr(partition_dim, 'field_name') else partition_dim
+            if field_name and field_name not in terms:
+                terms[field_name] = None
     
     return terms
 
@@ -340,6 +342,7 @@ async def _get_field_mapper(
     获取或创建 FieldMapperNode 实例。
     
     优先使用直接传递的 data_model，其次从 WorkflowContext 获取。
+    KnowledgeAssembler 内部使用 SqliteStore 缓存向量索引。
     
     Args:
         datasource_luid: 数据源标识符
@@ -370,19 +373,29 @@ async def _get_field_mapper(
     # 初始化 mapper
     try:
         if hasattr(data_model, 'fields') and data_model.fields:
+            # load_metadata 内部会使用 SqliteStore 缓存
             mapper.load_metadata(
                 fields=data_model.fields,
                 datasource_luid=datasource_luid
             )
             logger.info(f"FieldMapper 已加载 {len(data_model.fields)} 个字段")
         
-        # 设置 SemanticMapper
+        # 设置 SemanticMapper - 复用 KnowledgeAssembler 的 FieldIndexer
         from tableau_assistant.src.infra.ai.rag.semantic_mapper import SemanticMapper
-        from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
         
-        field_indexer = FieldIndexer(datasource_luid=datasource_luid)
-        if hasattr(data_model, 'fields'):
-            field_indexer.index_fields(data_model.fields)
+        # 从 mapper.assembler 获取已有的 FieldIndexer，避免重复构建索引
+        if mapper.assembler is not None and hasattr(mapper.assembler, '_indexer'):
+            field_indexer = mapper.assembler._indexer
+            logger.debug(f"复用 KnowledgeAssembler 的 FieldIndexer: {field_indexer.field_count} 个字段")
+        else:
+            # 回退：创建新的 FieldIndexer
+            from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
+            
+            field_indexer = FieldIndexer(datasource_luid=datasource_luid)
+            
+            # 如果有字段数据，调用 index_fields
+            if hasattr(data_model, 'fields') and data_model.fields:
+                field_indexer.index_fields(data_model.fields)
         
         semantic_mapper = SemanticMapper(field_indexer=field_indexer)
         mapper.set_semantic_mapper(semantic_mapper)

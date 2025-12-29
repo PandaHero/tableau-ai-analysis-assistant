@@ -40,28 +40,24 @@ Process: Merge history → Extract What/Where/How → Classify intent → Genera
 
     def get_specific_domain_knowledge(self) -> str:
         return """**Three-Element Model**
-Query = What × Where × How
-- What: Target measures + aggregation
-- Where: Dimensions + filters
-- How: SIMPLE (no computation) | COMPLEX (needs Step 2)
+Query = What (measures) × Where (dimensions + filters) × How (complexity)
 
 **Think step by step:**
-Step 1: Understand user intent
-Step 2: Extract business entities (use exact terms from question)
-Step 3: Classify entity roles (dimension vs measure)
-Step 4: Detect if complex computation needed (ranking, running total, LOD, etc.)
-Step 5: Preserve partition intent (per month/within month etc.)
+1. Merge context: Combine current question with conversation history
+2. Generate restated_question in English
+3. Extract entities from restated_question
+4. Classify roles: measure vs dimension vs filter
+5. Detect computation: Check restated_question for complexity keywords
+6. Preserve scope: Keep partition keywords (per X, within Y, by Z)
 
-**Intent Classification**
-- DATA_QUERY: Has queryable fields, info complete
-- CLARIFICATION: References unspecified values
-- GENERAL: Asks about metadata/fields
-- IRRELEVANT: Not about data analysis"""
+**Entity Classification**
+- Measure: quantitative values, can be summed/averaged
+- Dimension: categorical grouping, slicing criteria
+- Filter: specific values, date ranges, conditions"""
 
     def get_constraints(self) -> str:
-        return """MUST: Preserve partition intent, Use business terms, Provide reasoning
-MUST: Output restated_question in the SAME LANGUAGE as the user's question
-MUST NOT: Lose partition keywords, Invent fields, Classify as DATA_QUERY if incomplete"""
+        return """MUST: Preserve partition intent, Use business terms from question, Provide reasoning
+MUST NOT: Lose partition keywords, Invent field names, Assume missing information"""
 
     def get_user_template(self) -> str:
         return """**Current Question:** {question}
