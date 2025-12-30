@@ -312,6 +312,9 @@ class ReActErrorHandler:
         path = correction.target_path
         value = correction.corrected_value
         
+        # Convert value to proper type based on target path
+        value = self._convert_value_for_path(path, value)
+        
         if operation == CorrectionOperation.REMOVE_DUPLICATE_MEASURES:
             return self._remove_duplicate_measures(output, path)
         elif operation == CorrectionOperation.REPLACE_FIELD:
@@ -325,6 +328,114 @@ class ReActErrorHandler:
         else:
             logger.warning(f"Unknown correction operation: {operation}")
             return output
+    
+    def _convert_value_for_path(self, path: str, value: Any) -> Any:
+        """Convert value to proper type based on target path.
+        
+        Handles type mismatches between LLM output and expected schema:
+        - partition_by: List[str] -> List[DimensionField]
+        - where.dimensions: List[str] -> List[DimensionField]
+        - what.measures: List[str] -> List[MeasureField]
+        
+        Args:
+            path: Target path (e.g., "computations[0].partition_by")
+            value: Value from LLM (may be wrong type)
+        
+        Returns:
+            Converted value with correct type
+        """
+        if value is None:
+            return value
+        
+        # Import field models
+        from tableau_assistant.src.core.models.fields import DimensionField, MeasureField
+        
+        # Check if path ends with partition_by or contains dimension-related fields
+        path_lower = path.lower()
+        
+        if "partition_by" in path_lower:
+            # partition_by expects List[DimensionField]
+            return self._convert_to_dimension_fields(value, DimensionField)
+        
+        if path_lower.endswith("dimensions") or "where.dimensions" in path_lower:
+            # dimensions expects List[DimensionField]
+            return self._convert_to_dimension_fields(value, DimensionField)
+        
+        if path_lower.endswith("measures") or "what.measures" in path_lower:
+            # measures expects List[MeasureField]
+            return self._convert_to_measure_fields(value, MeasureField)
+        
+        return value
+    
+    def _convert_to_dimension_fields(self, value: Any, field_class: type) -> Any:
+        """Convert value to List[DimensionField].
+        
+        Handles:
+        - ["Category"] -> [DimensionField(field_name="Category")]
+        - [{"field_name": "Category"}] -> [DimensionField(field_name="Category")]
+        - Already DimensionField objects -> unchanged
+        """
+        if not isinstance(value, list):
+            return value
+        
+        result = []
+        for item in value:
+            if isinstance(item, str):
+                # String -> DimensionField
+                result.append(field_class(field_name=item))
+                logger.debug(f"Converted string '{item}' to DimensionField")
+            elif isinstance(item, dict):
+                # Dict -> DimensionField (if has field_name)
+                if "field_name" in item:
+                    try:
+                        result.append(field_class(**item))
+                    except Exception as e:
+                        logger.warning(f"Failed to create DimensionField from dict: {e}")
+                        result.append(item)
+                else:
+                    result.append(item)
+            elif hasattr(item, "field_name"):
+                # Already a field object
+                result.append(item)
+            else:
+                result.append(item)
+        
+        return result
+    
+    def _convert_to_measure_fields(self, value: Any, field_class: type) -> Any:
+        """Convert value to List[MeasureField].
+        
+        Handles:
+        - ["Sales"] -> [MeasureField(field_name="Sales")]
+        - [{"field_name": "Sales", "aggregation": "SUM"}] -> [MeasureField(...)]
+        - Already MeasureField objects -> unchanged
+        """
+        if not isinstance(value, list):
+            return value
+        
+        result = []
+        for item in value:
+            if isinstance(item, str):
+                # String -> MeasureField with default aggregation
+                result.append(field_class(field_name=item))
+                logger.debug(f"Converted string '{item}' to MeasureField")
+            elif isinstance(item, dict):
+                # Dict -> MeasureField (if has field_name)
+                if "field_name" in item:
+                    try:
+                        result.append(field_class(**item))
+                    except Exception as e:
+                        logger.warning(f"Failed to create MeasureField from dict: {e}")
+                        result.append(item)
+                else:
+                    result.append(item)
+            elif hasattr(item, "field_name"):
+                # Already a field object
+                result.append(item)
+            else:
+                result.append(item)
+        
+        return result
     
     def _remove_duplicate_measures(self, output: Any, path: str) -> Any:
         """Remove duplicate measures, keeping only base measures.

@@ -24,7 +24,7 @@ class ChunkingStrategy(str, Enum):
     """Recommended chunking strategy for data analysis.
     
     <rule>
-    - by_cluster: Data has clear clusters, analyze each cluster separately
+    - by_anomaly: Data has significant anomalies, isolate anomalies for priority analysis
     - by_change_point: Data has significant change points, split at change points
     - by_pareto: Data follows Pareto distribution, prioritize top contributors
     - by_semantic: Data has semantic groupings (time, category), group by semantic type
@@ -32,7 +32,7 @@ class ChunkingStrategy(str, Enum):
     - by_position: Default position-based chunking (top N, mid, tail)
     </rule>
     """
-    BY_CLUSTER = "by_cluster"
+    BY_ANOMALY = "by_anomaly"
     BY_CHANGE_POINT = "by_change_point"
     BY_PARETO = "by_pareto"
     BY_SEMANTIC = "by_semantic"
@@ -284,6 +284,12 @@ class TrendAnalysis(BaseModel):
         description="""<what>Detected change points in the trend</what>
 <when>If change points detected</when>
 <rule>Format: [{"index": 10, "date": "2024-06", "type": "increase"}, ...]</rule>"""
+    )
+    change_point_method: Optional[str] = Field(
+        default=None,
+        description="""<what>Method used for change point detection</what>
+<when>If change points detected</when>
+<rule>Values: "pelt" (ruptures PELT algorithm), "rolling_mean" (simple fallback)</rule>"""
     )
     forecast: Optional[Dict[str, Any]] = Field(
         default=None,

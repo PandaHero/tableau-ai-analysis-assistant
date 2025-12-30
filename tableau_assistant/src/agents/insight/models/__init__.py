@@ -48,6 +48,7 @@ from .profile import (
 
 from .director import (
     DirectorAction,
+    DirectorLLMOutput,
     DirectorInput,
     DirectorDecision,
     InsightAction,
@@ -56,6 +57,7 @@ from .director import (
 )
 
 from .analyst import (
+    AnalystLLMOutput,
     HistoricalInsightActionType,
     HistoricalInsightAction,
     AnalystOutputWithHistory,
@@ -90,12 +92,14 @@ __all__ = [
     "ChunkingStrategy",
     # From director.py
     "DirectorAction",
+    "DirectorLLMOutput",
     "DirectorInput",
     "DirectorDecision",
     "InsightAction",
     "InsightActionItem",
     "DirectorOutputWithAccumulation",
     # From analyst.py
+    "AnalystLLMOutput",
     "HistoricalInsightActionType",
     "HistoricalInsightAction",
     "AnalystOutputWithHistory",

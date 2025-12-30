@@ -337,6 +337,7 @@ class DataInsightProfile(BaseModel):
     trend: Optional[Literal["increasing", "decreasing", "stable"]] = Field(default=None, description="Trend direction")
     trend_slope: Optional[float] = Field(default=None, description="Trend slope")
     change_points: Optional[List[int]] = Field(default=None, description="Change point indices")
+    change_point_method: Optional[str] = Field(default=None, description="Change point detection method: pelt/rolling_mean")
     
     # Correlation analysis
     correlations: Dict[str, float] = Field(default_factory=dict, description="Column correlations")
@@ -346,7 +347,7 @@ class DataInsightProfile(BaseModel):
     
     # Recommended chunking strategy
     recommended_chunking_strategy: Literal[
-        "by_cluster", "by_change_point", "by_pareto", "by_semantic", "by_statistics", "by_position"
+        "by_anomaly", "by_change_point", "by_pareto", "by_semantic", "by_statistics", "by_position"
     ] = Field(default="by_position", description="Recommended chunking strategy")
     
     # Primary measure column

@@ -73,6 +73,9 @@ class InsightState(VizQLState):
     # Enhanced data profile with Tableau Pulse-style insights
     enhanced_profile: Optional[EnhancedDataProfile]
     
+    # Data insight profile for chunking and analysis (from StatisticalAnalyzer)
+    insight_profile: Optional[Any]  # DataInsightProfile
+    
     # Data chunks created by profiler based on recommended strategy
     chunks: Optional[List[PriorityChunk]]
     

@@ -5,13 +5,20 @@ This backend stores files in the agent's state, which is automatically
 checkpointed by LangGraph. Files persist within a conversation thread
 but not across threads.
 
+Large data optimization:
+- Files exceeding LARGE_DATA_THRESHOLD are stored in SqliteStore instead of state
+- This prevents memory issues with large query results
+- SqliteStore provides persistent storage with TTL-based cleanup
+
 Based on deepagents StateBackend design, adapted for production use.
 """
 
-from typing import Any
+import logging
+from typing import Any, Optional
 
 from langchain.tools import ToolRuntime
 
+from tableau_assistant.src.infra.storage.langgraph_store import get_langgraph_store
 from tableau_assistant.src.orchestration.middleware.backends.protocol import (
     BackendProtocol,
     EditResult,
@@ -33,6 +40,14 @@ from tableau_assistant.src.orchestration.middleware.backends.utils import (
     validate_path,
 )
 
+logger = logging.getLogger(__name__)
+
+# Large data threshold: 100KB - files larger than this go to SqliteStore
+LARGE_DATA_THRESHOLD = 100 * 1024
+
+# TTL for large data in SqliteStore (minutes) - short TTL since query results are temporary
+LARGE_DATA_TTL_MINUTES = 60
+
 
 class StateBackend(BackendProtocol):
     """Backend that stores files in agent state (ephemeral).
@@ -40,6 +55,11 @@ class StateBackend(BackendProtocol):
     Uses LangGraph's state management and checkpointing. Files persist within
     a conversation thread but not across threads. State is automatically
     checkpointed after each agent step.
+    
+    Large data optimization:
+    - Files exceeding LARGE_DATA_THRESHOLD are stored in SqliteStore
+    - This prevents memory issues with large query results
+    - SqliteStore data is keyed by (thread_id, file_path) for isolation
     
     Special handling: Since LangGraph state must be updated via Command objects
     (not direct mutation), operations return WriteResult/EditResult with
@@ -53,10 +73,46 @@ class StateBackend(BackendProtocol):
             runtime: LangGraph tool runtime providing access to state
         """
         self.runtime = runtime
+        self._store = get_langgraph_store()
+    
+    def _get_thread_id(self) -> str:
+        """Get thread_id from runtime config for namespace isolation."""
+        config = getattr(self.runtime, "config", {}) or {}
+        configurable = config.get("configurable", {})
+        return configurable.get("thread_id", "default")
+    
+    def _get_large_data_namespace(self) -> tuple:
+        """Get namespace for large data in SqliteStore."""
+        return ("large_results", self._get_thread_id())
     
     def _get_files(self) -> dict[str, Any]:
         """Get files dict from state."""
         return self.runtime.state.get("files", {})
+    
+    def _is_large_data(self, content: str) -> bool:
+        """Check if content exceeds large data threshold."""
+        return len(content.encode("utf-8")) > LARGE_DATA_THRESHOLD
+    
+    def _write_to_sqlite_store(self, file_path: str, content: str) -> None:
+        """Write large data to SqliteStore with short TTL."""
+        namespace = self._get_large_data_namespace()
+        self._store.put(
+            namespace=namespace,
+            key=file_path,
+            value={"content": content, "type": "large_data"},
+            ttl=LARGE_DATA_TTL_MINUTES,  # 1小时 TTL，查询结果是临时的
+        )
+        logger.info(f"Large data written to SqliteStore: {file_path} ({len(content)} bytes), TTL={LARGE_DATA_TTL_MINUTES}min")
+    
+    def _read_from_sqlite_store(self, file_path: str) -> Optional[str]:
+        """Read large data from SqliteStore."""
+        namespace = self._get_large_data_namespace()
+        item = self._store.get(namespace=namespace, key=file_path)
+        if item is not None and hasattr(item, "value"):
+            value = item.value
+            if isinstance(value, dict) and "content" in value:
+                return value["content"]
+        return None
     
     def ls_info(self, path: str) -> list[FileInfo]:
         """List files and directories in the specified directory (non-recursive).
@@ -122,6 +178,8 @@ class StateBackend(BackendProtocol):
     ) -> str:
         """Read file content with line numbers.
         
+        Checks both state.files and SqliteStore for large data.
+        
         Args:
             file_path: Absolute file path
             offset: Line offset to start reading from (0-indexed)
@@ -132,6 +190,13 @@ class StateBackend(BackendProtocol):
         """
         files = self._get_files()
         file_data = files.get(file_path)
+        
+        # If not in state, check SqliteStore for large data
+        if file_data is None:
+            content = self._read_from_sqlite_store(file_path)
+            if content is not None:
+                # Create temporary file_data structure for format_read_response
+                file_data = {"content": content.split("\n")}
         
         if file_data is None:
             return f"Error: File '{file_path}' not found"
@@ -145,7 +210,11 @@ class StateBackend(BackendProtocol):
     ) -> WriteResult:
         """Create a new file with content.
         
+        Large data (> LARGE_DATA_THRESHOLD) is stored in SqliteStore instead of state.
+        This prevents memory issues with large query results.
+        
         Returns WriteResult with files_update to update LangGraph state.
+        For large data, files_update is None (data is in SqliteStore).
         """
         files = self._get_files()
         
@@ -155,6 +224,14 @@ class StateBackend(BackendProtocol):
                       "Read and then make an edit, or write to a new path."
             )
         
+        # Check if this is large data
+        if self._is_large_data(content):
+            # Store in SqliteStore, not in state
+            self._write_to_sqlite_store(file_path, content)
+            # Return without files_update - data is persisted externally
+            return WriteResult(path=file_path, files_update=None)
+        
+        # Small data goes to state as before
         new_file_data = create_file_data(content)
         return WriteResult(path=file_path, files_update={file_path: new_file_data})
     

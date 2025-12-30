@@ -187,6 +187,11 @@ class Step1Component:
             
         Returns:
             Formatted string describing available fields for LLM reference
+            
+        Note:
+            For measures, we indicate whether they are pre-aggregated (calculated fields
+            with formulas containing aggregations like SUM, AVG). Pre-aggregated measures
+            should NOT have aggregation specified in MeasureField.
         """
         if not data_model:
             return "(No data model available)"
@@ -205,23 +210,80 @@ class Step1Component:
             for table in data_model.logical_tables:
                 table_fields = data_model.get_fields_by_table(table.logicalTableId)
                 dims = [f.fieldCaption or f.name for f in table_fields if f.role == "dimension"]
-                meas = [f.fieldCaption or f.name for f in table_fields if f.role == "measure"]
+                meas = self._format_measures_with_aggregation_info(
+                    [f for f in table_fields if f.role == "measure"]
+                )
                 result.append(f"  [{table.caption}]")
                 if dims:
                     result.append(f"    Dimensions: {', '.join(dims)}")
                 if meas:
-                    result.append(f"    Measures: {', '.join(meas)}")
+                    result.append(f"    Measures: {meas}")
         else:
-            # Single table: just list dimensions and measures
+            # Single table: list dimensions and measures with aggregation info
             dimensions = [f.fieldCaption or f.name for f in data_model.get_dimensions()]
-            measures = [f.fieldCaption or f.name for f in data_model.get_measures()]
+            measures = self._format_measures_with_aggregation_info(data_model.get_measures())
             
             if dimensions:
                 result.append(f"Dimensions: {', '.join(dimensions)}")
             if measures:
-                result.append(f"Measures: {', '.join(measures)}")
+                result.append(f"Measures: {measures}")
         
         return "\n".join(result) if result else "(No fields available)"
+    
+    def _format_measures_with_aggregation_info(self, measures: list) -> str:
+        """Format measures with aggregation info.
+        
+        Indicates whether each measure is pre-aggregated (calculated field with
+        aggregation in formula) or needs aggregation.
+        
+        Args:
+            measures: List of FieldMetadata objects for measures
+            
+        Returns:
+            Formatted string like: "Sales, Profit, Profit Ratio [pre-aggregated]"
+        """
+        if not measures:
+            return ""
+        
+        formatted = []
+        for f in measures:
+            name = f.fieldCaption or f.name
+            # Check if this is a pre-aggregated calculated field
+            if self._is_pre_aggregated(f):
+                formatted.append(f"{name} [pre-aggregated]")
+            else:
+                formatted.append(name)
+        
+        return ", ".join(formatted)
+    
+    def _is_pre_aggregated(self, field) -> bool:
+        """Check if a measure field is pre-aggregated.
+        
+        A field is pre-aggregated if:
+        1. It's a calculated field (columnClass == 'CALCULATION')
+        2. Its formula contains aggregation functions (SUM, AVG, COUNT, etc.)
+        
+        Args:
+            field: FieldMetadata object
+            
+        Returns:
+            True if the field is pre-aggregated
+        """
+        # Check if it's a calculated field
+        column_class = (field.columnClass or "").upper()
+        if column_class not in ("CALCULATION", "TABLE_CALCULATION"):
+            return False
+        
+        # Check if formula contains aggregation functions
+        formula = (field.formula or "").upper()
+        if not formula:
+            return False
+        
+        # Common aggregation functions in Tableau
+        agg_functions = ["SUM(", "AVG(", "COUNT(", "COUNTD(", "MIN(", "MAX(", 
+                        "MEDIAN(", "STDEV(", "VAR(", "ATTR(", "TOTAL("]
+        
+        return any(agg in formula for agg in agg_functions)
 
 
 __all__ = ["Step1Component"]

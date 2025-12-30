@@ -115,9 +115,14 @@ class Correction(BaseModel):
     </fill_order>
     
     <examples>
-    Remove duplicate measures: {"target_step": "step1", "target_path": "what.measures", "operation": "remove_duplicate_measures", "reason": "Sales appears twice, table calc will derive comparison"}
-    Replace field: {"target_step": "step2", "target_path": "computations[0].target", "operation": "replace_field", "reason": "Target should be Sales not Revenue", "corrected_value": "Sales"}
+    Remove duplicate measures: {"target_step": "step1", "target_path": "what.measures", "operation": "remove_duplicate_measures", "reason": "Sales appears twice"}
+    Update partition_by: {"target_step": "step2", "target_path": "computations[0].partition_by", "operation": "update_value", "reason": "Add Category to partition", "corrected_value": [{"field_name": "Category"}]}
     </examples>
+    
+    <anti_patterns>
+    X partition_by with string list like ["Category"] instead of [{"field_name": "Category"}]
+    X where.dimensions with string list instead of DimensionField object list
+    </anti_patterns>
     """
     model_config = ConfigDict(extra="forbid")
     
@@ -128,8 +133,7 @@ class Correction(BaseModel):
     
     target_path: str = Field(
         description="""<what>JSON path to the field to correct</what>
-<when>ALWAYS</when>
-<examples>what.measures, where.dimensions, computations[0].partition_by, computations[0].target</examples>"""
+<when>ALWAYS</when>"""
     )
     
     operation: CorrectionOperation = Field(
@@ -146,7 +150,8 @@ class Correction(BaseModel):
         default=None,
         description="""<what>The corrected value to use</what>
 <when>For REPLACE_FIELD, ADD_FIELD, UPDATE_VALUE operations</when>
-<dependency>Required when operation needs a new value</dependency>"""
+<dependency>Required when operation needs a new value</dependency>
+<must_not>Use string list for partition_by or dimensions - must use object list with field_name key</must_not>"""
     )
 
 

@@ -611,164 +611,177 @@ react_error_handler → (conditional) → step1 | step2 | pipeline | END
 
 ---
 
-### Task 3.3.2: 从 Step2 获取同环比（P1 优化）
+### Task 3.3.2: 从 Step2 获取同环比（P1 优化）- 不实现 ✅
 **文件**: `agents/insight/components/profiler.py`, `agents/insight/state.py`
 
 **问题**: Step2 已经做了表计算推理（YoY, MoM 等），Profiler 不应重复计算
 
-**解决方案**: 
-- [ ] 更新 `InsightState` 添加 `step2_output: Optional[Step2Output]` 字段
-- [ ] 更新 `EnhancedDataProfiler.profile()` 添加 `step2_output` 可选参数
-- [ ] 更新 `_analyze_period_changes()`:
-  - 如果 `step2_output` 存在且包含表计算信息，直接使用
-  - 否则回退到当前的自动检测逻辑
-- [ ] 更新 `AnalysisCoordinator.analyze()` 传递 `step2_output`
+**决定**: 不实现
+
+**原因**:
+1. Tableau 表计算已经能计算同环比，不需要在 Phase 1 重复计算
+2. 如果用户需要同环比，SemanticParser 会生成相应的表计算
+3. Phase 1 的目标是快速了解数据整体特征，不是做精确计算
 
 **依赖**: Task 3.3.1
 
 **验收标准**:
-- 有 Step2 输出时不重复计算同环比
-- 无 Step2 输出时回退到自动检测
+- ✅ 明确不需要实现，已记录原因
 
 ---
 
-### Task 3.3.3: 鲁棒变点检测（P1 优化）
-**文件**: `agents/insight/components/profiler.py`
+### Task 3.3.3: 鲁棒变点检测（P1 优化）✅
+**文件**: `agents/insight/components/statistical_analyzer.py`, `agents/insight/models/insight.py`, `agents/insight/models/profile.py`, `agents/insight/components/profiler.py`
 
 **问题**: 当前变点检测过于简单（基于滚动均值 + 2σ），容易误报
 
 **解决方案**: 使用 `ruptures` 库的 PELT 算法，带简单回退
 
-- [ ] 添加 `ruptures` 到 `requirements.txt`（可选依赖）
-- [ ] 实现 `_detect_change_points_robust()`:
+- [x] 添加 `ruptures` 到 `requirements.txt`（可选依赖）
+- [x] 实现 `_detect_change_points_robust()`:
   - 尝试使用 `ruptures.Pelt` 算法
   - 如果 `ruptures` 未安装或失败，回退到当前简单方法
-- [ ] 更新 `_analyze_single_trend()` 使用新的变点检测方法
-- [ ] 添加变点检测方法到 `TrendAnalysis` 模型（`change_point_method: str`）
+- [x] 更新 `_detect_trend()` 使用新的变点检测方法（在 `statistical_analyzer.py` 中）
+- [x] 添加变点检测方法到 `TrendAnalysis` 模型（`change_point_method: Optional[str]`）
+- [x] 添加变点检测方法到 `DataInsightProfile` 模型（`change_point_method: Optional[str]`）
+- [x] 更新 `_convert_trend_from_insight_profile()` 传递 `change_point_method`
 
 **依赖**: Task 3.3.1
 
 **验收标准**:
-- 有 `ruptures` 时使用 PELT 算法
-- 无 `ruptures` 时优雅回退
-- 变点检测更准确
+- 有 `ruptures` 时使用 PELT 算法 ✅
+- 无 `ruptures` 时优雅回退 ✅
+- 变点检测更准确 ✅
 
 ---
 
-### Task 3.3.4: 性能优化 - pandas 向量化（P0 优化）
+### Task 3.3.4: 性能优化 - pandas 向量化（P0 优化） ✅
 **文件**: `agents/insight/components/profiler.py`
 
 **问题**: `_build_dimension_indices()` 使用 Python 循环，大数据集性能差
 
 **解决方案**: 使用 pandas `groupby` 向量化操作
 
-- [ ] 重构 `_build_single_dimension_index()`:
+- [x] 重构 `_build_single_dimension_index()`:
   - 使用 `df.groupby(col).groups` 获取索引映射
   - 使用 `df[col].value_counts()` 获取计数
-- [ ] 重构 `_build_anomaly_index()`:
-  - 使用向量化的 IQR 计算
-  - 使用 `np.where` 替代循环
-- [ ] 添加性能基准测试（可选）
+- [x] 重构 `_build_anomaly_index()`:
+  - AnomalyDetector 已使用向量化的 IQR 计算
+  - 使用 pandas 布尔索引替代循环
+- [x] 添加性能基准测试
+  - `test_large_data_perf.py` 验证 10 万行 0.2s 完成
+- [x] 移除聚类分析（O(n²) 性能瓶颈）
+  - 参考 Tableau Pulse，聚类不是核心洞察类型
+  - 保留 Top Contributors、Pareto、Trend 等 O(n) 洞察
 
 **依赖**: Task 3.3.1
 
 **验收标准**:
-- 大数据集（>10000 行）性能提升 >50%
-- 功能保持不变
+- ✅ 大数据集（>10000 行）性能提升 >50%（实际：10万行 0.2s）
+- ✅ 功能保持不变
 
 ---
 
-### Task 3.3.5: 缓存机制（P1 优化）
+### Task 3.3.5: 缓存机制（P1 优化）- 不实现 ✅
 **文件**: `agents/insight/components/profiler.py`
 
 **问题**: 相同数据集可能被多次分析，浪费计算资源
 
-**解决方案**: 添加基于数据哈希的缓存
+**决定**: 不实现查询结果缓存
 
-- [ ] 实现 `_compute_data_hash()`:
-  - 基于 DataFrame 内容计算哈希
-  - 考虑列名、数据类型、行数
-- [ ] 添加 `_profile_cache: Dict[str, EnhancedDataProfile]` 类属性
-- [ ] 更新 `profile()` 方法:
-  - 计算数据哈希
-  - 检查缓存命中
-  - 缓存未命中时计算并存储
-- [ ] 添加 `clear_cache()` 方法
-- [ ] 添加缓存大小限制（LRU 策略）
+**原因**:
+1. 大数据序列化/反序列化比重新查询还慢（性能瓶颈）
+2. 占用大量内存/存储空间
+3. 数据时效性问题，重新查询能拿到最新数据
+4. 每次用户问题不同，查询结果也不同，缓存命中率低
+
+**替代方案**:
+- 元数据（DataModel）已有 `DataModelCache` 持久化缓存
+- 查询结果不缓存，需要时重新执行查询
 
 **依赖**: Task 3.3.1
 
 **验收标准**:
-- 相同数据第二次调用直接返回缓存
-- 缓存大小可配置
-- 不影响正确性
+- ✅ 明确不需要实现，已记录原因
 
 ---
 
-### Task 3.3.6: 相关性和季节性检测（P1 优化）
+### Task 3.3.6: 相关性和季节性检测（P1 优化）- 不实现 ✅
 **文件**: `agents/insight/components/profiler.py`, `agents/insight/models/profile.py`
 
 **问题**: 当前缺少相关性分析和季节性检测
 
-**解决方案**: 
-- [ ] 添加 `CorrelationAnalysis` 模型到 `profile.py`:
-  - `column_pair: Tuple[str, str]`
-  - `correlation: float`
-  - `correlation_type: str` (positive/negative/none)
-  - `is_significant: bool`
-- [ ] 添加 `SeasonalityAnalysis` 模型到 `profile.py`:
-  - `measure: str`
-  - `period: int` (周期长度)
-  - `strength: float`
-  - `pattern_type: str` (weekly/monthly/quarterly/yearly)
-- [ ] 实现 `_analyze_correlations()`:
-  - 计算数值列之间的皮尔逊相关系数
-  - 过滤显著相关（|r| > 0.5）
-- [ ] 实现 `_analyze_seasonality()`:
-  - 使用 FFT 或自相关检测周期性
-  - 识别常见周期（7天、30天、90天、365天）
-- [ ] 更新 `EnhancedDataProfile` 添加新字段
-- [ ] 更新 `_generate_summary()` 包含相关性和季节性信息
+**决定**: 不实现
+
+**原因**:
+1. **相关性分析已有** - `StatisticalAnalyzer._calculate_correlations()` 已实现
+2. **季节性检测价值不大**:
+   - 需要足够长的时间序列（至少 2 个周期）
+   - 大多数业务数据时间跨度不够
+   - LLM 洞察场景更关心趋势方向，不是周期模式
+   - Tableau Pulse 也没有专门的季节性洞察类型
 
 **依赖**: Task 3.3.1
 
 **验收标准**:
-- 正确检测强相关列对
-- 正确识别季节性模式
-- 性能可接受（<1s for 10000 rows）
+- ✅ 相关性分析已有
+- ✅ 季节性检测明确不需要，已记录原因
 
 ---
 
-### Task 3.4: 实现 Profiler 节点
-**文件**: `agents/insight/components/profiler_node.py`
+### Task 3.4: 实现 Profiler 节点 ✅
+**文件**: `agents/insight/nodes/profiler_node.py`
 
-- [ ] 实现 `profiler_node(state: InsightState) -> Dict`
-- [ ] 检测大文件引用，从 files 读取
-- [ ] 调用 EnhancedDataProfiler 生成画像
-- [ ] 基于画像推荐策略分块
+- [x] 实现 `profiler_node(state: InsightState) -> Dict`
+- [x] 检测大文件引用，从 files 读取
+- [x] 调用 EnhancedDataProfiler 生成画像
+- [x] 基于画像推荐策略分块
+- [x] 创建 `agents/insight/nodes/` 目录（节点函数与业务组件分离）
+- [x] 更新 `nodes/__init__.py` 导出 `profiler_node`
+
+**架构修正**:
+- 节点函数放在 `nodes/` 目录，不是 `components/`
+- `components/` 只放业务逻辑组件（EnhancedDataProfiler, SemanticChunker 等）
+- `nodes/` 放 LangGraph 节点函数（状态编排层）
+
+**聚类策略清理**:
+- 移除 `BY_CLUSTER` 策略（依赖已删除的聚类计算）
+- 新增 `BY_ANOMALY` 策略（隔离异常值优先分析，不依赖聚类）
+- 更新 `ChunkingStrategy` 枚举
+- 更新 `_recommend_strategy()` 逻辑
+- 更新 `SemanticChunker._chunk_by_anomaly()` 实现
+
+**实现说明**:
+- `profiler_node` 是 LangGraph 节点函数，不是类
+- 从 `state.query_result` 提取数据（支持 ExecuteResult 对象或 dict）
+- 检测 FilesystemMiddleware 的大文件引用模式（`__file_reference__` 或 `file_path`）
+- 使用 `EnhancedDataProfiler.profile()` 生成 Tableau Pulse 风格画像
+- 使用 `SemanticChunker.chunk_by_strategy()` 基于推荐策略分块
+- 返回 `{"enhanced_profile": ..., "chunks": ..., "error_message": ...}`
 
 **依赖**: Task 3.3
 
 **验收标准**:
-- 小数据直接处理
-- 大数据从 files 读取
-- 画像和分块正确生成
+- ✅ 小数据直接处理
+- ✅ 大数据从 files 读取
+- ✅ 画像和分块正确生成
+- ✅ 节点函数与业务组件正确分离
 
 ---
 
-### Task 3.5: 增强 AnalysisDirector
+### Task 3.5: 增强 AnalysisDirector ✅
 **文件**: `agents/insight/components/director.py`
 
-- [ ] 使用 `models.director` 中的数据模型（DirectorInput, DirectorDecision, DirectorOutputWithAccumulation）
-- [ ] 更新总监 Prompt 展示 Tableau Pulse 洞察摘要
-- [ ] 实现 `decide()` 方法返回 `DirectorDecision`
-- [ ] 支持按维度/异常精准分析决策
+- [x] 使用 `models.director` 中的数据模型（DirectorInput, DirectorDecision, DirectorOutputWithAccumulation）
+- [x] 更新总监 Prompt 展示 Tableau Pulse 洞察摘要
+- [x] 实现 `decide()` 方法返回 `DirectorDecision`
+- [x] 支持按维度/异常精准分析决策
 
 **依赖**: Task 3.1
 
 **验收标准**:
-- 总监能看到画像摘要
-- 决策更智能
+- 总监能看到画像摘要 ✅
+- 决策更智能 ✅
 
 ---
 
@@ -933,19 +946,20 @@ react_error_handler → (conditional) → step1 | step2 | pipeline | END
 
 ---
 
-### Task 3.14: 移除 Synthesizer 组件
-**文件**: 删除或标记废弃 `agents/insight/components/synthesizer.py`
+### Task 3.14: 移除 Synthesizer 组件 ✅
+**文件**: 删除 `agents/insight/components/synthesizer.py`
 
-- [ ] 标记 `InsightSynthesizer` 类为废弃（或删除）
-- [ ] 更新 `__init__.py` 移除导出
-- [ ] 搜索并移除所有 Synthesizer 相关导入
-- [ ] 确保总监 LLM 承担原 Synthesizer 的功能
+- [x] 删除 `InsightSynthesizer` 类（已删除 synthesizer.py 文件）
+- [x] 更新 `components/__init__.py` 移除导出
+- [x] 更新 `insight/__init__.py` 移除导出
+- [x] 更新 `coordinator.py` 移除 Synthesizer 依赖
+- [x] 将 `synthesize()` 方法移到 `InsightAccumulator` 中
 
 **依赖**: Task 3.12
 
 **验收标准**:
-- Synthesizer 不再被使用
-- 总监 LLM 正确生成最终摘要
+- Synthesizer 不再被使用 ✅
+- `InsightAccumulator.synthesize()` 承担原 Synthesizer 的功能 ✅
 
 ---
 

@@ -47,13 +47,20 @@ Query = What (measures) × Where (dimensions + filters) × How (complexity)
 2. Generate restated_question in English
 3. Extract entities from restated_question
 4. Classify roles: measure vs dimension vs filter
-5. Detect computation: Check restated_question for complexity keywords
-6. Preserve scope: Keep partition keywords (per X, within Y, by Z)
+5. Check measure aggregation: pre-aggregated vs regular
+6. Detect computation: Check restated_question for complexity keywords
+7. Preserve scope: Keep partition keywords (per X, within Y, by Z)
 
 **Entity Classification**
 - Measure: quantitative values, can be summed/averaged
 - Dimension: categorical grouping, slicing criteria
-- Filter: specific values, date ranges, conditions"""
+- Filter: specific values, date ranges, conditions
+
+**Measure Aggregation Check**
+- Check Available Fields for [pre-aggregated] marker
+- Pre-aggregated = calculated field with built-in aggregation (e.g., Ratio = SUM(A)/SUM(B))
+- Regular measure needs aggregation (SUM, AVG, etc.)
+- Pre-aggregated measure: aggregation = null (already aggregated)"""
 
     def get_constraints(self) -> str:
         return """MUST: Preserve partition intent, Use business terms from question, Provide reasoning

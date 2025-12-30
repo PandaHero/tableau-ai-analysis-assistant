@@ -2,22 +2,37 @@
 """
 InsightAccumulator Component
 
-累积洞察，处理去重和合并。
+Accumulates insights with deduplication and action processing.
 
-设计说明：
-- 主持人 LLM 负责智能累积洞察（在 ChunkAnalyzer.decide_next_with_coordinator() 中判断完成度）
-- 本组件提供基于代码逻辑的去重和合并
-- 用于 AnalysisCoordinator 中的洞察去重
+Features:
+- Pattern-based deduplication (code-level fallback)
+- Format insights with indices for LLM
+- Apply LLM's processing suggestions (KEEP/MERGE/REPLACE/DISCARD)
+
+Design:
+- Director LLM is responsible for intelligent insight accumulation
+- This component provides code-level deduplication as fallback
+- Supports progressive accumulation with historical insight processing
 
 Requirements:
 - R8.5: Insight accumulation and deduplication
+- Task 3.10: Insight accumulation helper module
 """
 
 import logging
-from typing import List, Set, Optional
+from typing import List, Set, Optional, Tuple
 import hashlib
 
-from tableau_assistant.src.agents.insight.models import Insight
+from tableau_assistant.src.agents.insight.models import Insight, InsightEvidence
+from tableau_assistant.src.agents.insight.models.analyst import (
+    HistoricalInsightAction,
+    HistoricalInsightActionType,
+)
+from tableau_assistant.src.agents.insight.models.director import (
+    InsightActionItem,
+    InsightAction,
+)
+from .utils import format_insights_with_index as _format_insights_with_index
 
 logger = logging.getLogger(__name__)
 
@@ -189,3 +204,179 @@ class InsightAccumulator:
         # Merge dicts
         merged = {**evidence1, **evidence2}
         return merged
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Progressive Accumulation Methods (Task 3.10)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def format_insights_with_index(self, insights: Optional[List[Insight]] = None) -> str:
+        """
+        Format insights with indices for LLM consumption.
+        
+        Args:
+            insights: List of insights to format (uses accumulated if None)
+            
+        Returns:
+            Formatted string with indexed insights
+        """
+        target_insights = insights if insights is not None else self._insights
+        return _format_insights_with_index(target_insights, description_max_len=150)
+    
+    def apply_analyst_actions(
+        self,
+        historical_actions: List[HistoricalInsightAction],
+        new_insights: List[Insight],
+    ) -> Tuple[List[Insight], List[str]]:
+        """
+        Apply analyst's suggestions to accumulated insights.
+        
+        Args:
+            historical_actions: Analyst's suggestions for each historical insight
+            new_insights: New insights from analyst to add
+            
+        Returns:
+            Tuple of (updated_insights, action_logs)
+        """
+        action_logs = []
+        updated_insights = []
+        
+        # Process historical actions
+        for action in sorted(historical_actions, key=lambda a: a.historical_index):
+            idx = action.historical_index
+            
+            if idx >= len(self._insights):
+                action_logs.append(f"[SKIP] Index {idx} out of range")
+                continue
+            
+            original = self._insights[idx]
+            
+            if action.action == HistoricalInsightActionType.KEEP:
+                updated_insights.append(original)
+                action_logs.append(f"[KEEP] [{idx}] {original.title}")
+                
+            elif action.action == HistoricalInsightActionType.MERGE:
+                if action.merged_insight:
+                    updated_insights.append(action.merged_insight)
+                    action_logs.append(f"[MERGE] [{idx}] {original.title} -> {action.merged_insight.title}")
+                else:
+                    # Fallback: keep original if no merged insight provided
+                    updated_insights.append(original)
+                    action_logs.append(f"[MERGE-FALLBACK] [{idx}] {original.title} (no merged insight)")
+                    
+            elif action.action == HistoricalInsightActionType.REPLACE:
+                if action.replacement_insight:
+                    updated_insights.append(action.replacement_insight)
+                    action_logs.append(f"[REPLACE] [{idx}] {original.title} -> {action.replacement_insight.title}")
+                else:
+                    # Fallback: keep original if no replacement provided
+                    updated_insights.append(original)
+                    action_logs.append(f"[REPLACE-FALLBACK] [{idx}] {original.title} (no replacement)")
+                    
+            elif action.action == HistoricalInsightActionType.DISCARD:
+                action_logs.append(f"[DISCARD] [{idx}] {original.title}: {action.reason}")
+                # Don't add to updated_insights
+        
+        # Add new insights
+        for new_ins in new_insights:
+            # Check for duplicates before adding
+            if not self._is_duplicate_in_list(new_ins, updated_insights):
+                updated_insights.append(new_ins)
+                action_logs.append(f"[ADD] {new_ins.title}")
+            else:
+                action_logs.append(f"[SKIP-DUP] {new_ins.title}")
+        
+        # Update internal state
+        self._insights = updated_insights
+        self._rebuild_patterns()
+        
+        return updated_insights, action_logs
+    
+    def apply_director_actions(
+        self,
+        insight_actions: List[InsightActionItem],
+        new_insights: List[Insight],
+    ) -> Tuple[List[Insight], List[str]]:
+        """
+        Apply director's insight actions to accumulated insights.
+        
+        Args:
+            insight_actions: Director's actions for existing insights
+            new_insights: New insights to add
+            
+        Returns:
+            Tuple of (updated_insights, action_logs)
+        """
+        action_logs = []
+        updated_insights = []
+        
+        # Build action map by index
+        action_map = {a.insight_index: a for a in insight_actions}
+        
+        # Process each existing insight
+        for idx, original in enumerate(self._insights):
+            action_item = action_map.get(idx)
+            
+            if action_item is None:
+                # No action specified, default to KEEP
+                updated_insights.append(original)
+                action_logs.append(f"[KEEP-DEFAULT] [{idx}] {original.title}")
+                continue
+            
+            if action_item.action == InsightAction.KEEP:
+                updated_insights.append(original)
+                action_logs.append(f"[KEEP] [{idx}] {original.title}")
+                
+            elif action_item.action == InsightAction.MERGE:
+                # For MERGE, we need merge_with_index
+                if action_item.merge_with_index is not None:
+                    # Skip this one, it will be merged with another
+                    action_logs.append(f"[MERGE-SOURCE] [{idx}] {original.title} -> [{action_item.merge_with_index}]")
+                else:
+                    updated_insights.append(original)
+                    action_logs.append(f"[MERGE-FALLBACK] [{idx}] {original.title}")
+                    
+            elif action_item.action == InsightAction.REPLACE:
+                if action_item.replacement_insight:
+                    updated_insights.append(action_item.replacement_insight)
+                    action_logs.append(f"[REPLACE] [{idx}] {original.title} -> {action_item.replacement_insight.title}")
+                else:
+                    updated_insights.append(original)
+                    action_logs.append(f"[REPLACE-FALLBACK] [{idx}] {original.title}")
+                    
+            elif action_item.action == InsightAction.DISCARD:
+                action_logs.append(f"[DISCARD] [{idx}] {original.title}: {action_item.reason}")
+        
+        # Add new insights
+        for new_ins in new_insights:
+            if not self._is_duplicate_in_list(new_ins, updated_insights):
+                updated_insights.append(new_ins)
+                action_logs.append(f"[ADD] {new_ins.title}")
+            else:
+                action_logs.append(f"[SKIP-DUP] {new_ins.title}")
+        
+        # Update internal state
+        self._insights = updated_insights
+        self._rebuild_patterns()
+        
+        return updated_insights, action_logs
+    
+    def _is_duplicate_in_list(self, insight: Insight, insight_list: List[Insight]) -> bool:
+        """Check if insight is duplicate of any in the list."""
+        pattern = self._extract_pattern(insight)
+        for existing in insight_list:
+            if self._extract_pattern(existing) == pattern:
+                return True
+        return False
+    
+    def _rebuild_patterns(self) -> None:
+        """Rebuild seen patterns from current insights."""
+        self._seen_patterns = {self._extract_pattern(ins) for ins in self._insights}
+    
+    def set_insights(self, insights: List[Insight]) -> None:
+        """Set insights directly (for initialization from state)."""
+        self._insights = list(insights)
+        self._rebuild_patterns()
+    
+    def count(self) -> int:
+        """Get count of accumulated insights."""
+        return len(self._insights)

@@ -34,6 +34,7 @@ from tableau_assistant.src.orchestration.middleware.backends.protocol import (
     BackendProtocol,
     EditResult,
     WriteResult,
+    FileData,
 )
 from tableau_assistant.src.orchestration.middleware.backends.state import StateBackend
 from tableau_assistant.src.orchestration.middleware.backends.utils import (
@@ -49,8 +50,6 @@ from tableau_assistant.src.orchestration.middleware.backends.utils import (
 # Constants
 # ═══════════════════════════════════════════════════════════════════════════
 
-EMPTY_CONTENT_WARNING = "System reminder: File exists but has empty contents"
-MAX_LINE_LENGTH = 2000
 LINE_NUMBER_WIDTH = 6
 DEFAULT_READ_OFFSET = 0
 DEFAULT_READ_LIMIT = 500
@@ -59,13 +58,6 @@ DEFAULT_READ_LIMIT = 500
 # ═══════════════════════════════════════════════════════════════════════════
 # State Schema
 # ═══════════════════════════════════════════════════════════════════════════
-
-class FileData(TypedDict):
-    """Data structure for storing file contents with metadata."""
-    content: list[str]
-    created_at: str
-    modified_at: str
-
 
 def _file_data_reducer(
     left: dict[str, FileData] | None,

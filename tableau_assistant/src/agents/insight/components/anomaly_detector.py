@@ -13,6 +13,7 @@ import pandas as pd
 import numpy as np
 
 from tableau_assistant.src.agents.insight.models import AnomalyResult, AnomalyDetail
+from .utils import to_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -72,19 +73,7 @@ class AnomalyDetector:
     
     def _to_dataframe(self, data: Any) -> pd.DataFrame:
         """Convert various data formats to DataFrame."""
-        if isinstance(data, pd.DataFrame):
-            return data
-        elif isinstance(data, list):
-            if not data:
-                return pd.DataFrame()
-            if isinstance(data[0], dict):
-                return pd.DataFrame(data)
-            return pd.DataFrame(data)
-        elif isinstance(data, dict):
-            return pd.DataFrame([data])
-        else:
-            logger.warning(f"Unknown data type: {type(data)}, returning empty DataFrame")
-            return pd.DataFrame()
+        return to_dataframe(data)
     
     def _detect_outliers(self, df: pd.DataFrame) -> tuple:
         """

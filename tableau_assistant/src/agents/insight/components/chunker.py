@@ -23,9 +23,9 @@ from tableau_assistant.src.agents.insight.models import (
     DataChunk,
     SemanticGroup,
     DataInsightProfile,
-    ClusterInfo,
     ColumnStats,
 )
+from .utils import to_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -280,19 +280,7 @@ class SemanticChunker:
     
     def _to_dataframe(self, data: Any) -> pd.DataFrame:
         """转换各种数据格式为 DataFrame"""
-        if isinstance(data, pd.DataFrame):
-            return data
-        elif isinstance(data, list):
-            if not data:
-                return pd.DataFrame()
-            if isinstance(data[0], dict):
-                return pd.DataFrame(data)
-            return pd.DataFrame(data)
-        elif isinstance(data, dict):
-            return pd.DataFrame([data])
-        else:
-            logger.warning(f"Unknown data type: {type(data)}")
-            return pd.DataFrame()
+        return to_dataframe(data)
 
     
     # ========== 新的智能分块策略（基于 Phase 1 分析结果）=========
@@ -325,8 +313,8 @@ class SemanticChunker:
         
         logger.info(f"执行分块策略: {strategy}, 数据量: {len(df)} 行")
         
-        if strategy == "by_cluster" and insight_profile and insight_profile.clusters:
-            return self._chunk_by_cluster(df, insight_profile.clusters)
+        if strategy == "by_anomaly" and insight_profile and insight_profile.anomaly_indices:
+            return self._chunk_by_anomaly(df, insight_profile.anomaly_indices)
         
         elif strategy == "by_change_point" and insight_profile and insight_profile.change_points:
             return self._chunk_by_change_point(df, insight_profile.change_points)
@@ -344,48 +332,74 @@ class SemanticChunker:
             # 默认：按位置分块
             return self._chunk_by_position(df)
     
-    def _chunk_by_cluster(
+    def _chunk_by_anomaly(
         self,
         df: pd.DataFrame,
-        clusters: List[ClusterInfo],
+        anomaly_indices: List[int],
     ) -> List[PriorityChunk]:
-        """按聚类分块"""
+        """按异常值分块 - 隔离异常值优先分析"""
         chunks = []
         column_names = df.columns.tolist()
         
-        for i, cluster in enumerate(clusters):
-            valid_indices = [idx for idx in cluster.indices if idx < len(df)]
-            if not valid_indices:
-                continue
-            
-            cluster_df = df.iloc[valid_indices]
-            
-            if cluster.label == "异常" or cluster.size < len(df) * 0.05:
-                priority = ChunkPriority.URGENT
-                estimated_value = "high"
-            elif i == 0:
-                priority = ChunkPriority.HIGH
-                estimated_value = "high"
-            elif i == len(clusters) - 1:
-                priority = ChunkPriority.LOW
-                estimated_value = "low"
-            else:
-                priority = ChunkPriority.MEDIUM
-                estimated_value = "medium"
-            
+        # Filter valid indices
+        valid_anomaly_indices = [idx for idx in anomaly_indices if idx < len(df)]
+        normal_indices = [i for i in range(len(df)) if i not in valid_anomaly_indices]
+        
+        chunk_id = 0
+        
+        # 1. Anomaly chunk (URGENT priority)
+        if valid_anomaly_indices:
+            anomaly_df = df.iloc[valid_anomaly_indices]
             chunks.append(PriorityChunk(
-                chunk_id=i,
-                chunk_type=f"cluster_{cluster.cluster_id}",
-                priority=priority,
-                data=cluster_df.to_dict('records'),
-                row_count=cluster.size,
+                chunk_id=chunk_id,
+                chunk_type="anomalies",
+                priority=ChunkPriority.URGENT,
+                data=anomaly_df.to_dict('records'),
+                row_count=len(anomaly_df),
                 column_names=column_names,
-                description=f"聚类 {cluster.cluster_id}: {cluster.label} ({cluster.size} 行)",
-                estimated_value=estimated_value,
+                description=f"异常值数据 ({len(anomaly_df)} 行)",
+                estimated_value="high",
             ))
+            chunk_id += 1
+        
+        # 2. Normal data chunks (by position)
+        if normal_indices:
+            normal_df = df.iloc[normal_indices]
+            total_normal = len(normal_df)
+            
+            # Top portion (HIGH)
+            top_end = min(self.TOP_THRESHOLD, total_normal)
+            if top_end > 0:
+                top_df = normal_df.head(top_end)
+                chunks.append(PriorityChunk(
+                    chunk_id=chunk_id,
+                    chunk_type="normal_top",
+                    priority=ChunkPriority.HIGH,
+                    data=top_df.to_dict('records'),
+                    row_count=len(top_df),
+                    column_names=column_names,
+                    description=f"正常数据 Top {len(top_df)} 行",
+                    estimated_value="high",
+                ))
+                chunk_id += 1
+            
+            # Remaining normal data (MEDIUM/LOW)
+            if total_normal > self.TOP_THRESHOLD:
+                remaining_df = normal_df.iloc[self.TOP_THRESHOLD:]
+                chunks.append(PriorityChunk(
+                    chunk_id=chunk_id,
+                    chunk_type="normal_rest",
+                    priority=ChunkPriority.MEDIUM,
+                    data=remaining_df.to_dict('records'),
+                    row_count=len(remaining_df),
+                    column_names=column_names,
+                    description=f"正常数据剩余 {len(remaining_df)} 行",
+                    estimated_value="medium",
+                ))
+                chunk_id += 1
         
         chunks.sort(key=lambda x: x.priority)
-        logger.info(f"聚类分块完成: {len(chunks)} 个块")
+        logger.info(f"异常值分块完成: {len(chunks)} 个块")
         return chunks
     
     def _chunk_by_change_point(

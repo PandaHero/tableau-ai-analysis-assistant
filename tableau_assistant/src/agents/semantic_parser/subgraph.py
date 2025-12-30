@@ -99,9 +99,10 @@ async def step1_node(
             "restated_question": step1_output.restated_question,
             "current_stage": "semantic_parser.step1",
             "thinking": thinking,
-            # Clear retry state after successful execution
+            # Clear retry state and pipeline_error after successful execution
             "retry_from": None,
             "error_feedback": None,
+            "pipeline_error": None,  # Clear previous error to allow pipeline to continue
         }
         
     except Exception as e:
@@ -165,9 +166,10 @@ async def step2_node(
         return {
             "step2_output": step2_output,
             "current_stage": "semantic_parser.step2",
-            # Clear retry state after successful execution
+            # Clear retry state and pipeline_error after successful execution
             "retry_from": None,
             "error_feedback": None,
+            "pipeline_error": None,  # Clear previous error to allow pipeline to continue
         }
         
     except Exception as e:
@@ -433,7 +435,14 @@ async def react_error_handler_node(
             # Clear error state and retry from pipeline
             result["pipeline_error"] = None
             result["retry_from"] = "pipeline"  # Re-run pipeline with corrected outputs
-            logger.info("CORRECT action: Applied corrections, will re-run pipeline")
+            
+            # CRITICAL: Clear downstream outputs to force rebuild
+            # Without this, pipeline will skip MapFields/BuildQuery and use stale vizql_query
+            result["semantic_query"] = None
+            result["mapped_query"] = None
+            result["vizql_query"] = None
+            
+            logger.info("CORRECT action: Applied corrections, cleared downstream outputs, will re-run pipeline")
             
         elif output.action.action_type == ReActActionType.RETRY:
             result["retry_from"] = output.action.retry_from

@@ -62,16 +62,18 @@ Query = Step1(semantic) → Step2(computation) → map_fields → build_query �
 Step 1: Identify error source (which step caused the error?)
 Step 2: Understand error semantics (what does the error mean?)
 Step 3: Determine root cause (why did this happen?)
-Step 4: Decide action type:
+Step 4: Check how_type to determine retry_from (CRITICAL!)
+Step 5: Decide action type:
   - Can I directly fix the output? → CORRECT
   - Does LLM need to re-think? → RETRY with guidance
   - Need user clarification? → CLARIFY
   - Cannot recover? → ABORT
-Step 5: Generate specific correction or guidance
+Step 6: Generate specific correction or guidance
 
 **Error Source Analysis**
 - execute_query error with "field not unique" → Usually Step1 duplicate measures
 - execute_query error with "unknown field" → Usually map_fields issue
+- execute_query error with "already an aggregation" → Aggregation on pre-aggregated field
 - build_query error → Usually Step2 computation design issue
 - map_fields error → Field reference or mapping issue
 - step1/step2 parsing error → Output format issue
@@ -81,25 +83,33 @@ Step 5: Generate specific correction or guidance
 - Table calculations derive from base measures (no need for duplicate measures)
 - LOD dimensions must exist in data source
 - Partition dimensions must be subset of query dimensions
+- Pre-aggregated fields (ratios, percentages) cannot be further aggregated with MIN/MAX/SUM/AVG
+
+**CRITICAL: Determining retry_from based on how_type**
+When error is related to computation or aggregation:
+- If how_type = SIMPLE → retry_from must be step1 (no Step2 involved, problem is in Step1)
+- If how_type = COMPLEX (LOD/Table Calc) → retry_from should be step2 (Step2 designed the computation)
 
 **Common Error Patterns**
-1. "Field X isn't unique" → Step1 has duplicate measures with same field_name
-   → CORRECT: remove_duplicate_measures, keep base measure only
+1. "Field X isn't unique" → Step1 has duplicate measures
+   → CORRECT: remove_duplicate_measures
 2. "Unknown field X" → Field doesn't exist or wrong mapping
-   → RETRY map_fields or ABORT if field truly doesn't exist
-3. "Invalid computation" → Step2 computation logic error
-   → RETRY step2 with specific guidance
+   → RETRY map_fields or ABORT
+3. "already an aggregation, cannot be further aggregated" → Pre-aggregated field issue
+   → Check how_type: SIMPLE → retry step1, COMPLEX → retry step2
 4. "Permission denied" → Access issue
    → ABORT with explanation"""
 
     def get_constraints(self) -> str:
         return """MUST: Identify root cause accurately, not just where error occurred
-MUST: Provide specific, actionable corrections or guidance in Chinese
+MUST: Check how_type before deciding retry_from for aggregation/computation errors
+MUST: Provide specific, actionable corrections or guidance
 MUST: Use CORRECT when output can be directly fixed (faster, no LLM call)
 MUST: Use RETRY only when LLM re-thinking is truly needed
 MUST NOT: Use RETRY for errors that can be directly corrected
 MUST NOT: Retry the same step more than 2 times
-MUST NOT: Retry if error is clearly a permission/data issue"""
+MUST NOT: Retry if error is clearly a permission/data issue
+MUST NOT: Set retry_from=step2 when how_type=SIMPLE (Step2 was never called)"""
 
     def get_user_template(self) -> str:
         return """## User Question

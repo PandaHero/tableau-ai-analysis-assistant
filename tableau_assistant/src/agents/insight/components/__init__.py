@@ -2,31 +2,23 @@
 """
 Insight Components - Progressive insight analysis components.
 
-Three-layer architecture for progressive insight analysis:
-- Coordination layer: AnalysisCoordinator (orchestration and strategy selection)
-- Processing layer: EnhancedDataProfiler, SemanticChunker, ChunkAnalyzer
-- Synthesis layer: InsightAccumulator, InsightSynthesizer
+Architecture (Subgraph-based):
+- Profiler: EnhancedDataProfiler (Tableau Pulse-style analysis)
+- Director: AnalysisDirector (LLM-based decision making + insight accumulation)
+- Analyzer: ChunkAnalyzer (LLM-based chunk analysis)
+- Accumulator: InsightAccumulator (code-level deduplication helper)
 
-Architecture (Task 3.3.1):
-- EnhancedDataProfiler is the single entry point for profiling
-- It internally delegates to StatisticalAnalyzer and AnomalyDetector
-- AnalysisCoordinator only calls EnhancedDataProfiler, not individual analyzers
+Flow:
+- profiler_node → director_node ↔ analyzer_node (loop)
+- Director LLM handles insight accumulation and final summary generation
+- No separate Synthesizer - Director generates final_summary when stopping
 
 Requirements:
 - R8.1: Progressive insight analysis
-- R8.2: Strategy selection (direct/progressive/hybrid)
 - R8.3: Semantic chunking
 - R8.4: Chunk analysis with context
 - R8.5: Insight accumulation and deduplication
-- R8.6: Insight synthesis
 - R8.7: Streaming output support
-
-Import Order Note:
-To avoid circular imports, import order matters:
-1. models (no dependencies)
-2. Components without LLM dependencies (profiler, anomaly_detector, chunker, accumulator, synthesizer, statistical_analyzer)
-3. analyzer (depends on agents/insight/prompt.py)
-4. coordinator (depends on analyzer)
 """
 
 # 1. Import models from agents/insight/models
@@ -53,14 +45,16 @@ from .profiler import EnhancedDataProfiler
 from .anomaly_detector import AnomalyDetector
 from .chunker import SemanticChunker
 from .accumulator import InsightAccumulator
-from .synthesizer import InsightSynthesizer
 from .statistical_analyzer import StatisticalAnalyzer
+from .utils import to_dataframe, format_insights_with_index
 
 # 3. Import analyzer (depends on agents/insight/prompt.py)
 from .analyzer import ChunkAnalyzer
 
-# 4. Import coordinator (depends on analyzer)
-from .coordinator import AnalysisCoordinator
+# 4. Import director (Task 3.5)
+from .director import AnalysisDirector
+
+# Note: Node functions are in agents/insight/nodes/, not here
 
 __all__ = [
     # Models (per data-models.md spec)
@@ -87,7 +81,9 @@ __all__ = [
     "SemanticChunker",
     "ChunkAnalyzer",
     "InsightAccumulator",
-    "InsightSynthesizer",
-    "AnalysisCoordinator",
     "StatisticalAnalyzer",
+    "AnalysisDirector",
+    # Utilities
+    "to_dataframe",
+    "format_insights_with_index",
 ]

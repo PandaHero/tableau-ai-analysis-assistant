@@ -1,44 +1,38 @@
 # -*- coding: utf-8 -*-
 """
-ChunkAnalyzer Component - 双 LLM 协作分析器
+ChunkAnalyzer Component - Analyst LLM wrapper
 
-基于设计文档 insight-design.md 实现双 LLM 协作模式：
-- 分析师 LLM：分析单个数据块，生成结构化洞察，输出 List[Insight]
-- 主持人 LLM：决定分析顺序、累积洞察、决定早停，输出 NextBiteDecision
+Wraps the Analyst LLM for analyzing data chunks.
+Orchestration decisions are handled by AnalysisDirector (director.py).
 
-方法：
-- analyze_chunk_with_analyst(): 使用分析师 LLM 分析数据块
-- decide_next_with_coordinator(): 使用主持人 LLM 决定下一步
-- analyze_full(): 直接分析小数据集（< 100 行）
-
-使用 call_llm_with_tools 模式：
-- call_llm_with_tools(): 支持工具调用 + 中间件 + 流式输出
-- 不使用 with_structured_output（对某些模型不可靠）
+Contains:
+- analyze_chunk_with_analyst: Basic analysis (simple insights list)
+- analyze_chunk_with_history: Enhanced analysis with historical insight processing
 """
 
 import logging
 import json
 import re
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 
 from tableau_assistant.src.agents.insight.models import (
     Insight,
     InsightEvidence,
     PriorityChunk,
-    NextBiteDecision,
-    InsightQuality,
     DataInsightProfile,
 )
-
-# 直接从 prompt.py 模块导入，不从 agents/insight 包导入
-# 这样避免触发 agents/insight/__init__.py 中的 node.py 导入（会导致循环依赖）
-from tableau_assistant.src.agents.insight.prompt import (
-    COORDINATOR_PROMPT,
-    ANALYST_PROMPT,
-    DIRECT_ANALYSIS_PROMPT,
+from tableau_assistant.src.agents.insight.models.analyst import (
+    AnalystOutputWithHistory,
+    HistoricalInsightAction,
+    HistoricalInsightActionType,
 )
 
-# 导入 call_llm_with_tools 支持中间件和流式输出
+from tableau_assistant.src.agents.insight.prompts import (
+    ANALYST_PROMPT,
+    ANALYST_PROMPT_WITH_HISTORY,
+)
+from .utils import format_insights_with_index
+
 from tableau_assistant.src.agents.base import call_llm_with_tools
 
 logger = logging.getLogger(__name__)
@@ -171,226 +165,285 @@ class ChunkAnalyzer:
             )
             
             insights = self._parse_insights_response(response.content)
-            logger.info(f"分析师 LLM 分析 {chunk.chunk_type}: {len(insights)} 个洞察")
+            logger.info(f"Analyst LLM analyzed {chunk.chunk_type}: {len(insights)} insights")
             return insights
             
         except Exception as e:
-            logger.error(f"分析师 LLM 分析失败 {chunk.chunk_type}: {e}")
+            logger.error(f"Analyst LLM analysis failed {chunk.chunk_type}: {e}")
             return []
     
-    async def decide_next_with_coordinator(
+    async def analyze_chunk_with_history(
         self,
+        chunk: PriorityChunk,
         context: Dict[str, Any],
         insight_profile: DataInsightProfile,
-        accumulated_insights: List[Insight],
-        remaining_chunks: List[PriorityChunk],
-        analyzed_count: int,
+        historical_insights: List[Insight],
+        current_coverage: float = 0.0,
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[NextBiteDecision, InsightQuality]:
+    ) -> AnalystOutputWithHistory:
         """
-        使用主持人 LLM 决定下一步
+        Analyze data chunk with historical insight processing.
         
-        主持人 LLM 职责（来自 insight-design.md）：
-        - 决定分析顺序（优先级）
-        - 累积洞察，判断完成度
-        - 决定是否早停
-        
-        使用 call_llm_with_tools 支持中间件和流式输出。
+        Enhanced analyst that:
+        - Generates NEW insights (not duplicating historical ones)
+        - Suggests actions for each historical insight (KEEP/MERGE/REPLACE/DISCARD)
         
         Args:
-            context: 分析上下文（question）
-            insight_profile: 整体数据画像（Phase 1 结果）
-            accumulated_insights: 已累积的洞察
-            remaining_chunks: 剩余的数据块
-            analyzed_count: 已分析的块数
-            state: 当前工作流状态（用于中间件）
-            config: LangGraph RunnableConfig（包含中间件）
+            chunk: Current data chunk to analyze
+            context: Analysis context (question, dimensions, measures)
+            insight_profile: Overall data profile (Phase 1 result)
+            historical_insights: Existing accumulated insights (with indices)
+            current_coverage: Current data coverage ratio (0.0-1.0)
+            state: Workflow state (for middleware)
+            config: LangGraph RunnableConfig (for middleware)
             
         Returns:
-            (NextBiteDecision, InsightQuality)
+            AnalystOutputWithHistory: New insights + historical action suggestions
         """
-        # 格式化已有洞察
-        insights_text = "\n".join([
-            f"- 洞察 {i+1} ({ins.type}): {ins.title}\n  描述: {ins.description}"
-            for i, ins in enumerate(accumulated_insights)
-        ]) if accumulated_insights else "（还没有洞察）"
+        # Prepare data sample
+        if chunk.chunk_type == "tail_data" and chunk.tail_summary:
+            data_sample = json.dumps(
+                chunk.tail_summary.sample_data[:self.max_sample_rows],
+                ensure_ascii=False,
+                indent=2
+            )
+        else:
+            data_sample = json.dumps(
+                chunk.data[:self.max_sample_rows],
+                ensure_ascii=False,
+                indent=2
+            )
         
-        # 格式化剩余数据块
-        remaining_text = "\n".join([
-            f"- chunk_id={rc.chunk_id}, {rc.chunk_type} (优先级 {rc.priority}): {rc.description}, 估算价值 {rc.estimated_value}"
-            for rc in remaining_chunks
-        ]) if remaining_chunks else "（没有剩余数据块了）"
+        # Format historical insights with indices
+        historical_text = self._format_historical_insights(historical_insights)
+        
+        # Format Top N summary
+        top_n_summary = json.dumps(
+            insight_profile.top_n_summary if insight_profile.top_n_summary else [],
+            ensure_ascii=False,
+            indent=2
+        )
+        
+        # Format statistics
+        statistics_text = json.dumps(
+            {k: v.model_dump() for k, v in insight_profile.statistics.items()},
+            ensure_ascii=False,
+            indent=2
+        ) if insight_profile.statistics else "{}"
         
         try:
-            messages = COORDINATOR_PROMPT.format_messages(
+            messages = ANALYST_PROMPT_WITH_HISTORY.format_messages(
                 question=context.get("question", ""),
                 distribution_type=insight_profile.distribution_type,
+                statistics=statistics_text,
                 pareto_ratio=f"{insight_profile.pareto_ratio:.1%}",
-                anomaly_ratio=f"{insight_profile.anomaly_ratio:.1%}",
-                cluster_count=len(insight_profile.clusters),
-                chunking_strategy=insight_profile.recommended_chunking_strategy,
-                accumulated_insights=insights_text,
-                remaining_chunks=remaining_text,
-                analyzed_count=analyzed_count,
+                top_n_summary=top_n_summary,
+                chunk_type=chunk.chunk_type,
+                row_count=chunk.row_count,
+                chunk_description=chunk.description,
+                data_sample=data_sample,
+                historical_insights=historical_text,
+                current_coverage=f"{current_coverage:.1%}",
             )
             
-            # 获取中间件
+            # Get middleware
             middleware = None
             if config and "configurable" in config:
                 middleware = config["configurable"].get("middleware")
             
-            # 使用 call_llm_with_tools 支持中间件和流式输出
+            # Call LLM with middleware support
             llm = self._get_llm()
             response = await call_llm_with_tools(
                 llm=llm,
                 messages=messages,
-                tools=[],  # 不需要工具
+                tools=[],
                 streaming=True,
                 middleware=middleware,
                 state=state or {},
                 config=config,
             )
             
-            decision, quality = self._parse_coordinator_response(response.content, remaining_chunks)
+            output = self._parse_analyst_output_with_history(
+                response.content, 
+                historical_insights,
+                current_coverage,
+            )
             logger.info(
-                f"主持人 LLM 决策: continue={decision.should_continue}, "
-                f"next_chunk_id={decision.next_chunk_id}, "
-                f"completeness={decision.completeness_estimate:.2f}"
+                f"Analyst LLM analyzed {chunk.chunk_type}: "
+                f"{len(output.new_insights)} new insights, "
+                f"{len(output.historical_actions)} historical actions"
             )
-            return decision, quality
+            return output
             
         except Exception as e:
-            logger.error(f"主持人 LLM 决策失败: {e}")
-            return self._default_coordinator_response(remaining_chunks)
+            logger.error(f"Analyst LLM analysis failed {chunk.chunk_type}: {e}")
+            # Return default output with all KEEP actions
+            return self._create_default_analyst_output(historical_insights, current_coverage)
     
-    async def analyze_full(
-        self,
-        data: List[Dict[str, Any]],
-        context: Dict[str, Any],
-        state: Optional[Dict[str, Any]] = None,
-        config: Optional[Dict[str, Any]] = None,
-    ) -> List[Insight]:
-        """
-        直接分析完整数据集（用于小数据集 < 100 行）
-        
-        使用 call_llm_with_tools 支持中间件和流式输出。
-        
-        Args:
-            data: 完整数据集
-            context: 分析上下文
-            state: 当前工作流状态（用于中间件）
-            config: LangGraph RunnableConfig（包含中间件）
-        """
-        sample_data = data[:self.max_sample_rows]
-        data_str = json.dumps(sample_data, ensure_ascii=False, indent=2)
-        columns = list(data[0].keys()) if data else []
-        
-        try:
-            messages = DIRECT_ANALYSIS_PROMPT.format_messages(
-                row_count=len(data),
-                columns=", ".join(columns),
-                data=data_str,
-                question=context.get("question", ""),
-                dimensions=", ".join([
-                    d.get("name", str(d)) if isinstance(d, dict) else str(d) 
-                    for d in context.get("dimensions", [])
-                ]),
-                measures=", ".join([
-                    m.get("name", str(m)) if isinstance(m, dict) else str(m) 
-                    for m in context.get("measures", [])
-                ]),
-            )
-            
-            # 获取中间件
-            middleware = None
-            if config and "configurable" in config:
-                middleware = config["configurable"].get("middleware")
-            
-            # 使用 call_llm_with_tools 支持中间件和流式输出
-            llm = self._get_llm()
-            response = await call_llm_with_tools(
-                llm=llm,
-                messages=messages,
-                tools=[],  # 不需要工具
-                streaming=True,
-                middleware=middleware,
-                state=state or {},
-                config=config,
-            )
-            
-            insights = self._parse_insights_response(response.content)
-            logger.info(f"直接分析完成: {len(insights)} 个洞察")
-            return insights
-            
-        except Exception as e:
-            logger.error(f"直接分析失败: {e}")
-            return []
+    def _format_historical_insights(self, insights: List[Insight]) -> str:
+        """Format historical insights with indices for LLM."""
+        return format_insights_with_index(insights, description_max_len=100)
     
-    def _parse_coordinator_response(
+    def _parse_analyst_output_with_history(
         self,
         content: str,
-        remaining_chunks: List[PriorityChunk],
-    ) -> Tuple[NextBiteDecision, InsightQuality]:
-        """解析主持人 LLM 响应"""
+        historical_insights: List[Insight],
+        current_coverage: float,
+    ) -> AnalystOutputWithHistory:
+        """Parse AnalystOutputWithHistory from LLM response."""
         try:
             json_str = self._extract_json(content)
             if not json_str:
-                logger.warning("主持人响应中没有找到 JSON")
-                return self._default_coordinator_response(remaining_chunks)
+                logger.warning("No JSON found in analyst response")
+                return self._create_default_analyst_output(historical_insights, current_coverage)
             
             result = json.loads(json_str)
             
-            # 解析下一口决策
-            nbd = result.get("next_bite_decision", {})
-            next_bite = NextBiteDecision(
-                should_continue=nbd.get("should_continue", True),
-                next_chunk_id=nbd.get("next_chunk_id"),
-                reason=nbd.get("reason", ""),
-                completeness_estimate=float(nbd.get("completeness_estimate", 0.0)),
+            # Parse new_insights
+            new_insights = []
+            raw_new = result.get("new_insights", [])
+            for raw in raw_new:
+                try:
+                    insight = self._parse_single_insight(raw)
+                    new_insights.append(insight)
+                except Exception as e:
+                    logger.warning(f"Failed to parse new insight: {e}")
+            
+            # Parse historical_actions
+            historical_actions = []
+            raw_actions = result.get("historical_actions", [])
+            for raw_action in raw_actions:
+                try:
+                    action = self._parse_historical_action(raw_action)
+                    historical_actions.append(action)
+                except Exception as e:
+                    logger.warning(f"Failed to parse historical action: {e}")
+            
+            # Ensure we have actions for all historical insights
+            historical_actions = self._ensure_all_actions(
+                historical_actions, 
+                historical_insights
             )
             
-            # 解析洞察质量
-            iq = result.get("insights_quality", {})
-            quality = InsightQuality(
-                completeness=float(iq.get("completeness", 0.0)),
-                confidence=float(iq.get("confidence", 0.0)),
-                need_more_data=iq.get("need_more_data", True),
-                question_answered=iq.get("question_answered", False),
+            return AnalystOutputWithHistory(
+                new_insights=new_insights,
+                historical_actions=historical_actions,
+                analysis_summary=result.get("analysis_summary", "Analysis completed"),
+                data_coverage=float(result.get("data_coverage", current_coverage)),
+                confidence=float(result.get("confidence", 0.5)),
+                needs_further_analysis=result.get("needs_further_analysis", True),
+                suggested_next_focus=result.get("suggested_next_focus"),
             )
-            
-            return (next_bite, quality)
             
         except json.JSONDecodeError as e:
-            logger.warning(f"解析主持人响应 JSON 失败: {e}")
-            return self._default_coordinator_response(remaining_chunks)
+            logger.warning(f"Failed to parse analyst JSON: {e}")
+            return self._create_default_analyst_output(historical_insights, current_coverage)
         except Exception as e:
-            logger.error(f"解析主持人响应时发生错误: {e}")
-            return self._default_coordinator_response(remaining_chunks)
+            logger.error(f"Error parsing analyst response: {e}")
+            return self._create_default_analyst_output(historical_insights, current_coverage)
     
-    def _default_coordinator_response(
-        self,
-        remaining_chunks: List[PriorityChunk],
-    ) -> Tuple[NextBiteDecision, InsightQuality]:
-        """返回默认的主持人响应"""
-        next_chunk_id = None
-        if remaining_chunks:
-            sorted_chunks = sorted(remaining_chunks, key=lambda x: x.priority)
-            next_chunk_id = sorted_chunks[0].chunk_id if sorted_chunks else None
+    def _parse_single_insight(self, raw: Dict[str, Any]) -> Insight:
+        """Parse a single Insight from raw dict."""
+        evidence = None
+        raw_evidence = raw.get("evidence")
+        if raw_evidence and isinstance(raw_evidence, dict):
+            evidence = InsightEvidence(
+                metric_name=raw_evidence.get("metric_name"),
+                metric_value=raw_evidence.get("metric_value") or raw_evidence.get("value"),
+                comparison_value=raw_evidence.get("comparison_value") or raw_evidence.get("second_place"),
+                ratio=raw_evidence.get("ratio") or raw_evidence.get("growth_rate"),
+                percentage=raw_evidence.get("percentage"),
+                period=raw_evidence.get("period"),
+                additional_data={
+                    k: v for k, v in raw_evidence.items()
+                    if k not in {"metric_name", "metric_value", "value", "comparison_value", 
+                               "second_place", "ratio", "growth_rate", "percentage", "period"}
+                    and isinstance(v, (str, int, float, bool))
+                } or None,
+            )
         
-        return (
-            NextBiteDecision(
-                should_continue=bool(remaining_chunks),
-                next_chunk_id=next_chunk_id,
-                reason="解析失败，使用默认决策",
-                completeness_estimate=0.0,
-            ),
-            InsightQuality(
-                completeness=0.0,
-                confidence=0.0,
-                need_more_data=True,
-                question_answered=False,
-            ),
+        return Insight(
+            type=self._normalize_type(raw.get("type", "pattern")),
+            title=raw.get("title", "Unnamed insight"),
+            description=raw.get("description", ""),
+            importance=float(raw.get("importance", 0.5)),
+            evidence=evidence,
+        )
+    
+    def _parse_historical_action(self, raw: Dict[str, Any]) -> HistoricalInsightAction:
+        """Parse a HistoricalInsightAction from raw dict."""
+        action_str = raw.get("action", "KEEP").upper()
+        try:
+            action = HistoricalInsightActionType(action_str)
+        except ValueError:
+            action = HistoricalInsightActionType.KEEP
+        
+        merged_insight = None
+        if action == HistoricalInsightActionType.MERGE and raw.get("merged_insight"):
+            merged_insight = self._parse_single_insight(raw["merged_insight"])
+        
+        replacement_insight = None
+        if action == HistoricalInsightActionType.REPLACE and raw.get("replacement_insight"):
+            replacement_insight = self._parse_single_insight(raw["replacement_insight"])
+        
+        return HistoricalInsightAction(
+            historical_index=int(raw.get("historical_index", 0)),
+            action=action,
+            reason=raw.get("reason", ""),
+            merged_insight=merged_insight,
+            replacement_insight=replacement_insight,
+        )
+    
+    def _ensure_all_actions(
+        self,
+        actions: List[HistoricalInsightAction],
+        historical_insights: List[Insight],
+    ) -> List[HistoricalInsightAction]:
+        """Ensure we have actions for all historical insights."""
+        if not historical_insights:
+            return []
+        
+        # Build index set of existing actions
+        existing_indices = {a.historical_index for a in actions}
+        
+        # Add KEEP actions for missing indices
+        for i in range(len(historical_insights)):
+            if i not in existing_indices:
+                actions.append(HistoricalInsightAction(
+                    historical_index=i,
+                    action=HistoricalInsightActionType.KEEP,
+                    reason="Default KEEP (no explicit action from analyst)",
+                ))
+        
+        # Sort by index
+        actions.sort(key=lambda a: a.historical_index)
+        return actions
+    
+    def _create_default_analyst_output(
+        self,
+        historical_insights: List[Insight],
+        current_coverage: float,
+    ) -> AnalystOutputWithHistory:
+        """Create default output when parsing fails."""
+        # Default: KEEP all historical insights
+        historical_actions = [
+            HistoricalInsightAction(
+                historical_index=i,
+                action=HistoricalInsightActionType.KEEP,
+                reason="Default KEEP (parsing failed)",
+            )
+            for i in range(len(historical_insights))
+        ]
+        
+        return AnalystOutputWithHistory(
+            new_insights=[],
+            historical_actions=historical_actions,
+            analysis_summary="Analysis parsing failed, keeping all historical insights",
+            data_coverage=current_coverage,
+            confidence=0.3,
+            needs_further_analysis=True,
+            suggested_next_focus=None,
         )
     
     def _parse_insights_response(self, content: str) -> List[Insight]:

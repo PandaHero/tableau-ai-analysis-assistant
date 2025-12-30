@@ -25,6 +25,13 @@ Design Principles:
 - Generates Tableau Pulse style insights
 - Builds indices for precise data access
 - Single entry point - no duplicate code
+
+Performance Note (Task 3.3.5 - 不实现缓存):
+- 查询结果数据不做缓存，原因：
+  1. 大数据序列化/反序列化比重新查询还慢
+  2. 占用大量内存/存储
+  3. 数据时效性问题，重新查询能拿到最新数据
+- 如需数据，直接重新执行查询
 """
 
 import logging
@@ -52,6 +59,7 @@ from tableau_assistant.src.agents.insight.models.profile import (
 )
 from .statistical_analyzer import StatisticalAnalyzer
 from .anomaly_detector import AnomalyDetector
+from .utils import to_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +112,7 @@ class EnhancedDataProfiler:
         self._dimension_hierarchy = dimension_hierarchy or {}
         self._statistical_analyzer = statistical_analyzer or StatisticalAnalyzer()
         self._anomaly_detector = anomaly_detector or AnomalyDetector()
+        self._last_insight_profile: Optional[DataInsightProfile] = None
     
     def set_dimension_hierarchy(self, hierarchy: Dict[str, Any]):
         """Set dimension hierarchy info."""
@@ -125,6 +134,7 @@ class EnhancedDataProfiler:
         df = self._to_dataframe(data)
         
         if df.empty:
+            self._last_insight_profile = self._statistical_analyzer._empty_profile()
             return EnhancedDataProfile(
                 row_count=0,
                 column_count=0,
@@ -145,11 +155,13 @@ class EnhancedDataProfiler:
         basic_profile = self._build_basic_profile(df, statistics, time_cols, categorical_cols, numeric_cols)
         
         # Delegate to StatisticalAnalyzer for distribution/clustering/correlation
-        data_list = df.to_dict('records')
-        insight_profile = self._statistical_analyzer.analyze(data_list, basic_profile)
+        # Pass DataFrame directly for better performance (avoid list conversion)
+        # Cache the result to avoid duplicate computation in get_insight_profile()
+        insight_profile = self._statistical_analyzer.analyze(df, basic_profile)
+        self._last_insight_profile = insight_profile
         
-        # Delegate to AnomalyDetector
-        anomaly_result = self._anomaly_detector.detect(data_list)
+        # Delegate to AnomalyDetector (also supports DataFrame directly)
+        anomaly_result = self._anomaly_detector.detect(df)
         
         # Tableau Pulse style analyses (unique to EnhancedDataProfiler)
         contributor_analyses = self._analyze_contributors(df, categorical_cols, numeric_cols)
@@ -180,7 +192,7 @@ class EnhancedDataProfiler:
             period_changes, trend_analyses, anomaly_index
         )
         
-        return EnhancedDataProfile(
+        profile = EnhancedDataProfile(
             row_count=len(df),
             column_count=len(df.columns),
             statistics=statistics,
@@ -194,6 +206,8 @@ class EnhancedDataProfiler:
             strategy_reason=reason,
             profile_summary=profile_summary,
         )
+        
+        return profile
     
     def get_insight_profile(self, data: Any) -> DataInsightProfile:
         """
@@ -202,12 +216,20 @@ class EnhancedDataProfiler:
         This method provides access to the StatisticalAnalyzer's output
         which is used by SemanticChunker to determine chunking strategy.
         
+        Note: If profile() was called first, returns cached result to avoid
+        duplicate computation.
+        
         Args:
             data: Input data
             
         Returns:
             DataInsightProfile from StatisticalAnalyzer
         """
+        # Return cached result if available (from profile() call)
+        if self._last_insight_profile is not None:
+            return self._last_insight_profile
+        
+        # Otherwise compute fresh
         df = self._to_dataframe(data)
         if df.empty:
             return self._statistical_analyzer._empty_profile()
@@ -218,9 +240,9 @@ class EnhancedDataProfiler:
         time_cols = self._identify_time_columns(df)
         
         basic_profile = self._build_basic_profile(df, statistics, time_cols, categorical_cols, numeric_cols)
-        data_list = df.to_dict('records')
         
-        return self._statistical_analyzer.analyze(data_list, basic_profile)
+        # Pass DataFrame directly for better performance
+        return self._statistical_analyzer.analyze(df, basic_profile)
     
     def _build_basic_profile(
         self,
@@ -256,19 +278,7 @@ class EnhancedDataProfiler:
     
     def _to_dataframe(self, data: Any) -> pd.DataFrame:
         """Convert various data formats to DataFrame."""
-        if isinstance(data, pd.DataFrame):
-            return data
-        elif isinstance(data, list):
-            if not data:
-                return pd.DataFrame()
-            if isinstance(data[0], dict):
-                return pd.DataFrame(data)
-            return pd.DataFrame(data)
-        elif isinstance(data, dict):
-            return pd.DataFrame([data])
-        else:
-            logger.warning(f"Unknown data type: {type(data)}, returning empty DataFrame")
-            return pd.DataFrame()
+        return to_dataframe(data)
     
     def _calculate_statistics(self, df: pd.DataFrame) -> Dict[str, ColumnStats]:
         """Calculate statistics for numeric columns."""
@@ -617,6 +627,7 @@ class EnhancedDataProfiler:
             slope=slope,
             r_squared=0.5,  # Default, StatisticalAnalyzer doesn't expose this
             change_points=change_points,
+            change_point_method=insight_profile.change_point_method,
         ))
         
         return trends
@@ -651,18 +662,26 @@ class EnhancedDataProfiler:
         df: pd.DataFrame, 
         col: str
     ) -> Optional[DimensionIndex]:
-        """Build index for a single dimension."""
-        value_to_indices: Dict[str, List[int]] = {}
-        value_counts: Dict[str, int] = {}
+        """
+        Build index for a single dimension.
         
-        for idx, value in enumerate(df[col]):
-            str_value = str(value)
-            if str_value not in value_to_indices:
-                value_to_indices[str_value] = []
-            value_to_indices[str_value].append(idx)
+        Optimized using pandas groupby for better performance on large datasets.
+        """
+        # Use pandas groupby.groups for vectorized index mapping
+        # This is much faster than Python loops for large datasets
+        grouped = df.groupby(col, sort=False)
         
-        for value, indices in value_to_indices.items():
-            value_counts[value] = len(indices)
+        # Get value to indices mapping (vectorized)
+        value_to_indices: Dict[str, List[int]] = {
+            str(value): list(indices)
+            for value, indices in grouped.groups.items()
+        }
+        
+        # Get value counts (vectorized)
+        value_counts: Dict[str, int] = {
+            str(value): count
+            for value, count in df[col].value_counts().items()
+        }
         
         return DimensionIndex(
             dimension=col,
@@ -743,26 +762,18 @@ class EnhancedDataProfiler:
         StatisticalAnalyzer's DataInsightProfile.
         
         Priority order:
-        1. High anomaly ratio -> by_cluster (isolate anomalies)
-        2. Clear clusters from StatisticalAnalyzer -> by_cluster
-        3. High concentration -> by_pareto (focus on top contributors)
-        4. Change points detected -> by_change_point
-        5. Long tail distribution -> by_pareto
-        6. Clear semantic groups -> by_semantic
-        7. Default -> by_position
+        1. High anomaly ratio -> by_anomaly (isolate anomalies for priority analysis)
+        2. High concentration -> by_pareto (focus on top contributors)
+        3. Change points detected -> by_change_point
+        4. Long tail distribution -> by_pareto
+        5. Clear semantic groups -> by_semantic
+        6. Default -> by_position
         """
-        # Check anomaly ratio
+        # Check anomaly ratio - isolate anomalies for priority analysis
         if anomaly_index and anomaly_index.anomaly_ratio > 0.1:
             return (
-                ChunkingStrategy.BY_CLUSTER,
+                ChunkingStrategy.BY_ANOMALY,
                 f"High anomaly ratio ({anomaly_index.anomaly_ratio*100:.1f}%), recommend isolating anomalies"
-            )
-        
-        # Check clusters from StatisticalAnalyzer
-        if insight_profile.clusters and len(insight_profile.clusters) >= 2:
-            return (
-                ChunkingStrategy.BY_CLUSTER,
-                f"Found {len(insight_profile.clusters)} distinct clusters"
             )
         
         # Check concentration

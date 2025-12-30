@@ -200,11 +200,9 @@ class TableauQueryBuilder(BaseQueryBuilder):
                         ))
         
         # Auto-fix: fill default aggregation for measures without one
-        if semantic_query.measures:
-            for measure in semantic_query.measures:
-                if measure.aggregation is None:
-                    measure.aggregation = AggregationType.SUM
-                    auto_fixed.append(f"Set default aggregation SUM for {measure.field_name}")
+        # Note: aggregation=None is valid for pre-aggregated calculated fields
+        # We only auto-fix if the field is not explicitly set to None
+        # (This is handled by the LLM which sets None for pre-aggregated fields)
         
         return ValidationResult(
             is_valid=len(errors) == 0,
@@ -264,13 +262,19 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return field
     
     def _build_measure_field(self, measure: MeasureField) -> dict:
-        """Build VizQL measure field."""
-        vizql_func = AGGREGATION_TO_VIZQL.get(measure.aggregation, VizQLFunction.SUM)
+        """Build VizQL measure field.
         
+        For pre-aggregated measures (aggregation=None), no function is added.
+        This is used for calculated fields that already contain aggregation.
+        """
         field = {
             "fieldCaption": measure.field_name,
-            "function": vizql_func.value,
         }
+        
+        # Only add function for non-pre-aggregated measures
+        if measure.aggregation is not None:
+            vizql_func = AGGREGATION_TO_VIZQL.get(measure.aggregation, VizQLFunction.SUM)
+            field["function"] = vizql_func.value
         
         if measure.alias:
             field["fieldAlias"] = measure.alias

@@ -7,6 +7,7 @@ Contains:
 - DirectorAction: Actions the director can take
 - DirectorInput: Input to the director
 - DirectorDecision: Director's decision on next action
+- DirectorLLMOutput: LLM output model for Director prompt
 - InsightAction: Action to take on accumulated insights
 - DirectorOutputWithAccumulation: Director output with insight accumulation
 """
@@ -31,6 +32,92 @@ class DirectorAction(str, Enum):
     ANALYZE_DIMENSION = "analyze_dimension"
     ANALYZE_ANOMALY = "analyze_anomaly"
     STOP = "stop"
+
+
+class DirectorLLMOutput(BaseModel):
+    """Director LLM output model.
+    
+    <what>Director's decision including action, target, and quality assessment</what>
+    
+    <fill_order>
+    1. action (ALWAYS)
+    2. should_continue (ALWAYS)
+    3. reason (ALWAYS)
+    4. target_chunk_id (if action = analyze_chunk)
+    5. target_dimension (if action = analyze_dimension)
+    6. target_dimension_value (if action = analyze_dimension)
+    7. target_anomaly_indices (if action = analyze_anomaly)
+    8. completeness, confidence, question_answered (ALWAYS)
+    9. final_summary (if should_continue = false)
+    </fill_order>
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    action: str = Field(
+        description="""<what>Action to execute</what>
+<when>ALWAYS required</when>
+<rule>One of: analyze_chunk, analyze_dimension, analyze_anomaly, stop</rule>"""
+    )
+    should_continue: bool = Field(
+        description="""<what>Whether to continue analysis</what>
+<when>ALWAYS required</when>
+<rule>False only when action=stop</rule>"""
+    )
+    reason: str = Field(
+        description="""<what>Decision reason</what>
+<when>ALWAYS required</when>"""
+    )
+    
+    # Target for analyze_chunk
+    target_chunk_id: Optional[int] = Field(
+        default=None,
+        description="""<what>Target chunk ID</what>
+<when>action = analyze_chunk</when>"""
+    )
+    
+    # Target for analyze_dimension
+    target_dimension: Optional[str] = Field(
+        default=None,
+        description="""<what>Target dimension name</what>
+<when>action = analyze_dimension</when>"""
+    )
+    target_dimension_value: Optional[str] = Field(
+        default=None,
+        description="""<what>Target dimension value</what>
+<when>action = analyze_dimension</when>"""
+    )
+    
+    # Target for analyze_anomaly
+    target_anomaly_indices: Optional[List[int]] = Field(
+        default=None,
+        description="""<what>Target anomaly row indices</what>
+<when>action = analyze_anomaly</when>"""
+    )
+    
+    # Quality assessment
+    completeness: float = Field(
+        default=0.0,
+        description="""<what>Insight completeness (0.0-1.0)</what>
+<when>ALWAYS required</when>"""
+    )
+    confidence: float = Field(
+        default=0.0,
+        description="""<what>Insight confidence (0.0-1.0)</what>
+<when>ALWAYS required</when>"""
+    )
+    question_answered: bool = Field(
+        default=False,
+        description="""<what>Whether core question is answered</what>
+<when>ALWAYS required</when>"""
+    )
+    
+    # Final summary (when stopping)
+    final_summary: Optional[str] = Field(
+        default=None,
+        description="""<what>Final summary (Chinese)</what>
+<when>should_continue = false</when>
+<rule>Comprehensive summary answering user's question</rule>"""
+    )
 
 
 class InsightAction(str, Enum):
@@ -280,6 +367,7 @@ class DirectorOutputWithAccumulation(BaseModel):
 
 __all__ = [
     "DirectorAction",
+    "DirectorLLMOutput",
     "InsightAction",
     "DirectorInput",
     "DirectorDecision",
