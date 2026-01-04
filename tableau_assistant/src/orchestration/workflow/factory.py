@@ -4,16 +4,20 @@ Tableau Workflow Factory
 
 Creates the main Tableau Assistant workflow with middleware support.
 
-Workflow nodes (7 nodes):
-1. SemanticParser Agent (LLM) - Semantic parsing with Step1 + Step2 + Observer
-2. FieldMapper Node (RAG + LLM hybrid) - Business term to technical field mapping
-3. QueryBuilder Node (pure code) - VizQL query generation
-4. Execute Node (pure code) - VizQL API execution
-5. SelfCorrection Node (code + LLM) - Query self-correction on execution failure
-6. Insight Agent (LLM) - Data insight analysis
-7. Replanner Agent (LLM) - Replan decision
+Refactored Architecture (3 Agent Nodes):
+1. SemanticParser Agent (Subgraph) - Step1 → Step2 → QueryPipeline (MapFields → BuildQuery → Execute)
+   - ReAct error handling for tool failures
+2. Insight Agent (Subgraph) - Profiler → Director ⟷ Analyst (progressive accumulation)
+   - Director handles final synthesis (no separate Synthesizer)
+3. Replanner Agent (single LLM node) - Evaluates completeness, generates exploration questions
+   - Supports parallel execution via Send() API
 
-Middleware stack (7 middleware):
+Parallel Execution:
+- When Replanner generates N>1 questions, route_after_replanner returns List[Send]
+- LangGraph automatically handles parallel branch execution and state merging
+- accumulated_insights uses merge_insights reducer for automatic deduplication
+
+Middleware stack (8 middleware):
 - TodoListMiddleware (LangChain)
 - SummarizationMiddleware (LangChain)
 - ModelRetryMiddleware (LangChain)
@@ -21,6 +25,7 @@ Middleware stack (7 middleware):
 - HumanInTheLoopMiddleware (LangChain, optional)
 - FilesystemMiddleware (custom)
 - PatchToolCallsMiddleware (custom)
+- OutputValidationMiddleware (custom)
 """
 
 from typing import Dict, Optional, List, Union, Any
@@ -51,15 +56,9 @@ from tableau_assistant.src.orchestration.workflow.routes import (
     route_after_semantic_parser,
 )
 
-# Import Node implementations (import directly from node.py to avoid circular imports)
-from tableau_assistant.src.agents.field_mapper.node import field_mapper_node as _field_mapper_node
-from tableau_assistant.src.nodes.query_builder.node import query_builder_node as _query_builder_node
-from tableau_assistant.src.nodes.execute.node import execute_node as _execute_node
-from tableau_assistant.src.nodes.self_correction.node import self_correction_node as _self_correction_node
-
-# Import Agent implementations (import directly from node.py to avoid circular imports)
-from tableau_assistant.src.agents.semantic_parser.node import semantic_parser_node as _semantic_parser_node
-from tableau_assistant.src.agents.insight.node import insight_node as _insight_node
+# Import Subgraph implementations
+from tableau_assistant.src.agents.semantic_parser.subgraph import create_semantic_parser_subgraph
+from tableau_assistant.src.agents.insight.subgraph import create_insight_subgraph
 
 
 def get_default_config() -> Dict[str, Union[int, float, List[str], None]]:
@@ -101,9 +100,6 @@ def get_default_config() -> Dict[str, Union[int, float, List[str], None]]:
     }
 
 
-
-
-
 def create_middleware_stack(
     model_name: Optional[str] = None,
     config: Optional[Dict[str, Union[int, float, List[str], None]]] = None,
@@ -129,23 +125,15 @@ def create_middleware_stack(
     middleware.append(TodoListMiddleware())
     
     # 2. SummarizationMiddleware - Auto-summarize conversation history
-    # 必须创建 SummarizationMiddleware，使用模型管理器获取默认模型
-    # Prefer chat_model if provided, otherwise use model_name, otherwise use model manager
     summarization_model = chat_model
     if summarization_model is None and model_name:
         summarization_model = model_name
     
-    # 如果没有提供模型，使用模型管理器获取默认模型
+    # If no model provided, use model manager to get default model
     if summarization_model is None:
         try:
-            from tableau_assistant.src.infra.ai.llm import select_model
-            from tableau_assistant.src.infra.config.settings import settings
-            # 使用配置中的模型提供商和模型名称
-            summarization_model = select_model(
-                provider=settings.llm_model_provider,
-                model_name=settings.tooling_llm_model,
-                temperature=0,
-            )
+            from tableau_assistant.src.infra.ai import get_llm
+            summarization_model = get_llm(temperature=0)
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
@@ -159,19 +147,15 @@ def create_middleware_stack(
         ))
     
     # 3. ModelRetryMiddleware - Auto-retry LLM calls with exponential backoff
-    # Backoff strategy: 1s, 2s, 4s (initial_delay * backoff_factor^n)
-    # **Property 17: LLM 重试指数退避**
-    # **Validates: Requirements 9.1, 9.2, 9.3, 9.4**
     middleware.append(ModelRetryMiddleware(
         max_retries=config["model_max_retries"],
         initial_delay=config.get("model_initial_delay", 1.0),
         backoff_factor=config.get("model_backoff_factor", 2.0),
         max_delay=config.get("model_max_delay", 60.0),
-        jitter=True,  # Add randomness to prevent thundering herd
+        jitter=True,
     ))
     
     # 4. ToolRetryMiddleware - Auto-retry tool calls with exponential backoff
-    # **Validates: Requirements 10.1, 10.2, 10.3, 10.4**
     middleware.append(ToolRetryMiddleware(
         max_retries=config["tool_max_retries"],
         initial_delay=config.get("tool_initial_delay", 1.0),
@@ -189,13 +173,8 @@ def create_middleware_stack(
     middleware.append(PatchToolCallsMiddleware())
     
     # 7. HumanInTheLoopMiddleware - Human confirmation (optional)
-    # **Validates: Requirements 15.1, 15.2, 15.3, 15.4, 15.5**
-    # interrupt_on should be a dict like {"write_todos": True} or {"tool_name": InterruptOnConfig(...)}
     interrupt_on = config.get("interrupt_on")
     if interrupt_on:
-        # Convert list of tool names to dict format if needed
-        # Settings returns list[str] like ["write_todos", "execute_query"]
-        # HumanInTheLoopMiddleware expects dict[str, bool | InterruptOnConfig]
         if isinstance(interrupt_on, list):
             interrupt_on = {tool_name: True for tool_name in interrupt_on}
         elif not isinstance(interrupt_on, dict):
@@ -208,12 +187,9 @@ def create_middleware_stack(
         ))
     
     # 8. OutputValidationMiddleware - Validate LLM output format (custom)
-    # **Validates: Requirements 15.1, 15.2, 15.3, 15.4, 15.5, 15.6**
-    # Note: expected_schema is set per-node, not globally
-    # This middleware validates JSON format and triggers retry on failure
     middleware.append(OutputValidationMiddleware(
-        strict=False,  # Non-strict mode: log warnings instead of raising
-        retry_on_failure=True,  # Trigger ModelRetryMiddleware on validation failure
+        strict=False,
+        retry_on_failure=True,
     ))
     
     return middleware
@@ -231,16 +207,18 @@ def create_workflow(
     """
     Create the Tableau Assistant workflow.
     
-    The workflow contains 6 nodes:
-    SemanticParser -> FieldMapper -> QueryBuilder -> Execute -> Insight -> Replanner
+    Refactored Architecture (3 Agent Nodes):
+    - SemanticParser (Subgraph): Step1 → Step2 → QueryPipeline
+    - Insight (Subgraph): Profiler → Director ⟷ Analyst
+    - Replanner (single node): Evaluates completeness, generates exploration questions
     
-    All LLM nodes share the same middleware stack.
+    Parallel Execution:
+    - When Replanner generates N>1 questions, route_after_replanner returns List[Send]
+    - LangGraph automatically handles parallel branch execution and state merging
     
     Checkpointer options (mutually exclusive):
     - use_memory_checkpointer=True: In-memory checkpointer (default, for development)
     - use_sqlite_checkpointer=True: SQLite checkpointer (for production persistence)
-    
-    **Validates: Requirements 18.4, 18.5**
     
     Args:
         model_name: LLM model name (used if chat_model is None)
@@ -255,8 +233,8 @@ def create_workflow(
         Compiled StateGraph workflow
     
     Example:
-        >>> from tableau_assistant.src.infra.ai.llm import select_model
-        >>> chat_model = select_model("qwen", "qwen3", temperature=0)
+        >>> from tableau_assistant.src.infra.ai import get_llm
+        >>> chat_model = get_llm(temperature=0)
         >>> # Development: in-memory checkpointer
         >>> workflow = create_workflow(
         ...     chat_model=chat_model,
@@ -271,7 +249,7 @@ def create_workflow(
         ... )
         >>> result = workflow.invoke({"question": "2024年各地区销售额"})
     """
-    # Import state from orchestration layer (state belongs here)
+    # Import state from orchestration layer
     from tableau_assistant.src.orchestration.workflow.state import VizQLState
     
     config = {**get_default_config(), **(config or {})}
@@ -282,44 +260,41 @@ def create_workflow(
     # Create StateGraph
     graph = StateGraph(VizQLState)
     
-    # ========== Node implementations ==========
-    # SemanticParser: imported from tableau_assistant.src.agents.semantic_parser
-    # FieldMapper: imported from tableau_assistant.src.agents.field_mapper
+    # ========== Create Subgraphs ==========
+    semantic_parser_subgraph = create_semantic_parser_subgraph()
+    insight_subgraph = create_insight_subgraph()
     
-    # QueryBuilder and Execute nodes use actual implementations
-    # imported from tableau_assistant.src.nodes
-    
-    # insight_node 使用实际实现（从 tableau_assistant.src.agents.insight.node 导入）
-    
+    # ========== Replanner Node (single LLM node) ==========
     async def replanner_node(state: "VizQLState", runnable_config: Optional[Dict[str, Any]] = None) -> Dict[str, object]:
         """
         Replanner Agent node (LLM)
         
         - Evaluate completeness (completeness_score)
         - Identify missing aspects (missing_aspects)
-        - Generate new questions (new_questions)
+        - Generate exploration questions (exploration_questions)
         - Route decision: should_replan=True -> SemanticParser, False -> END
         
-        Output: ReplanDecision Pydantic object
+        Parallel Execution Support:
+        - When N>1 questions generated, sets parallel_questions for Send() API
+        - Single question: sets question for serial execution
         
-        **Validates: Requirements 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.8**
+        Output: ReplanDecision Pydantic object
         """
         from tableau_assistant.src.agents.replanner import ReplannerAgent
-        from tableau_assistant.src.core.models import ReplanDecision
+        from tableau_assistant.src.agents.replanner.models import ReplanDecision
         
         replan_count = state.get("replan_count", 0)
         
-        # 获取当前洞察 (insights 是 Pydantic 对象列表)
-        insights = state.get("insights", [])
+        # Get current insights (use accumulated_insights from parallel execution if available)
+        accumulated_insights = state.get("accumulated_insights", [])
+        insights = accumulated_insights if accumulated_insights else state.get("insights", [])
         
-        # 边界处理：没有洞察结果
-        # **Validates: Requirements 17.8**
+        # Edge case: no insights
         if not insights:
-            # 返回 ReplanDecision Pydantic 对象
             decision = ReplanDecision(
                 should_replan=False,
                 completeness_score=0.0,
-                reason="没有洞察结果，无法评估完成度",
+                reason="No insights available, cannot evaluate completeness",
                 missing_aspects=[],
                 exploration_questions=[],
             )
@@ -327,83 +302,72 @@ def create_workflow(
                 "replan_decision": decision,
                 "replan_count": replan_count + 1,
                 "current_stage": "replanner",
+                "replanner_complete": True,
             }
         
-        # 创建 ReplannerAgent 实例
+        # Create ReplannerAgent instance
         replanner = ReplannerAgent(
             max_replan_rounds=config.get("max_replan_rounds", 3),
             max_questions_per_round=config.get("max_questions_per_round", 3),
         )
         
-        # 获取已回答问题列表（用于去重）
-        # **Validates: Requirements 14.3, 14.4, 14.5**
+        # Get answered questions for deduplication
         answered_questions = state.get("answered_questions", [])
         
-        # 使用 trim_answered_questions 限制长度
-        from tableau_assistant.src.infra.utils.conversation import trim_answered_questions
-        trimmed_questions = trim_answered_questions(answered_questions)
-        
-        # 执行重规划决策 - insights 是 Pydantic 对象列表
-        # 传递 state 和 runnable_config 以支持中间件和流式输出
+        # Execute replan decision
         decision = await replanner.replan(
             original_question=state.get("question", ""),
-            insights=insights,  # 直接传递 Pydantic 对象列表
+            insights=insights,
             data_insight_profile=state.get("data_insight_profile"),
             dimension_hierarchy=state.get("dimension_hierarchy"),
             current_dimensions=state.get("current_dimensions", []),
             current_round=replan_count + 1,
-            answered_questions=trimmed_questions,  # 传递已回答问题用于去重
-            state=dict(state),  # 传递状态用于中间件
-            config=runnable_config,  # 传递 config 用于中间件
+            answered_questions=answered_questions,
+            state=dict(state),
+            config=runnable_config,
         )
         
-        # 记录重规划历史
-        # **Validates: Requirements 17.9**
-        replan_history = state.get("replan_history", [])
-        replan_history.append({
+        # Record replan history
+        replan_history_entry = {
             "round": replan_count + 1,
             "completeness_score": decision.completeness_score,
             "should_replan": decision.should_replan,
             "reason": decision.reason,
             "questions_count": len(decision.exploration_questions),
-        })
+        }
         
-        # 构建返回结果
+        # Build result
         result = {
             "replan_decision": decision,
             "replan_count": replan_count + 1,
-            "replan_history": replan_history,
+            "replan_history": [replan_history_entry],
             "current_stage": "replanner",
+            "replanner_complete": True,
         }
         
-        # 如果需要重规划，将探索问题添加到待处理队列
-        # TodoListMiddleware 会管理这些问题的执行
+        # Handle exploration questions for parallel/serial execution
         if decision.should_replan and decision.exploration_questions:
             from langchain_core.messages import HumanMessage
             
-            # 获取原始问题用于标记 parent_question
             original_question = state.get("question", "")
             
-            # 将探索问题转换为待处理问题列表
-            pending_questions = []
+            # Extract question texts
+            question_texts = []
             for q in decision.exploration_questions:
                 if hasattr(q, "question"):
-                    pending_questions.append({
-                        "question": q.question,
-                        "priority": getattr(q, "priority", 5),
-                        "exploration_type": getattr(q, "exploration_type", "drill_down"),
-                        "target_dimension": getattr(q, "target_dimension", ""),
-                    })
+                    question_texts.append(q.question)
                 elif isinstance(q, dict):
-                    pending_questions.append(q)
+                    question_texts.append(q.get("question", str(q)))
+                else:
+                    question_texts.append(str(q))
             
-            # 更新 question 为第一个探索问题（当前轮次处理）
-            if pending_questions:
-                next_question = pending_questions[0]["question"]
+            if len(question_texts) == 1:
+                # Single question: serial execution
+                next_question = question_texts[0]
                 result["question"] = next_question
+                result["parallel_questions"] = []
                 
-                # 创建带来源标记的消息，添加到对话历史
-                # 标记 replanner 生成的问题，并关联原始问题
+                # Add to conversation history
                 replanner_message = HumanMessage(
                     content=next_question,
                     additional_kwargs={
@@ -412,19 +376,30 @@ def create_workflow(
                     }
                 )
                 result["messages"] = [replanner_message]
+            else:
+                # Multiple questions: parallel execution via Send() API
+                # route_after_replanner will handle creating Send() objects
+                result["parallel_questions"] = question_texts
+                result["question"] = question_texts[0]  # First question for logging
                 
-                # 剩余问题存入队列，供后续轮次处理
-                result["pending_questions"] = pending_questions[1:] if len(pending_questions) > 1 else []
+                # Add all questions to conversation history
+                messages = []
+                for q_text in question_texts:
+                    messages.append(HumanMessage(
+                        content=q_text,
+                        additional_kwargs={
+                            "source": "replanner",
+                            "parent_question": original_question,
+                            "parallel": True,
+                        }
+                    ))
+                result["messages"] = messages
         
         return result
     
-    # ========== Add nodes to graph (7 nodes) ==========
-    graph.add_node("semantic_parser", _semantic_parser_node)  # Step1 + Step2 + Observer
-    graph.add_node("field_mapper", _field_mapper_node)
-    graph.add_node("query_builder", _query_builder_node)
-    graph.add_node("execute", _execute_node)
-    graph.add_node("self_correction", _self_correction_node)  # Self-Correction 节点
-    graph.add_node("insight", _insight_node)
+    # ========== Add nodes to graph (3 nodes) ==========
+    graph.add_node("semantic_parser", semantic_parser_subgraph)
+    graph.add_node("insight", insight_subgraph)
     graph.add_node("replanner", replanner_node)
     
     # ========== Add edges ==========
@@ -432,42 +407,13 @@ def create_workflow(
     # START -> SemanticParser
     graph.add_edge(START, "semantic_parser")
     
-    # SemanticParser -> FieldMapper or END (conditional)
-    # If intent.type != DATA_QUERY, route to END
+    # SemanticParser -> Insight or END (conditional)
+    # If intent.type != DATA_QUERY or query failed, route to END
     graph.add_conditional_edges(
         "semantic_parser",
         route_after_semantic_parser,
         {
-            "field_mapper": "field_mapper",
-            "end": END,
-        }
-    )
-    
-    # FieldMapper -> QueryBuilder
-    graph.add_edge("field_mapper", "query_builder")
-    
-    # QueryBuilder -> Execute
-    graph.add_edge("query_builder", "execute")
-    
-    # Execute -> Insight or Self-Correction (conditional)
-    # If query failed and correction not exhausted -> self_correction
-    from tableau_assistant.src.orchestration.workflow.routes import route_after_execute, route_after_self_correction
-    graph.add_conditional_edges(
-        "execute",
-        route_after_execute,
-        {
             "insight": "insight",
-            "self_correction": "self_correction",
-            "end": END,
-        }
-    )
-    
-    # Self-Correction -> Execute (retry) or END (give up)
-    graph.add_conditional_edges(
-        "self_correction",
-        route_after_self_correction,
-        {
-            "execute": "execute",
             "end": END,
         }
     )
@@ -476,6 +422,7 @@ def create_workflow(
     graph.add_edge("insight", "replanner")
     
     # Replanner -> SemanticParser or END (conditional)
+    # Supports parallel execution via Send() API
     graph.add_conditional_edges(
         "replanner",
         lambda state: route_after_replanner(state, config.get("max_replan_rounds", 3)),
@@ -489,28 +436,18 @@ def create_workflow(
     compile_kwargs = {}
     
     # Checkpointer selection (mutually exclusive)
-    # **Validates: Requirements 18.4, 18.5**
     if use_sqlite_checkpointer:
-        # SQLite checkpointer for production persistence
-        # Supports session save/restore across restarts
         from pathlib import Path
         import sqlite3
         db_path = sqlite_db_path or "data/workflow_checkpoints.db"
-        # Ensure directory exists
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        # Create SQLite connection and checkpointer
         conn = sqlite3.connect(db_path, check_same_thread=False)
         compile_kwargs["checkpointer"] = SqliteSaver(conn)
     elif use_memory_checkpointer:
-        # In-memory checkpointer for development
         compile_kwargs["checkpointer"] = MemorySaver()
     
     if store:
         compile_kwargs["store"] = store
-    
-    # Note: LangGraph StateGraph.compile() doesn't directly support middleware parameter
-    # Middleware is applied through langchain.agents.create_agent() for individual agents
-    # For our custom workflow, we'll apply middleware at the node level in subsequent tasks
     
     compiled_graph = graph.compile(**compile_kwargs)
     
@@ -543,11 +480,11 @@ def get_workflow_info(workflow: StateGraph) -> Dict[str, object]:
         checkpointer_type = type(workflow.checkpointer).__name__
     
     return {
-        "nodes": ["semantic_parser", "field_mapper", "query_builder", "execute", "self_correction", "insight", "replanner"],
+        "nodes": ["semantic_parser", "insight", "replanner"],
         "middleware": middleware_names,
         "checkpointer": checkpointer_type,
         "config": config,
-        "architecture": "semantic_parser_agent",  # Step1 + Step2 + Observer + Self-Correction
+        "architecture": "subgraph_with_parallel",  # 3 nodes with Send() API support
     }
 
 
@@ -555,38 +492,16 @@ def create_sqlite_checkpointer(db_path: str = "data/workflow_checkpoints.db") ->
     """
     Create a SQLite checkpointer for session persistence.
     
-    The SQLite checkpointer enables:
-    - Session save: Automatically saves workflow state after each step
-    - Session restore: Resume workflow from last checkpoint
-    - Cross-restart persistence: State survives application restarts
-    
-    **Validates: Requirements 18.4, 18.5**
-    
     Args:
         db_path: Path to SQLite database file
     
     Returns:
         Configured SqliteSaver instance
-    
-    Example:
-        >>> checkpointer = create_sqlite_checkpointer("data/sessions.db")
-        >>> workflow = create_workflow(
-        ...     use_memory_checkpointer=False,
-        ...     use_sqlite_checkpointer=False,  # We'll pass checkpointer directly
-        ... )
-        >>> # Or use the built-in parameter:
-        >>> workflow = create_workflow(
-        ...     use_sqlite_checkpointer=True,
-        ...     sqlite_db_path="data/sessions.db"
-        ... )
     """
     from pathlib import Path
     import sqlite3
     
-    # Ensure directory exists
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    # Create SQLite connection with check_same_thread=False for async support
     conn = sqlite3.connect(db_path, check_same_thread=False)
     
     return SqliteSaver(conn)
@@ -606,8 +521,6 @@ def get_session_history(
     Returns:
         List of checkpoint metadata
     """
-    # Note: This is a simplified implementation
-    # Full implementation would use checkpointer.list() method
     try:
         config = {"configurable": {"thread_id": thread_id}}
         checkpoint = checkpointer.get(config)
@@ -623,24 +536,14 @@ def inject_middleware_to_config(
     middleware: List[AgentMiddleware],
 ) -> Dict[str, Any]:
     """
-    将 middleware 注入到 config 中。
-    
-    用于在调用 workflow 时传递 middleware 给节点函数。
+    Inject middleware into config for node functions.
     
     Args:
-        config: 原始 config（可以为 None）
-        middleware: Middleware 列表
+        config: Original config (can be None)
+        middleware: Middleware list
     
     Returns:
-        包含 middleware 的新 config
-    
-    Example:
-        workflow = create_workflow()
-        config = inject_middleware_to_config(
-            {"configurable": {"thread_id": "123"}},
-            workflow.middleware
-        )
-        result = await workflow.ainvoke(state, config)
+        New config containing middleware
     """
     config = config or {}
     configurable = config.get('configurable', {})

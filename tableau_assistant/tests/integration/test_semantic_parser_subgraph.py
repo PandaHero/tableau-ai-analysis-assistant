@@ -224,7 +224,7 @@ async def get_data_model(
     """获取数据源元数据，使用 LangGraph SqliteStore 缓存"""
     from tableau_assistant.src.infra.storage.langgraph_store import get_langgraph_store
     from tableau_assistant.src.infra.storage.data_model_cache import DataModelCache
-    from tableau_assistant.src.infra.storage.data_model_loader import TableauDataModelLoader
+    from tableau_assistant.src.platforms.tableau import TableauDataModelLoader
     
     logger.info(f"获取数据源元数据: {datasource_luid}")
     

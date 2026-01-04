@@ -4,13 +4,11 @@
 注意：所有环境变量从项目根目录的 .env 文件读取
 """
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List, Optional, TYPE_CHECKING
+from typing import List, Optional
 from dotenv import load_dotenv
-
-if TYPE_CHECKING:
-    from .tableau_env import TableauEnvConfig
 
 # 获取项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
@@ -21,10 +19,24 @@ if env_path.exists():
     load_dotenv(env_path)
 
 
+@dataclass
+class TableauConfig:
+    """Tableau 配置"""
+    domain: str
+    site: str
+    api_version: str
+    user: str
+    jwt_client_id: str
+    jwt_secret_id: str
+    jwt_secret: str
+    pat_name: str
+    pat_secret: str
+
+
 class Settings(BaseSettings):
     """应用配置"""
 
-    # Tableau 默认配置（兼容旧代码）
+    # Tableau 配置
     tableau_domain: str = os.getenv("TABLEAU_DOMAIN", "")
     tableau_site: str = os.getenv("TABLEAU_SITE", "")
     tableau_api_version: str = os.getenv("TABLEAU_API_VERSION", "3.24")
@@ -37,18 +49,19 @@ class Settings(BaseSettings):
     datasource_luid: str = os.getenv("DATASOURCE_LUID", "")
     decimal_precision: int = int(os.getenv("DECIMAL_PRECISION", "2"))
     
-    def get_tableau_config(self, domain: Optional[str] = None) -> "TableauEnvConfig":
-        """
-        获取 Tableau 配置（支持多环境）
-        
-        Args:
-            domain: Tableau 域名，如果不提供则使用默认配置
-        
-        Returns:
-            匹配的 Tableau 环境配置
-        """
-        from .tableau_env import get_tableau_config
-        return get_tableau_config(domain)
+    def get_tableau_config(self) -> TableauConfig:
+        """获取 Tableau 配置"""
+        return TableauConfig(
+            domain=self.tableau_domain,
+            site=self.tableau_site,
+            api_version=self.tableau_api_version,
+            user=self.tableau_user,
+            jwt_client_id=self.tableau_jwt_client_id,
+            jwt_secret_id=self.tableau_jwt_secret_id,
+            jwt_secret=self.tableau_jwt_secret,
+            pat_name=self.tableau_pat_name,
+            pat_secret=self.tableau_pat_secret,
+        )
 
     # LLM配置
     llm_api_base: str = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
@@ -64,9 +77,11 @@ class Settings(BaseSettings):
     deepseek_api_base: str = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
     deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
     
-    # DeepSeek R1 配置（公司内部部署）
-    deepseek_r1_api_base: str = os.getenv("DEEPSEEK_R1_API_BASE", "")
-    deepseek_r1_api_key: str = os.getenv("DEEPSEEK_R1_API_KEY", "")
+    # 自定义 LLM 配置（公司内部部署的模型）
+    custom_llm_api_base: str = os.getenv("CUSTOM_LLM_API_BASE", "") or os.getenv("DEEPSEEK_R1_API_BASE", "")
+    custom_llm_api_key: str = os.getenv("CUSTOM_LLM_API_KEY", "") or os.getenv("DEEPSEEK_R1_API_KEY", "")
+    custom_llm_api_endpoint: str = os.getenv("CUSTOM_LLM_API_ENDPOINT", "/api/v1/offline/deep/think")
+    custom_llm_model_name: str = os.getenv("CUSTOM_LLM_MODEL_NAME", "deepseek-r1")
     
     # 智谱 AI 配置
     zhipuai_api_key: str = os.getenv("ZHIPUAI_API_KEY", "")
@@ -87,6 +102,10 @@ class Settings(BaseSettings):
     metadata_cache_ttl: int = int(os.getenv("METADATA_CACHE_TTL", "86400"))
     dimension_hierarchy_cache_ttl: int = int(os.getenv("DIMENSION_HIERARCHY_CACHE_TTL", "86400"))
     data_model_cache_ttl: int = int(os.getenv("DATA_MODEL_CACHE_TTL", "86400"))
+    field_mapping_cache_ttl: int = int(os.getenv("FIELD_MAPPING_CACHE_TTL", "86400"))
+    
+    # LLM 超时配置
+    llm_request_timeout: int = int(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
 
     # 任务调度配置
     parallel_upper_limit: int = int(os.getenv("Parallel_Upper_Limit", "3"))

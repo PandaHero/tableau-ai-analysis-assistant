@@ -9,7 +9,7 @@ from typing import Type
 from pydantic import BaseModel
 
 from tableau_assistant.src.agents.base.prompt import VizQLPrompt
-from tableau_assistant.src.core.models import DimensionHierarchyResult
+from tableau_assistant.src.agents.dimension_hierarchy.models import DimensionHierarchyResult
 
 
 class DimensionHierarchyPrompt(VizQLPrompt):

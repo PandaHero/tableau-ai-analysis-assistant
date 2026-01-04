@@ -5,39 +5,57 @@ Workflow routing logic for Tableau Assistant
 This module contains the routing functions used by the StateGraph
 to determine the next node based on the current state.
 
-Routing decisions:
-1. After SemanticParser: intent.type == DATA_QUERY -> field_mapper or END
-2. After Replanner: should_replan + replan_count -> semantic_parser or END
+Refactored Architecture (3 Agent Nodes):
+- SemanticParser (Subgraph): Step1 → Step2 → QueryPipeline
+- Insight (Subgraph): Profiler → Director ⟷ Analyst
+- Replanner (single node): Decides continue/end, generates parallel questions
 
-**Validates: Requirements 2.3, 2.4, 2.5, 17.4, 17.5, 17.6, 17.7**
+Routing decisions:
+1. After SemanticParser: intent.type == DATA_QUERY -> insight or END
+2. After Replanner: should_replan + replan_count -> semantic_parser or END
+   - Multiple questions: Use Send() API for parallel execution
+   - Single question: Serial execution
+
+Parallel Execution:
+- When Replanner generates N>1 questions, route_after_replanner returns List[Send]
+- LangGraph automatically handles parallel branch execution and state merging
+- accumulated_insights uses merge_insights reducer for automatic deduplication
 """
 
 import logging
 from typing import Dict, List, Literal, Optional, Union
 
+from langgraph.types import Send
+
 # VizQLState must be imported at runtime because LangGraph's add_conditional_edges
 # calls get_type_hints() to infer the output schema
-from tableau_assistant.src.orchestration.workflow.state import VizQLState, ErrorRecord
-from tableau_assistant.src.core.models import ReplanDecision
+from tableau_assistant.src.orchestration.workflow.state import VizQLState
+from tableau_assistant.src.agents.replanner.models import ReplanDecision
 
 logger = logging.getLogger(__name__)
 
 
-def route_after_semantic_parser(state: VizQLState) -> Literal["field_mapper", "end"]:
+def route_after_semantic_parser(state: VizQLState) -> Literal["insight", "end"]:
     """
-    Route after SemanticParser node.
+    Route after SemanticParser Subgraph.
     
     Decision rules based on intent type:
-    - DATA_QUERY -> field_mapper (continue with data analysis)
+    - DATA_QUERY with successful query_result -> insight (continue with analysis)
     - CLARIFICATION -> end (return clarification question)
     - GENERAL -> end (return general response)
     - IRRELEVANT -> end (return rejection message)
+    - Query execution failed -> end (return error to user)
+    
+    Note: Error handling is now done within SemanticParser Subgraph via ReAct.
+    If we reach this routing function, either:
+    1. Query succeeded -> route to insight
+    2. ReAct decided to ABORT/CLARIFY -> route to end
     
     Args:
         state: Current workflow state
     
     Returns:
-        Next node name: "field_mapper" or "end"
+        Next node name: "insight" or "end"
     """
     from tableau_assistant.src.core.models import IntentType
     
@@ -45,10 +63,34 @@ def route_after_semantic_parser(state: VizQLState) -> Literal["field_mapper", "e
 
     # Check intent_type (flattened field from SemanticParseResult)
     intent_type = state.get("intent_type")
+    
     if intent_type is not None:
         if intent_type == IntentType.DATA_QUERY:
-            logger.debug(f"Routing to field_mapper (DATA_QUERY): question='{question}...'")
-            return "field_mapper"
+            # Check if query execution succeeded
+            query_result = state.get("query_result")
+            if query_result is not None:
+                # Check for success
+                is_success = False
+                if hasattr(query_result, 'is_success'):
+                    is_success = query_result.is_success()
+                elif hasattr(query_result, 'error'):
+                    is_success = not bool(query_result.error)
+                elif isinstance(query_result, dict):
+                    is_success = not bool(query_result.get('error'))
+                else:
+                    # Assume success if we have a result
+                    is_success = True
+                
+                if is_success:
+                    logger.debug(f"Routing to insight (DATA_QUERY success): question='{question}...'")
+                    return "insight"
+                else:
+                    logger.info(f"Query failed, routing to END: '{question}...'")
+                    return "end"
+            else:
+                # No query result - might be clarification or abort from ReAct
+                logger.info(f"No query result, routing to END: '{question}...'")
+                return "end"
         else:
             logger.info(f"Non-DATA_QUERY intent ({intent_type}), routing to END: '{question}...'")
             return "end"
@@ -56,36 +98,45 @@ def route_after_semantic_parser(state: VizQLState) -> Literal["field_mapper", "e
     # Fallback: check is_analysis_question
     is_analysis_question = state.get("is_analysis_question", True)
     
-    if is_analysis_question:
-        logger.debug(f"Routing to field_mapper: question='{question}...'")
-        return "field_mapper"
+    if is_analysis_question and state.get("query_result") is not None:
+        logger.debug(f"Routing to insight (fallback): question='{question}...'")
+        return "insight"
     
-    logger.info(f"Non-analysis question detected, routing to END: '{question}...'")
+    logger.info(f"Non-analysis question or no result, routing to END: '{question}...'")
     return "end"
 
 
 def route_after_replanner(
     state: VizQLState,
     max_replan_rounds: int = 3
-) -> Literal["semantic_parser", "end"]:
+) -> Union[Literal["semantic_parser", "end"], List[Send]]:
     """
-    Smart replan routing logic.
+    Smart replan routing logic with parallel execution support.
     
     Decision rules (determined by Replanner Agent LLM):
-    1. completeness_score >= 0.9 -> END (analysis complete)
-    2. completeness_score < 0.9 and replan_count < max -> replan
-       - Route to semantic_parser (parse new exploration question)
+    1. completeness_score >= 0.9 or should_replan=False -> END (analysis complete)
+    2. should_replan=True and replan_count < max:
+       - N=1 question: Return "semantic_parser" (serial execution)
+       - N>1 questions: Return List[Send] (parallel execution via Send() API)
     3. replan_count >= max -> END (force end)
+    
+    Parallel Execution:
+    - When multiple exploration questions are generated, use Send() API
+    - Each Send() creates a parallel branch with its own question
+    - LangGraph automatically merges states using merge_insights reducer
     
     Args:
         state: Current workflow state
         max_replan_rounds: Maximum number of replan rounds (default 3)
     
     Returns:
-        Next node name: "semantic_parser" or "end"
+        - "semantic_parser": Serial execution for single question
+        - "end": Analysis complete or max rounds reached
+        - List[Send]: Parallel execution for multiple questions
     """
     replan_decision = state.get("replan_decision")
     replan_count = state.get("replan_count", 0)
+    parallel_questions = state.get("parallel_questions", [])
 
     # Extract decision details - handle both Pydantic object and dict
     if replan_decision is None:
@@ -112,105 +163,64 @@ def route_after_replanner(
         return "end"
     
     # Route based on Replanner's smart decision
-    if should_replan:
-        # Get exploration questions for logging
-        if exploration_questions:
-            first_q = exploration_questions[0]
-            if hasattr(first_q, "question"):
-                next_question = first_q.question
-            elif isinstance(first_q, dict):
-                next_question = first_q.get("question", "N/A")
-            else:
-                next_question = str(first_q)
-        else:
-            next_question = "N/A"
+    if should_replan and exploration_questions:
+        num_questions = len(exploration_questions)
         
-        logger.info(
-            f"Replanning: round {replan_count + 1}/{max_replan_rounds}, "
-            f"completeness={completeness_score:.2f}, "
-            f"next_question='{next_question[:50]}...'"
-        )
-        return "semantic_parser"
+        # Extract question texts for logging and Send()
+        question_texts = []
+        for q in exploration_questions:
+            if hasattr(q, "question"):
+                question_texts.append(q.question)
+            elif isinstance(q, dict):
+                question_texts.append(q.get("question", str(q)))
+            else:
+                question_texts.append(str(q))
+        
+        if num_questions == 1:
+            # Single question: serial execution
+            logger.info(
+                f"Replanning (serial): round {replan_count + 1}/{max_replan_rounds}, "
+                f"completeness={completeness_score:.2f}, "
+                f"question='{question_texts[0][:50]}...'"
+            )
+            return "semantic_parser"
+        else:
+            # Multiple questions: parallel execution via Send() API
+            logger.info(
+                f"Replanning (parallel): round {replan_count + 1}/{max_replan_rounds}, "
+                f"completeness={completeness_score:.2f}, "
+                f"dispatching {num_questions} parallel branches"
+            )
+            
+            # Create Send() for each question
+            sends = []
+            for i, question_text in enumerate(question_texts):
+                # Each Send() creates a parallel branch with updated question
+                sends.append(
+                    Send(
+                        "semantic_parser",
+                        {
+                            "question": question_text,
+                            "replan_count": replan_count + 1,
+                            # Clear previous results for fresh analysis
+                            "semantic_query": None,
+                            "mapped_query": None,
+                            "vizql_query": None,
+                            "query_result": None,
+                            "enhanced_profile": None,
+                            "insights": [],
+                        }
+                    )
+                )
+                logger.debug(f"  Branch {i+1}: '{question_text[:50]}...'")
+            
+            return sends
     
     logger.info(
         f"Analysis complete: completeness={completeness_score:.2f}, "
         f"rounds={replan_count}, routing to END"
     )
     return "end"
-
-
-def route_after_execute(state: VizQLState) -> Literal["insight", "self_correction", "end"]:
-    """
-    Route after Execute node.
-    
-    Decision rules:
-    - query_result.is_success() -> insight (continue to analysis)
-    - query_result.error and correction_count < max -> self_correction (try to fix)
-    - query_result.error and correction exhausted -> end (结束，返回错误信息)
-    
-    Args:
-        state: Current workflow state
-    
-    Returns:
-        Next node name: "insight", "self_correction", or "end"
-    """
-    query_result = state.get("query_result")
-    correction_count = state.get("correction_count", 0)
-    correction_exhausted = state.get("correction_exhausted", False)
-    max_correction_attempts = 2  # 最多纠错 2 次
-    
-    # 检查是否有错误
-    has_error = False
-    is_success = False
-    if query_result:
-        if hasattr(query_result, 'is_success'):
-            is_success = query_result.is_success()
-            has_error = not is_success
-        elif hasattr(query_result, 'error'):
-            has_error = bool(query_result.error)
-            is_success = not has_error
-        elif isinstance(query_result, dict):
-            has_error = bool(query_result.get('error'))
-            is_success = not has_error
-    
-    # 成功执行，进入 insight 分析
-    if is_success:
-        logger.info("Query succeeded, routing to insight")
-        return "insight"
-    
-    # 有错误且未用尽纠错次数，尝试纠错
-    if has_error and not correction_exhausted and correction_count < max_correction_attempts:
-        logger.info(f"Query failed, routing to self_correction (attempt {correction_count + 1}/{max_correction_attempts})")
-        return "self_correction"
-    
-    # 纠错用尽，直接结束
-    logger.warning(f"Query failed and correction exhausted ({correction_count}/{max_correction_attempts}), routing to END")
-    return "end"
-
-
-def route_after_self_correction(state: VizQLState) -> Literal["execute", "end"]:
-    """
-    Route after Self-Correction node.
-    
-    Decision rules:
-    - correction_exhausted=False -> execute (retry with corrected query)
-    - correction_exhausted=True -> end (无法纠正，结束)
-    
-    Args:
-        state: Current workflow state
-    
-    Returns:
-        Next node name: "execute" or "end"
-    """
-    correction_exhausted = state.get("correction_exhausted", True)
-    
-    if correction_exhausted:
-        logger.warning("Correction exhausted or failed, routing to END")
-        return "end"
-    
-    logger.info("Query corrected, routing to execute for retry")
-    return "execute"
-
 
 
 def calculate_completeness_score(
@@ -243,21 +253,24 @@ def calculate_completeness_score(
     # Auxiliary score: sanity check for extreme cases (20% weight)
     auxiliary_score = 1.0
     
-    subtask_results = state.get("subtask_results", [])
     errors = state.get("errors", [])
     insights = state.get("insights", [])
+    accumulated_insights = state.get("accumulated_insights", [])
     
-    # Check 1: No results at all is a critical failure
-    if not subtask_results:
+    # Use accumulated_insights if available (from parallel execution)
+    all_insights = accumulated_insights if accumulated_insights else insights
+    
+    # Check 1: No query result at all is a critical failure
+    query_result = state.get("query_result")
+    if not query_result:
         auxiliary_score = 0.0
     else:
-        # Check 2: High error ratio (> 50%) indicates problems
-        error_ratio = len(errors) / len(subtask_results) if subtask_results else 0
-        if error_ratio > 0.5:
+        # Check 2: High error ratio indicates problems
+        if errors:
             auxiliary_score = min(auxiliary_score, 0.5)
         
         # Check 3: No insights means analysis is incomplete
-        if not insights:
+        if not all_insights:
             auxiliary_score = min(auxiliary_score, 0.5)
     
     # Final score: LLM is primary (80%), auxiliary is sanity check (20%)

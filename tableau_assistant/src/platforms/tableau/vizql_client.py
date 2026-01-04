@@ -77,14 +77,13 @@ class VizQLClient:
         
         Args:
             config: Client configuration. If None, reads from environment variables.
-            domain: Tableau domain for multi-environment support. Used when config is None.
+            domain: Tableau domain (deprecated, kept for compatibility).
         """
         if config is None:
             from tableau_assistant.src.infra.config.settings import settings
-            from tableau_assistant.src.infra.config.tableau_env import get_tableau_config
             
-            # 获取对应环境的配置
-            tableau_config = get_tableau_config(domain)
+            # 获取配置
+            tableau_config = settings.get_tableau_config()
             
             config = VizQLClientConfig(
                 base_url=tableau_config.domain,

@@ -34,7 +34,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
 from ..models import Step1Output
-from ....core.models.data_model import DataModel
+from ....infra.storage.data_model import DataModel
 from ....core.exceptions import ValidationError
 from ..prompts.step1 import STEP1_PROMPT
 from tableau_assistant.src.agents.base import (

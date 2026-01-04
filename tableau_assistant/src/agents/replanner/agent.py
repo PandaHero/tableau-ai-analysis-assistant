@@ -19,10 +19,10 @@ import logging
 import json
 from typing import Dict, List, Any, Optional
 
-from tableau_assistant.src.core.models import ReplanDecision, ExplorationQuestion
+from tableau_assistant.src.agents.replanner.models import ReplanDecision, ExplorationQuestion
 from tableau_assistant.src.agents.insight.models import Insight
 from tableau_assistant.src.agents.base import clean_json_output, get_llm, call_llm_with_tools
-from .prompt import REPLANNER_PROMPT
+from .prompts import REPLANNER_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,15 @@ class ReplannerAgent:
         
         try:
             # 使用 Prompt 格式化消息
+            # 从 state 或 config 获取 user_language，默认为中文
+            user_language = "Chinese"
+            if state and "user_language" in state:
+                user_language = state["user_language"]
+            elif config and "configurable" in config:
+                user_language = config["configurable"].get("user_language", "Chinese")
+            
             messages = REPLANNER_PROMPT.format_messages(
+                user_language=user_language,
                 original_question=original_question,
                 insights_summary=insights_summary,
                 data_insight_profile=profile_str,
@@ -301,7 +309,7 @@ class ReplannerAgent:
             return "（无已回答问题）"
         
         # 使用 trim_answered_questions 限制长度
-        from tableau_assistant.src.infra.utils.conversation import trim_answered_questions
+        from .utils import trim_answered_questions
         trimmed = trim_answered_questions(questions)
         
         lines = []

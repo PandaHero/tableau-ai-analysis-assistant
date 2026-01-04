@@ -56,8 +56,8 @@ class DateGranularity(str, Enum):
 
 class SortDirection(str, Enum):
     """Sort direction: DESC=descending (high to low) | ASC=ascending (low to high)"""
-    ASC = "asc"
-    DESC = "desc"
+    ASC = "ASC"
+    DESC = "DESC"
 
 
 class FilterType(str, Enum):

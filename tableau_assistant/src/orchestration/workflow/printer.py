@@ -23,8 +23,9 @@
 import sys
 from typing import Optional
 
-from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, ReplanDecision
-from tableau_assistant.src.core.models import ExecuteResult
+from tableau_assistant.src.core.models import SemanticQuery, ExecuteResult
+from tableau_assistant.src.agents.replanner.models import ReplanDecision
+from tableau_assistant.src.agents.field_mapper.models import MappedQuery
 from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery
 from tableau_assistant.src.orchestration.workflow.executor import NodeOutput, WorkflowEvent, WorkflowResult
 

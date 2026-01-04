@@ -78,10 +78,11 @@ class DateRangeFilter(Filter):
     
     <rule>
     Use current_time to calculate concrete dates for relative terms:
-    this year -> YYYY-01-01 to YYYY-12-31
+    this year -> YYYY-01-01 to current_date (NOT year end!)
     last year -> (YYYY-1)-01-01 to (YYYY-1)-12-31
-    this month -> YYYY-MM-01 to YYYY-MM-last
-    last month -> previous month range
+    this month -> YYYY-MM-01 to current_date (NOT month end!)
+    last month -> previous month range (full month)
+    IMPORTANT: "this year/month" end_date = current_date, NOT the last day of year/month
     </rule>
     """
     filter_type: FilterType = Field(default=FilterType.DATE_RANGE)

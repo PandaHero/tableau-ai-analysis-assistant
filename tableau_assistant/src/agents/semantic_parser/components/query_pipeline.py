@@ -1,7 +1,7 @@
 """QueryPipeline - Core query execution pipeline.
 
 This component executes the post-semantic-understanding pipeline:
-    MapFields → BuildQuery → ExecuteQuery
+    MapFields "BuildQuery "ExecuteQuery
 
 Note: Step1 and Step2 are handled by separate LangGraph nodes in subgraph.py.
 This separation enables ReAct error handling to retry from specific steps.
@@ -24,7 +24,7 @@ Error Handling:
 - ReAct error handler in subgraph.py handles retry decisions
 
 Architecture:
-- QueryPipeline: MapFields → BuildQuery → ExecuteQuery only
+- QueryPipeline: MapFields "BuildQuery "ExecuteQuery only
 - step1_node/step2_node: Separate LangGraph nodes in subgraph.py
 - react_error_handler_node: Handles errors and decides retry target
 """
@@ -35,11 +35,11 @@ from typing import Any, Dict, List, Optional
 
 from langgraph.types import RunnableConfig
 
-from ..models.pipeline import QueryResult, QueryError, QueryErrorType
+from ..models.pipeline import PipelineResult, QueryError, QueryErrorType
 from ..models import Step1Output, Step2Output
 from ....core.models import SemanticQuery
-from ....core.models.data_model import DataModel
-from ....core.models.field_mapping import MappedQuery
+from ....infra.storage.data_model import DataModel
+from ....agents.field_mapper.models import MappedQuery
 from ....agents.base import (
     MiddlewareRunner,
     Runtime,
@@ -49,16 +49,16 @@ logger = logging.getLogger(__name__)
 
 
 class QueryPipeline:
-    """Query execution pipeline: MapFields → BuildQuery → ExecuteQuery.
+    """Query execution pipeline: MapFields "BuildQuery "ExecuteQuery.
     
     This pipeline executes the post-semantic-understanding steps.
     Step1 and Step2 are handled by separate LangGraph nodes.
     
     Field mapping uses existing RAG+LLM hybrid strategy:
     1. Cache check (LangGraph SqliteStore)
-    2. RAG retrieval (confidence >= 0.9 → direct return)
-    3. LLM Fallback (confidence < 0.9 → select from candidates)
-    4. RAG unavailable → LLM Only
+    2. RAG retrieval (confidence >= 0.9 "direct return)
+    3. LLM Fallback (confidence < 0.9 "select from candidates)
+    4. RAG unavailable "LLM Only
     
     Attributes:
         middleware_runner: MiddlewareRunner instance for hook execution
@@ -88,8 +88,8 @@ class QueryPipeline:
         datasource_luid: str = "default",
         state: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
-    ) -> QueryResult:
-        """Execute the query pipeline: MapFields → BuildQuery → ExecuteQuery.
+    ) -> PipelineResult:
+        """Execute the query pipeline: MapFields "BuildQuery "ExecuteQuery.
         
         Supports retry from map_fields or build_query by checking state:
         - If mapped_query exists in state, skip MapFields
@@ -109,7 +109,7 @@ class QueryPipeline:
             config: LangGraph RunnableConfig
         
         Returns:
-            QueryResult with success/error status and data
+            PipelineResult with success/error status and data
         """
         start_time = time.time()
         current_state = dict(state) if state else {}
@@ -118,7 +118,7 @@ class QueryPipeline:
         error_feedback_info = current_state.pop("error_feedback", None)
         
         # Track intermediate results - use existing from state if available
-        # 内部使用 MappedQuery 对象，state 中可能是 dict 需要转换
+        # 内部使用 MappedQuery 对象，state 中可能是 dict 需要转"
         mapped_query: Optional[MappedQuery] = None
         if current_state.get("mapped_query"):
             state_mq = current_state.get("mapped_query")
@@ -142,9 +142,9 @@ class QueryPipeline:
         semantic_query = self._build_semantic_query(step1_output, step2_output)
         
         try:
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             # MapFields: Field mapping (RAG+LLM hybrid, skip if done)
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             if mapped_query is None:
                 logger.info("QueryPipeline: Starting MapFields")
                 
@@ -160,15 +160,15 @@ class QueryPipeline:
                     map_result.semantic_query = semantic_query.model_dump() if semantic_query else None
                     return map_result
                 
-                # map_result.mapped_query 是 dict，转换为 MappedQuery 对象
+                # map_result.mapped_query "dict，转换为 MappedQuery 对象
                 if map_result.mapped_query:
                     mapped_query = MappedQuery.model_validate(map_result.mapped_query)
             else:
                 logger.info("QueryPipeline: Skipping MapFields (using existing output)")
             
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             # ResolveFilterValues: Validate and resolve SetFilter values
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             filter_resolve_info = None
             if mapped_query:
                 resolve_result = await self._resolve_filter_values(
@@ -179,16 +179,16 @@ class QueryPipeline:
                 )
                 
                 if resolve_result:
-                    # resolve_result["mapped_query"] 现在是 MappedQuery 对象
+                    # resolve_result["mapped_query"] 现在"MappedQuery 对象
                     mapped_query = resolve_result.get("mapped_query", mapped_query)
                     filter_resolve_info = resolve_result.get("resolve_info")
                     
                     if filter_resolve_info and filter_resolve_info.get("warning"):
                         logger.warning(f"Filter resolve warning: {filter_resolve_info['warning']}")
             
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             # BuildQuery: Build VizQL query (skip if done)
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             if vizql_query_dict is None:
                 logger.info("QueryPipeline: Starting BuildQuery")
                 
@@ -209,9 +209,9 @@ class QueryPipeline:
             else:
                 logger.info("QueryPipeline: Skipping BuildQuery (using existing output)")
             
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             # ExecuteQuery: Execute VizQL query
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             logger.info("QueryPipeline: Starting ExecuteQuery")
             
             execute_result = await self._execute_query(
@@ -226,9 +226,9 @@ class QueryPipeline:
             execute_result.vizql_query = vizql_query_dict
             execute_result.execution_time_ms = int((time.time() - start_time) * 1000)
             
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             # Check for clarification: If fallback query returned no results
-            # ═══════════════════════════════════════════════════════════════
+            # ══════════════════════════════════════════════════════════════"
             if (execute_result.success and 
                 execute_result.row_count == 0 and 
                 filter_resolve_info and 
@@ -240,8 +240,7 @@ class QueryPipeline:
                 execute_result.needs_clarification = True
                 execute_result.clarification = {
                     "type": "FILTER_VALUE_NOT_FOUND",
-                    "message": f"筛选值 {filter_resolve_info.get('unmatched_values', [])} "
-                               f"在数据中没有找到匹配的结果",
+                    "message": f"筛选 {filter_resolve_info.get('unmatched_values', [])} 在数据中没有找到匹配的结果",
                     "field": filter_resolve_info.get("field"),
                     "user_values": filter_resolve_info.get("unmatched_values", []),
                     "available_values": filter_resolve_info.get("available_values", []),
@@ -253,7 +252,7 @@ class QueryPipeline:
             logger.error(f"QueryPipeline failed: {e}", exc_info=True)
             execution_time_ms = int((time.time() - start_time) * 1000)
             
-            return QueryResult.fail(
+            return PipelineResult.fail(
                 error=QueryError(
                     type=QueryErrorType.UNKNOWN,
                     message=f"Pipeline execution failed: {e}",
@@ -267,9 +266,9 @@ class QueryPipeline:
             )
 
     
-    # ═══════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════"
     # Step Execution Methods
-    # ═══════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════"
     
     async def _execute_map_fields(
         self,
@@ -278,7 +277,7 @@ class QueryPipeline:
         context: Optional[str],
         data_model: Optional[DataModel],
         config: Optional[RunnableConfig],
-    ) -> QueryResult:
+    ) -> PipelineResult:
         """Execute MapFields tool.
         
         Uses call_tool_with_middleware for:
@@ -286,9 +285,9 @@ class QueryPipeline:
         
         Field mapping uses existing RAG+LLM hybrid strategy:
         1. Cache check
-        2. RAG retrieval (confidence >= 0.9 → direct return)
+        2. RAG retrieval (confidence >= 0.9 "direct return)
         3. LLM Fallback
-        4. RAG unavailable → LLM Only
+        4. RAG unavailable "LLM Only
         
         Args:
             semantic_query: SemanticQuery to map
@@ -298,7 +297,7 @@ class QueryPipeline:
             config: LangGraph config
         
         Returns:
-            QueryResult with mapped_query or error
+            PipelineResult with mapped_query or error
         """
         try:
             from ....orchestration.tools.map_fields import map_fields_async
@@ -315,7 +314,7 @@ class QueryPipeline:
                 error = result.error
                 error_type = self._map_field_error_type(error.type if error else None)
                 
-                return QueryResult.fail(
+                return PipelineResult.fail(
                     error=QueryError(
                         type=error_type,
                         message=error.message if error else "Field mapping failed",
@@ -329,14 +328,14 @@ class QueryPipeline:
                     ),
                 )
             
-            return QueryResult(
+            return PipelineResult(
                 success=True,
                 mapped_query=result.mapped_query,
             )
             
         except Exception as e:
             logger.error(f"MapFields failed: {e}", exc_info=True)
-            return QueryResult.fail(
+            return PipelineResult.fail(
                 error=QueryError(
                     type=QueryErrorType.MAPPING_FAILED,
                     message=f"Field mapping failed: {e}",
@@ -351,7 +350,7 @@ class QueryPipeline:
         datasource_luid: str,
         config: Optional[RunnableConfig],
         error_feedback: Optional[str] = None,
-    ) -> QueryResult:
+    ) -> PipelineResult:
         """Execute BuildQuery tool.
         
         Pure logic, no middleware needed.
@@ -365,7 +364,7 @@ class QueryPipeline:
             error_feedback: Feedback from previous error (for logging)
         
         Returns:
-            QueryResult with vizql_query or error
+            PipelineResult with vizql_query or error
         """
         try:
             if error_feedback:
@@ -384,7 +383,7 @@ class QueryPipeline:
                 error = result.error
                 error_type = self._map_build_error_type(error.type if error else None)
                 
-                return QueryResult.fail(
+                return PipelineResult.fail(
                     error=QueryError(
                         type=error_type,
                         message=error.message if error else "Query build failed",
@@ -393,14 +392,14 @@ class QueryPipeline:
                     ),
                 )
             
-            return QueryResult(
+            return PipelineResult(
                 success=True,
                 vizql_query=result.vizql_query,
             )
             
         except Exception as e:
             logger.error(f"BuildQuery failed: {e}", exc_info=True)
-            return QueryResult.fail(
+            return PipelineResult.fail(
                 error=QueryError(
                     type=QueryErrorType.BUILD_FAILED,
                     message=f"Query build failed: {e}",
@@ -414,7 +413,7 @@ class QueryPipeline:
         vizql_query: Dict[str, Any],
         datasource_luid: str,
         config: Optional[RunnableConfig],
-    ) -> QueryResult:
+    ) -> PipelineResult:
         """Execute ExecuteQuery tool.
         
         Uses call_tool_with_middleware for:
@@ -428,7 +427,7 @@ class QueryPipeline:
             config: LangGraph config
         
         Returns:
-            QueryResult with data or error
+            PipelineResult with data or error
         """
         try:
             from ....orchestration.tools.execute_query import execute_query_async
@@ -443,7 +442,7 @@ class QueryPipeline:
                 error = result.error
                 error_type = self._map_execute_error_type(error.type if error else None)
                 
-                return QueryResult.fail(
+                return PipelineResult.fail(
                     error=QueryError(
                         type=error_type,
                         message=error.message if error else "Query execution failed",
@@ -453,7 +452,7 @@ class QueryPipeline:
                     ),
                 )
             
-            return QueryResult.ok(
+            return PipelineResult.ok(
                 data=result.data or [],
                 columns=result.columns,
                 row_count=result.row_count,
@@ -463,7 +462,7 @@ class QueryPipeline:
             
         except Exception as e:
             logger.error(f"ExecuteQuery failed: {e}", exc_info=True)
-            return QueryResult.fail(
+            return PipelineResult.fail(
                 error=QueryError(
                     type=QueryErrorType.EXECUTION_FAILED,
                     message=f"Query execution failed: {e}",
@@ -473,9 +472,9 @@ class QueryPipeline:
             )
 
     
-    # ═══════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════"
     # Helper Methods
-    # ═══════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════"
     
     def _build_semantic_query(
         self,
@@ -598,19 +597,19 @@ class QueryPipeline:
         data_model: Optional[DataModel] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        解析并验证 SetFilter 的值
+        解析并验"SetFilter 的"
         
-        对 MappedQuery 中的 SetFilter 进行值验证：
-        1. 从 DataModel 的 sample_values 获取字段唯一值
-        2. 精确匹配 → RAG 语义匹配
-        3. 匹配成功 → 使用真实值
-        4. 匹配失败 → 降级为 TextMatchFilter（单值模糊匹配）
+        "MappedQuery 中的 SetFilter 进行值验证：
+        1. "DataModel "sample_values 获取字段唯一"
+        2. 精确匹配 "RAG 语义匹配
+        3. 匹配成功 "使用真实"
+        4. 匹配失败 "降级"TextMatchFilter（单值模糊匹配）
         
         Args:
             mapped_query: MappedQuery Pydantic 对象
-            datasource_luid: 数据源 LUID
+            datasource_luid: 数据"LUID
             config: LangGraph 配置
-            data_model: DataModel 实例（用于获取 sample_values）
+            data_model: DataModel 实例（用于获"sample_values"
         
         Returns:
             {
@@ -623,7 +622,7 @@ class QueryPipeline:
                     "field": str,
                 }
             }
-            如果没有 SetFilter，返回 None
+            如果没有 SetFilter，返"None
         """
         try:
             from tableau_assistant.src.orchestration.tools.filter_value_resolver import (
@@ -653,7 +652,7 @@ class QueryPipeline:
             
             logger.info(f"QueryPipeline: Resolving {len(set_filters)} SetFilter(s)")
             
-            # 创建解析器（传入 data_model）
+            # 创建解析器（传入 data_model"
             resolver = FilterValueResolver(
                 datasource_luid=datasource_luid,
                 config=config,
@@ -661,7 +660,7 @@ class QueryPipeline:
             )
             
             # 解析每个 SetFilter
-            resolved_filters = list(other_filters)  # 保留其他筛选器（Pydantic 对象）
+            resolved_filters = list(other_filters)  # 保留其他筛选器（Pydantic 对象"
             resolve_info = {
                 "is_fallback": False,
                 "warning": None,
@@ -677,7 +676,7 @@ class QueryPipeline:
                 mapping = mapped_query.field_mappings.get(field_name)
                 technical_field = mapping.technical_field if mapping else field_name
                 
-                # 解析筛选值
+                # 解析筛选"
                 result = await resolver.resolve_set_filter(
                     filter_spec=sf,
                     technical_field_name=technical_field,
@@ -691,7 +690,7 @@ class QueryPipeline:
                     resolve_info["available_values"] = result.available_values
                     resolve_info["field"] = field_name
                     
-                    # MatchFilterFallback 需要转换为 TextMatchFilter（Pydantic 模型）
+                    # MatchFilterFallback 需要转换为 TextMatchFilter（Pydantic 模型"
                     if isinstance(result.resolved_filter, MatchFilterFallback):
                         match_type_map = {
                             "contains": TextMatchType.CONTAINS,
@@ -717,13 +716,13 @@ class QueryPipeline:
                     # 直接使用解析后的 SetFilter Pydantic 对象
                     resolved_filters.append(result.resolved_filter)
             
-            # 创建新的 SemanticQuery（使用 model_copy 更新 filters）
+            # 创建新的 SemanticQuery（使"model_copy 更新 filters"
             new_semantic_query = mapped_query.semantic_query.model_copy(update={"filters": resolved_filters})
             
-            # 创建新的 MappedQuery（使用 model_copy 更新 semantic_query）
+            # 创建新的 MappedQuery（使"model_copy 更新 semantic_query"
             new_mapped_query = mapped_query.model_copy(update={"semantic_query": new_semantic_query})
             
-            # 直接返回 Pydantic 对象，不序列化
+            # 直接返回 Pydantic 对象，不序列"
             return {
                 "mapped_query": new_mapped_query,
                 "resolve_info": resolve_info,

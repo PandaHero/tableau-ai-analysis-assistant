@@ -25,10 +25,9 @@ Requirements: 6.3
 """
 import logging
 import time
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List
 
-if TYPE_CHECKING:
-    from langgraph.store.sqlite import SqliteStore
+from langgraph.store.sqlite import SqliteStore
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ class FieldIndexCache:
     - ("field_index", datasource_luid) -> 索引数据
     """
     
-    def __init__(self, store: "SqliteStore"):
+    def __init__(self, store: SqliteStore):
         """
         初始化缓存
         

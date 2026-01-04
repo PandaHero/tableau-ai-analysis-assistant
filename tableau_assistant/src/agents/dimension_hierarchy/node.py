@@ -23,8 +23,8 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Set
 
-from tableau_assistant.src.core.models import (
-    DataModel,
+from tableau_assistant.src.infra.storage.data_model import DataModel
+from tableau_assistant.src.agents.dimension_hierarchy.models import (
     DimensionHierarchyResult,
     DimensionAttributes,
 )
@@ -697,7 +697,7 @@ def _get_dimension_rag():
     如果没有可用的提供者，返回 None（禁用 RAG）。
     """
     try:
-        from tableau_assistant.src.infra.ai.rag.dimension_pattern import (
+        from tableau_assistant.src.agents.field_mapper.rag.dimension_pattern import (
             DimensionHierarchyRAG,
         )
         from tableau_assistant.src.infra.ai import EmbeddingProviderFactory

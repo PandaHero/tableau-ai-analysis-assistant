@@ -1,17 +1,19 @@
-"""Validation and result models.
+"""验证和结果模型。
 
-Models for validation errors, results, and query execution results.
-Used by platform adapters for validation and error reporting.
+用于验证错误和结果的模型。
+由平台适配器用于验证和错误报告。
+
+注意：QueryResult 和 ColumnInfo 已移至 execute_result.py，
+作为 ExecuteResult 和 ColumnInfo 用于统一结果处理。
 """
 
 from enum import Enum
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class ValidationErrorType(str, Enum):
-    """Type of validation error."""
+    """验证错误类型。"""
     MISSING_REQUIRED = "MISSING_REQUIRED"
     INVALID_VALUE = "INVALID_VALUE"
     INVALID_TYPE = "INVALID_TYPE"
@@ -21,120 +23,58 @@ class ValidationErrorType(str, Enum):
 
 
 class ValidationError(BaseModel):
-    """Validation error details."""
+    """验证错误详情。"""
     model_config = ConfigDict(extra="forbid")
     
     error_type: ValidationErrorType = Field(
-        description="""<what>Type of validation error</what>
-<when>ALWAYS required</when>"""
+        description="""<what>验证错误类型</what>
+<when>始终必需</when>"""
     )
     
     field_path: str = Field(
-        description="""<what>Path to the field with error</what>
-<when>ALWAYS required</when>
-<rule>Use dot notation, e.g., 'computations[0].partition_by'</rule>"""
+        description="""<what>出错字段的路径</what>
+<when>始终必需</when>
+<rule>使用点号表示法，如 'computations[0].partition_by'</rule>"""
     )
     
     message: str = Field(
-        description="""<what>Human-readable error message</what>
-<when>ALWAYS required</when>"""
+        description="""<what>人类可读的错误消息</what>
+<when>始终必需</when>"""
     )
     
     suggestion: str | None = Field(
         default=None,
-        description="""<what>Suggested fix for the error</what>
-<when>Optional, when fix is known</when>"""
+        description="""<what>建议的修复方法</what>
+<when>可选，当已知修复方法时</when>"""
     )
 
 
 class ValidationResult(BaseModel):
-    """Result of validation.
+    """验证结果。
     
-    Used by platform adapters to report validation results.
+    由平台适配器用于报告验证结果。
     """
     model_config = ConfigDict(extra="forbid")
     
     is_valid: bool = Field(
-        description="""<what>Whether validation passed</what>
-<when>ALWAYS required</when>"""
+        description="""<what>验证是否通过</what>
+<when>始终必需</when>"""
     )
     
     errors: list[ValidationError] = Field(
         default_factory=list,
-        description="""<what>List of validation errors</what>
-<when>When is_valid=False</when>"""
+        description="""<what>验证错误列表</what>
+<when>当 is_valid=False 时</when>"""
     )
     
     warnings: list[ValidationError] = Field(
         default_factory=list,
-        description="""<what>List of validation warnings (non-blocking)</what>
-<when>Optional, for non-critical issues</when>"""
+        description="""<what>验证警告列表（非阻塞）</what>
+<when>可选，用于非关键问题</when>"""
     )
     
     auto_fixed: list[str] = Field(
         default_factory=list,
-        description="""<what>List of fields that were auto-fixed</what>
-<when>When auto-correction was applied</when>"""
-    )
-
-
-class ColumnInfo(BaseModel):
-    """Column information in query result."""
-    model_config = ConfigDict(extra="forbid")
-    
-    name: str = Field(
-        description="""<what>Column name</what>
-<when>ALWAYS required</when>"""
-    )
-    
-    data_type: str = Field(
-        description="""<what>Data type of the column</what>
-<when>ALWAYS required</when>"""
-    )
-    
-    is_dimension: bool = Field(
-        default=False,
-        description="""<what>Whether this is a dimension column</what>
-<when>Default False</when>"""
-    )
-    
-    is_measure: bool = Field(
-        default=False,
-        description="""<what>Whether this is a measure column</what>
-<when>Default False</when>"""
-    )
-    
-    is_computation: bool = Field(
-        default=False,
-        description="""<what>Whether this is a computed column</what>
-<when>Default False</when>"""
-    )
-
-
-class QueryResult(BaseModel):
-    """Query execution result.
-    
-    Returned by platform adapters after executing a query.
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    columns: list[ColumnInfo] = Field(
-        description="""<what>Column information</what>
-<when>ALWAYS required</when>"""
-    )
-    
-    rows: list[dict[str, Any]] = Field(
-        description="""<what>Query result rows</what>
-<when>ALWAYS required</when>"""
-    )
-    
-    row_count: int = Field(
-        description="""<what>Total number of rows returned</what>
-<when>ALWAYS required</when>"""
-    )
-    
-    execution_time_ms: int | None = Field(
-        default=None,
-        description="""<what>Query execution time in milliseconds</what>
-<when>Optional, for performance tracking</when>"""
+        description="""<what>已自动修复的字段列表</what>
+<when>当应用了自动修正时</when>"""
     )

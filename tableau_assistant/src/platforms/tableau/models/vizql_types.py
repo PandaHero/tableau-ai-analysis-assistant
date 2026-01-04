@@ -8,9 +8,6 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# Import base class from core
-from tableau_assistant.src.core.models.query_request import QueryRequest
-
 
 class VizQLFunction(str, Enum):
     """VizQL aggregation functions (from OpenAPI spec)."""
@@ -162,14 +159,13 @@ class VizQLTopFilter(VizQLFilterBase):
 # VizQL Query Request/Response
 # ═══════════════════════════════════════════════════════════════════════════
 
-class VizQLQueryRequest(QueryRequest):
+class VizQLQueryRequest(BaseModel):
     """VizQL query request (from OpenAPI QueryRequest).
     
-    Inherits from QueryRequest base class for platform-agnostic state handling.
+    Standalone model for VizQL API query construction.
     """
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     
-    # Override with VizQL-specific types (same structure, just explicit)
     datasource: Dict[str, Any] = Field(description="Datasource identifier")
     fields: List[Dict[str, Any]] = Field(description="Fields to query")
     filters: Optional[List[Dict[str, Any]]] = Field(default=None, description="Filter conditions")

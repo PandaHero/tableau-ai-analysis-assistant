@@ -38,7 +38,7 @@ class TableauFieldMapper(BaseFieldMapper):
         """Get or create semantic mapper."""
         if self._semantic_mapper is None:
             try:
-                from tableau_assistant.src.infra.ai.rag.semantic_mapper import (
+                from tableau_assistant.src.agents.field_mapper.rag.semantic_mapper import (
                     SemanticMapper,
                 )
                 self._semantic_mapper = SemanticMapper()

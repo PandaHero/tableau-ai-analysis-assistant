@@ -1,13 +1,12 @@
-"""Tableau Query Builder - Converts SemanticQuery to VizQL API request.
+"""Tableau 查询构建器 - 将 SemanticQuery 转换为 VizQL API 请求。
 
-This is the core translation layer from platform-agnostic SemanticQuery
-to Tableau-specific VizQL API format.
+这是从平台无关的 SemanticQuery 到 Tableau 特定 VizQL API 格式的核心转换层。
 
-Key translations:
-- Computation.partition_by → Table Calculation dimensions (partitioning)
-- Computation subtypes (RankCalc, etc.) → TableCalcType
-- CalcParams → VizQL specific parameters
-- Filter types → VizQL filter types
+关键转换：
+- Computation.partition_by → 表计算维度（分区）
+- Computation 子类型（RankCalc 等）→ TableCalcType
+- CalcParams → VizQL 特定参数
+- Filter 类型 → VizQL 过滤器类型
 """
 
 import logging
@@ -46,7 +45,7 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
-# Mapping from core AggregationType to VizQL Function
+# 核心 AggregationType 到 VizQL Function 的映射
 AGGREGATION_TO_VIZQL: dict[AggregationType, VizQLFunction] = {
     AggregationType.SUM: VizQLFunction.SUM,
     AggregationType.AVG: VizQLFunction.AVG,
@@ -61,13 +60,13 @@ AGGREGATION_TO_VIZQL: dict[AggregationType, VizQLFunction] = {
 
 
 class TableauQueryBuilder(BaseQueryBuilder):
-    """Tableau query builder - converts SemanticQuery to VizQL request.
+    """Tableau 查询构建器 - 将 SemanticQuery 转换为 VizQL 请求。
     
-    Tableau-specific default values are defined here, not in CalcParams.
-    This keeps CalcParams platform-agnostic.
+    Tableau 特定的默认值在这里定义，而不是在 CalcParams 中。
+    这使 CalcParams 保持平台无关性。
     """
     
-    # Tableau-specific default values
+    # Tableau 特定的默认值
     DEFAULT_RANK_STYLE = RankStyle.COMPETITION
     DEFAULT_DIRECTION = SortDirection.DESC
     DEFAULT_RELATIVE_TO = RelativeTo.PREVIOUS
@@ -77,33 +76,33 @@ class TableauQueryBuilder(BaseQueryBuilder):
     DEFAULT_INCLUDE_CURRENT = True
     
     def build(self, semantic_query: SemanticQuery, **kwargs: Any) -> dict:
-        """Build VizQL API request from SemanticQuery.
+        """从 SemanticQuery 构建 VizQL API 请求。
         
         Args:
-            semantic_query: Platform-agnostic semantic query
-            **kwargs: Additional parameters:
-                - datasource_id: Datasource LUID
-                - field_metadata: dict[str, dict] mapping field names to metadata
-                  (used for determining field dataType for date handling)
+            semantic_query: 平台无关的语义查询
+            **kwargs: 额外参数：
+                - datasource_id: 数据源 LUID
+                - field_metadata: dict[str, dict] 字段名到元数据的映射
+                  （用于确定日期处理的字段 dataType）
             
         Returns:
-            VizQL API request dictionary
+            VizQL API 请求字典
         """
         field_metadata = kwargs.get("field_metadata", {})
         fields = []
         
-        # Build dimension fields
+        # 构建维度字段
         if semantic_query.dimensions:
             for dim in semantic_query.dimensions:
                 fields.append(self._build_dimension_field(dim, field_metadata))
         
-        # Build measure fields
+        # 构建度量字段
         if semantic_query.measures:
             for measure in semantic_query.measures:
                 fields.append(self._build_measure_field(measure))
         
-        # Build computation fields (table calculations or LOD)
-        # Important: LOD fields must come before table calc fields
+        # 构建计算字段（表计算或 LOD）
+        # 重要：LOD 字段必须在表计算字段之前
         if semantic_query.computations:
             view_dims = [d.field_name for d in (semantic_query.dimensions or [])]
             comp_fields = self._build_computation_fields(
@@ -113,7 +112,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
             )
             fields.extend(comp_fields)
         
-        # Build filters
+        # 构建过滤器
         filters = []
         if semantic_query.filters:
             for f in semantic_query.filters:
@@ -121,16 +120,16 @@ class TableauQueryBuilder(BaseQueryBuilder):
                 if vizql_filter:
                     filters.append(vizql_filter)
         
-        # Build Top N filters from computations with top_n parameter
+        # 从带有 top_n 参数的计算中构建 Top N 过滤器
         if semantic_query.computations:
             for comp in semantic_query.computations:
-                # Check for RANK or DENSE_RANK with top_n attribute
+                # 检查带有 top_n 属性的 RANK 或 DENSE_RANK
                 if comp.calc_type in ("RANK", "DENSE_RANK") and getattr(comp, 'top_n', None):
                     top_n_filter = self._build_top_n_filter_from_computation(comp, semantic_query)
                     if top_n_filter:
                         filters.append(top_n_filter)
         
-        # Build request
+        # 构建请求
         request = {
             "fields": fields,
         }
@@ -138,7 +137,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         if filters:
             request["filters"] = filters
         
-        # Build sorts - 排序嵌入在字段的 sort 属性中，使用 get_sorts() 获取
+        # 构建排序 - 排序嵌入在字段的 sort 属性中，使用 get_sorts() 获取
         sorts_list = semantic_query.get_sorts()
         if sorts_list:
             sorts = self._build_sorts_from_tuples(sorts_list)
@@ -148,61 +147,60 @@ class TableauQueryBuilder(BaseQueryBuilder):
         if semantic_query.row_limit:
             request["rowLimit"] = semantic_query.row_limit
         
-        # Add datasource if provided
-        datasource_id = kwargs.get("datasource_id")
-        if datasource_id:
-            request["datasource"] = {"datasourceId": datasource_id}
+        # 注意：datasource 不在这里添加 - 它由 API 层处理
+        # VizQLClient.query_datasource() 会将查询包装在：
+        # {"datasource": {"datasourceLuid": ...}, "query": <此请求>}
         
         return request
     
     def validate(self, semantic_query: SemanticQuery, **kwargs: Any) -> ValidationResult:
-        """Validate SemanticQuery for Tableau platform."""
+        """验证 SemanticQuery 是否适用于 Tableau 平台。"""
         errors = []
         warnings = []
         auto_fixed = []
         
-        # LOD calc_type values (as strings)
+        # LOD calc_type 值（字符串形式）
         lod_calc_types = {"LOD_FIXED", "LOD_INCLUDE", "LOD_EXCLUDE"}
         
-        # Check for empty query
+        # 检查空查询
         if not semantic_query.dimensions and not semantic_query.measures:
             errors.append(ValidationError(
                 error_type=ValidationErrorType.MISSING_REQUIRED,
                 field_path="dimensions/measures",
-                message="Query must have at least one dimension or measure",
+                message="查询必须至少有一个维度或度量",
             ))
         
-        # Validate computations
+        # 验证计算
         if semantic_query.computations:
             view_dims = set(d.field_name for d in (semantic_query.dimensions or []))
             measures = set(m.field_name for m in (semantic_query.measures or []))
             
             for i, comp in enumerate(semantic_query.computations):
-                # Check target is in measures (for non-LOD) or valid field
+                # 检查目标是否在度量中（非 LOD）或有效字段
                 if comp.calc_type not in lod_calc_types and comp.target not in measures:
                     errors.append(ValidationError(
                         error_type=ValidationErrorType.FIELD_NOT_FOUND,
                         field_path=f"computations[{i}].target",
-                        message=f"Target '{comp.target}' not in measures",
-                        suggestion=f"Add '{comp.target}' to measures or use existing measure",
+                        message=f"目标 '{comp.target}' 不在度量中",
+                        suggestion=f"将 '{comp.target}' 添加到度量或使用现有度量",
                     ))
                 
-                # Check partition_by is subset of dimensions
-                # partition_by is now list[DimensionField], extract field_name from each
+                # 检查 partition_by 是否是维度的子集
+                # partition_by 现在是 list[DimensionField]，从每个中提取 field_name
                 for p in comp.partition_by:
                     p_field_name = p.field_name if hasattr(p, 'field_name') else p
                     if p_field_name not in view_dims:
                         errors.append(ValidationError(
                             error_type=ValidationErrorType.FIELD_NOT_FOUND,
                             field_path=f"computations[{i}].partition_by",
-                            message=f"Partition dimension '{p_field_name}' not in query dimensions",
-                            suggestion=f"Add '{p_field_name}' to dimensions or remove from partition_by",
+                            message=f"分区维度 '{p_field_name}' 不在查询维度中",
+                            suggestion=f"将 '{p_field_name}' 添加到维度或从 partition_by 中移除",
                         ))
         
-        # Auto-fix: fill default aggregation for measures without one
-        # Note: aggregation=None is valid for pre-aggregated calculated fields
-        # We only auto-fix if the field is not explicitly set to None
-        # (This is handled by the LLM which sets None for pre-aggregated fields)
+        # 自动修复：为没有聚合的度量填充默认聚合
+        # 注意：aggregation=None 对于预聚合的计算字段是有效的
+        # 我们只在字段没有显式设置为 None 时自动修复
+        # （这由 LLM 处理，它为预聚合字段设置 None）
         
         return ValidationResult(
             is_valid=len(errors) == 0,
@@ -212,11 +210,11 @@ class TableauQueryBuilder(BaseQueryBuilder):
         )
     
     def _build_dimension_field(self, dim: DimensionField, field_metadata: dict[str, dict] | None = None) -> dict:
-        """Build VizQL dimension field.
+        """构建 VizQL 维度字段。
         
-        For date fields with granularity:
-        - DATE/DATETIME type: use function: "TRUNC_MONTH" etc.
-        - STRING type: use calculation: "DATETRUNC('month', DATEPARSE('yyyy-MM-dd', [Field]))"
+        对于带有粒度的日期字段：
+        - DATE/DATETIME 类型：使用 function: "TRUNC_MONTH" 等
+        - STRING 类型：使用 calculation: "DATETRUNC('month', DATEPARSE('yyyy-MM-dd', [Field]))"
         """
         field_metadata = field_metadata or {}
         field = {
@@ -226,12 +224,12 @@ class TableauQueryBuilder(BaseQueryBuilder):
         if dim.alias:
             field["fieldAlias"] = dim.alias
         
-        # Handle date granularity
+        # 处理日期粒度
         if dim.date_granularity:
             meta = field_metadata.get(dim.field_name, {})
             data_type = meta.get("dataType", "").upper()
             
-            # Map granularity to TRUNC function name
+            # 粒度到 TRUNC 函数名的映射
             trunc_map = {
                 DateGranularity.YEAR: "TRUNC_YEAR",
                 DateGranularity.QUARTER: "TRUNC_QUARTER",
@@ -240,7 +238,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
                 DateGranularity.DAY: "TRUNC_DAY",
             }
             
-            # Map granularity to DATETRUNC parameter
+            # 粒度到 DATETRUNC 参数的映射
             datetrunc_map = {
                 DateGranularity.YEAR: "year",
                 DateGranularity.QUARTER: "quarter",
@@ -250,11 +248,11 @@ class TableauQueryBuilder(BaseQueryBuilder):
             }
             
             if data_type == "STRING":
-                # STRING type date field - use DATETRUNC + DATEPARSE calculation
+                # STRING 类型日期字段 - 使用 DATETRUNC + DATEPARSE 计算
                 granularity_str = datetrunc_map.get(dim.date_granularity, "month")
                 field["calculation"] = f"DATETRUNC('{granularity_str}', DATEPARSE('yyyy-MM-dd', [{dim.field_name}]))"
             else:
-                # DATE/DATETIME type - use TRUNC_* function
+                # DATE/DATETIME 类型 - 使用 TRUNC_* 函数
                 trunc_func = trunc_map.get(dim.date_granularity)
                 if trunc_func:
                     field["function"] = trunc_func
@@ -262,16 +260,16 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return field
     
     def _build_measure_field(self, measure: MeasureField) -> dict:
-        """Build VizQL measure field.
+        """构建 VizQL 度量字段。
         
-        For pre-aggregated measures (aggregation=None), no function is added.
-        This is used for calculated fields that already contain aggregation.
+        对于预聚合度量（aggregation=None），不添加函数。
+        这用于已包含聚合的计算字段。
         """
         field = {
             "fieldCaption": measure.field_name,
         }
         
-        # Only add function for non-pre-aggregated measures
+        # 仅为非预聚合度量添加函数
         if measure.aggregation is not None:
             vizql_func = AGGREGATION_TO_VIZQL.get(measure.aggregation, VizQLFunction.SUM)
             field["function"] = vizql_func.value
@@ -282,17 +280,17 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return field
     
     def _build_sorts(self, sorts: list[Sort]) -> list[dict]:
-        """Build VizQL sort specifications.
+        """构建 VizQL 排序规范。
         
         Args:
-            sorts: List of Sort objects from SemanticQuery
+            sorts: SemanticQuery 中的 Sort 对象列表
             
         Returns:
-            List of VizQL sort dictionaries
+            VizQL 排序字典列表
         """
         vizql_sorts = []
         
-        # Sort by priority (lower = higher priority)
+        # 按优先级排序（数值越小优先级越高）
         sorted_sorts = sorted(sorts, key=lambda s: s.priority)
         
         for sort in sorted_sorts:
@@ -305,13 +303,13 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return vizql_sorts
     
     def _build_sorts_from_tuples(self, sorts: list[tuple[str, "SortSpec"]]) -> list[dict]:
-        """Build VizQL sort specifications from (field_name, SortSpec) tuples.
+        """从 (field_name, SortSpec) 元组构建 VizQL 排序规范。
         
         Args:
-            sorts: List of (field_name, SortSpec) tuples, already sorted by priority
+            sorts: (field_name, SortSpec) 元组列表，已按优先级排序
             
         Returns:
-            List of VizQL sort dictionaries
+            VizQL 排序字典列表
         """
         vizql_sorts = []
         
@@ -330,20 +328,20 @@ class TableauQueryBuilder(BaseQueryBuilder):
         view_dimensions: list[str],
         measures: list[MeasureField] | None = None,
     ) -> list[dict]:
-        """Build computation fields list (LOD first, then table calcs).
+        """构建计算字段列表（先 LOD，后表计算）。
         
-        Important: LOD fields must be generated before table calc fields
-        because table calcs may reference LOD results.
+        重要：LOD 字段必须在表计算字段之前生成，
+        因为表计算可能引用 LOD 结果。
         
         Args:
-            computations: List of computation objects
-            view_dimensions: List of dimension field names in the query
-            measures: List of measure fields (for table calc aggregation lookup)
+            computations: 计算对象列表
+            view_dimensions: 查询中的维度字段名列表
+            measures: 度量字段列表（用于表计算聚合查找）
         """
-        # LOD calc_type values (as strings, not CalcType enum)
+        # LOD calc_type 值（字符串形式，不是 CalcType 枚举）
         lod_calc_types = {"LOD_FIXED", "LOD_INCLUDE", "LOD_EXCLUDE"}
         
-        # Build measure lookup for aggregation
+        # 构建度量聚合查找表
         measure_agg_map: dict[str, AggregationType] = {}
         if measures:
             for m in measures:
@@ -360,7 +358,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
                     self._build_table_calc_field(comp, view_dimensions, measure_agg_map)
                 )
         
-        # LOD first, then table calcs
+        # 先 LOD，后表计算
         return lod_fields + table_calc_fields
     
     def _build_table_calc_field(
@@ -369,28 +367,28 @@ class TableauQueryBuilder(BaseQueryBuilder):
         view_dimensions: list[str],
         measure_agg_map: dict[str, AggregationType] | None = None,
     ) -> dict:
-        """Build VizQL table calculation field.
+        """构建 VizQL 表计算字段。
         
-        Note: Computation is a Union type with different subtypes.
-        Each subtype has its attributes directly on the object (not via params).
+        注意：Computation 是一个 Union 类型，有不同的子类型。
+        每个子类型的属性直接在对象上（不是通过 params）。
         
-        VizQL API requires table calculation fields to have both:
-        - function: The aggregation function (SUM, AVG, etc.)
-        - tableCalculation: The table calculation specification
+        VizQL API 要求表计算字段同时具有：
+        - function: 聚合函数（SUM、AVG 等）
+        - tableCalculation: 表计算规范
         
         Args:
-            comp: Computation object
-            view_dimensions: List of dimension field names in the query
-            measure_agg_map: Mapping from measure field names to their aggregation types
+            comp: Computation 对象
+            view_dimensions: 查询中的维度字段名列表
+            measure_agg_map: 度量字段名到其聚合类型的映射
         """
-        # Build partitioning dimensions
-        # partition_by is now list[DimensionField], need to handle date_granularity
+        # 构建分区维度
+        # partition_by 现在是 list[DimensionField]，需要处理 date_granularity
         partition_dims = []
         for p in comp.partition_by:
             if hasattr(p, 'field_name'):
-                # It's a DimensionField object
+                # 它是 DimensionField 对象
                 dim_ref = {"fieldCaption": p.field_name}
-                # If has date_granularity, add function to match the query field
+                # 如果有 date_granularity，添加 function 以匹配查询字段
                 if hasattr(p, 'date_granularity') and p.date_granularity:
                     trunc_map = {
                         DateGranularity.YEAR: "TRUNC_YEAR",
@@ -404,12 +402,12 @@ class TableauQueryBuilder(BaseQueryBuilder):
                         dim_ref["function"] = trunc_func
                 partition_dims.append(dim_ref)
             else:
-                # String fallback: use fieldCaption directly
+                # 字符串回退：直接使用 fieldCaption
                 partition_dims.append({"fieldCaption": p})
         
-        # Build table calc specification based on calc_type
+        # 根据 calc_type 构建表计算规范
         table_calc: dict
-        calc_type = comp.calc_type  # This is a Literal string like "RANK", "PERCENT_OF_TOTAL", etc.
+        calc_type = comp.calc_type  # 这是一个 Literal 字符串，如 "RANK"、"PERCENT_OF_TOTAL" 等
         
         if calc_type in ("RANK", "DENSE_RANK"):
             table_calc = self._build_rank_spec(comp, partition_dims)
@@ -433,21 +431,21 @@ class TableauQueryBuilder(BaseQueryBuilder):
             table_calc = self._build_percent_difference_spec(comp, partition_dims)
         
         else:
-            # Fallback to custom
+            # 回退到自定义
             table_calc = {
                 "tableCalcType": "CUSTOM",
                 "dimensions": partition_dims,
             }
         
-        # Get aggregation function for the target measure
-        # Default to SUM if not found in measure_agg_map
+        # 获取目标度量的聚合函数
+        # 如果在 measure_agg_map 中找不到，默认为 SUM
         agg_type = AggregationType.SUM
         if measure_agg_map and comp.target in measure_agg_map:
             agg_type = measure_agg_map[comp.target]
         
         vizql_func = AGGREGATION_TO_VIZQL.get(agg_type, VizQLFunction.SUM)
         
-        # Build the field - VizQL API requires both function and tableCalculation
+        # 构建字段 - VizQL API 要求同时有 function 和 tableCalculation
         field = {
             "fieldCaption": comp.target,
             "function": vizql_func.value,
@@ -462,15 +460,15 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return field
     
     def _build_rank_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """Build rank table calculation spec.
+        """构建排名表计算规范。
         
-        Supports both RankCalc and DenseRankCalc types.
+        支持 RankCalc 和 DenseRankCalc 类型。
         """
-        # Determine rank type
+        # 确定排名类型
         if comp.calc_type == "DENSE_RANK":
             rank_type = "DENSE"
         else:
-            # RankCalc has rank_style attribute
+            # RankCalc 有 rank_style 属性
             rank_style = getattr(comp, 'rank_style', None) or self.DEFAULT_RANK_STYLE
             rank_type = rank_style.value if hasattr(rank_style, 'value') else str(rank_style)
         
@@ -488,21 +486,21 @@ class TableauQueryBuilder(BaseQueryBuilder):
         comp: Computation,
         semantic_query: SemanticQuery,
     ) -> dict | None:
-        """Build Top N filter from computation with top_n parameter.
+        """从带有 top_n 参数的计算构建 Top N 过滤器。
         
         Args:
-            comp: Computation with top_n parameter (RankCalc or DenseRankCalc)
-            semantic_query: Full semantic query for context
+            comp: 带有 top_n 参数的 Computation（RankCalc 或 DenseRankCalc）
+            semantic_query: 完整的语义查询用于上下文
             
         Returns:
-            VizQL Top N filter dict or None
+            VizQL Top N 过滤器字典或 None
         """
         top_n = getattr(comp, 'top_n', None)
         if not top_n:
             return None
         
-        # Determine the dimension to filter on (first partition dimension or first query dimension)
-        # partition_by is now list[DimensionField]
+        # 确定要过滤的维度（第一个分区维度或第一个查询维度）
+        # partition_by 现在是 list[DimensionField]
         filter_dimension = None
         if comp.partition_by:
             first_partition = comp.partition_by[0]
@@ -511,10 +509,10 @@ class TableauQueryBuilder(BaseQueryBuilder):
             filter_dimension = semantic_query.dimensions[0].field_name
         
         if not filter_dimension:
-            logger.warning(f"Cannot build Top N filter: no dimension available for computation {comp.target}")
+            logger.warning(f"无法构建 Top N 过滤器：计算 {comp.target} 没有可用维度")
             return None
         
-        # Direction: ASC means bottom N, DESC means top N
+        # 方向：ASC 表示后 N 个，DESC 表示前 N 个
         direction = getattr(comp, 'direction', None) or self.DEFAULT_DIRECTION
         
         return {
@@ -526,7 +524,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         }
     
     def _build_percentile_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """Build percentile table calculation spec."""
+        """构建百分位表计算规范。"""
         direction = getattr(comp, 'direction', None) or self.DEFAULT_DIRECTION
         
         return {
@@ -536,7 +534,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         }
     
     def _build_running_total_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """Build running total table calculation spec."""
+        """构建累计表计算规范。"""
         aggregation = getattr(comp, 'aggregation', None) or self.DEFAULT_AGGREGATION
         
         spec = {
@@ -552,7 +550,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return spec
     
     def _build_moving_calc_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """Build moving calculation spec."""
+        """构建移动计算规范。"""
         aggregation = getattr(comp, 'aggregation', None) or self.DEFAULT_AGGREGATION
         previous = getattr(comp, 'window_previous', None)
         if previous is None:
@@ -574,7 +572,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         }
     
     def _build_percent_of_total_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """Build percent of total table calculation spec."""
+        """构建占比表计算规范。"""
         spec = {
             "tableCalcType": "PERCENT_OF_TOTAL",
             "dimensions": partition_dims,
@@ -587,7 +585,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return spec
     
     def _build_difference_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """Build difference table calculation spec."""
+        """构建差异表计算规范。"""
         relative_to = getattr(comp, 'relative_to', None) or self.DEFAULT_RELATIVE_TO
         
         return {
@@ -597,7 +595,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         }
     
     def _build_percent_difference_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """Build percent difference table calculation spec."""
+        """构建百分比差异表计算规范。"""
         relative_to = getattr(comp, 'relative_to', None) or self.DEFAULT_RELATIVE_TO
         
         return {
@@ -607,12 +605,12 @@ class TableauQueryBuilder(BaseQueryBuilder):
         }
     
     def _build_lod_field(self, comp: Computation) -> dict:
-        """Build VizQL LOD expression field.
+        """构建 VizQL LOD 表达式字段。
         
-        Supports LODFixed, LODInclude, LODExclude types.
-        These types have 'dimensions' and 'aggregation' attributes directly.
+        支持 LODFixed、LODInclude、LODExclude 类型。
+        这些类型直接有 'dimensions' 和 'aggregation' 属性。
         """
-        # Determine LOD type from calc_type string
+        # 从 calc_type 字符串确定 LOD 类型
         lod_type_map = {
             "LOD_FIXED": "FIXED",
             "LOD_INCLUDE": "INCLUDE",
@@ -620,12 +618,12 @@ class TableauQueryBuilder(BaseQueryBuilder):
         }
         lod_type = lod_type_map.get(comp.calc_type, "FIXED")
         
-        # Build LOD expression string
-        # LOD types have 'dimensions' attribute (not lod_dimensions)
+        # 构建 LOD 表达式字符串
+        # LOD 类型有 'dimensions' 属性（不是 lod_dimensions）
         lod_dims = getattr(comp, 'dimensions', []) or []
         dims_str = ", ".join(f"[{d}]" for d in lod_dims)
         
-        # LOD types have 'aggregation' attribute (not lod_aggregation)
+        # LOD 类型有 'aggregation' 属性（不是 lod_aggregation）
         aggregation = getattr(comp, 'aggregation', None) or AggregationType.SUM
         agg = aggregation.value if hasattr(aggregation, 'value') else str(aggregation)
         
@@ -640,9 +638,9 @@ class TableauQueryBuilder(BaseQueryBuilder):
         }
     
     def _build_filter(self, f: Any, field_metadata: dict[str, dict] | None = None) -> dict | None:
-        """Build VizQL filter from core filter model.
+        """从核心过滤器模型构建 VizQL 过滤器。
         
-        For date filters (DateRangeFilter):
+        对于日期过滤器（DateRangeFilter）：
         - DATE/DATETIME 类型：QuantitativeDateFilter + fieldCaption
         - STRING 类型：QuantitativeDateFilter + DATEPARSE 计算字段
         
@@ -729,5 +727,5 @@ class TableauQueryBuilder(BaseQueryBuilder):
                 "direction": f.direction.value,
             }
         
-        logger.warning(f"Unknown filter type: {type(f)}")
+        logger.warning(f"未知过滤器类型: {type(f)}")
         return None

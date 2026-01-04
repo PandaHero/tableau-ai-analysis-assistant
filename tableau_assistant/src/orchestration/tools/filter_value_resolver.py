@@ -145,7 +145,7 @@ class FilterValueResolver:
     def _get_value_indexer(self):
         """获取或创建 FieldValueIndexer"""
         if self._value_indexer is None:
-            from tableau_assistant.src.infra.ai.rag.field_value_indexer import FieldValueIndexer
+            from tableau_assistant.src.agents.field_mapper.rag.field_value_indexer import FieldValueIndexer
             self._value_indexer = FieldValueIndexer(datasource_luid=self.datasource_luid)
         return self._value_indexer
     

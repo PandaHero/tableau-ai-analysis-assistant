@@ -13,8 +13,9 @@
     from tableau_assistant.src.infra.storage import (
         get_langgraph_store,
         DataModelCache,
-        TableauDataModelLoader,
+        DataModelLoader,
     )
+    from tableau_assistant.src.platforms.tableau import TableauDataModelLoader
     
     # 获取 store
     store = get_langgraph_store()
@@ -46,7 +47,12 @@ from tableau_assistant.src.infra.storage.field_index_cache import (
 )
 from tableau_assistant.src.infra.storage.data_model_loader import (
     DataModelLoader,
-    TableauDataModelLoader,
+)
+from tableau_assistant.src.infra.storage.data_model import (
+    DataModel,
+    FieldMetadata,
+    LogicalTable,
+    LogicalTableRelationship,
 )
 from tableau_assistant.src.infra.storage.golden_queries import (
     GoldenQuery,
@@ -71,7 +77,11 @@ __all__ = [
     "FIELD_INDEX_NAMESPACE",
     # DataModelLoader
     "DataModelLoader",
-    "TableauDataModelLoader",
+    # DataModel
+    "DataModel",
+    "FieldMetadata",
+    "LogicalTable",
+    "LogicalTableRelationship",
     # Golden Queries
     "GoldenQuery",
     "GoldenQueryStore",

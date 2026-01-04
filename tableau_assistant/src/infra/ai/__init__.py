@@ -4,72 +4,85 @@ AI 模型管理
 统一管理所有 AI 模型的选择、配置和创建。
 
 主要功能：
-- LLM 模型管理（get_llm, select_model）
-- Embedding 模型管理（select_embeddings, EmbeddingProvider）
-- Reranker 模型管理（select_reranker）
+- LLM 模型管理（get_llm）
+- Embedding 模型管理（get_embeddings, EmbeddingProvider）
+- 模型配置管理（ModelManager）
 
 使用示例：
     from tableau_assistant.src.infra.ai import (
-        get_llm,           # 推荐：自动从环境变量读取配置
-        select_model,      # 底层 API：显式指定 provider/model
-        select_embeddings,
-        select_reranker,
+        get_llm,           # 推荐：自动从 ModelManager 获取配置
+        get_embeddings,    # 推荐：自动从 ModelManager 获取配置
     )
     
-    # 推荐方式：自动从环境变量读取配置
+    # 使用默认 LLM
     llm = get_llm()
     llm = get_llm(temperature=0.1)  # 指定 temperature
     
-    # 底层 API：显式指定
-    llm = select_model(provider="deepseek", model_name="deepseek-chat")
-    
-    # Embedding
-    embeddings = select_embeddings(provider="zhipu", model_name="embedding-2")
-    
-    # Reranker
-    reranker = select_reranker(reranker_type="llm")
+    # 使用默认 Embedding
+    embeddings = get_embeddings()
 """
 
 # LLM 模型管理
 from tableau_assistant.src.infra.ai.llm import (
-    select_model,
     get_llm,
-    SUPPORTED_LLM_PROVIDERS,
+    get_supported_providers,
 )
 
-# DeepSeek R1 推理模型
-from tableau_assistant.src.infra.ai.deepseek_r1 import DeepSeekR1Chat
+# 自定义 LLM（公司内部部署的模型）
+from tableau_assistant.src.infra.ai.custom_llm import (
+    CustomLLMChat,
+    CustomLLMConfig,
+    AuthType,
+)
+
+# 模型管理器
+from tableau_assistant.src.infra.ai.model_manager import (
+    ModelManager,
+    ModelConfig,
+    ModelStats,
+    ModelType,
+    ModelStatus,
+    ModelCreateRequest,
+    ModelUpdateRequest,
+    HealthCheckResult,
+    get_model_manager,
+    reset_model_manager,
+)
 
 # Embedding 模型管理
 from tableau_assistant.src.infra.ai.embeddings import (
+    get_embeddings,
     select_embeddings,
     EmbeddingProvider,
     ZhipuEmbedding,
     OpenAIEmbedding,
     EmbeddingProviderFactory,
-    SUPPORTED_EMBEDDING_PROVIDERS,
-)
-
-# Reranker 模型管理
-from tableau_assistant.src.infra.ai.reranker import (
-    select_reranker,
-    SUPPORTED_RERANKER_TYPES,
 )
 
 __all__ = [
     # LLM
-    "select_model",
     "get_llm",
-    "SUPPORTED_LLM_PROVIDERS",
-    "DeepSeekR1Chat",
+    "get_supported_providers",
+    # 自定义 LLM
+    "CustomLLMChat",
+    "CustomLLMConfig",
+    "AuthType",
+    # 模型管理器
+    "ModelManager",
+    "ModelConfig",
+    "ModelStats",
+    "ModelType",
+    "ModelStatus",
+    "ModelCreateRequest",
+    "ModelUpdateRequest",
+    "HealthCheckResult",
+    "get_model_manager",
+    "reset_model_manager",
     # Embedding
+    "get_embeddings",
     "select_embeddings",
     "EmbeddingProvider",
     "ZhipuEmbedding",
     "OpenAIEmbedding",
     "EmbeddingProviderFactory",
-    "SUPPORTED_EMBEDDING_PROVIDERS",
-    # Reranker
-    "select_reranker",
-    "SUPPORTED_RERANKER_TYPES",
 ]

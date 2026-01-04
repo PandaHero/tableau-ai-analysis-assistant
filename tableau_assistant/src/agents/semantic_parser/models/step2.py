@@ -7,9 +7,12 @@ IMPORTANT: validation is LLM self-validation, NOT code validation.
 The LLM fills in the validation fields based on the rules in field descriptions.
 """
 
-from typing import Any
+from typing import Union, List, Dict
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# 定义验证值的类型，替代 Any
+ValidationValueType = Union[str, int, float, bool, List, Dict, None]
 
 from tableau_assistant.src.core.models.computations import Computation
 
@@ -21,13 +24,13 @@ class ValidationCheck(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     
-    inferred_value: Any = Field(
+    inferred_value: ValidationValueType = Field(
         description="""<what>Value inferred from restated_question</what>
 <when>ALWAYS required</when>
 <rule>Extract what you inferred in Step 2 (can be string, list, or object)</rule>"""
     )
     
-    reference_value: Any = Field(
+    reference_value: ValidationValueType = Field(
         description="""<what>Value from Step 1 structured output</what>
 <when>ALWAYS required</when>
 <rule>Extract what Step 1 extracted (can be string, list, or object)</rule>"""

@@ -51,9 +51,11 @@ from tableau_assistant.src.platforms.tableau import (
 )
 from tableau_assistant.src.infra.storage.langgraph_store import get_langgraph_store
 from tableau_assistant.src.infra.storage.data_model_cache import DataModelCache
-from tableau_assistant.src.infra.storage.data_model_loader import TableauDataModelLoader
-from tableau_assistant.src.core.models import SemanticQuery, MappedQuery, ReplanDecision, ExecuteResult
+from tableau_assistant.src.platforms.tableau import TableauDataModelLoader
+from tableau_assistant.src.core.models import SemanticQuery, ExecuteResult
+from tableau_assistant.src.agents.replanner.models import ReplanDecision
 from tableau_assistant.src.agents.insight.models import Insight
+from tableau_assistant.src.agents.field_mapper.models import MappedQuery
 from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest as VizQLQuery
 
 logger = logging.getLogger(__name__)

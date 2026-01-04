@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from langgraph.types import RunnableConfig
 
 from tableau_assistant.src.platforms.tableau import TableauAuthContext
-from tableau_assistant.src.core.models import DataModel
+from tableau_assistant.src.infra.storage.data_model import DataModel
 
 logger = logging.getLogger(__name__)
 

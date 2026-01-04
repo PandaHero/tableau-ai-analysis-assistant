@@ -65,6 +65,16 @@ T = TypeVar('T', bound=BaseModel)
 # ═══════════════════════════════════════════════════════════════════════════
 
 from tableau_assistant.src.infra.ai import get_llm as _get_llm
+from tableau_assistant.src.infra.config import settings
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LLM 超时配置
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_llm_timeout() -> int:
+    """获取 LLM 请求超时时间（秒），从配置读取"""
+    return settings.llm_request_timeout
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -322,6 +332,7 @@ async def call_llm_with_tools(
     tools: List[Any],
     max_iterations: int = 5,
     streaming: bool = True,
+    timeout: Optional[int] = None,
     # Middleware 支持参数
     middleware: Optional[List[Any]] = None,
     state: Optional[Dict[str, Any]] = None,
@@ -344,6 +355,7 @@ async def call_llm_with_tools(
         tools: 可用工具列表（@tool 装饰的函数）
         max_iterations: 最大迭代次数（防止无限循环）
         streaming: 是否使用流式调用（默认 True，支持 token 级别流式输出）
+        timeout: 请求超时时间（秒），默认从配置读取 llm_request_timeout
         middleware: 可选的 middleware 列表（AgentMiddleware 实例）
         state: 可选的当前状态（用于 middleware）
         config: 可选的 LangGraph RunnableConfig（用于 middleware）
@@ -366,17 +378,25 @@ async def call_llm_with_tools(
         # 获取思考过程（R1 模型）
         thinking = response.additional_kwargs.get("thinking", "")
     """
+    import asyncio
+    
+    # 获取超时配置
+    request_timeout = timeout if timeout is not None else get_llm_timeout()
+    
     # 如果提供了 middleware，使用 MiddlewareRunner
     if middleware:
-        return await _call_llm_with_tools_and_middleware(
-            llm=llm,
-            messages=messages,
-            tools=tools,
-            max_iterations=max_iterations,
-            streaming=streaming,
-            middleware=middleware,
-            state=state or {},
-            config=config,
+        return await asyncio.wait_for(
+            _call_llm_with_tools_and_middleware(
+                llm=llm,
+                messages=messages,
+                tools=tools,
+                max_iterations=max_iterations,
+                streaming=streaming,
+                middleware=middleware,
+                state=state or {},
+                config=config,
+            ),
+            timeout=request_timeout
         )
     
     # 绑定工具到 LLM（如果有工具的话）
@@ -395,10 +415,16 @@ async def call_llm_with_tools(
         if streaming:
             # 流式调用 - 支持 token 级别输出
             # 传递 config 以便 LangGraph 的 callbacks 能捕获流式事件
-            response = await _stream_llm_call_internal(llm_with_tools, langchain_messages, config=config)
+            response = await asyncio.wait_for(
+                _stream_llm_call_internal(llm_with_tools, langchain_messages, config=config),
+                timeout=request_timeout
+            )
         else:
             # 非流式调用
-            response = await llm_with_tools.ainvoke(langchain_messages, config=config)
+            response = await asyncio.wait_for(
+                llm_with_tools.ainvoke(langchain_messages, config=config),
+                timeout=request_timeout
+            )
         
         langchain_messages.append(response)
         

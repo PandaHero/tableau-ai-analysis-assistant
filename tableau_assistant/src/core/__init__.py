@@ -10,6 +10,9 @@ Modules:
 Note:
     - State types (VizQLState, etc.) are in orchestration/workflow/state.py
     - Agent-specific models (Step1, Step2, ParseResult) are in agents/{agent}/models/
+    - DataModel, FieldMetadata are in infra/storage/data_model.py
+    - DimensionHierarchy models are in agents/dimension_hierarchy/models/hierarchy.py
+    - FieldMapping models are in agents/field_mapper/models/mapping.py
 """
 
 from .interfaces import (
@@ -47,15 +50,12 @@ from .models import (
     # Query
     SemanticQuery,
     # Validation
-    ColumnInfo,
-    QueryResult,
     ValidationError,
     ValidationErrorType,
     ValidationResult,
     # Execute Result
     ExecuteResult,
-    # Query Request
-    QueryRequest,
+    ColumnInfo,
 )
 
 __all__ = [
@@ -92,13 +92,10 @@ __all__ = [
     # Query
     "SemanticQuery",
     # Validation
-    "ColumnInfo",
-    "QueryResult",
     "ValidationError",
     "ValidationErrorType",
     "ValidationResult",
     # Execute Result
     "ExecuteResult",
-    # Query Request
-    "QueryRequest",
+    "ColumnInfo",
 ]

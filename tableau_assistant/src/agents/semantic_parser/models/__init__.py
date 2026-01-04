@@ -30,7 +30,7 @@ from tableau_assistant.src.agents.semantic_parser.models.parse_result import (
 )
 
 from tableau_assistant.src.agents.semantic_parser.models.pipeline import (
-    QueryResult,
+    PipelineResult,
     QueryError,
     QueryErrorType,
 )
@@ -62,7 +62,7 @@ __all__ = [
     "ClarificationQuestion",
     "SemanticParseResult",
     # Pipeline models
-    "QueryResult",
+    "PipelineResult",
     "QueryError",
     "QueryErrorType",
     # ReAct models

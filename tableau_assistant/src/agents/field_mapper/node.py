@@ -33,14 +33,19 @@ from .llm_selector import (
     FieldCandidate,
     SingleSelectionResult,
 )
+from .models import MappedQuery, FieldMapping
 
-from tableau_assistant.src.infra.ai.rag.assembler import (
+from tableau_assistant.src.core.models.query import SemanticQuery
+from tableau_assistant.src.agents.field_mapper.rag.assembler import (
     KnowledgeAssembler,
     AssemblerConfig,
     ChunkStrategy,
 )
-from tableau_assistant.src.infra.ai.rag.reranker import LLMReranker
-from tableau_assistant.src.infra.ai.rag.models import FieldChunk
+from tableau_assistant.src.agents.field_mapper.rag.reranker import LLMReranker
+from tableau_assistant.src.agents.field_mapper.rag.models import FieldChunk
+from tableau_assistant.src.agents.field_mapper.rag.semantic_mapper import SemanticMapper
+from tableau_assistant.src.agents.field_mapper.rag.field_indexer import FieldIndexer
+from tableau_assistant.src.infra.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +54,13 @@ logger = logging.getLogger(__name__)
 HIGH_CONFIDENCE_THRESHOLD = 0.9
 LOW_CONFIDENCE_THRESHOLD = 0.7
 MAX_CONCURRENCY = 5
-CACHE_TTL = 24 * 60 * 60  # 24 hours
 TOP_K_CANDIDATES = 10
 MAX_ALTERNATIVES = 3
+
+
+def _get_cache_ttl() -> int:
+    """从配置获取缓存 TTL，默认 24 小时"""
+    return settings.field_mapping_cache_ttl
 
 
 @dataclass
@@ -73,7 +82,7 @@ class FieldMappingConfig:
     high_confidence_threshold: float = HIGH_CONFIDENCE_THRESHOLD
     low_confidence_threshold: float = LOW_CONFIDENCE_THRESHOLD
     max_concurrency: int = MAX_CONCURRENCY
-    cache_ttl: int = CACHE_TTL
+    cache_ttl: int = field(default_factory=_get_cache_ttl)
     top_k_candidates: int = TOP_K_CANDIDATES
     max_alternatives: int = MAX_ALTERNATIVES
     enable_cache: bool = True
@@ -490,9 +499,9 @@ class FieldMapperNode:
                 config=config,
             )
         
-        # 5. RAG retrieval
+        # 5. RAG retrieval (使用异步版本)
         try:
-            rag_result = self.semantic_mapper.map_field(
+            rag_result = await self.semantic_mapper.amap_field(
                 term=term,
                 context=context,
                 role_filter=role_filter
@@ -957,7 +966,6 @@ async def field_mapper_node(
     
     **Validates: Requirements 9.3**
     """
-    from tableau_assistant.src.core.models.field_mapping import MappedQuery, FieldMapping
     from tableau_assistant.src.agents.base.middleware_runner import get_middleware_from_config
     
     start_time = time.time()
@@ -1136,15 +1144,12 @@ def _get_field_mapper(state: Dict[str, Any], config: Optional[RunnableConfig] = 
                 )
                 logger.info(f"两阶段架构已启用: {len(data_model.fields)} 个字段已索引")
             
-            from tableau_assistant.src.infra.ai.rag.semantic_mapper import SemanticMapper
-            
             # 复用 KnowledgeAssembler 的 FieldIndexer，避免重复构建索引
             if mapper.assembler is not None and hasattr(mapper.assembler, '_indexer'):
                 field_indexer = mapper.assembler._indexer
                 logger.debug(f"复用 KnowledgeAssembler 的 FieldIndexer: {field_indexer.field_count} 个字段")
             else:
                 # 回退：创建新的 FieldIndexer
-                from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
                 field_indexer = FieldIndexer(datasource_luid=datasource_luid)
                 if hasattr(data_model, 'fields'):
                     field_indexer.index_fields(data_model.fields)
@@ -1155,9 +1160,6 @@ def _get_field_mapper(state: Dict[str, Any], config: Optional[RunnableConfig] = 
         except Exception as e:
             logger.warning(f"Failed to set up two-stage architecture: {e}")
             try:
-                from tableau_assistant.src.infra.ai.rag.semantic_mapper import SemanticMapper
-                from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
-                
                 field_indexer = FieldIndexer(datasource_luid=datasource_luid)
                 if hasattr(data_model, 'fields'):
                     field_indexer.index_fields(data_model.fields)

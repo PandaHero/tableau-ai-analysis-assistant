@@ -102,14 +102,13 @@ async def _execute_query_impl(
     """
     execute_query 核心实现。
     
-    调用 ExecuteNode 执行查询。
+    直接使用 VizQLClient 执行查询。
     """
     start_time = time.time()
     
     try:
         # 延迟导入避免循环依赖
-        from tableau_assistant.src.nodes.execute.node import ExecuteNode
-        from tableau_assistant.src.platforms.tableau.models import VizQLQueryRequest
+        from tableau_assistant.src.platforms.tableau.vizql_client import VizQLClient
         from tableau_assistant.src.platforms.tableau import ensure_valid_auth_async, TableauAuthError
         
         # 验证输入
@@ -119,20 +118,6 @@ async def _execute_query_impl(
                 error=ExecutionError(
                     type=ExecutionErrorType.MISSING_INPUT,
                     message="未提供 vizql_query",
-                ),
-                execution_time_ms=execution_time_ms
-            )
-        
-        # 解析 VizQLQueryRequest
-        try:
-            query = VizQLQueryRequest.model_validate(vizql_query)
-        except Exception as e:
-            logger.error(f"Invalid vizql_query: {e}")
-            execution_time_ms = int((time.time() - start_time) * 1000)
-            return ExecuteQueryOutput.fail(
-                error=ExecutionError(
-                    type=ExecutionErrorType.INVALID_QUERY,
-                    message=f"无效的 VizQL 查询: {e}",
                 ),
                 execution_time_ms=execution_time_ms
             )
@@ -174,59 +159,53 @@ async def _execute_query_impl(
             )
         
         # 执行查询
-        executor = None
+        client = None
         try:
-            executor = ExecuteNode()
-            result = await executor.execute(
-                vizql_query=query,
+            client = VizQLClient(domain=domain)
+            result = await client.query_datasource_async(
                 datasource_luid=datasource_luid,
+                query=vizql_query,
                 api_key=api_key,
                 site=site,
-                domain=domain,
             )
             
             execution_time_ms = int((time.time() - start_time) * 1000)
             
-            if result.is_success():
-                # 检查是否为大结果集
-                is_large = result.row_count > LARGE_RESULT_THRESHOLD
-                file_path = None
-                
-                # 大结果集处理（FilesystemMiddleware 会在外层处理）
-                if is_large:
-                    logger.info(
-                        f"Large result set detected: {result.row_count} rows "
-                        f"(threshold: {LARGE_RESULT_THRESHOLD})"
-                    )
-                
+            # 解析结果
+            data = result.get('data', [])
+            columns = result.get('columns', [])
+            row_count = len(data)
+            query_id = result.get('queryId')
+            
+            # 检查是否为大结果集
+            is_large = row_count > LARGE_RESULT_THRESHOLD
+            file_path = None
+            
+            # 大结果集处理（FilesystemMiddleware 会在外层处理）
+            if is_large:
                 logger.info(
-                    f"execute_query completed: {result.row_count} rows, "
-                    f"execution_time={execution_time_ms}ms"
+                    f"Large result set detected: {row_count} rows "
+                    f"(threshold: {LARGE_RESULT_THRESHOLD})"
                 )
-                
-                return ExecuteQueryOutput.ok(
-                    data=result.data or [],
-                    columns=result.columns,
-                    row_count=result.row_count,
-                    query_id=result.query_id,
-                    file_path=file_path,
-                    is_large_result=is_large,
-                    execution_time_ms=execution_time_ms
-                )
-            else:
-                # 执行失败
-                error_type = _classify_error(result.error)
-                return ExecuteQueryOutput.fail(
-                    error=ExecutionError(
-                        type=error_type,
-                        message=f"查询执行失败: {result.error}",
-                    ),
-                    execution_time_ms=execution_time_ms
-                )
+            
+            logger.info(
+                f"execute_query completed: {row_count} rows, "
+                f"execution_time={execution_time_ms}ms"
+            )
+            
+            return ExecuteQueryOutput.ok(
+                data=data,
+                columns=columns,
+                row_count=row_count,
+                query_id=query_id,
+                file_path=file_path,
+                is_large_result=is_large,
+                execution_time_ms=execution_time_ms
+            )
                 
         finally:
-            if executor:
-                executor.close()
+            if client:
+                client.close()
                 
     except Exception as e:
         logger.error(f"execute_query failed: {e}", exc_info=True)

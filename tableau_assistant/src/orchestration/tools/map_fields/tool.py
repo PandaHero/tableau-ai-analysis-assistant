@@ -18,6 +18,11 @@ from typing import Dict, Any, Optional, List
 from langchain_core.tools import tool
 from langgraph.types import RunnableConfig
 
+from tableau_assistant.src.core.models.query import SemanticQuery
+from tableau_assistant.src.agents.field_mapper.models import MappedQuery, FieldMapping
+from tableau_assistant.src.agents.field_mapper.node import FieldMapperNode
+from tableau_assistant.src.agents.field_mapper.rag.semantic_mapper import SemanticMapper
+from tableau_assistant.src.agents.field_mapper.rag.field_indexer import FieldIndexer
 from tableau_assistant.src.orchestration.tools.map_fields.models import (
     MapFieldsInput,
     MapFieldsOutput,
@@ -121,11 +126,6 @@ async def _map_fields_impl(
     start_time = time.time()
     
     try:
-        # 延迟导入避免循环依赖
-        from tableau_assistant.src.core.models.query import SemanticQuery
-        from tableau_assistant.src.core.models.field_mapping import MappedQuery, FieldMapping
-        from tableau_assistant.src.agents.field_mapper.node import FieldMapperNode
-        
         # 解析 SemanticQuery
         try:
             sq = SemanticQuery.model_validate(semantic_query)
@@ -381,7 +381,6 @@ async def _get_field_mapper(
             logger.info(f"FieldMapper 已加载 {len(data_model.fields)} 个字段")
         
         # 设置 SemanticMapper - 复用 KnowledgeAssembler 的 FieldIndexer
-        from tableau_assistant.src.infra.ai.rag.semantic_mapper import SemanticMapper
         
         # 从 mapper.assembler 获取已有的 FieldIndexer，避免重复构建索引
         if mapper.assembler is not None and hasattr(mapper.assembler, '_indexer'):
@@ -389,8 +388,6 @@ async def _get_field_mapper(
             logger.debug(f"复用 KnowledgeAssembler 的 FieldIndexer: {field_indexer.field_count} 个字段")
         else:
             # 回退：创建新的 FieldIndexer
-            from tableau_assistant.src.infra.ai.rag.field_indexer import FieldIndexer
-            
             field_indexer = FieldIndexer(datasource_luid=datasource_luid)
             
             # 如果有字段数据，调用 index_fields

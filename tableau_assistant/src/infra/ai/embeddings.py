@@ -22,15 +22,6 @@ from langchain.embeddings.base import Embeddings
 
 logger = logging.getLogger(__name__)
 
-# 支持的 Embedding 提供商
-SUPPORTED_EMBEDDING_PROVIDERS: List[str] = [
-    "zhipu",
-    "openai",
-    "azure",
-    "local",
-    "mock",
-]
-
 # 导入证书管理器
 from tableau_assistant.src.infra.certs import get_certificate_config
 
@@ -199,49 +190,6 @@ class EmbeddingProvider(ABC):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.embed_query, text)
     
-    def embed_documents_with_results(self, texts: List[str]) -> List["EmbeddingResult"]:
-        """
-        向量化文档列表并返回带元数据的结果
-        
-        Args:
-            texts: 文本列表
-            
-        Returns:
-            EmbeddingResult 列表
-        """
-        from tableau_assistant.src.infra.ai.rag.models import EmbeddingResult
-        
-        vectors = self.embed_documents(texts)
-        results = []
-        for text, vector in zip(texts, vectors):
-            results.append(EmbeddingResult(
-                text=text,
-                vector=vector,
-                model=self.model_name,
-                dimensions=self.dimensions
-            ))
-        return results
-    
-    def embed_query_with_result(self, text: str) -> "EmbeddingResult":
-        """
-        向量化查询文本并返回带元数据的结果
-        
-        Args:
-            text: 查询文本
-            
-        Returns:
-            EmbeddingResult
-        """
-        from tableau_assistant.src.infra.ai.rag.models import EmbeddingResult
-        
-        vector = self.embed_query(text)
-        return EmbeddingResult(
-            text=text,
-            vector=vector,
-            model=self.model_name,
-            dimensions=self.dimensions
-        )
-    
     @staticmethod
     def compute_text_hash(text: str) -> str:
         """计算文本哈希值（用于缓存）"""
@@ -315,7 +263,7 @@ class ZhipuEmbedding(EmbeddingProvider):
         if self._async_client is None:
             try:
                 from zhipuai import ZhipuAI
-                async_http_client = self._create_async_http_client_with_certs()
+                async_http_client = self._create_http_client_with_certs(async_mode=True)
                 
                 if async_http_client:
                     self._async_client = ZhipuAI(api_key=self.api_key, http_client=async_http_client)
@@ -326,9 +274,12 @@ class ZhipuEmbedding(EmbeddingProvider):
                 raise ImportError("请安装 zhipuai 包: pip install zhipuai")
         return self._async_client
     
-    def _create_http_client_with_certs(self):
+    def _create_http_client_with_certs(self, async_mode: bool = False):
         """
-        创建带证书配置的 HTTP 客户端（同步）
+        创建带证书配置的 HTTP 客户端
+        
+        Args:
+            async_mode: 是否创建异步客户端
         
         优先级：
         1. Linux/Mac: 优先使用系统证书（公网 API 通常不需要自定义证书）
@@ -339,13 +290,16 @@ class ZhipuEmbedding(EmbeddingProvider):
         from pathlib import Path
         from tableau_assistant.src.infra.certs import get_cert_config
         
+        client_class = httpx.AsyncClient if async_mode else httpx.Client
+        mode_suffix = "(异步)" if async_mode else ""
+        
         # Linux/Mac 优先尝试系统证书
         if platform.system() != "Windows":
             try:
-                logger.debug("zhipu-ai: 使用系统证书")
-                return httpx.Client(verify=True, timeout=60.0)
+                logger.debug(f"zhipu-ai: 使用系统证书{mode_suffix}")
+                return client_class(verify=True, timeout=60.0)
             except Exception as e:
-                logger.warning(f"zhipu-ai: 系统证书不可用，尝试自定义证书: {e}")
+                logger.warning(f"zhipu-ai: 系统证书不可用{mode_suffix}，尝试自定义证书: {e}")
         
         # 使用证书管理器中的 zhipu-ai 服务证书
         try:
@@ -354,8 +308,8 @@ class ZhipuEmbedding(EmbeddingProvider):
             if zhipu_service and zhipu_service.ca_bundle:
                 cert_path = Path(config.cert_dir) / zhipu_service.ca_bundle
                 if cert_path.exists():
-                    logger.info(f"使用证书管理器的 zhipu-ai 证书: {cert_path}")
-                    return httpx.Client(verify=str(cert_path), timeout=60.0)
+                    logger.info(f"使用证书管理器的 zhipu-ai 证书{mode_suffix}: {cert_path}")
+                    return client_class(verify=str(cert_path), timeout=60.0)
                 else:
                     logger.warning(f"zhipu-ai 证书文件不存在: {cert_path}")
         except Exception as e:
@@ -364,78 +318,22 @@ class ZhipuEmbedding(EmbeddingProvider):
         # 回退到 certifi 证书
         try:
             import certifi
-            logger.debug(f"回退使用 certifi 证书: {certifi.where()}")
-            return httpx.Client(verify=certifi.where(), timeout=60.0)
+            logger.debug(f"回退使用 certifi 证书{mode_suffix}: {certifi.where()}")
+            return client_class(verify=certifi.where(), timeout=60.0)
         except ImportError:
             logger.warning("certifi 未安装")
         except Exception as e:
-            logger.warning(f"使用 certifi 创建客户端失败: {e}")
+            logger.warning(f"使用 certifi 创建客户端失败{mode_suffix}: {e}")
         
         # 回退到系统默认证书
         try:
-            logger.debug("回退使用系统默认证书")
-            return httpx.Client(verify=True, timeout=60.0)
+            logger.debug(f"回退使用系统默认证书{mode_suffix}")
+            return client_class(verify=True, timeout=60.0)
         except Exception as e:
-            logger.warning(f"使用系统证书失败: {e}")
+            logger.warning(f"使用系统证书失败{mode_suffix}: {e}")
         
         # 最后使用默认配置
-        logger.warning("无法配置 SSL 证书，使用默认配置")
-        return None
-    
-    def _create_async_http_client_with_certs(self):
-        """
-        创建带证书配置的异步 HTTP 客户端
-        
-        优先级：
-        1. Linux/Mac: 优先使用系统证书（公网 API 通常不需要自定义证书）
-        2. Windows 或系统证书失败: 使用 cert_config.yaml 中的服务证书
-        3. 回退到 certifi
-        """
-        import platform
-        from pathlib import Path
-        from tableau_assistant.src.infra.certs import get_cert_config
-        
-        # Linux/Mac 优先尝试系统证书
-        if platform.system() != "Windows":
-            try:
-                logger.debug("zhipu-ai: 使用系统证书(异步)")
-                return httpx.AsyncClient(verify=True, timeout=60.0)
-            except Exception as e:
-                logger.warning(f"zhipu-ai: 系统证书不可用(异步)，尝试自定义证书: {e}")
-        
-        # 使用证书管理器中的 zhipu-ai 服务证书
-        try:
-            config = get_cert_config()
-            zhipu_service = config.services.get("zhipu-ai")
-            if zhipu_service and zhipu_service.ca_bundle:
-                cert_path = Path(config.cert_dir) / zhipu_service.ca_bundle
-                if cert_path.exists():
-                    logger.info(f"使用证书管理器的 zhipu-ai 证书(异步): {cert_path}")
-                    return httpx.AsyncClient(verify=str(cert_path), timeout=60.0)
-                else:
-                    logger.warning(f"zhipu-ai 证书文件不存在: {cert_path}")
-        except Exception as e:
-            logger.warning(f"从证书管理器获取 zhipu-ai 证书失败: {e}")
-        
-        # 回退到 certifi 证书
-        try:
-            import certifi
-            logger.debug(f"回退使用 certifi 证书(异步): {certifi.where()}")
-            return httpx.AsyncClient(verify=certifi.where(), timeout=60.0)
-        except ImportError:
-            logger.warning("certifi 未安装")
-        except Exception as e:
-            logger.warning(f"使用 certifi 创建异步客户端失败: {e}")
-        
-        # 回退到系统默认证书
-        try:
-            logger.debug("回退使用系统默认证书(异步)")
-            return httpx.AsyncClient(verify=True, timeout=60.0)
-        except Exception as e:
-            logger.warning(f"使用系统证书失败: {e}")
-        
-        # 最后使用默认配置
-        logger.warning("无法配置异步 SSL 证书，使用默认配置")
+        logger.warning(f"无法配置 SSL 证书{mode_suffix}，使用默认配置")
         return None
     
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -783,11 +681,42 @@ class EmbeddingProviderFactory:
         return list(cls._providers.keys())
 
 
+def get_embeddings(model_id: Optional[str] = None, **kwargs) -> EmbeddingProvider:
+    """获取 Embedding 实例
+    
+    统一的 Embedding 获取入口，从 ModelManager 获取模型配置并创建实例。
+    
+    Args:
+        model_id: 模型 ID（可选，不指定则使用默认 Embedding）
+        **kwargs: 其他参数（如 batch_size, dimensions）
+    
+    Returns:
+        配置好的 EmbeddingProvider 实例
+    
+    Raises:
+        ValueError: 未找到模型配置
+    
+    Examples:
+        # 使用默认 Embedding
+        embeddings = get_embeddings()
+        
+        # 指定模型
+        embeddings = get_embeddings(model_id="env-zhipu-embedding")
+        
+        # 自定义参数
+        embeddings = get_embeddings(batch_size=64)
+    """
+    from tableau_assistant.src.infra.ai.model_manager import get_model_manager
+    
+    manager = get_model_manager()
+    return manager.create_embedding(model_id=model_id, **kwargs)
+
+
 __all__ = [
+    "get_embeddings",
     "select_embeddings",
     "EmbeddingProvider",
     "ZhipuEmbedding",
     "OpenAIEmbedding",
     "EmbeddingProviderFactory",
-    "SUPPORTED_EMBEDDING_PROVIDERS",
 ]

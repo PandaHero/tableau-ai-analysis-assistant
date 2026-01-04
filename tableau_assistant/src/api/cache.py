@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from tableau_assistant.src.infra.storage.langgraph_store import get_langgraph_store
 from tableau_assistant.src.infra.storage.data_model_cache import DataModelCache
-from tableau_assistant.src.infra.storage.data_model_loader import TableauDataModelLoader
+from tableau_assistant.src.platforms.tableau import TableauDataModelLoader
 
 logger = logging.getLogger(__name__)
 

@@ -21,12 +21,11 @@ Requirements: 2.1, 2.2, 2.3, 2.5
 """
 import logging
 import time
-from typing import Optional, Dict, Any, Tuple, TYPE_CHECKING
+from typing import Optional, Dict, Any, Tuple
 
-if TYPE_CHECKING:
-    from langgraph.store.sqlite import SqliteStore
-    from tableau_assistant.src.core.models import DataModel
-    from .data_model_loader import DataModelLoader
+from langgraph.store.base import BaseStore
+from tableau_assistant.src.infra.storage.data_model import DataModel
+from tableau_assistant.src.infra.storage.data_model_loader import DataModelLoader
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +49,7 @@ class DataModelCache:
     - ("dimension_hierarchy", datasource_luid) -> 维度层级字典
     """
     
-    def __init__(self, store: "SqliteStore"):
+    def __init__(self, store: BaseStore):
         """
         初始化缓存
         
@@ -62,8 +61,8 @@ class DataModelCache:
     async def get_or_load(
         self,
         datasource_luid: str,
-        loader: "DataModelLoader",
-    ) -> Tuple["DataModel", bool]:
+        loader: DataModelLoader,
+    ) -> Tuple[DataModel, bool]:
         """
         获取或加载数据模型（缓存优先）
         
@@ -111,7 +110,7 @@ class DataModelCache:
         
         return data_model, False
 
-    def _get_from_cache(self, datasource_luid: str) -> Optional["DataModel"]:
+    def _get_from_cache(self, datasource_luid: str) -> Optional[DataModel]:
         """
         从缓存获取数据模型
         
@@ -121,8 +120,6 @@ class DataModelCache:
         Returns:
             DataModel 对象，如果缓存未命中则返回 None
         """
-        from tableau_assistant.src.core.models import DataModel
-        
         try:
             # 获取 data_model
             item = self._store.get(
@@ -149,7 +146,7 @@ class DataModelCache:
             logger.warning(f"缓存读取失败: {datasource_luid}, error={e}")
             return None
     
-    def _put_to_cache(self, datasource_luid: str, data_model: "DataModel") -> bool:
+    def _put_to_cache(self, datasource_luid: str, data_model: DataModel) -> bool:
         """
         存入缓存
         

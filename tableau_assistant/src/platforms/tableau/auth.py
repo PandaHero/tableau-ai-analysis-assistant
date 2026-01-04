@@ -169,23 +169,22 @@ class TableauAuthError(Exception):
 def _get_tableau_context_from_env(target_domain: Optional[str] = None) -> Dict[str, Any]:
     """
     获取 Tableau token，支持 JWT 和 PAT 两种认证方式。
-    支持多环境：根据 target_domain 选择对应的配置。
     优先使用 JWT，如果 JWT 配置不完整则尝试 PAT。
     
     Args:
-        target_domain: 目标 Tableau 域名（可选），如果不提供则使用默认配置
+        target_domain: 目标 Tableau 域名（可选，已废弃，保留参数兼容性）
     
     JWT 必需：TABLEAU_DOMAIN, TABLEAU_JWT_CLIENT_ID, TABLEAU_JWT_SECRET_ID, TABLEAU_JWT_SECRET, TABLEAU_USER
     PAT 必需：TABLEAU_DOMAIN, TABLEAU_PAT_NAME, TABLEAU_PAT_SECRET
-    可选：TABLEAU_SITE, TABLEAU_API_VERSION(默认 3.18)
+    可选：TABLEAU_SITE, TABLEAU_API_VERSION(默认 3.24)
     
-    Token 10 分钟缓存（按域名分别缓存）
+    Token 10 分钟缓存
     返回: {"domain": str, "site": str, "api_key": Optional[str]}
     """
-    from tableau_assistant.src.infra.config.tableau_env import get_tableau_config
+    from tableau_assistant.src.infra.config.settings import settings
     
-    # 获取对应环境的配置
-    tableau_config = get_tableau_config(target_domain)
+    # 获取配置
+    tableau_config = settings.get_tableau_config()
     
     domain = tableau_config.domain.strip().rstrip("/")
     site = tableau_config.site.strip()
@@ -355,14 +354,12 @@ def get_tableau_auth(
     """
     获取 Tableau 认证上下文（同步版本）
     
-    支持多环境：根据 target_domain 选择对应的配置。
-    
     优先级：
     1. 内存缓存（如果未过期）
     2. 调用认证 API 获取新 token
     
     Args:
-        target_domain: 目标 Tableau 域名（可选），如果不提供则使用默认配置
+        target_domain: 目标 Tableau 域名（可选，已废弃，保留参数兼容性）
         force_refresh: 是否强制刷新 token
     
     Returns:
@@ -374,8 +371,8 @@ def get_tableau_auth(
     global _ctx_cache, _ctx_cached_at
     
     # 获取缓存 key
-    from tableau_assistant.src.infra.config.tableau_env import get_tableau_config
-    tableau_config = get_tableau_config(target_domain)
+    from tableau_assistant.src.infra.config.settings import settings
+    tableau_config = settings.get_tableau_config()
     cache_key = tableau_config.domain.lower().rstrip("/")
     
     # 1. 检查内存缓存
@@ -416,13 +413,11 @@ async def get_tableau_auth_async(
     """
     获取 Tableau 认证上下文（异步版本）
     
-    支持多环境：根据 target_domain 选择对应的配置。
-    
     注意：当前实现是同步的，因为 Tableau API 调用是同步的。
     提供异步接口是为了与异步工作流兼容。
     
     Args:
-        target_domain: 目标 Tableau 域名（可选），如果不提供则使用默认配置
+        target_domain: 目标 Tableau 域名（可选，已废弃，保留参数兼容性）
         force_refresh: 是否强制刷新 token
     """
     return get_tableau_auth(target_domain=target_domain, force_refresh=force_refresh)

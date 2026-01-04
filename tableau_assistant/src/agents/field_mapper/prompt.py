@@ -9,7 +9,7 @@ from typing import Type
 from pydantic import BaseModel
 
 from tableau_assistant.src.agents.base.prompt import VizQLPrompt
-from tableau_assistant.src.core.models import SingleSelectionResult
+from tableau_assistant.src.agents.field_mapper.models import SingleSelectionResult
 
 
 class FieldMapperPrompt(VizQLPrompt):

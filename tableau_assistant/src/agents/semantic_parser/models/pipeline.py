@@ -1,6 +1,7 @@
 """Pipeline models - QueryPipeline execution result models.
 
 Defines QueryPipeline output models including success results and error types.
+PipelineResult extends ExecuteResult with pipeline-specific fields.
 """
 
 from typing import Any, Dict, List, Optional
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .step1 import Step1Output
 from .step2 import Step2Output
 from ....core.models import IntentType
+from ....core.models.execute_result import ExecuteResult
 
 
 class QueryErrorType(str, Enum):
@@ -81,31 +83,34 @@ class QueryError(BaseModel):
         return msg
 
 
-class QueryResult(BaseModel):
+class PipelineResult(ExecuteResult):
     """QueryPipeline execution result.
     
-    Contains query result data on success, error info on failure.
+    Extends ExecuteResult with pipeline-specific fields for intermediate results,
+    error handling, and clarification support.
+    
+    Inheritance from ExecuteResult:
+    - data: List[RowData] - Query result data
+    - columns: List[ColumnInfo] - Column metadata with semantic info
+    - row_count: int - Number of rows returned
+    - execution_time_ms: int - Execution time in milliseconds
+    - error: Optional[str] - Simple error message
+    - query_id: Optional[str] - Query ID
+    - timestamp: str - Execution timestamp
+    
+    PipelineResult adds:
+    - success: bool - Pipeline success status
+    - step1_output, step2_output - Intermediate LLM outputs
+    - semantic_query, mapped_query, vizql_query - Query transformation stages
+    - pipeline_error: QueryError - Structured error info
+    - clarification - User clarification support
     """
     model_config = ConfigDict(extra="allow")  # Allow extra fields for intermediate results
     
+    # Pipeline status
     success: bool = Field(
+        default=True,
         description="Whether execution succeeded"
-    )
-    
-    # Success data
-    data: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="Query result data (on success)"
-    )
-    
-    columns: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
-        description="Column metadata"
-    )
-    
-    row_count: int = Field(
-        default=0,
-        description="Number of rows returned"
     )
     
     # Intermediate results (for debugging and ReAct)
@@ -150,16 +155,10 @@ class QueryResult(BaseModel):
         description="Whether result is large"
     )
     
-    # Error info
-    error: Optional[QueryError] = Field(
+    # Structured error info (more detailed than ExecuteResult.error)
+    pipeline_error: Optional[QueryError] = Field(
         default=None,
-        description="Error info (on failure)"
-    )
-    
-    # Execution stats
-    execution_time_ms: int = Field(
-        default=0,
-        description="Total execution time (milliseconds)"
+        description="Structured error info (on failure)"
     )
     
     # Clarification (when filter values not found)
@@ -185,12 +184,12 @@ class QueryResult(BaseModel):
         file_path: Optional[str] = None,
         is_large_result: bool = False,
         execution_time_ms: int = 0
-    ) -> "QueryResult":
+    ) -> "PipelineResult":
         """Create success response."""
         return cls(
             success=True,
             data=data,
-            columns=columns,
+            columns=columns or [],
             row_count=row_count,
             semantic_query=semantic_query,
             mapped_query=mapped_query,
@@ -208,11 +207,12 @@ class QueryResult(BaseModel):
         mapped_query: Optional[Dict[str, Any]] = None,
         vizql_query: Optional[Dict[str, Any]] = None,
         execution_time_ms: int = 0
-    ) -> "QueryResult":
+    ) -> "PipelineResult":
         """Create failure response."""
         return cls(
             success=False,
-            error=error,
+            error=error.message,  # Simple error message for ExecuteResult.error
+            pipeline_error=error,  # Structured error for pipeline
             semantic_query=semantic_query,
             mapped_query=mapped_query,
             vizql_query=vizql_query,
@@ -221,7 +221,7 @@ class QueryResult(BaseModel):
 
 
 __all__ = [
-    "QueryResult",
+    "PipelineResult",
     "QueryError",
     "QueryErrorType",
 ]

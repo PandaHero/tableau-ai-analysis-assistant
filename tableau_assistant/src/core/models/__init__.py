@@ -6,18 +6,19 @@ Core Data Models - 平台无关的语义层模型
 
 1. 基础模型 (enums, fields, filters, computations)
 2. 查询模型 (query)
-3. 数据模型 (data_model)
+3. 执行结果模型 (execute_result)
 4. 验证模型 (validation)
-5. 维度层级模型 (dimension_hierarchy)
-6. 字段映射模型 (field_mapping)
-7. 重规划模型 (replan)
 
-注意：以下模型已迁移到 agents/ 层：
+注意：以下模型已迁移到其他层：
+- DataModel, FieldMetadata → infra/storage/data_model.py
+- DimensionHierarchy → agents/dimension_hierarchy/models/hierarchy.py
+- FieldMapping, MappedQuery → agents/field_mapper/models/mapping.py
 - Step1 模型 → agents/semantic_parser/models/step1.py
 - Step2 模型 → agents/semantic_parser/models/step2.py
 - Observer 模型 → agents/semantic_parser/models/observer.py
 - ParseResult 模型 → agents/semantic_parser/models/parse_result.py
 - Insight 模型 → agents/insight/models/insight.py
+- Replan 模型 → agents/replanner/models/output.py (ExplorationQuestion, ReplanDecision)
 """
 
 # Enums
@@ -82,53 +83,17 @@ from .query import SemanticQuery
 
 # Validation
 from .validation import (
-    ColumnInfo,
-    QueryResult,
     ValidationError,
     ValidationErrorType,
     ValidationResult,
 )
 
-# Data Model (包含 FieldMetadata)
-from .data_model import (
-    FieldMetadata,
-    DataModel,
-    LogicalTable,
-    LogicalTableRelationship,
-)
-
-# Dimension Hierarchy
-from .dimension_hierarchy import (
-    DimensionAttributes,
-    DimensionHierarchyResult,
-)
-
-# Field Mapping
-from .field_mapping import (
-    SingleSelectionResult,
-    BatchSelectionResult,
-    AlternativeMapping,
-    FieldMapping,
-    MappedQuery,
-)
-
-# Replan
-from .replan import (
-    ExplorationQuestion,
-    ReplanDecision,
-)
-
 # Execute Result
 from .execute_result import (
     ExecuteResult,
-    ColumnMetadata,
+    ColumnInfo,
     RowData,
     RowValue,
-)
-
-# Query Request (abstract base)
-from .query_request import (
-    QueryRequest,
 )
 
 
@@ -181,33 +146,12 @@ __all__ = [
     # Query
     "SemanticQuery",
     # Validation
-    "ColumnInfo",
-    "QueryResult",
     "ValidationError",
     "ValidationErrorType",
     "ValidationResult",
-    # Data Model
-    "FieldMetadata",
-    "DataModel",
-    "LogicalTable",
-    "LogicalTableRelationship",
-    # Dimension Hierarchy
-    "DimensionAttributes",
-    "DimensionHierarchyResult",
-    # Field Mapping
-    "SingleSelectionResult",
-    "BatchSelectionResult",
-    "AlternativeMapping",
-    "FieldMapping",
-    "MappedQuery",
-    # Replan
-    "ExplorationQuestion",
-    "ReplanDecision",
     # Execute Result
     "ExecuteResult",
-    "ColumnMetadata",
+    "ColumnInfo",
     "RowData",
     "RowValue",
-    # Query Request
-    "QueryRequest",
 ]

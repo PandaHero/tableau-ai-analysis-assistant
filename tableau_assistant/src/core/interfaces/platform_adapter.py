@@ -7,7 +7,7 @@ Each BI platform (Tableau, Power BI, Superset) implements this interface.
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..models import QueryResult, SemanticQuery, ValidationResult
+from ..models import ExecuteResult, SemanticQuery, ValidationResult
 
 
 class BasePlatformAdapter(ABC):
@@ -34,7 +34,7 @@ class BasePlatformAdapter(ABC):
         semantic_query: SemanticQuery,
         datasource_id: str,
         **kwargs: Any,
-    ) -> QueryResult:
+    ) -> ExecuteResult:
         """Execute a semantic query against the platform.
         
         This is the main entry point for query execution.
@@ -46,7 +46,7 @@ class BasePlatformAdapter(ABC):
             **kwargs: Additional platform-specific parameters
             
         Returns:
-            QueryResult with columns and rows
+            ExecuteResult with columns and data
             
         Raises:
             ValidationError: If query validation fails

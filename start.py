@@ -283,58 +283,34 @@ def load_env_vars():
 
 
 def validate_env_vars():
-    """Validate critical environment variables (supports multi-environment)."""
+    """Validate critical environment variables."""
     print_header("Validating Environment Variables")
     
     # Load .env file
     env_vars = load_env_vars()
     
-    # Check for multi-environment Tableau config (TABLEAU_CLOUD_* or TABLEAU_SERVER_*)
-    has_cloud = env_vars.get('TABLEAU_CLOUD_DOMAIN', '')
-    has_server = env_vars.get('TABLEAU_SERVER_DOMAIN', '')
-    has_default = env_vars.get('TABLEAU_DOMAIN', '')
+    # Check for Tableau config
+    has_tableau = env_vars.get('TABLEAU_DOMAIN', '')
     
-    # At least one Tableau environment must be configured
-    if not has_cloud and not has_server and not has_default:
+    # Tableau environment must be configured
+    if not has_tableau:
         print_error("No Tableau environment configured!")
-        print_info("Please configure at least one of:")
-        print_info("  - TABLEAU_CLOUD_* (for Tableau Cloud)")
-        print_info("  - TABLEAU_SERVER_* (for Tableau Server)")
+        print_info("Please configure TABLEAU_DOMAIN and authentication variables")
         sys.exit(1)
     
-    # Validate each configured environment
-    tableau_envs = []
-    
-    if has_cloud:
-        cloud_vars = ["TABLEAU_CLOUD_DOMAIN", "TABLEAU_CLOUD_USER"]
-        cloud_auth_jwt = all([
-            env_vars.get("TABLEAU_CLOUD_JWT_CLIENT_ID"),
-            env_vars.get("TABLEAU_CLOUD_JWT_SECRET_ID"),
-            env_vars.get("TABLEAU_CLOUD_JWT_SECRET"),
-        ])
-        cloud_auth_pat = all([
-            env_vars.get("TABLEAU_CLOUD_PAT_NAME"),
-            env_vars.get("TABLEAU_CLOUD_PAT_SECRET"),
-        ])
-        if not cloud_auth_jwt and not cloud_auth_pat:
-            print_error("Tableau Cloud: Missing authentication (need JWT or PAT)")
-            sys.exit(1)
-        tableau_envs.append(("Cloud", env_vars.get("TABLEAU_CLOUD_DOMAIN")))
-    
-    if has_server:
-        server_auth_jwt = all([
-            env_vars.get("TABLEAU_SERVER_JWT_CLIENT_ID"),
-            env_vars.get("TABLEAU_SERVER_JWT_SECRET_ID"),
-            env_vars.get("TABLEAU_SERVER_JWT_SECRET"),
-        ])
-        server_auth_pat = all([
-            env_vars.get("TABLEAU_SERVER_PAT_NAME"),
-            env_vars.get("TABLEAU_SERVER_PAT_SECRET"),
-        ])
-        if not server_auth_jwt and not server_auth_pat:
-            print_error("Tableau Server: Missing authentication (need JWT or PAT)")
-            sys.exit(1)
-        tableau_envs.append(("Server", env_vars.get("TABLEAU_SERVER_DOMAIN")))
+    # Validate authentication
+    auth_jwt = all([
+        env_vars.get("TABLEAU_JWT_CLIENT_ID"),
+        env_vars.get("TABLEAU_JWT_SECRET_ID"),
+        env_vars.get("TABLEAU_JWT_SECRET"),
+    ])
+    auth_pat = all([
+        env_vars.get("TABLEAU_PAT_NAME"),
+        env_vars.get("TABLEAU_PAT_SECRET"),
+    ])
+    if not auth_jwt and not auth_pat:
+        print_error("Tableau: Missing authentication (need JWT or PAT)")
+        sys.exit(1)
     
     # Check LLM config
     if not env_vars.get('LLM_API_BASE'):
@@ -350,10 +326,9 @@ def validate_env_vars():
     print(f"  Frontend Host: {env_vars.get('VITE_APP_HOST', '127.0.0.1')}")
     print(f"  Frontend Port: {env_vars.get('VITE_APP_PORT', '5173')}")
     
-    # Show Tableau environments
-    print_info("\nTableau Environments:")
-    for env_name, domain in tableau_envs:
-        print(f"  {env_name}: {domain}")
+    # Show Tableau environment
+    print_info("\nTableau Environment:")
+    print(f"  Domain: {env_vars.get('TABLEAU_DOMAIN')}")
     
     print(f"\n  LLM API Base: {env_vars.get('LLM_API_BASE', 'Not set')}")
     

@@ -1,7 +1,7 @@
 """Tableau Platform Adapter - Implements BasePlatformAdapter for Tableau.
 
 This adapter handles the complete flow:
-SemanticQuery → validate → build VizQL → execute → QueryResult
+SemanticQuery → validate → build VizQL → execute → ExecuteResult
 """
 
 import logging
@@ -10,7 +10,7 @@ from typing import Any
 from ...core.interfaces import BasePlatformAdapter
 from ...core.models import (
     ColumnInfo,
-    QueryResult,
+    ExecuteResult,
     SemanticQuery,
     ValidationResult,
 )
@@ -58,7 +58,7 @@ class TableauAdapter(BasePlatformAdapter):
         semantic_query: SemanticQuery,
         datasource_id: str,
         **kwargs: Any,
-    ) -> QueryResult:
+    ) -> ExecuteResult:
         """Execute semantic query against Tableau.
         
         Args:
@@ -67,7 +67,7 @@ class TableauAdapter(BasePlatformAdapter):
             **kwargs: Additional parameters
             
         Returns:
-            QueryResult with columns and rows
+            ExecuteResult with columns and data
         """
         # Validate query
         validation = self.validate_query(semantic_query, **kwargs)
@@ -130,8 +130,8 @@ class TableauAdapter(BasePlatformAdapter):
         """
         return self._query_builder.validate(semantic_query, **kwargs)
     
-    def _convert_response(self, response: dict) -> QueryResult:
-        """Convert VizQL response to QueryResult."""
+    def _convert_response(self, response: dict) -> ExecuteResult:
+        """Convert VizQL response to ExecuteResult."""
         columns = []
         for col in response.get("columns", []):
             columns.append(ColumnInfo(
@@ -146,9 +146,9 @@ class TableauAdapter(BasePlatformAdapter):
         row_count = response.get("rowCount", len(rows))
         execution_time = response.get("executionTimeMs", 0)
         
-        return QueryResult(
+        return ExecuteResult(
             columns=columns,
-            rows=rows,
+            data=rows,
             row_count=row_count,
             execution_time_ms=execution_time,
         )

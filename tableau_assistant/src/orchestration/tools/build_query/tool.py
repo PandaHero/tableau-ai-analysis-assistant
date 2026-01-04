@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional, Union
 from langchain_core.tools import tool
 from langgraph.types import RunnableConfig
 
-from tableau_assistant.src.core.models.field_mapping import MappedQuery
+from tableau_assistant.src.agents.field_mapper.models import MappedQuery
 from tableau_assistant.src.orchestration.tools.build_query.models import (
     BuildQueryInput,
     BuildQueryOutput,
@@ -105,7 +105,7 @@ async def _build_query_impl(
     """
     build_query 核心实现。
     
-    调用 QueryBuilderNode 进行查询构建。
+    直接使用 TableauQueryBuilder 进行查询构建。
     
     Args:
         mapped_query: MappedQuery 对象或字典表示
@@ -113,7 +113,7 @@ async def _build_query_impl(
     start_time = time.time()
     
     try:
-        from tableau_assistant.src.nodes.query_builder.node import QueryBuilderNode
+        from tableau_assistant.src.platforms.tableau.query_builder import TableauQueryBuilder
         
         # 解析 MappedQuery - 支持对象或字典
         if not mapped_query:
@@ -164,18 +164,42 @@ async def _build_query_impl(
             except Exception as e:
                 logger.warning(f"从 config 获取上下文失败: {e}")
         
-        # 构建查询
-        builder = QueryBuilderNode()
-        vizql_query = await builder.build(
-            mapped_query=mq,
-            datasource_luid=datasource_luid,
+        # 从 MappedQuery 获取 SemanticQuery
+        semantic_query = mq.semantic_query
+        if not semantic_query:
+            latency_ms = int((time.time() - start_time) * 1000)
+            return BuildQueryOutput.fail(
+                error=QueryBuildError(
+                    type=QueryBuildErrorType.VALIDATION_FAILED,
+                    message="MappedQuery 中缺少 semantic_query",
+                ),
+                latency_ms=latency_ms
+            )
+        
+        # 使用 TableauQueryBuilder 构建查询
+        builder = TableauQueryBuilder()
+        
+        # 先验证
+        validation_result = builder.validate(semantic_query)
+        if not validation_result.is_valid:
+            error_msgs = [e.message for e in validation_result.errors]
+            latency_ms = int((time.time() - start_time) * 1000)
+            return BuildQueryOutput.fail(
+                error=QueryBuildError(
+                    type=QueryBuildErrorType.VALIDATION_FAILED,
+                    message=f"查询验证失败: {'; '.join(error_msgs)}",
+                ),
+                latency_ms=latency_ms
+            )
+        
+        # 构建 VizQL 查询
+        vizql_dict = builder.build(
+            semantic_query,
+            datasource_id=datasource_luid,
             field_metadata=field_metadata or {}
         )
         
         latency_ms = int((time.time() - start_time) * 1000)
-        
-        # 转换为字典
-        vizql_dict = vizql_query.model_dump() if hasattr(vizql_query, 'model_dump') else dict(vizql_query)
         
         # 统计信息
         fields = vizql_dict.get('fields', [])

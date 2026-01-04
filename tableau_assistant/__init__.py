@@ -19,7 +19,6 @@ def _auto_setup_certificates():
     
     使用证书管理器，支持：
     - 多服务证书管理
-    - 多环境配置（Cloud + Server）
     """
     try:
         import os
@@ -35,17 +34,17 @@ def _auto_setup_certificates():
         
         logger = logging.getLogger(__name__)
         
-        # 使用多环境管理器获取所有配置的域名
-        from tableau_assistant.src.infra.config.tableau_env import get_tableau_env_manager
+        # 获取 Tableau 配置
+        from tableau_assistant.src.infra.config.settings import settings
         
         try:
-            env_manager = get_tableau_env_manager()
-            domains = env_manager.get_all_domains()
+            tableau_config = settings.get_tableau_config()
+            domain = tableau_config.domain
         except Exception:
             logger.debug("未配置 Tableau 环境，跳过证书自动配置")
             return
         
-        if not domains:
+        if not domain:
             logger.debug("未配置 Tableau 环境，跳过证书自动配置")
             return
         
@@ -55,36 +54,31 @@ def _auto_setup_certificates():
         # 初始化证书管理器
         manager = CertificateManager()
         
-        # 为每个非 Cloud 环境配置证书
-        for domain in domains:
-            if not domain:
-                continue
+        # Tableau Cloud 使用系统证书，无需处理
+        if "online.tableau.com" in domain.lower():
+            logger.info(f"检测到 Tableau Cloud: {domain}，使用系统证书库")
+            return
+        
+        # 内部 Tableau Server，使用证书管理器
+        logger.info(f"检测到内部 Tableau Server: {domain}")
+        
+        # 解析域名
+        parsed = urlparse(domain)
+        hostname = parsed.hostname or parsed.path.split('/')[0]
+        
+        # 获取 Tableau 证书
+        try:
+            result = manager.fetch_and_save_certificates(hostname, force=False)
+            
+            if "server_cert" in result:
+                cert_file = result["server_cert"]
+                logger.info(f"✅ 证书已配置: {cert_file}")
                 
-            # Tableau Cloud 使用系统证书，无需处理
-            if "online.tableau.com" in domain.lower():
-                logger.info(f"检测到 Tableau Cloud: {domain}，使用系统证书库")
-                continue
-            
-            # 内部 Tableau Server，使用证书管理器
-            logger.info(f"检测到内部 Tableau Server: {domain}")
-            
-            # 解析域名
-            parsed = urlparse(domain)
-            hostname = parsed.hostname or parsed.path.split('/')[0]
-            
-            # 获取 Tableau 证书
-            try:
-                result = manager.fetch_and_save_certificates(hostname, force=False)
-                
-                if "server_cert" in result:
-                    cert_file = result["server_cert"]
-                    logger.info(f"✅ 证书已配置: {cert_file}")
-                    
-                    # 设置环境变量（运行时生效）
-                    os.environ["VIZQL_CA_BUNDLE"] = cert_file
-                    os.environ["VIZQL_VERIFY_SSL"] = "true"
-            except Exception as e:
-                logger.warning(f"Tableau 证书获取失败 ({hostname}): {e}")
+                # 设置环境变量（运行时生效）
+                os.environ["VIZQL_CA_BUNDLE"] = cert_file
+                os.environ["VIZQL_VERIFY_SSL"] = "true"
+        except Exception as e:
+            logger.warning(f"Tableau 证书获取失败 ({hostname}): {e}")
         
     except Exception as e:
         # 静默失败，不影响应用启动

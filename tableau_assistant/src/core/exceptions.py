@@ -1,14 +1,14 @@
-"""Custom exceptions for Semantic Parser.
+"""语义解析器的自定义异常。
 
-These exceptions carry additional context for Observer-based error correction.
+这些异常携带额外的上下文信息，用于基于 Observer 的错误修正。
 """
 
 
 class ValidationError(Exception):
-    """Validation error with original output for Observer correction.
+    """带有原始输出的验证错误，用于 Observer 修正。
     
-    Carries both the error message and the original LLM output,
-    allowing Observer to see what went wrong and attempt correction.
+    同时携带错误消息和原始 LLM 输出，
+    允许 Observer 查看出错的内容并尝试修正。
     """
     
     def __init__(
@@ -17,12 +17,12 @@ class ValidationError(Exception):
         original_output: str | None = None,
         step: str = "unknown",
     ):
-        """Initialize ValidationError.
+        """初始化 ValidationError。
         
         Args:
-            message: Error message describing what went wrong
-            original_output: Original LLM output that failed validation
-            step: Which step failed ("step1" or "step2")
+            message: 描述出错内容的错误消息
+            original_output: 验证失败的原始 LLM 输出
+            step: 失败的步骤（"step1" 或 "step2"）
         """
         super().__init__(message)
         self.message = message

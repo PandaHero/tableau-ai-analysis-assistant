@@ -63,11 +63,9 @@ app.add_middleware(
 # 注册路由
 from tableau_assistant.src.api.chat import router as chat_router
 from tableau_assistant.src.api.cache import router as cache_router
-from tableau_assistant.src.api.custom_models import router as custom_models_router
 
 app.include_router(chat_router)
 app.include_router(cache_router)
-app.include_router(custom_models_router)
 
 
 @app.get("/api/status")

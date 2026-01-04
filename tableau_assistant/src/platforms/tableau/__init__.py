@@ -33,7 +33,7 @@ from .auth import (
 )
 
 # Metadata Services
-from .metadata import (
+from .data_model import (
     get_data_dictionary,
     get_data_dictionary_async,
     get_datasource_luid_by_name,
@@ -41,7 +41,9 @@ from .metadata import (
 
 # VizQL Client
 from .vizql_client import VizQLClient, VizQLClientConfig
-from .client import VizQLClientWrapper, get_vizql_client
+
+# Data Model Loader
+from .data_model_loader import TableauDataModelLoader
 
 
 # Register Tableau adapter with platform registry
@@ -77,6 +79,6 @@ __all__ = [
     # VizQL Client
     "VizQLClient",
     "VizQLClientConfig",
-    "VizQLClientWrapper",
-    "get_vizql_client",
+    # Data Model Loader
+    "TableauDataModelLoader",
 ]

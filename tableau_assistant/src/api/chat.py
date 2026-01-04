@@ -56,72 +56,16 @@ async def resolve_datasource_luid(request: ChatRequest) -> tuple[str, str]:
     from tableau_assistant.src.platforms.tableau import get_datasource_luid_by_name, get_tableau_auth_async
     from tableau_assistant.src.infra.storage import get_langgraph_store
     from tableau_assistant.src.infra.config.settings import settings
-    from tableau_assistant.src.infra.config.tableau_env import get_tableau_config, get_tableau_env_manager
     
     store = get_langgraph_store()
+    tableau_config = settings.get_tableau_config()
     
-    # 优先使用 LUID（需要配合 domain 使用）
+    # 优先使用 LUID
     if request.datasource_luid:
-        tableau_config = get_tableau_config(request.tableau_domain, request.tableau_context)
         return request.datasource_luid, tableau_config.domain
     
     # 通过名称查找
     if request.datasource_name:
-        # 如果明确指定了 domain 或 context 能确定环境，直接使用
-        if request.tableau_domain or request.tableau_context in ("cloud", "server"):
-            tableau_config = get_tableau_config(request.tableau_domain, request.tableau_context)
-            return await _find_datasource_in_env(
-                request.datasource_name,
-                tableau_config.domain,
-                request.tableau_site or tableau_config.site,
-                store,
-                logger
-            )
-        
-        # Desktop 环境且未指定 domain，尝试所有配置
-        if request.tableau_context == "desktop":
-            logger.info("Desktop 环境，尝试在所有配置的 Tableau 环境中查找数据源")
-            env_manager = get_tableau_env_manager()
-            
-            # 获取所有配置的环境
-            errors = []
-            for env_key in ["server", "cloud"]:  # 优先尝试 server
-                if env_key not in env_manager._configs:
-                    continue
-                    
-                config = env_manager._configs[env_key]
-                logger.info(f"尝试在 {env_key} ({config.domain}) 中查找数据源...")
-                
-                try:
-                    luid, domain = await _find_datasource_in_env(
-                        request.datasource_name,
-                        config.domain,
-                        request.tableau_site or config.site,
-                        store,
-                        logger
-                    )
-                    logger.info(f"在 {env_key} 中找到数据源: {luid}")
-                    return luid, domain
-                except HTTPException as e:
-                    errors.append(f"{env_key}: {e.detail.get('message', str(e))}")
-                    logger.info(f"在 {env_key} 中未找到数据源: {e.detail}")
-                    continue
-                except Exception as e:
-                    errors.append(f"{env_key}: {str(e)}")
-                    logger.warning(f"在 {env_key} 中查找数据源失败: {e}")
-                    continue
-            
-            # 所有环境都没找到
-            raise HTTPException(
-                status_code=400,
-                detail=ErrorResponse(
-                    error="DatasourceNotFound",
-                    message=f"在所有配置的 Tableau 环境中都无法找到数据源: {request.datasource_name}"
-                ).model_dump()
-            )
-        
-        # 其他情况，使用默认配置
-        tableau_config = get_tableau_config(request.tableau_domain, request.tableau_context)
         return await _find_datasource_in_env(
             request.datasource_name,
             tableau_config.domain,
@@ -132,7 +76,6 @@ async def resolve_datasource_luid(request: ChatRequest) -> tuple[str, str]:
     
     # 都没有提供，使用环境变量默认值
     if settings.datasource_luid:
-        tableau_config = get_tableau_config(request.tableau_domain, request.tableau_context)
         return settings.datasource_luid, tableau_config.domain
     
     raise HTTPException(
@@ -596,16 +539,15 @@ async def health_check():
         checks["llm"] = {"status": "error", "message": str(e)}
         logger.warning(f"LLM health check failed: {e}")
     
-    # 检查 Tableau API（多环境支持）
+    # 检查 Tableau API
     try:
-        from tableau_assistant.src.infra.config.tableau_env import get_tableau_env_manager
-        env_manager = get_tableau_env_manager()
-        domains = env_manager.get_all_domains()
+        from tableau_assistant.src.infra.config.settings import settings
+        tableau_config = settings.get_tableau_config()
         
-        if domains:
+        if tableau_config.domain:
             checks["tableau"] = {
                 "status": "ok", 
-                "message": f"Tableau 配置正常，已配置 {len(domains)} 个环境"
+                "message": f"Tableau 配置正常: {tableau_config.domain}"
             }
         else:
             checks["tableau"] = {"status": "warning", "message": "Tableau 配置不完整"}

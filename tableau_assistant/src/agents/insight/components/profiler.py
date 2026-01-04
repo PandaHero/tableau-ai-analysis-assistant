@@ -35,10 +35,13 @@ Performance Note (Task 3.3.5 - 不实现缓存):
 """
 
 import logging
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 import pandas as pd
 import numpy as np
 from scipy import stats as scipy_stats
+
+# 定义数据输入类型，替代 Any
+DataInputType = Union[pd.DataFrame, List[Dict], Dict]
 
 from tableau_assistant.src.agents.insight.models import (
     DataProfile,
@@ -118,7 +121,7 @@ class EnhancedDataProfiler:
         """Set dimension hierarchy info."""
         self._dimension_hierarchy = hierarchy or {}
     
-    def profile(self, data: Any) -> EnhancedDataProfile:
+    def profile(self, data: DataInputType) -> EnhancedDataProfile:
         """
         Generate an enhanced profile of the data.
         
@@ -209,7 +212,7 @@ class EnhancedDataProfiler:
         
         return profile
     
-    def get_insight_profile(self, data: Any) -> DataInsightProfile:
+    def get_insight_profile(self, data: DataInputType) -> DataInsightProfile:
         """
         Get DataInsightProfile for chunking strategy.
         

@@ -52,7 +52,7 @@ from .lod import (
 # ExecuteResult is defined in core.models, re-export for convenience
 from tableau_assistant.src.core.models.execute_result import (
     ExecuteResult,
-    ColumnMetadata,
+    ColumnInfo,
     RowData,
     RowValue,
 )
@@ -99,7 +99,7 @@ __all__ = [
     "determine_lod_type",
     # Execute Result
     "ExecuteResult",
-    "ColumnMetadata",
+    "ColumnInfo",
     "RowData",
     "RowValue",
 ]
