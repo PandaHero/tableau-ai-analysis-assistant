@@ -75,9 +75,10 @@ class DimensionAttributes(BaseModel):
 <dependency>One-to-one mapping with level</dependency>"""
     )
     
-    unique_count: int = Field(
+    unique_count: Optional[int] = Field(
+        default=None,
         description="""<what>Unique value count</what>
-<when>ALWAYS required</when>"""
+<when>Optional, may be null if not available</when>"""
     )
     
     parent_dimension: Optional[str] = Field(
@@ -96,9 +97,10 @@ class DimensionAttributes(BaseModel):
 <must_not>Guess when uncertain (should be null)</must_not>"""
     )
     
-    sample_values: List[str] = Field(
+    sample_values: Optional[List[str]] = Field(
+        default=None,
         description="""<what>Sample values list</what>
-<when>ALWAYS required</when>
+<when>Optional, may be null if not available</when>
 <rule>Maximum 10 values</rule>"""
     )
     

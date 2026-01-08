@@ -417,6 +417,50 @@ async def _fetch_dimension_samples_async(
     return results
 
 
+async def fetch_dimension_samples_for_fields(
+    api_key: str,
+    domain: str,
+    datasource_luid: str,
+    field_names: List[str],
+    measure_field: str,
+    site: Optional[str] = None,
+    sample_size: int = 5,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    获取指定字段的样例数据（公开接口，用于延迟加载）
+    
+    这是 dimension_hierarchy 模块的延迟加载入口，只对 RAG 未命中的字段调用。
+    
+    Args:
+        api_key: Tableau API Key
+        domain: Tableau 域名
+        datasource_luid: 数据源 LUID
+        field_names: 要获取样例的字段名列表
+        measure_field: 用于 TOP 过滤的度量字段
+        site: Tableau 站点（可选）
+        sample_size: 样例数量（默认 5）
+    
+    Returns:
+        {field_name: {"sample_values": [...], "unique_count": int}}
+    """
+    if not field_names:
+        return {}
+    
+    domain = (domain or "").rstrip("/")
+    config = VizQLClientConfig(base_url=domain, timeout=30, max_retries=3)
+    
+    with VizQLClient(config=config) as client:
+        return await _fetch_dimension_samples_async(
+            client=client,
+            datasource_luid=datasource_luid,
+            dimension_names=field_names,
+            measure_field=measure_field,
+            api_key=api_key,
+            site=site,
+            sample_size=sample_size,
+        )
+
+
 def _fetch_graphql_roles(
     domain: str,
     datasource_luid: str,
@@ -689,7 +733,8 @@ async def get_datasource_metadata(
     datasource_luid: str,
     tableau_token: str,
     tableau_site: str,
-    tableau_domain: str
+    tableau_domain: str,
+    include_samples: bool = False,  # 默认不获取样例数据（延迟加载优化）
 ) -> Dict[str, Any]:
     """
     从 Tableau API 获取数据源元数据（异步版本）
@@ -701,6 +746,7 @@ async def get_datasource_metadata(
         tableau_token: Tableau 认证 token
         tableau_site: Tableau 站点
         tableau_domain: Tableau 域名
+        include_samples: 是否获取样例数据（默认 False，支持延迟加载优化）
     
     Returns:
         元数据字典，包含标准化的字段和解析后的数据模型
@@ -713,7 +759,8 @@ async def get_datasource_metadata(
             api_key=tableau_token,
             domain=tableau_domain,
             datasource_luid=datasource_luid,
-            site=tableau_site
+            site=tableau_site,
+            include_samples=include_samples,  # 传递参数，默认不获取样例
         )
         
         # 标准化字段格式（确保同时有 name 和 fieldCaption）

@@ -174,15 +174,26 @@ class CustomLLMChat(BaseChatModel):
         return headers
     
     def _get_payload(self, messages: List[BaseMessage], stream: bool = False) -> dict:
-        """构建请求体"""
+        """构建请求体
+        
+        注意：只有非 None 的参数才会被添加到请求体中，
+        因为某些 API 不接受额外的参数（如 max_tokens）。
+        """
         payload = {
             "model": self.config.model_name,
-            "max_tokens": self.config.max_tokens,
-            "temperature": self._effective_temperature,
             "messages": self._convert_messages(messages),
             "stream": stream,
-            **self.config.extra_body,
         }
+        
+        # 只在非 None 时添加可选参数
+        if self.config.max_tokens is not None:
+            payload["max_tokens"] = self.config.max_tokens
+        if self._effective_temperature is not None:
+            payload["temperature"] = self._effective_temperature
+        
+        # 添加额外参数
+        payload.update(self.config.extra_body)
+        
         return payload
     
     def _get_url(self) -> str:
@@ -209,12 +220,33 @@ class CustomLLMChat(BaseChatModel):
         with httpx.Client(verify=self.config.verify_ssl, timeout=self.config.timeout) as client:
             resp = client.post(url, json=payload, headers=self._get_headers())
             resp.raise_for_status()
-            data = resp.json()
+            
+            # 检查响应是否为空
+            response_text = resp.text.strip()
+            if not response_text:
+                logger.error(f"Custom LLM [{self.config.name}] 返回空响应")
+                raise ValueError(f"LLM API 返回空响应 (status={resp.status_code})")
+            
+            try:
+                data = json.loads(response_text)
+            except json.JSONDecodeError as e:
+                logger.error(f"Custom LLM [{self.config.name}] JSON 解析失败: {response_text[:200]}")
+                raise ValueError(f"LLM API 响应不是有效的 JSON: {e}") from e
         
-        content = data["choices"][0]["message"]["content"]
+        # 验证响应结构
+        if not data.get("choices") or not data["choices"]:
+            logger.error(f"Custom LLM [{self.config.name}] 响应缺少 choices: {data}")
+            raise ValueError(f"LLM API 响应缺少 choices 字段")
+        
+        message = data["choices"][0].get("message", {})
+        content = message.get("content", "")
+        
+        if not content:
+            logger.warning(f"Custom LLM [{self.config.name}] 响应内容为空")
+        
         ai_message = self._parse_response(content)
         
-        logger.debug(f"Custom LLM [{self.config.name}] 响应: {ai_message.content[:100]}...")
+        logger.debug(f"Custom LLM [{self.config.name}] 响应: {ai_message.content[:100] if ai_message.content else '(空)'}...")
         
         return ChatResult(generations=[ChatGeneration(message=ai_message)])
     
@@ -234,12 +266,33 @@ class CustomLLMChat(BaseChatModel):
         async with httpx.AsyncClient(verify=self.config.verify_ssl, timeout=self.config.timeout) as client:
             resp = await client.post(url, json=payload, headers=self._get_headers())
             resp.raise_for_status()
-            data = resp.json()
+            
+            # 检查响应是否为空
+            response_text = resp.text.strip()
+            if not response_text:
+                logger.error(f"Custom LLM [{self.config.name}] 返回空响应")
+                raise ValueError(f"LLM API 返回空响应 (status={resp.status_code})")
+            
+            try:
+                data = json.loads(response_text)
+            except json.JSONDecodeError as e:
+                logger.error(f"Custom LLM [{self.config.name}] JSON 解析失败: {response_text[:200]}")
+                raise ValueError(f"LLM API 响应不是有效的 JSON: {e}") from e
         
-        content = data["choices"][0]["message"]["content"]
+        # 验证响应结构
+        if not data.get("choices") or not data["choices"]:
+            logger.error(f"Custom LLM [{self.config.name}] 响应缺少 choices: {data}")
+            raise ValueError(f"LLM API 响应缺少 choices 字段")
+        
+        message = data["choices"][0].get("message", {})
+        content = message.get("content", "")
+        
+        if not content:
+            logger.warning(f"Custom LLM [{self.config.name}] 响应内容为空")
+        
         ai_message = self._parse_response(content)
         
-        logger.debug(f"Custom LLM [{self.config.name}] 异步响应: {ai_message.content[:100]}...")
+        logger.debug(f"Custom LLM [{self.config.name}] 异步响应: {ai_message.content[:100] if ai_message.content else '(空)'}...")
         
         return ChatResult(generations=[ChatGeneration(message=ai_message)])
 

@@ -1,847 +1,263 @@
+# -*- coding: utf-8 -*-
 """
-维度层级推断 Agent
+维度层级推断 Agent（优化版）
 
 功能：
-1. 根据字段元数据推断维度层级
-2. 识别维度的 category、level、granularity
-3. 识别父子关系
-4. RAG 增强：复用历史推断结果作为 few-shot 示例
-5. 缓存机制：避免重复推断，支持增量推断
+1. RAG 优先推断：复用历史推断结果
+2. LLM 兜底：RAG 未命中时调用 LLM
+3. 增量推断：只对新增/变更字段进行推断
+4. 延迟加载：只对 RAG 未命中字段查询样例数据
+5. 自学习：高置信度结果存入 RAG
 
-使用 base 包提供的基础能力：
-- get_llm(): 获取 LLM 实例
-- stream_llm_call(): 流式调用 LLM
-- invoke_llm(): 非流式调用 LLM
-- parse_json_response(): 解析 JSON 响应
+使用新的推断系统：
+- DimensionHierarchyInference: 主推断类
+- DimensionPatternFAISS: FAISS 向量索引
+- DimensionHierarchyCacheStorage: 缓存存储
+- DimensionRAGRetriever: RAG 检索器
 
 输出：DimensionHierarchyResult 模型
+
+Requirements: 1.1, 1.2, 1.3, 1.4
 """
-import json
+import asyncio
 import logging
-import hashlib
-from datetime import datetime, timedelta
-from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Callable, Awaitable
 
 from tableau_assistant.src.infra.storage.data_model import DataModel
 from tableau_assistant.src.agents.dimension_hierarchy.models import (
     DimensionHierarchyResult,
     DimensionAttributes,
 )
-from tableau_assistant.src.agents.base import (
-    get_llm,
-    stream_llm_call,
-    stream_llm_call_with_batch_id,
-    invoke_llm,
-    parse_json_response,
-)
-from .prompt import DIMENSION_HIERARCHY_PROMPT
 
 logger = logging.getLogger(__name__)
 
-# 缓存默认 TTL（7 天）
-DEFAULT_CACHE_TTL_DAYS = 7
+# 默认索引路径
+DEFAULT_INDEX_PATH = "data/indexes/dimension_patterns"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 缓存数据结构
+# 全局单例（延迟初始化）
 # ═══════════════════════════════════════════════════════════════════════════
 
-@dataclass
-class HierarchyCacheEntry:
+_inference_instance = None
+_inference_lock = asyncio.Lock()
+
+
+async def _get_inference_instance():
     """
-    维度层级缓存条目
+    获取 DimensionHierarchyInference 单例实例
     
-    Attributes:
-        datasource_luid: 数据源 LUID
-        field_hash: 字段列表的哈希值（用于检测字段变化）
-        hierarchy_data: 推断结果（字典格式）
-        created_at: 创建时间
-        ttl_days: 过期天数
+    延迟初始化，首次调用时创建实例。
     """
-    datasource_luid: str
-    field_hash: str
-    hierarchy_data: Dict[str, Any]
-    created_at: datetime = field(default_factory=datetime.now)
-    ttl_days: int = DEFAULT_CACHE_TTL_DAYS
+    global _inference_instance
     
-    @property
-    def is_expired(self) -> bool:
-        """检查缓存是否过期"""
-        expiry_time = self.created_at + timedelta(days=self.ttl_days)
-        return datetime.now() > expiry_time
+    if _inference_instance is not None:
+        return _inference_instance
     
-    @property
-    def cached_fields(self) -> Set[str]:
-        """获取缓存中的字段名集合"""
-        return set(self.hierarchy_data.keys())
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典（用于存储）"""
-        return {
-            "datasource_luid": self.datasource_luid,
-            "field_hash": self.field_hash,
-            "hierarchy_data": self.hierarchy_data,
-            "created_at": self.created_at.isoformat(),
-            "ttl_days": self.ttl_days,
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "HierarchyCacheEntry":
-        """从字典创建（用于读取）"""
-        return cls(
-            datasource_luid=data["datasource_luid"],
-            field_hash=data["field_hash"],
-            hierarchy_data=data["hierarchy_data"],
-            created_at=datetime.fromisoformat(data["created_at"]),
-            ttl_days=data.get("ttl_days", DEFAULT_CACHE_TTL_DAYS),
-        )
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 缓存辅助函数
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _get_cache_namespace() -> str:
-    """获取缓存命名空间"""
-    return "dimension_hierarchy_cache"
-
-
-def _compute_field_hash(dimension_fields: List[Any]) -> str:
-    """
-    计算字段列表的哈希值
-    
-    用于检测字段是否发生变化（新增/删除/修改）
-    
-    Args:
-        dimension_fields: 维度字段列表
-    
-    Returns:
-        字段列表的 MD5 哈希值
-    """
-    # 提取字段关键信息
-    field_info = []
-    for f in sorted(dimension_fields, key=lambda x: x.name):
-        info = {
-            "name": f.name,
-            "caption": f.fieldCaption,
-            "dataType": f.dataType,
-            "unique_count": f.unique_count or 0,
-        }
-        field_info.append(info)
-    
-    # 计算哈希
-    content = json.dumps(field_info, sort_keys=True, ensure_ascii=False)
-    return hashlib.md5(content.encode("utf-8")).hexdigest()
-
-
-def _get_store_manager():
-    """获取 LangGraph SqliteStore 实例"""
-    try:
-        from tableau_assistant.src.infra.storage import get_langgraph_store
-        return get_langgraph_store()
-    except Exception as e:
-        logger.warning(f"无法获取 LangGraph Store: {e}")
-        return None
-
-
-def _get_from_cache(
-    datasource_luid: str,
-    store_manager=None
-) -> Optional[HierarchyCacheEntry]:
-    """
-    从缓存获取维度层级推断结果
-    
-    Args:
-        datasource_luid: 数据源 LUID
-        store_manager: LangGraph SqliteStore 实例（可选）
-    
-    Returns:
-        缓存条目，如果不存在或已过期则返回 None
-    """
-    if not datasource_luid:
-        return None
-    
-    store = store_manager or _get_store_manager()
-    if not store:
-        return None
-    
-    try:
-        namespace = (_get_cache_namespace(),)
+    async with _inference_lock:
+        # 双重检查
+        if _inference_instance is not None:
+            return _inference_instance
         
-        # 使用 LangGraph SqliteStore.get() 返回 StoreItem
-        store_item = store.get(namespace, datasource_luid)
-        if not store_item:
-            logger.debug(f"缓存未命中: {datasource_luid}")
-            return None
-        
-        # StoreItem.value 是实际的数据字典
-        cached_data = store_item.value
-        if not cached_data:
-            logger.debug(f"缓存数据为空: {datasource_luid}")
-            return None
-        
-        entry = HierarchyCacheEntry.from_dict(cached_data)
-        
-        # 检查是否过期
-        if entry.is_expired:
-            logger.info(f"缓存已过期: {datasource_luid}")
-            return None
-        
-        logger.debug(f"缓存命中: {datasource_luid}, {len(entry.hierarchy_data)} 个字段")
-        return entry
-        
-    except Exception as e:
-        logger.warning(f"读取缓存失败: {e}")
-        return None
-
-
-def _put_to_cache(
-    datasource_luid: str,
-    field_hash: str,
-    hierarchy_data: Dict[str, Any],
-    store_manager=None,
-    ttl_days: int = DEFAULT_CACHE_TTL_DAYS
-) -> bool:
-    """
-    将维度层级推断结果存入缓存
-    
-    Args:
-        datasource_luid: 数据源 LUID
-        field_hash: 字段列表哈希值
-        hierarchy_data: 推断结果
-        store_manager: LangGraph SqliteStore 实例（可选）
-        ttl_days: 缓存过期天数
-    
-    Returns:
-        是否存储成功
-    """
-    if not datasource_luid:
-        return False
-    
-    store = store_manager or _get_store_manager()
-    if not store:
-        return False
-    
-    try:
-        entry = HierarchyCacheEntry(
-            datasource_luid=datasource_luid,
-            field_hash=field_hash,
-            hierarchy_data=hierarchy_data,
-            ttl_days=ttl_days,
-        )
-        
-        namespace = (_get_cache_namespace(),)
-        ttl_seconds = ttl_days * 24 * 60 * 60
-        
-        # 使用 LangGraph SqliteStore.put() 方法
-        store.put(namespace, datasource_luid, entry.to_dict(), ttl=ttl_seconds)
-        logger.info(f"缓存已更新: {datasource_luid}, {len(hierarchy_data)} 个字段")
-        return True
-        
-    except Exception as e:
-        logger.warning(f"写入缓存失败: {e}")
-        return False
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 增量推断辅助函数
-# ═══════════════════════════════════════════════════════════════════════════
-
-@dataclass
-class IncrementalFields:
-    """
-    增量字段计算结果
-    
-    Attributes:
-        new_fields: 新增字段名集合
-        deleted_fields: 删除字段名集合
-        unchanged_fields: 未变化字段名集合
-    """
-    new_fields: Set[str]
-    deleted_fields: Set[str]
-    unchanged_fields: Set[str]
-    
-    @property
-    def has_changes(self) -> bool:
-        """是否有变化"""
-        return len(self.new_fields) > 0 or len(self.deleted_fields) > 0
-    
-    @property
-    def needs_inference(self) -> bool:
-        """是否需要推断（有新增字段）"""
-        return len(self.new_fields) > 0
-
-
-def _compute_incremental_fields(
-    current_fields: List[Any],
-    cache_entry: Optional[HierarchyCacheEntry]
-) -> IncrementalFields:
-    """
-    计算增量字段
-    
-    比较当前字段与缓存字段，计算新增、删除、未变化的字段。
-    
-    Args:
-        current_fields: 当前维度字段列表
-        cache_entry: 缓存条目（可能为 None）
-    
-    Returns:
-        IncrementalFields 对象
-    """
-    current_field_names = {f.name for f in current_fields}
-    
-    if cache_entry is None:
-        # 无缓存，所有字段都是新增
-        return IncrementalFields(
-            new_fields=current_field_names,
-            deleted_fields=set(),
-            unchanged_fields=set()
-        )
-    
-    cached_field_names = cache_entry.cached_fields
-    
-    # 计算差集
-    new_fields = current_field_names - cached_field_names
-    deleted_fields = cached_field_names - current_field_names
-    unchanged_fields = current_field_names & cached_field_names
-    
-    logger.debug(
-        f"增量计算: 新增={len(new_fields)}, "
-        f"删除={len(deleted_fields)}, "
-        f"未变化={len(unchanged_fields)}"
-    )
-    
-    return IncrementalFields(
-        new_fields=new_fields,
-        deleted_fields=deleted_fields,
-        unchanged_fields=unchanged_fields
-    )
-
-
-def _filter_fields_by_names(
-    fields: List[Any],
-    field_names: Set[str]
-) -> List[Any]:
-    """
-    根据字段名过滤字段列表
-    
-    Args:
-        fields: 字段列表
-        field_names: 要保留的字段名集合
-    
-    Returns:
-        过滤后的字段列表
-    """
-    return [f for f in fields if f.name in field_names]
-
-
-def _merge_hierarchy_results(
-    cached_data: Dict[str, Any],
-    new_result: DimensionHierarchyResult,
-    deleted_fields: Set[str]
-) -> Dict[str, DimensionAttributes]:
-    """
-    合并缓存结果和新推断结果
-    
-    Args:
-        cached_data: 缓存的层级数据（字典格式）
-        new_result: 新推断的结果
-        deleted_fields: 要删除的字段名集合
-    
-    Returns:
-        合并后的层级字典
-    """
-    merged = {}
-    
-    # 1. 添加缓存中未删除的字段
-    for field_name, attrs_dict in cached_data.items():
-        if field_name not in deleted_fields:
-            merged[field_name] = DimensionAttributes(**attrs_dict)
-    
-    # 2. 添加新推断的字段（覆盖同名字段）
-    for field_name, attrs in new_result.dimension_hierarchy.items():
-        merged[field_name] = attrs
-    
-    return merged
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 分批推断辅助函数
-# ═══════════════════════════════════════════════════════════════════════════
-
-import asyncio
-
-# 默认批次大小
-DEFAULT_BATCH_SIZE = 5
-
-# 默认最大并发数（防止 API 限流）
-DEFAULT_MAX_CONCURRENCY = 3
-
-
-def _split_into_batches(
-    fields: List[Any],
-    batch_size: int = DEFAULT_BATCH_SIZE
-) -> List[List[Any]]:
-    """
-    将字段列表分成多个批次
-    
-    Args:
-        fields: 字段列表
-        batch_size: 每批大小
-    
-    Returns:
-        批次列表
-    """
-    batches = []
-    for i in range(0, len(fields), batch_size):
-        batches.append(fields[i:i + batch_size])
-    return batches
-
-
-from typing import Callable, Union
-from typing_extensions import Protocol
-
-
-# 带批次标识的回调类型（与 base/node.py 保持一致）
-class BatchStreamCallback(Protocol):
-    """带批次标识的流式输出回调协议"""
-    def __call__(self, batch_id: int, token: str) -> None: ...
-
-
-class AsyncBatchStreamCallback(Protocol):
-    """异步带批次标识的流式输出回调协议"""
-    async def __call__(self, batch_id: int, token: str) -> None: ...
-
-
-BatchStreamCallbackType = Union[BatchStreamCallback, AsyncBatchStreamCallback, None]
-
-
-async def _infer_single_batch(
-    batch_idx: int,
-    batch_fields: List[Any],
-    rag,
-    total_batches: int,
-    stream: bool = False,
-    on_token: BatchStreamCallbackType = None,
-) -> Dict[str, DimensionAttributes]:
-    """
-    推断单个批次的维度层级
-    
-    Args:
-        batch_idx: 批次索引（从 0 开始）
-        batch_fields: 该批次的字段列表
-        rag: RAG 组件（可选）
-        total_batches: 总批次数
-        stream: 是否流式输出
-        on_token: 流式输出回调 (batch_id, token) -> None
-    
-    Returns:
-        该批次的推断结果字典 {field_name: DimensionAttributes}
-    """
-    logger.info(f"推断批次 {batch_idx + 1}/{total_batches}: {len(batch_fields)} 个字段")
-    
-    # 准备批次的维度信息
-    dimensions_info = []
-    all_few_shot_examples = []
-    
-    for field in batch_fields:
-        info = {
-            "name": field.name,
-            "caption": field.fieldCaption,
-            "dataType": field.dataType,
-            "description": field.description or "",
-            "unique_count": field.unique_count or 0,
-            "sample_values": (field.sample_values or [])[:5],
-        }
-        dimensions_info.append(info)
-        
-        # RAG: 获取相似历史模式
-        if rag:
-            try:
-                rag_context = rag.get_inference_context(
-                    field_caption=field.fieldCaption,
-                    data_type=field.dataType,
-                    sample_values=field.sample_values or [],
-                    unique_count=field.unique_count or 0,
-                )
-                if rag_context.get("has_similar_patterns"):
-                    examples = rag_context.get("few_shot_examples", [])[:2]
-                    all_few_shot_examples.extend(examples)
-            except Exception as e:
-                logger.warning(f"RAG 检索失败: {e}")
-    
-    few_shot_section = _build_few_shot_section(all_few_shot_examples[:3])
-    
-    # 构建输入数据
-    dimensions_str = json.dumps(dimensions_info, ensure_ascii=False, indent=2)
-    if few_shot_section:
-        dimensions_str = few_shot_section + "\n" + dimensions_str
-    
-    input_data = {"dimensions": dimensions_str}
-    
-    try:
-        llm = get_llm(agent_name="dimension_hierarchy")
-        messages = DIMENSION_HIERARCHY_PROMPT.format_messages(**input_data)
-        
-        if stream and on_token:
-            # 流式输出（带批次标识）
-            response = await stream_llm_call_with_batch_id(
-                llm, messages, batch_idx, on_token
-            )
-        else:
-            # 非流式
-            response = await invoke_llm(llm, messages)
-        
-        batch_result = parse_json_response(response, DimensionHierarchyResult)
-        
-        logger.debug(f"批次 {batch_idx + 1} 完成: {len(batch_result.dimension_hierarchy)} 个字段")
-        return dict(batch_result.dimension_hierarchy)
-        
-    except Exception as e:
-        logger.error(f"批次 {batch_idx + 1} 推断失败: {e}")
-        return {}
-
-
-async def _batch_inference(
-    fields: List[Any],
-    rag,
-    stream: bool = False,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
-    on_token: BatchStreamCallbackType = None,
-) -> DimensionHierarchyResult:
-    """
-    并行分批推断维度层级（支持流式输出）
-    
-    将字段分成多个批次，并发调用 LLM，然后合并结果。
-    使用 semaphore 控制并发数，防止 API 限流。
-    
-    Args:
-        fields: 要推断的字段列表
-        rag: RAG 组件（可选）
-        stream: 是否流式输出
-        batch_size: 每批大小（默认 5）
-        max_concurrency: 最大并发数（默认 3）
-        on_token: 流式输出回调 (batch_id: int, token: str) -> None
-                  并行时每个批次的 token 都会带上 batch_id
-    
-    Returns:
-        合并后的 DimensionHierarchyResult
-    
-    Example:
-        # 并行 + 流式输出
-        def handle_token(batch_id: int, token: str):
-            print(f"[Batch {batch_id}] {token}", end="")
-        
-        result = await _batch_inference(
-            fields, rag, stream=True, on_token=handle_token
-        )
-    """
-    if not fields:
-        return DimensionHierarchyResult(dimension_hierarchy={})
-    
-    batches = _split_into_batches(fields, batch_size)
-    total_batches = len(batches)
-    logger.info(
-        f"并行分批推断: {len(fields)} 个字段, 分成 {total_batches} 批, "
-        f"最大并发 {max_concurrency}, 流式={stream}"
-    )
-    
-    # 使用 semaphore 控制并发数
-    semaphore = asyncio.Semaphore(max_concurrency)
-    
-    async def _limited_infer(batch_idx: int, batch_fields: List[Any]) -> Dict[str, DimensionAttributes]:
-        """带并发限制的推断"""
-        async with semaphore:
-            return await _infer_single_batch(
-                batch_idx, batch_fields, rag, total_batches,
-                stream=stream, on_token=on_token
-            )
-    
-    # 创建所有批次的任务
-    tasks = [
-        _limited_infer(idx, batch_fields)
-        for idx, batch_fields in enumerate(batches)
-    ]
-    
-    # 并发执行所有任务
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # 合并结果
-    all_hierarchy = {}
-    success_count = 0
-    error_count = 0
-    
-    for idx, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(f"批次 {idx + 1} 异常: {result}")
-            error_count += 1
-        elif isinstance(result, dict):
-            all_hierarchy.update(result)
-            success_count += 1
-    
-    logger.info(
-        f"并行分批推断完成: 共 {len(all_hierarchy)} 个字段, "
-        f"成功 {success_count} 批, 失败 {error_count} 批"
-    )
-    return DimensionHierarchyResult(dimension_hierarchy=all_hierarchy)
-
-
-async def _batch_inference_serial(
-    fields: List[Any],
-    rag,
-    stream: bool = False,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-) -> DimensionHierarchyResult:
-    """
-    串行分批推断维度层级（保留原有实现，支持流式输出）
-    
-    当需要流式输出时使用此函数，因为并行模式下流式输出会混乱。
-    
-    Args:
-        fields: 要推断的字段列表
-        rag: RAG 组件（可选）
-        stream: 是否流式输出
-        batch_size: 每批大小（默认 5）
-    
-    Returns:
-        合并后的 DimensionHierarchyResult
-    """
-    if not fields:
-        return DimensionHierarchyResult(dimension_hierarchy={})
-    
-    batches = _split_into_batches(fields, batch_size)
-    total_batches = len(batches)
-    logger.info(f"串行分批推断: {len(fields)} 个字段, 分成 {total_batches} 批")
-    
-    all_hierarchy = {}
-    
-    for batch_idx, batch_fields in enumerate(batches):
-        logger.info(f"推断批次 {batch_idx + 1}/{total_batches}: {len(batch_fields)} 个字段")
-        
-        # 准备批次的维度信息
-        dimensions_info = []
-        all_few_shot_examples = []
-        
-        for field in batch_fields:
-            info = {
-                "name": field.name,
-                "caption": field.fieldCaption,
-                "dataType": field.dataType,
-                "description": field.description or "",
-                "unique_count": field.unique_count or 0,
-                "sample_values": (field.sample_values or [])[:5],
-            }
-            dimensions_info.append(info)
-            
-            # RAG: 获取相似历史模式
-            if rag:
-                try:
-                    rag_context = rag.get_inference_context(
-                        field_caption=field.fieldCaption,
-                        data_type=field.dataType,
-                        sample_values=field.sample_values or [],
-                        unique_count=field.unique_count or 0,
-                    )
-                    if rag_context.get("has_similar_patterns"):
-                        examples = rag_context.get("few_shot_examples", [])[:2]
-                        all_few_shot_examples.extend(examples)
-                except Exception as e:
-                    logger.warning(f"RAG 检索失败: {e}")
-        
-        few_shot_section = _build_few_shot_section(all_few_shot_examples[:3])
-        
-        # 构建输入数据
-        dimensions_str = json.dumps(dimensions_info, ensure_ascii=False, indent=2)
-        if few_shot_section:
-            dimensions_str = few_shot_section + "\n" + dimensions_str
-        
-        input_data = {"dimensions": dimensions_str}
-        
-        # 调用 LLM
         try:
-            llm = get_llm(agent_name="dimension_hierarchy")
-            messages = DIMENSION_HIERARCHY_PROMPT.format_messages(**input_data)
+            from tableau_assistant.src.infra.ai.embeddings import EmbeddingProviderFactory
+            from tableau_assistant.src.agents.dimension_hierarchy.faiss_store import (
+                DimensionPatternFAISS,
+                DEFAULT_DIMENSION,
+            )
+            from tableau_assistant.src.agents.dimension_hierarchy.cache_storage import (
+                DimensionHierarchyCacheStorage,
+            )
+            from tableau_assistant.src.agents.dimension_hierarchy.rag_retriever import (
+                DimensionRAGRetriever,
+            )
+            from tableau_assistant.src.agents.dimension_hierarchy.inference import (
+                DimensionHierarchyInference,
+            )
             
-            if stream:
-                response = await stream_llm_call(llm, messages, print_output=True)
-            else:
-                response = await invoke_llm(llm, messages)
+            # 获取 Embedding 提供者
+            embedding_provider = EmbeddingProviderFactory.get_default()
+            if embedding_provider is None:
+                logger.warning("未配置 Embedding API Key，使用降级模式（仅 LLM）")
+                return None
             
-            batch_result = parse_json_response(response, DimensionHierarchyResult)
+            # 创建 FAISS 存储
+            faiss_store = DimensionPatternFAISS(
+                embedding_provider=embedding_provider,
+                index_path=DEFAULT_INDEX_PATH,
+                dimension=DEFAULT_DIMENSION,
+            )
+            faiss_store.load_or_create()
             
-            # 合并结果
-            for field_name, attrs in batch_result.dimension_hierarchy.items():
-                all_hierarchy[field_name] = attrs
+            # 创建缓存存储
+            cache_storage = DimensionHierarchyCacheStorage()
             
-            logger.debug(f"批次 {batch_idx + 1} 完成: {len(batch_result.dimension_hierarchy)} 个字段")
+            # 创建 RAG 检索器
+            rag_retriever = DimensionRAGRetriever(
+                faiss_store=faiss_store,
+                cache_storage=cache_storage,
+            )
+            
+            # 创建推断实例
+            _inference_instance = DimensionHierarchyInference(
+                faiss_store=faiss_store,
+                cache_storage=cache_storage,
+                rag_retriever=rag_retriever,
+            )
+            
+            logger.info("DimensionHierarchyInference 实例已创建")
+            return _inference_instance
             
         except Exception as e:
-            logger.error(f"批次 {batch_idx + 1} 推断失败: {e}")
-            # 继续处理下一批
-    
-    logger.info(f"串行分批推断完成: 共 {len(all_hierarchy)} 个字段")
-    return DimensionHierarchyResult(dimension_hierarchy=all_hierarchy)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# RAG 辅助函数
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _get_dimension_rag():
-    """
-    延迟加载 DimensionHierarchyRAG 组件
-    
-    使用 EmbeddingProviderFactory.get_default() 自动检测可用的 Embedding 提供者。
-    如果没有可用的提供者，返回 None（禁用 RAG）。
-    """
-    try:
-        from tableau_assistant.src.agents.field_mapper.rag.dimension_pattern import (
-            DimensionHierarchyRAG,
-        )
-        from tableau_assistant.src.infra.ai import EmbeddingProviderFactory
-        
-        # 使用工厂方法自动检测 Embedding 提供者
-        embedding_provider = EmbeddingProviderFactory.get_default()
-        
-        if embedding_provider is None:
-            logger.info("未配置 Embedding API Key，RAG 功能将禁用")
+            logger.error(f"创建 DimensionHierarchyInference 实例失败: {e}")
             return None
-        
-        return DimensionHierarchyRAG(embedding_provider=embedding_provider)
-    except Exception as e:
-        logger.warning(f"无法加载 DimensionHierarchyRAG: {e}")
-        return None
 
 
-def _build_few_shot_section(few_shot_examples: List[str]) -> str:
-    """构建 few-shot 示例部分"""
-    if not few_shot_examples:
-        return ""
+# ═══════════════════════════════════════════════════════════════════════════
+# 辅助函数
+# ═══════════════════════════════════════════════════════════════════════════
 
-    section = """**Historical Reference Examples (from similar fields):**
-
-The following are inference results from similar fields in the past. Use them as reference:
-
-"""
-    for i, example in enumerate(few_shot_examples[:3], 1):
-        section += f"Example {i}:\n{example}\n\n"
-
-    return section
-
-
-def _prepare_dimensions_info(
-    data_model: DataModel, rag=None
-) -> tuple[List[Dict[str, Any]], str]:
+def _convert_fields_to_dicts(dimension_fields: List[Any]) -> List[Dict[str, Any]]:
     """
-    准备维度字段信息，并获取 RAG few-shot 示例
+    将 FieldMetadata 对象列表转换为字典列表
+    
+    Args:
+        dimension_fields: FieldMetadata 对象列表
     
     Returns:
-        (维度信息列表, few_shot_section)
+        字典列表，每个字典包含 field_name, field_caption, data_type 等
+    
+    Note:
+        unique_count 语义：None 表示未知，0 表示真实的 0 个唯一值
     """
-    dimension_fields = data_model.get_dimensions()
-
-    if not dimension_fields:
-        return [], ""
-
-    dimension_info = []
-    all_few_shot_examples = []
-
-    for field in dimension_fields:
-        info = {
-            "name": field.name,
-            "caption": field.fieldCaption,
-            "dataType": field.dataType,
-            "description": field.description or "",
-            "unique_count": field.unique_count or 0,
-            "sample_values": (field.sample_values or [])[:5],
+    result = []
+    for f in dimension_fields:
+        field_dict = {
+            "field_name": f.name,
+            "field_caption": f.fieldCaption,
+            "data_type": f.dataType,
         }
-        dimension_info.append(info)
-
-        # RAG: 获取相似历史模式
-        if rag:
-            try:
-                rag_context = rag.get_inference_context(
-                    field_caption=field.fieldCaption,
-                    data_type=field.dataType,
-                    sample_values=field.sample_values or [],
-                    unique_count=field.unique_count or 0,
-                )
-
-                if rag_context.get("has_similar_patterns"):
-                    examples = rag_context.get("few_shot_examples", [])[:2]
-                    all_few_shot_examples.extend(examples)
-                    logger.debug(
-                        f"RAG: 字段 '{field.fieldCaption}' 找到 {len(examples)} 个相似模式"
-                    )
-            except Exception as e:
-                logger.warning(f"RAG 检索失败: {e}")
-
-    # 构建 few-shot section（最多 5 个示例）
-    few_shot_section = _build_few_shot_section(all_few_shot_examples[:5])
-
-    return dimension_info, few_shot_section
+        # 可选字段 - 使用 is not None 判断，保留 0 值的语义
+        if hasattr(f, "sample_values") and f.sample_values:
+            field_dict["sample_values"] = f.sample_values[:10]
+        if hasattr(f, "unique_count") and f.unique_count is not None:
+            field_dict["unique_count"] = f.unique_count
+        
+        result.append(field_dict)
+    
+    return result
 
 
-def _store_inference_results(
-    result: DimensionHierarchyResult,
+def _update_fields_with_hierarchy(
     data_model: DataModel,
-    rag,
-    datasource_luid: Optional[str] = None,
+    result: DimensionHierarchyResult,
 ) -> None:
-    """存储推断结果到 RAG（用于未来检索）"""
-    if not rag:
-        return
+    """
+    将维度层级信息注入到 DataModel 的各个 FieldMetadata 对象
+    
+    Args:
+        data_model: DataModel 对象
+        result: 推断结果
+    """
+    for field_name, attrs in result.dimension_hierarchy.items():
+        field = data_model.get_field(field_name)
+        if field:
+            field.category = attrs.category
+            field.category_detail = attrs.category_detail
+            field.level = attrs.level
+            field.granularity = attrs.granularity
+            field.parent_dimension = attrs.parent_dimension
+            field.child_dimension = attrs.child_dimension
+    
+    logger.debug(f"已将维度层级信息注入到 {len(result.dimension_hierarchy)} 个字段")
 
-    try:
-        stored_count = 0
-        skipped_count = 0
 
-        for field_name, attrs in result.dimension_hierarchy.items():
-            confidence = attrs.level_confidence
-
-            # 跳过置信度为 0 的结果
-            if confidence <= 0:
-                skipped_count += 1
-                continue
-
-            # 查找字段元数据
-            field = None
-            for f in data_model.get_dimensions():
-                if f.name == field_name:
-                    field = f
-                    break
-
-            if not field:
-                skipped_count += 1
-                continue
-
+async def _create_sample_value_fetcher(
+    data_model: DataModel,
+    datasource_luid: str,
+    auth_context: Optional[Any] = None,
+) -> Callable[[List[str]], Awaitable[Dict[str, Dict[str, Any]]]]:
+    """
+    创建样例值获取函数（真正的延迟加载）
+    
+    只对 RAG 未命中的字段调用 Tableau API 获取样例数据。
+    
+    Args:
+        data_model: DataModel 对象
+        datasource_luid: 数据源 LUID
+        auth_context: Tableau 认证上下文（可选）
+    
+    Returns:
+        异步函数，接收字段名列表，返回 {field_name: {"sample_values": [...], "unique_count": int}}
+    """
+    async def fetcher(field_names: List[str]) -> Dict[str, Dict[str, Any]]:
+        """获取指定字段的样例值和唯一值数量（延迟加载）"""
+        if not field_names:
+            return {}
+        
+        # 首先尝试从 data_model 中获取已有的样例数据
+        result: Dict[str, Dict[str, Any]] = {}
+        fields_to_fetch = []
+        
+        for field_name in field_names:
+            field = data_model.get_field(field_name)
+            if field and hasattr(field, "sample_values") and field.sample_values:
+                # 已有样例数据，直接使用（包含 unique_count）
+                result[field_name] = {
+                    "sample_values": field.sample_values[:10],
+                    "unique_count": getattr(field, "unique_count", None) or 0,
+                }
+            else:
+                # 需要从 Tableau API 获取
+                fields_to_fetch.append(field_name)
+        
+        # 如果有需要获取的字段，调用 Tableau API
+        if fields_to_fetch and auth_context:
             try:
-                rag.store_inference_result(
-                    field_name=field_name,
-                    field_caption=field.fieldCaption,
-                    data_type=field.dataType,
-                    sample_values=field.sample_values or [],
-                    unique_count=field.unique_count or 0,
-                    category=attrs.category,
-                    category_detail=attrs.category_detail,
-                    level=attrs.level,
-                    granularity=attrs.granularity,
-                    reasoning=attrs.reasoning,
-                    confidence=confidence,
-                    datasource_luid=datasource_luid,
-                )
-                stored_count += 1
+                from tableau_assistant.src.platforms.tableau import fetch_dimension_samples_for_fields
+                
+                # 获取一个度量字段用于 TOP 过滤
+                measures = data_model.get_measures()
+                measure_field = measures[0].name if measures else None
+                
+                if measure_field:
+                    logger.info(f"延迟加载样例数据: {len(fields_to_fetch)} 个字段")
+                    
+                    samples_dict = await fetch_dimension_samples_for_fields(
+                        api_key=auth_context.api_key,
+                        domain=auth_context.domain,
+                        datasource_luid=datasource_luid,
+                        field_names=fields_to_fetch,
+                        measure_field=measure_field,
+                        site=auth_context.site,
+                    )
+                    
+                    # 合并结果（包含 sample_values 和 unique_count）
+                    for field_name, data in samples_dict.items():
+                        sample_values = data.get("sample_values", [])
+                        unique_count = data.get("unique_count", 0)
+                        
+                        result[field_name] = {
+                            "sample_values": sample_values[:10] if sample_values else [],
+                            "unique_count": unique_count,
+                        }
+                        
+                        # 同时更新 data_model 中的字段（缓存）
+                        field = data_model.get_field(field_name)
+                        if field:
+                            field.sample_values = sample_values
+                            field.unique_count = unique_count
+                    
+                    logger.info(f"延迟加载完成: 获取到 {len(samples_dict)} 个字段的样例")
+                else:
+                    logger.warning("无度量字段，无法获取样例数据")
+                    
             except Exception as e:
-                logger.debug(f"存储推断结果失败: {field_name}, {e}")
-                skipped_count += 1
-
-        if stored_count > 0:
-            logger.info(f"RAG: 存储了 {stored_count} 个推断结果 (跳过 {skipped_count} 个)")
-
-    except Exception as e:
-        logger.warning(f"存储推断结果到 RAG 失败: {e}")
+                logger.warning(f"延迟加载样例数据失败: {e}")
+        
+        return result
+    
+    return fetcher
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -851,41 +267,46 @@ def _store_inference_results(
 async def dimension_hierarchy_node(
     data_model: DataModel,
     datasource_luid: Optional[str] = None,
-    stream: bool = True,
-    use_cache: bool = True,
-    incremental: bool = True,
-    use_batch: bool = True,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    parallel: bool = True,
-    max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
-    on_token: BatchStreamCallbackType = None,
-    store_manager=None
+    logical_table_id: Optional[str] = None,
+    force_refresh: bool = False,
+    skip_rag_store: bool = False,
+    auth_context: Optional[Any] = None,  # Tableau 认证上下文（用于延迟加载样例数据）
+    **kwargs,  # 兼容旧参数
 ) -> DimensionHierarchyResult:
     """
-    维度层级推断节点
+    维度层级推断节点（优化版）
     
-    支持缓存机制、增量推断和分批推断（串行/并行），避免重复推断。
-    支持并行 + 流式输出。
+    使用 RAG 优先 + LLM 兜底 + 延迟加载样例数据的推断策略。
+    自动检测多表数据源并分发到多表推断逻辑。
     
     Args:
         data_model: DataModel 对象（包含字段元数据）
-        datasource_luid: 数据源 LUID（可选，用于缓存和 RAG 存储）
-        stream: 是否流式输出（默认 True）
-        use_cache: 是否使用缓存（默认 True）
-        incremental: 是否启用增量推断（默认 True）
-        use_batch: 是否启用分批推断（默认 True，仅用于首次全量推断）
-        batch_size: 分批大小（默认 5）
-        parallel: 是否启用并行推断（默认 True）
-        max_concurrency: 最大并发数（默认 3，仅在 parallel=True 时生效）
-        on_token: 流式输出回调函数
-                  - 并行模式: (batch_id: int, token: str) -> None
-                  - 串行模式: 使用 print 输出（兼容旧行为）
-        store_manager: LangGraph SqliteStore 实例（可选）
+        datasource_luid: 数据源 LUID（用于缓存和 RAG 存储）
+        logical_table_id: 逻辑表 ID（可选，多表数据源时使用）
+        force_refresh: 是否强制刷新（跳过缓存）
+        skip_rag_store: 是否跳过 RAG 存储
+        auth_context: Tableau 认证上下文（用于延迟加载样例数据）
+        **kwargs: 兼容旧参数（stream, use_cache, incremental 等）
     
     Returns:
         DimensionHierarchyResult 模型对象
     """
-    logger.info("维度层级推断开始")
+    logger.info("维度层级推断开始（优化版）")
+    
+    # 自动检测多表数据源，分发到多表推断逻辑（符合 design.md 要求）
+    is_multi_table = getattr(data_model, "is_multi_table", False)
+    logical_tables = getattr(data_model, "logical_tables", None)
+    
+    if is_multi_table and logical_tables and len(logical_tables) > 1 and logical_table_id is None:
+        logger.info(f"检测到多表数据源 ({len(logical_tables)} 个逻辑表)，使用多表推断模式")
+        return await dimension_hierarchy_node_multi_table(
+            data_model=data_model,
+            datasource_luid=datasource_luid,
+            force_refresh=force_refresh,
+            skip_rag_store=skip_rag_store,
+            auth_context=auth_context,
+            **kwargs,
+        )
     
     # 获取维度字段
     dimension_fields = data_model.get_dimensions()
@@ -893,239 +314,247 @@ async def dimension_hierarchy_node(
         logger.warning("未找到维度字段")
         return DimensionHierarchyResult(dimension_hierarchy={})
     
-    # 计算当前字段哈希
-    current_field_hash = _compute_field_hash(dimension_fields)
-    logger.debug(f"当前字段哈希: {current_field_hash}")
+    logger.info(f"待推断维度字段: {len(dimension_fields)} 个")
     
-    # 1. 检查缓存（如果启用）
-    cache_entry = None
-    if use_cache and datasource_luid:
-        cache_entry = _get_from_cache(datasource_luid, store_manager)
-        
-        if cache_entry:
-            # 检查字段是否变化
-            if cache_entry.field_hash == current_field_hash:
-                # 缓存有效，直接返回
-                logger.info(
-                    f"缓存命中（字段未变化）: {len(cache_entry.hierarchy_data)} 个维度"
-                )
-                # 转换为 DimensionHierarchyResult
-                hierarchy = {}
-                for field_name, attrs_dict in cache_entry.hierarchy_data.items():
-                    hierarchy[field_name] = DimensionAttributes(**attrs_dict)
-                return DimensionHierarchyResult(dimension_hierarchy=hierarchy)
+    # 获取推断实例
+    inference = await _get_inference_instance()
     
-    # 2. 计算增量字段
-    incremental_fields = _compute_incremental_fields(dimension_fields, cache_entry)
+    if inference is None:
+        # 降级模式：使用旧的 LLM 推断
+        logger.warning("推断实例不可用，使用降级模式")
+        return await _fallback_inference(data_model, datasource_luid)
     
-    # 3. 决定推断策略
-    is_full_inference = False
-    if incremental and cache_entry and incremental_fields.needs_inference:
-        # 增量推断：仅推断新增字段
-        fields_to_infer = _filter_fields_by_names(
-            dimension_fields, 
-            incremental_fields.new_fields
-        )
-        is_full_inference = False
-        logger.info(
-            f"增量推断: 新增 {len(incremental_fields.new_fields)} 个字段, "
-            f"删除 {len(incremental_fields.deleted_fields)} 个字段, "
-            f"复用 {len(incremental_fields.unchanged_fields)} 个字段"
-        )
-    elif incremental and cache_entry and not incremental_fields.needs_inference:
-        # 无新增字段，只需删除已删除字段
-        logger.info(
-            f"无新增字段，仅删除 {len(incremental_fields.deleted_fields)} 个字段"
-        )
-        merged_hierarchy = _merge_hierarchy_results(
-            cache_entry.hierarchy_data,
-            DimensionHierarchyResult(dimension_hierarchy={}),
-            incremental_fields.deleted_fields
-        )
-        result = DimensionHierarchyResult(dimension_hierarchy=merged_hierarchy)
-        
-        # 更新缓存
-        if use_cache and datasource_luid:
-            hierarchy_data = {
-                name: attrs.model_dump() 
-                for name, attrs in result.dimension_hierarchy.items()
-            }
-            _put_to_cache(
-                datasource_luid=datasource_luid,
-                field_hash=current_field_hash,
-                hierarchy_data=hierarchy_data,
-                store_manager=store_manager
-            )
-        return result
-    else:
-        # 全量推断
-        fields_to_infer = dimension_fields
-        is_full_inference = True
-        logger.info(f"全量推断: {len(fields_to_infer)} 个字段")
-
-    # 4. 加载 RAG 组件
-    rag = _get_dimension_rag()
-    if rag:
-        logger.debug("RAG 组件已加载")
-
-    # 5. 执行推断
+    # 转换字段格式
+    fields = _convert_fields_to_dicts(dimension_fields)
+    
+    # 创建样例值获取函数（真正的延迟加载）
+    sample_value_fetcher = await _create_sample_value_fetcher(
+        data_model=data_model,
+        datasource_luid=datasource_luid or "unknown",
+        auth_context=auth_context,
+    )
+    
+    # 执行推断
     try:
-        # 判断是否使用分批推断（仅用于全量推断且字段数超过阈值）
-        use_batch_inference = (
-            use_batch 
-            and is_full_inference 
-            and len(fields_to_infer) > batch_size
+        result = await inference.infer(
+            datasource_luid=datasource_luid or "unknown",
+            fields=fields,
+            logical_table_id=logical_table_id,
+            force_refresh=force_refresh,
+            skip_rag_store=skip_rag_store,
+            sample_value_fetcher=sample_value_fetcher,
         )
         
-        if use_batch_inference:
-            # 分批推断（根据 parallel 参数选择并行或串行）
-            if parallel:
-                logger.info(
-                    f"使用并行分批推断: {len(fields_to_infer)} 个字段, "
-                    f"每批 {batch_size} 个, 最大并发 {max_concurrency}, 流式={stream}"
-                )
-                new_result = await _batch_inference(
-                    fields=fields_to_infer,
-                    rag=rag,
-                    stream=stream,
-                    batch_size=batch_size,
-                    max_concurrency=max_concurrency,
-                    on_token=on_token,
-                )
-            else:
-                logger.info(f"使用串行分批推断: {len(fields_to_infer)} 个字段, 每批 {batch_size} 个")
-                new_result = await _batch_inference_serial(
-                    fields=fields_to_infer,
-                    rag=rag,
-                    stream=stream,
-                    batch_size=batch_size,
-                )
-        else:
-            # 单次推断（增量推断或字段数较少）
-            dimensions_info = []
-            all_few_shot_examples = []
-            
-            for field in fields_to_infer:
-                info = {
-                    "name": field.name,
-                    "caption": field.fieldCaption,
-                    "dataType": field.dataType,
-                    "description": field.description or "",
-                    "unique_count": field.unique_count or 0,
-                    "sample_values": (field.sample_values or [])[:5],
-                }
-                dimensions_info.append(info)
-                
-                # RAG: 获取相似历史模式
-                if rag:
-                    try:
-                        rag_context = rag.get_inference_context(
-                            field_caption=field.fieldCaption,
-                            data_type=field.dataType,
-                            sample_values=field.sample_values or [],
-                            unique_count=field.unique_count or 0,
-                        )
-                        if rag_context.get("has_similar_patterns"):
-                            examples = rag_context.get("few_shot_examples", [])[:2]
-                            all_few_shot_examples.extend(examples)
-                    except Exception as e:
-                        logger.warning(f"RAG 检索失败: {e}")
-            
-            few_shot_section = _build_few_shot_section(all_few_shot_examples[:5])
-
-            logger.info(
-                f"推断 {len(dimensions_info)} 个维度的层级, "
-                f"RAG 示例: {'有' if few_shot_section else '无'}"
-            )
-
-            # 构建输入数据
-            dimensions_str = json.dumps(dimensions_info, ensure_ascii=False, indent=2)
-            if few_shot_section:
-                dimensions_str = few_shot_section + "\n" + dimensions_str
-
-            input_data = {"dimensions": dimensions_str}
-
-            # 调用 LLM 执行推断
-            llm = get_llm(agent_name="dimension_hierarchy")
-            messages = DIMENSION_HIERARCHY_PROMPT.format_messages(**input_data)
-            
-            if stream:
-                response = await stream_llm_call(llm, messages, print_output=True)
-            else:
-                response = await invoke_llm(llm, messages)
-            
-            new_result = parse_json_response(response, DimensionHierarchyResult)
-
-        # 8. 合并结果（如果是增量推断）
-        if incremental and cache_entry:
-            merged_hierarchy = _merge_hierarchy_results(
-                cache_entry.hierarchy_data,
-                new_result,
-                incremental_fields.deleted_fields
-            )
-            result = DimensionHierarchyResult(dimension_hierarchy=merged_hierarchy)
-            logger.info(
-                f"增量推断完成: 新推断 {len(new_result.dimension_hierarchy)} 个, "
-                f"合并后共 {len(result.dimension_hierarchy)} 个维度"
-            )
-        else:
-            result = new_result
-
-        # 计算平均置信度
-        confidences = [
-            attrs.level_confidence for attrs in result.dimension_hierarchy.values()
-        ]
-        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
-
+        # 获取统计信息
+        stats = inference.get_stats()
         logger.info(
-            f"维度层级推断完成: "
-            f"{len(result.dimension_hierarchy)} 个维度, "
-            f"平均置信度: {avg_confidence:.2f}"
+            f"维度层级推断完成: {len(result.dimension_hierarchy)} 个维度, "
+            f"RAG 命中率: {stats['rag_hit_rate']:.1%}, "
+            f"耗时: {stats['total_time_ms']:.0f}ms"
         )
-
-        # 输出每个维度的推断结果
-        for field_name, attrs in result.dimension_hierarchy.items():
-            logger.debug(
-                f"  → {field_name}: {attrs.category_detail} "
-                f"L{attrs.level}({attrs.granularity}) "
-                f"conf={attrs.level_confidence:.2f}"
-            )
-
-        # 9. 存储结果到缓存
-        if use_cache and datasource_luid:
-            hierarchy_data = {
-                name: attrs.model_dump() 
-                for name, attrs in result.dimension_hierarchy.items()
-            }
-            _put_to_cache(
-                datasource_luid=datasource_luid,
-                field_hash=current_field_hash,
-                hierarchy_data=hierarchy_data,
-                store_manager=store_manager
-            )
-
-        # 10. 存储结果到 RAG
-        _store_inference_results(result, data_model, rag, datasource_luid)
-
-        # 11. 将维度层级信息注入到 data_model 的各个 FieldMetadata 对象
-        # 这样后续的 FieldIndexer 可以使用 category 等信息构建索引
-        for field_name, attrs in result.dimension_hierarchy.items():
-            field = data_model.get_field(field_name)
-            if field:
-                field.category = attrs.category
-                field.category_detail = attrs.category_detail
-                field.level = attrs.level
-                field.granularity = attrs.granularity
-                field.parent_dimension = attrs.parent_dimension
-                field.child_dimension = attrs.child_dimension
         
-        logger.debug(f"已将维度层级信息注入到 {len(result.dimension_hierarchy)} 个字段")
-
+        # 将维度层级信息注入到 data_model
+        _update_fields_with_hierarchy(data_model, result)
+        
+        # 设置 merged_hierarchy（兼容旧接口）
+        if hasattr(data_model, "merged_hierarchy"):
+            data_model.merged_hierarchy = result.dimension_hierarchy
+        
         return result
-
+        
     except Exception as e:
         logger.error(f"维度层级推断失败: {e}", exc_info=True)
         return DimensionHierarchyResult(dimension_hierarchy={})
+
+
+
+async def dimension_hierarchy_node_multi_table(
+    data_model: DataModel,
+    datasource_luid: Optional[str] = None,
+    force_refresh: bool = False,
+    skip_rag_store: bool = False,
+    auth_context: Optional[Any] = None,  # Tableau 认证上下文
+    **kwargs,
+) -> DimensionHierarchyResult:
+    """
+    多表数据源维度层级推断节点
+    
+    按逻辑表分组，并发推断，合并结果。
+    
+    Args:
+        data_model: DataModel 对象（包含多个逻辑表）
+        datasource_luid: 数据源 LUID
+        force_refresh: 是否强制刷新
+        skip_rag_store: 是否跳过 RAG 存储
+        auth_context: Tableau 认证上下文（用于延迟加载样例数据）
+        **kwargs: 兼容旧参数
+    
+    Returns:
+        DimensionHierarchyResult 模型对象（合并后的结果）
+    """
+    logger.info("多表数据源维度层级推断开始")
+    
+    # 获取所有逻辑表（List[LogicalTable]）
+    logical_tables = getattr(data_model, "logical_tables", None)
+    if not logical_tables:
+        # 单表数据源，直接调用单表推断
+        return await dimension_hierarchy_node(
+            data_model=data_model,
+            datasource_luid=datasource_luid,
+            force_refresh=force_refresh,
+            skip_rag_store=skip_rag_store,
+            auth_context=auth_context,
+            **kwargs,
+        )
+    
+    logger.info(f"检测到 {len(logical_tables)} 个逻辑表")
+    
+    # 获取推断实例
+    inference = await _get_inference_instance()
+    
+    if inference is None:
+        logger.warning("推断实例不可用，使用降级模式")
+        return await _fallback_inference(data_model, datasource_luid)
+    
+    # 按逻辑表分组字段（修复：logical_tables 是 List[LogicalTable]，不是 Dict）
+    table_fields: Dict[str, List[Dict[str, Any]]] = {}
+    
+    for table in logical_tables:
+        # LogicalTable 对象有 logicalTableId 属性
+        table_id = table.logicalTableId
+        # 使用 DataModel.get_fields_by_table() 方法获取该表的字段
+        fields = data_model.get_fields_by_table(table_id)
+        # 只处理维度字段
+        dimension_fields = [f for f in fields if f.role == "dimension"]
+        if dimension_fields:
+            table_fields[table_id] = _convert_fields_to_dicts(dimension_fields)
+            logger.debug(f"逻辑表 {table.caption} ({table_id}): {len(dimension_fields)} 个维度字段")
+    
+    if not table_fields:
+        logger.warning("未找到任何逻辑表字段")
+        return DimensionHierarchyResult(dimension_hierarchy={})
+    
+    # 创建样例值获取函数（真正的延迟加载）
+    sample_value_fetcher = await _create_sample_value_fetcher(
+        data_model=data_model,
+        datasource_luid=datasource_luid or "unknown",
+        auth_context=auth_context,
+    )
+    
+    # 并发推断各逻辑表
+    async def infer_table(table_id: str, fields: List[Dict[str, Any]]) -> Dict[str, DimensionAttributes]:
+        """推断单个逻辑表"""
+        try:
+            result = await inference.infer(
+                datasource_luid=datasource_luid or "unknown",
+                fields=fields,
+                logical_table_id=table_id,
+                force_refresh=force_refresh,
+                skip_rag_store=skip_rag_store,
+                sample_value_fetcher=sample_value_fetcher,
+            )
+            return dict(result.dimension_hierarchy)
+        except Exception as e:
+            logger.error(f"逻辑表 {table_id} 推断失败: {e}")
+            return {}
+    
+    # 并发执行
+    table_ids = list(table_fields.keys())
+    tasks = [
+        infer_table(table_id, fields)
+        for table_id, fields in table_fields.items()
+    ]
+    
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # 合并结果（检测同名字段冲突）
+    merged_hierarchy: Dict[str, DimensionAttributes] = {}
+    field_source: Dict[str, str] = {}  # 记录字段来源的表 ID
+    conflict_count = 0
+    
+    for idx, result in enumerate(results):
+        table_id = table_ids[idx]
+        if isinstance(result, Exception):
+            logger.error(f"逻辑表推断异常: {result}")
+        elif isinstance(result, dict):
+            for field_name, attrs in result.items():
+                if field_name in merged_hierarchy:
+                    # 检测到同名字段冲突
+                    conflict_count += 1
+                    existing_table = field_source.get(field_name, "unknown")
+                    logger.warning(
+                        f"多表合并冲突: 字段 '{field_name}' 同时存在于表 "
+                        f"'{existing_table}' 和 '{table_id}'，使用后者覆盖"
+                    )
+                merged_hierarchy[field_name] = attrs
+                field_source[field_name] = table_id
+    
+    if conflict_count > 0:
+        logger.warning(f"多表合并完成，共 {conflict_count} 个字段冲突被覆盖")
+    
+    logger.info(f"多表推断完成: 共 {len(merged_hierarchy)} 个维度")
+    
+    # 将维度层级信息注入到 data_model
+    final_result = DimensionHierarchyResult(dimension_hierarchy=merged_hierarchy)
+    _update_fields_with_hierarchy(data_model, final_result)
+    
+    # 设置 merged_hierarchy
+    if hasattr(data_model, "merged_hierarchy"):
+        data_model.merged_hierarchy = merged_hierarchy
+    
+    return final_result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 降级模式（无 RAG 时使用）
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 降级模式的最大字段数（与 llm_inference.MAX_FIELDS_PER_INFERENCE 保持一致）
+FALLBACK_MAX_FIELDS_PER_BATCH = 30
+
+
+async def _fallback_inference(
+    data_model: DataModel,
+    datasource_luid: Optional[str] = None,
+) -> DimensionHierarchyResult:
+    """
+    降级推断模式（无 RAG 时使用）
+    
+    直接调用 LLM 推断，不使用 RAG 和缓存。
+    支持分批处理，避免字段数超过 30 时报错。
+    """
+    from tableau_assistant.src.agents.dimension_hierarchy.llm_inference import (
+        infer_dimensions_once,
+    )
+    
+    dimension_fields = data_model.get_dimensions()
+    if not dimension_fields:
+        return DimensionHierarchyResult(dimension_hierarchy={})
+    
+    # 转换字段格式
+    fields = _convert_fields_to_dicts(dimension_fields)
+    
+    # 分批推断（每批最多 30 个字段）
+    all_results: Dict[str, DimensionAttributes] = {}
+    
+    try:
+        for i in range(0, len(fields), FALLBACK_MAX_FIELDS_PER_BATCH):
+            batch = fields[i:i + FALLBACK_MAX_FIELDS_PER_BATCH]
+            logger.info(f"降级模式分批推断: 第 {i // FALLBACK_MAX_FIELDS_PER_BATCH + 1} 批, {len(batch)} 个字段")
+            
+            result = await infer_dimensions_once(batch)
+            all_results.update(result.dimension_hierarchy)
+        
+        final_result = DimensionHierarchyResult(dimension_hierarchy=all_results)
+        
+        # 将维度层级信息注入到 data_model
+        _update_fields_with_hierarchy(data_model, final_result)
+        
+        return final_result
+        
+    except Exception as e:
+        logger.error(f"降级推断失败: {e}")
+        return DimensionHierarchyResult(dimension_hierarchy=all_results if all_results else {})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1139,7 +568,7 @@ async def infer_single_field(
     sample_values: List[str],
     unique_count: int,
     datasource_luid: Optional[str] = None,
-    store_result: bool = True
+    store_result: bool = True,
 ) -> Optional[DimensionAttributes]:
     """
     推断单个字段的维度层级
@@ -1160,75 +589,54 @@ async def infer_single_field(
     """
     logger.info(f"单字段推断: {field_caption}")
     
-    # 加载 RAG 组件
-    rag = _get_dimension_rag()
+    # 获取推断实例
+    inference = await _get_inference_instance()
     
-    # 准备字段信息
-    dimensions_info = [{
-        "name": field_name,
-        "caption": field_caption,
-        "dataType": data_type,
-        "description": "",
+    if inference is None:
+        # 降级模式
+        from tableau_assistant.src.agents.dimension_hierarchy.llm_inference import (
+            infer_dimensions_once,
+        )
+        
+        fields = [{
+            "field_name": field_name,
+            "field_caption": field_caption,
+            "data_type": data_type,
+            "sample_values": sample_values[:10] if sample_values else [],
+            "unique_count": unique_count,
+        }]
+        
+        try:
+            result = await infer_dimensions_once(fields)
+            return result.dimension_hierarchy.get(field_name)
+        except Exception as e:
+            logger.error(f"单字段推断失败: {e}")
+            return None
+    
+    # 使用新推断系统
+    fields = [{
+        "field_name": field_name,
+        "field_caption": field_caption,
+        "data_type": data_type,
+        "sample_values": sample_values[:10] if sample_values else [],
         "unique_count": unique_count,
-        "sample_values": sample_values[:5],
     }]
     
-    # 获取 RAG few-shot 示例
-    few_shot_examples = []
-    if rag:
-        try:
-            rag_context = rag.get_inference_context(
-                field_caption=field_caption,
-                data_type=data_type,
-                sample_values=sample_values,
-                unique_count=unique_count,
-            )
-            if rag_context.get("has_similar_patterns"):
-                few_shot_examples = rag_context.get("few_shot_examples", [])[:3]
-        except Exception as e:
-            logger.warning(f"RAG 检索失败: {e}")
-    
-    few_shot_section = _build_few_shot_section(few_shot_examples)
-    
-    # 构建输入数据
-    dimensions_str = json.dumps(dimensions_info, ensure_ascii=False, indent=2)
-    if few_shot_section:
-        dimensions_str = few_shot_section + "\n" + dimensions_str
-    
-    input_data = {"dimensions": dimensions_str}
-    
     try:
-        llm = get_llm(agent_name="dimension_hierarchy")
-        messages = DIMENSION_HIERARCHY_PROMPT.format_messages(**input_data)
-        response = await invoke_llm(llm, messages)
-        result = parse_json_response(response, DimensionHierarchyResult)
+        result = await inference.infer(
+            datasource_luid=datasource_luid or "single_field",
+            fields=fields,
+            skip_rag_store=not store_result,
+        )
         
-        # 获取推断结果
         attrs = result.dimension_hierarchy.get(field_name)
         
-        if attrs and store_result and rag:
-            try:
-                rag.store_inference_result(
-                    field_name=field_name,
-                    field_caption=field_caption,
-                    data_type=data_type,
-                    sample_values=sample_values,
-                    unique_count=unique_count,
-                    category=attrs.category,
-                    category_detail=attrs.category_detail,
-                    level=attrs.level,
-                    granularity=attrs.granularity,
-                    reasoning=attrs.reasoning,
-                    confidence=attrs.level_confidence,
-                    datasource_luid=datasource_luid,
-                )
-            except Exception as e:
-                logger.warning(f"存储推断结果失败: {e}")
+        if attrs:
+            logger.debug(
+                f"单字段推断完成: {field_caption} -> "
+                f"{attrs.category_detail}"
+            )
         
-        logger.debug(
-            f"单字段推断完成: {field_caption} -> "
-            f"{attrs.category_detail if attrs else 'None'}"
-        )
         return attrs
         
     except Exception as e:
@@ -1236,4 +644,37 @@ async def infer_single_field(
         return None
 
 
-__all__ = ["dimension_hierarchy_node", "infer_single_field"]
+# ═══════════════════════════════════════════════════════════════════════════
+# 统计接口
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def get_inference_stats() -> Dict[str, Any]:
+    """
+    获取推断统计数据
+    
+    Returns:
+        统计数据字典
+    """
+    inference = await _get_inference_instance()
+    
+    if inference is None:
+        return {"error": "推断实例不可用"}
+    
+    return inference.get_stats()
+
+
+async def reset_inference_stats() -> None:
+    """重置推断统计数据"""
+    inference = await _get_inference_instance()
+    
+    if inference:
+        inference.reset_stats()
+
+
+__all__ = [
+    "dimension_hierarchy_node",
+    "dimension_hierarchy_node_multi_table",
+    "infer_single_field",
+    "get_inference_stats",
+    "reset_inference_stats",
+]

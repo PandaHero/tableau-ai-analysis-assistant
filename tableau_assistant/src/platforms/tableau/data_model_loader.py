@@ -134,6 +134,7 @@ class TableauDataModelLoader(DataModelLoader):
             result = await dimension_hierarchy_node(
                 data_model=data_model,
                 datasource_luid=data_model.datasource_luid,
+                auth_context=self._auth,
             )
             
             # 转换为字典格式

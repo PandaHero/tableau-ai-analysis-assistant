@@ -39,7 +39,6 @@ from tableau_assistant.src.infra.storage.langgraph_store import (
 from tableau_assistant.src.infra.storage.data_model_cache import (
     DataModelCache,
     DATA_MODEL_NAMESPACE,
-    HIERARCHY_NAMESPACE,
 )
 from tableau_assistant.src.infra.storage.field_index_cache import (
     FieldIndexCache,
@@ -71,7 +70,6 @@ __all__ = [
     # DataModelCache
     "DataModelCache",
     "DATA_MODEL_NAMESPACE",
-    "HIERARCHY_NAMESPACE",
     # FieldIndexCache
     "FieldIndexCache",
     "FIELD_INDEX_NAMESPACE",

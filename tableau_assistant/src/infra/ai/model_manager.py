@@ -11,21 +11,21 @@
 - 默认模型设置
 - 模型使用统计
 - 支持多种模型类型（LLM、Embedding）
+- 支持自定义 API 端点（通过 URL 重写）
 
 参考：
 - OpenRouter: 多模型路由
 - LiteLLM: 统一 API 接口
 - One API: 模型管理和负载均衡
 """
+import json
 import logging
 import time
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field, field_validator
-
-# 从 custom_llm 导入 AuthType，避免重复定义
-from tableau_assistant.src.infra.ai.custom_llm import AuthType
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,12 @@ class ModelType(str, Enum):
     EMBEDDING = "embedding"
 
 
-# AuthType 从 custom_llm 导入，不再重复定义
+class AuthType(str, Enum):
+    """认证类型"""
+    BEARER = "bearer"           # Authorization: Bearer <token>
+    API_KEY_HEADER = "apikey"   # Apikey: <token>
+    CUSTOM_HEADER = "custom"    # 自定义 header
+    NONE = "none"               # 无认证
 
 
 class ModelStatus(str, Enum):
@@ -371,7 +376,8 @@ class ModelManager:
         
         try:
             # 加载模型配置
-            items = self._store.search(MODEL_CONFIG_NAMESPACE)
+            # 注意：LangGraph SqliteStore.search 默认 limit=10，必须显式传递较大值
+            items = self._store.search(MODEL_CONFIG_NAMESPACE, limit=1000)
             for item in items:
                 try:
                     config = ModelConfig(**item.value)
@@ -380,7 +386,7 @@ class ModelManager:
                     logger.warning(f"加载模型配置失败: {e}")
             
             # 加载统计信息
-            stats_items = self._store.search(MODEL_STATS_NAMESPACE)
+            stats_items = self._store.search(MODEL_STATS_NAMESPACE, limit=1000)
             for item in stats_items:
                 try:
                     stats = ModelStats(**item.value)
@@ -989,17 +995,15 @@ class ModelManager:
         
         路由逻辑：
         1. Azure OpenAI → AzureChatOpenAI
-        2. openai_compatible=True → ChatOpenAI（支持 DeepSeek、Qwen、Kimi、智谱等）
-        3. openai_compatible=False → CustomLLMChat（自定义 API）
+        2. 非 OpenAI 兼容（自定义端点）→ CustomLLMChat
+        3. OpenAI 兼容 → ChatOpenAI
         
         参数处理：
-        - temperature/max_tokens 为 None 时不传给 API，使用模型默认值
         - kwargs 可覆盖配置中的参数
         """
-        import httpx
         from langchain_openai import ChatOpenAI, AzureChatOpenAI
         
-        # 合并参数：kwargs 优先，然后是 config，None 表示不传
+        # 合并参数：kwargs 优先，然后是 config
         temperature = kwargs.get('temperature', config.temperature)
         max_tokens = kwargs.get('max_tokens', config.max_tokens)
         
@@ -1017,68 +1021,66 @@ class ModelManager:
                 azure_kwargs["max_tokens"] = max_tokens
             return AzureChatOpenAI(**azure_kwargs)
         
-        # OpenAI 兼容模式（大多数模型：DeepSeek、Qwen、Kimi、智谱、OpenAI 等）
-        if config.openai_compatible:
-            # 创建 HTTP 客户端（处理 SSL）
-            http_client = None
-            http_async_client = None
-            if not config.verify_ssl:
-                http_client = httpx.Client(verify=False, timeout=config.timeout)
-                http_async_client = httpx.AsyncClient(verify=False, timeout=config.timeout)
+        # 非 OpenAI 兼容模型（自定义端点）→ 使用 CustomLLMChat
+        if not config.openai_compatible:
+            from tableau_assistant.src.infra.ai.custom_llm import CustomLLMChat, CustomLLMConfig
+            from tableau_assistant.src.infra.ai.custom_llm import AuthType as CustomAuthType
             
-            openai_kwargs = {
-                "model_name": config.model_name,
-                "api_key": config.api_key,
+            # 转换 AuthType
+            auth_type_map = {
+                AuthType.BEARER: CustomAuthType.BEARER,
+                AuthType.API_KEY_HEADER: CustomAuthType.API_KEY_HEADER,
+                AuthType.CUSTOM_HEADER: CustomAuthType.CUSTOM_HEADER,
+                AuthType.NONE: CustomAuthType.NONE,
             }
             
-            # 只有非 OpenAI 官方 API 才设置 base_url
-            if "api.openai.com" not in config.api_base:
-                openai_kwargs["base_url"] = config.api_base
-            
-            # 只有非 None 才传参数（让模型使用默认值）
-            if temperature is not None:
-                openai_kwargs["temperature"] = temperature
-            if max_tokens is not None:
-                openai_kwargs["max_tokens"] = max_tokens
-            
-            if http_client:
-                openai_kwargs["http_client"] = http_client
-                openai_kwargs["http_async_client"] = http_async_client
-            
-            return ChatOpenAI(**openai_kwargs)
+            custom_config = CustomLLMConfig(
+                name=config.name,
+                display_name=config.name,
+                description=config.description,
+                api_base=config.api_base,
+                api_endpoint=config.api_endpoint or "/v1/chat/completions",
+                model_name=config.model_name,
+                auth_type=auth_type_map.get(config.auth_type, CustomAuthType.BEARER),
+                auth_header=config.auth_header,
+                api_key=config.api_key,
+                temperature=temperature if temperature is not None else 0.2,
+                max_tokens=max_tokens if max_tokens is not None else 4096,
+                timeout=config.timeout,
+                supports_streaming=config.supports_streaming,
+                supports_thinking=config.supports_thinking,
+                thinking_tag=config.thinking_tag,
+                verify_ssl=config.verify_ssl,
+                extra_headers=config.extra_headers or {},
+                extra_body=config.extra_body or {},
+            )
+            return CustomLLMChat(config=custom_config)
         
-        # 自定义 API（非 OpenAI 兼容）
-        from tableau_assistant.src.infra.ai.custom_llm import CustomLLMChat, CustomLLMConfig
-        
-        # 构建 CustomLLMConfig 参数，只传递非 None 的值
-        custom_config_kwargs = {
-            "name": config.id,
-            "display_name": config.name,
-            "description": config.description,
-            "api_base": config.api_base,
-            "api_endpoint": config.api_endpoint or "/v1/chat/completions",
+        # OpenAI 兼容模型 → 使用 ChatOpenAI
+        openai_kwargs = {
             "model_name": config.model_name,
-            "auth_type": config.auth_type,
-            "auth_header": config.auth_header,
             "api_key": config.api_key,
-            "timeout": config.timeout,
-            "supports_streaming": config.supports_streaming,
-            "supports_thinking": config.supports_thinking,
-            "thinking_tag": config.thinking_tag,
-            "verify_ssl": config.verify_ssl,
-            "extra_headers": config.extra_headers,
-            "extra_body": config.extra_body,
         }
         
-        # 只在非 None 时传递 temperature 和 max_tokens
+        # 非 OpenAI 官方 API 设置 base_url
+        if "api.openai.com" not in config.api_base:
+            openai_kwargs["base_url"] = config.api_base
+        
         if temperature is not None:
-            custom_config_kwargs["temperature"] = temperature
+            openai_kwargs["temperature"] = temperature
         if max_tokens is not None:
-            custom_config_kwargs["max_tokens"] = max_tokens
+            openai_kwargs["max_tokens"] = max_tokens
         
-        custom_config = CustomLLMConfig(**custom_config_kwargs)
+        # 额外 headers
+        if config.extra_headers:
+            openai_kwargs["default_headers"] = config.extra_headers
         
-        return CustomLLMChat(config=custom_config)
+        # SSL 验证
+        if not config.verify_ssl:
+            openai_kwargs["http_client"] = httpx.Client(verify=False, timeout=config.timeout)
+            openai_kwargs["http_async_client"] = httpx.AsyncClient(verify=False, timeout=config.timeout)
+        
+        return ChatOpenAI(**openai_kwargs)
     
     def create_embedding(self, model_id: Optional[str] = None, **kwargs) -> Any:
         """创建 Embedding 实例
@@ -1185,3 +1187,6 @@ __all__ = [
     "get_model_manager",
     "reset_model_manager",
 ]
+
+
+

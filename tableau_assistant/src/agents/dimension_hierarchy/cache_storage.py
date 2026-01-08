@@ -46,6 +46,14 @@ RAG_STORE_CONFIDENCE_THRESHOLD = 0.85  # LLM 结果存入 RAG 的置信度阈值
 MAX_LOCKS = 1000  # 最大锁数量
 LOCK_EXPIRE_SECONDS = 3600  # 锁过期时间（秒），1 小时
 
+# ═══════════════════════════════════════════════════════════
+# TTL 常量（永久缓存）
+# ═══════════════════════════════════════════════════════════
+
+# 设置为 10 年（分钟），实现"永久"缓存（仅 field_hash 变化时失效）
+# LangGraph SqliteStore 的 TTL 单位是分钟
+PERMANENT_TTL_MINUTES = 10 * 365 * 24 * 60  # 10 年 = 5,256,000 分钟
+
 
 class PatternSource(str, Enum):
     """RAG 模式来源"""
@@ -61,7 +69,7 @@ def compute_field_hash_metadata_only(dimension_fields: List[Any]) -> str:
     用于缓存检查，避免因样例数据变化导致缓存失效。
     
     Args:
-        dimension_fields: 维度字段列表（FieldMetadata 对象）
+        dimension_fields: 维度字段列表（FieldMetadata 对象或 dict）
     
     Returns:
         MD5 哈希值（32 字符）
@@ -71,12 +79,30 @@ def compute_field_hash_metadata_only(dimension_fields: List[Any]) -> str:
         >>> hash_val = compute_field_hash_metadata_only(fields)
         >>> print(hash_val)  # "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
     """
+    def get_field_name(f):
+        """获取字段名（兼容对象和字典）"""
+        if isinstance(f, dict):
+            return f.get("field_name", f.get("name", ""))
+        return getattr(f, "name", getattr(f, "field_name", ""))
+    
+    def get_field_caption(f):
+        """获取字段标题（兼容对象和字典）"""
+        if isinstance(f, dict):
+            return f.get("field_caption", f.get("fieldCaption", ""))
+        return getattr(f, "fieldCaption", getattr(f, "field_caption", ""))
+    
+    def get_data_type(f):
+        """获取数据类型（兼容对象和字典）"""
+        if isinstance(f, dict):
+            return f.get("data_type", f.get("dataType", ""))
+        return getattr(f, "dataType", getattr(f, "data_type", ""))
+    
     field_info = []
-    for f in sorted(dimension_fields, key=lambda x: x.name):
+    for f in sorted(dimension_fields, key=get_field_name):
         info = {
-            "name": f.name,
-            "caption": f.fieldCaption,
-            "dataType": f.dataType,
+            "name": get_field_name(f),
+            "caption": get_field_caption(f),
+            "dataType": get_data_type(f),
             # 不包含 sample_values 和 unique_count
         }
         field_info.append(info)
@@ -85,26 +111,32 @@ def compute_field_hash_metadata_only(dimension_fields: List[Any]) -> str:
     return hashlib.md5(content.encode("utf-8")).hexdigest()
 
 
-def compute_single_field_hash(field: Any) -> str:
+def compute_single_field_hash(
+    field_name: str,
+    field_caption: str,
+    data_type: str,
+) -> str:
     """
     计算单个字段的元数据哈希值（用于检测字段变更）
     
     用于增量推断，检测字段的 caption 或 dataType 是否变化。
     
     Args:
-        field: 字段对象（FieldMetadata）
+        field_name: 字段名
+        field_caption: 字段标题
+        data_type: 数据类型
     
     Returns:
         MD5 哈希值（32 字符）
     
     Examples:
-        >>> field_hash = compute_single_field_hash(field)
+        >>> field_hash = compute_single_field_hash("year", "年份", "integer")
         >>> print(field_hash)  # "x1y2z3w4v5u6t7s8r9q0p1o2n3m4l5k6"
     """
     info = {
-        "name": field.name,
-        "caption": field.fieldCaption,
-        "dataType": field.dataType,
+        "name": field_name,
+        "caption": field_caption,
+        "dataType": data_type,
     }
     content = json.dumps(info, sort_keys=True, ensure_ascii=False)
     return hashlib.md5(content.encode("utf-8")).hexdigest()
@@ -193,7 +225,17 @@ class DimensionHierarchyCacheStorage:
                 "created_at": datetime.now().isoformat(),
             }
             
-            self._store.put((NS_HIERARCHY_CACHE,), cache_key, data)
+            # 显式设置超长 TTL（10 年），实现"永久"缓存
+            # 缓存仅在 field_hash 变化时失效，而非 TTL 过期
+            # 注意：某些 store 实现（如 InMemoryStore）不支持 TTL，需要优雅降级
+            try:
+                self._store.put((NS_HIERARCHY_CACHE,), cache_key, data, ttl=PERMANENT_TTL_MINUTES)
+            except (TypeError, Exception) as ttl_error:
+                if "TTL is not supported" in str(ttl_error) or "ttl" in str(ttl_error).lower():
+                    # store 不支持 ttl 参数，回退到无 TTL 模式
+                    self._store.put((NS_HIERARCHY_CACHE,), cache_key, data)
+                else:
+                    raise
             logger.debug(f"缓存已更新: {cache_key}")
             return True
         except Exception as e:
@@ -268,6 +310,7 @@ class DimensionHierarchyCacheStorage:
         存入 RAG 模式元数据（不含向量）
         
         向量存储在 FAISS 中，这里只存元数据。
+        使用超长 TTL（10 年）实现"永久"存储。
         
         Args:
             pattern_id: 模式 ID
@@ -310,7 +353,17 @@ class DimensionHierarchyCacheStorage:
                 "created_at": datetime.now().isoformat(),
             }
             
-            self._store.put((NS_DIMENSION_PATTERNS_METADATA,), pattern_id, data)
+            # 显式设置超长 TTL（10 年），实现"永久"存储
+            # RAG 模式元数据应永久保存，用于自学习
+            # 注意：某些 store 实现（如 InMemoryStore）不支持 TTL，需要优雅降级
+            try:
+                self._store.put((NS_DIMENSION_PATTERNS_METADATA,), pattern_id, data, ttl=PERMANENT_TTL_MINUTES)
+            except (TypeError, Exception) as ttl_error:
+                if "TTL is not supported" in str(ttl_error) or "ttl" in str(ttl_error).lower():
+                    # store 不支持 ttl 参数，回退到无 TTL 模式
+                    self._store.put((NS_DIMENSION_PATTERNS_METADATA,), pattern_id, data)
+                else:
+                    raise
             logger.debug(f"模式元数据已存入: {field_caption} (source={source})")
             return True
             
@@ -358,16 +411,30 @@ class DimensionHierarchyCacheStorage:
             metadata["verified"] = verified
             metadata["verified_at"] = datetime.now().isoformat() if verified else None
             
-            self._store.put((NS_DIMENSION_PATTERNS_METADATA,), pattern_id, metadata)
+            # 显式设置超长 TTL（10 年），实现"永久"存储
+            # 注意：某些 store 实现（如 InMemoryStore）不支持 TTL，需要优雅降级
+            try:
+                self._store.put((NS_DIMENSION_PATTERNS_METADATA,), pattern_id, metadata, ttl=PERMANENT_TTL_MINUTES)
+            except (TypeError, Exception) as ttl_error:
+                if "TTL is not supported" in str(ttl_error) or "ttl" in str(ttl_error).lower():
+                    # store 不支持 ttl 参数，回退到无 TTL 模式
+                    self._store.put((NS_DIMENSION_PATTERNS_METADATA,), pattern_id, metadata)
+                else:
+                    raise
             logger.info(f"模式验证状态已更新: {pattern_id} -> verified={verified}")
             return True
         except Exception as e:
             logger.warning(f"更新验证状态失败: {e}")
             return False
     
-    def get_all_pattern_metadata(self) -> List[Dict[str, Any]]:
+    def get_all_pattern_metadata(self, limit: int = 10000) -> List[Dict[str, Any]]:
         """
         获取所有模式元数据（用于重建 FAISS 索引）
+        
+        Args:
+            limit: 最大返回数量（默认 10000，足够覆盖所有模式）
+                   注意：LangGraph SqliteStore.search 默认 limit=10，
+                   必须显式传递较大值以获取所有数据
         
         Returns:
             所有模式元数据列表
@@ -377,7 +444,8 @@ class DimensionHierarchyCacheStorage:
         
         try:
             # 搜索该 namespace 下的所有项
-            items = self._store.search((NS_DIMENSION_PATTERNS_METADATA,))
+            # 重要：必须显式传递 limit，否则默认只返回 10 条
+            items = self._store.search((NS_DIMENSION_PATTERNS_METADATA,), limit=limit)
             return [item.value for item in items if item and item.value]
         except Exception as e:
             logger.warning(f"获取所有模式元数据失败: {e}")
@@ -425,6 +493,8 @@ __all__ = [
     # 并发控制常量
     "MAX_LOCKS",
     "LOCK_EXPIRE_SECONDS",
+    # TTL 常量
+    "PERMANENT_TTL_MINUTES",
     # 枚举
     "PatternSource",
     # 函数

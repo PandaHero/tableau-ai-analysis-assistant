@@ -37,6 +37,7 @@ from .data_model import (
     get_data_dictionary,
     get_data_dictionary_async,
     get_datasource_luid_by_name,
+    fetch_dimension_samples_for_fields,
 )
 
 # VizQL Client
@@ -76,6 +77,7 @@ __all__ = [
     "get_data_dictionary",
     "get_data_dictionary_async",
     "get_datasource_luid_by_name",
+    "fetch_dimension_samples_for_fields",
     # VizQL Client
     "VizQLClient",
     "VizQLClientConfig",

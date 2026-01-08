@@ -140,7 +140,10 @@ def _build_rank_table_calc(
     partitioning: list[str],
     addressing: list[str]
 ) -> dict:
-    """构建排名表计算"""
+    """构建排名表计算
+    
+    RANK 不支持 restartEvery，分区语义通过 dimensions 表达
+    """
     return {
         "fieldCaption": f"{target}_排名",
         "function": "SUM",
@@ -148,7 +151,7 @@ def _build_rank_table_calc(
         "tableCalculation": {
             "tableCalcType": "RANK",
             "direction": "DESC",
-            "dimensions": [{"fieldCaption": d} for d in addressing]
+            "dimensions": [{"fieldCaption": d} for d in partitioning]  # partitioning
         }
     }
 
@@ -159,14 +162,17 @@ def _build_running_sum_table_calc(
     partitioning: list[str],
     addressing: list[str]
 ) -> dict:
-    """构建累计表计算"""
+    """构建累计表计算
+    
+    RUNNING_TOTAL 支持 restartEvery，这里使用 dimensions 表达分区
+    """
     return {
         "fieldCaption": f"{target}_累计",
         "function": "SUM",
         "fieldName": target,
         "tableCalculation": {
             "tableCalcType": "RUNNING_TOTAL",
-            "dimensions": [{"fieldCaption": d} for d in addressing]
+            "dimensions": [{"fieldCaption": d} for d in partitioning]  # partitioning
         }
     }
 
@@ -177,14 +183,17 @@ def _build_percent_table_calc(
     partitioning: list[str],
     addressing: list[str]
 ) -> dict:
-    """构建占比表计算"""
+    """构建占比表计算
+    
+    PERCENT_OF_TOTAL 不支持 restartEvery，分区语义通过 dimensions 表达
+    """
     return {
         "fieldCaption": f"{target}_占比",
         "function": "SUM",
         "fieldName": target,
         "tableCalculation": {
             "tableCalcType": "PERCENT_OF_TOTAL",
-            "dimensions": [{"fieldCaption": d} for d in addressing]
+            "dimensions": [{"fieldCaption": d} for d in partitioning]  # partitioning
         }
     }
 
