@@ -51,21 +51,22 @@ def route_after_semantic_parser(state: VizQLState) -> Literal["insight", "end"]:
     1. Query succeeded -> route to insight
     2. ReAct decided to ABORT/CLARIFY -> route to end
     
+    ⚠️ State 序列化：intent_type 是字符串值（IntentType.value），需要字符串比较
+    
     Args:
         state: Current workflow state
     
     Returns:
         Next node name: "insight" or "end"
     """
-    from tableau_assistant.src.core.models import IntentType
-    
     question = state.get("question", "")[:50]  # Truncate for logging
 
-    # Check intent_type (flattened field from SemanticParseResult)
-    intent_type = state.get("intent_type")
+    # Check intent_type (flattened field from SemanticParser exit node)
+    # ⚠️ 字符串值比较（不使用枚举）
+    intent_type_str = state.get("intent_type")
     
-    if intent_type is not None:
-        if intent_type == IntentType.DATA_QUERY:
+    if intent_type_str is not None:
+        if intent_type_str == "DATA_QUERY":
             # Check if query execution succeeded
             query_result = state.get("query_result")
             if query_result is not None:
@@ -92,7 +93,7 @@ def route_after_semantic_parser(state: VizQLState) -> Literal["insight", "end"]:
                 logger.info(f"No query result, routing to END: '{question}...'")
                 return "end"
         else:
-            logger.info(f"Non-DATA_QUERY intent ({intent_type}), routing to END: '{question}...'")
+            logger.info(f"Non-DATA_QUERY intent ({intent_type_str}), routing to END: '{question}...'")
             return "end"
     
     # Fallback: check is_analysis_question

@@ -70,8 +70,8 @@ When question needs BOTH different granularity AND transformation:
 → Output order: [LOD first, then Table Calc]"""
 
     def get_constraints(self) -> str:
-        return """MUST: Infer from restated_question, Validate against Step 1, Report inconsistencies
-MUST NOT: Infer partition_by not in dimensions, Skip validation, Mark valid when check fails"""
+        return """MUST: Infer from restated_question, Validate against Step 1, Report inconsistencies, Output valid JSON format
+MUST NOT: Infer partition_by not in dimensions, Skip validation, Mark valid when check fails, Output anything other than JSON"""
 
     def get_user_template(self) -> str:
         return """**Restated Question:** {restated_question}
@@ -81,7 +81,15 @@ MUST NOT: Infer partition_by not in dimensions, Skip validation, Mark valid when
 - where.dimensions: {dimensions}
 - how_type: {how_type}
 
-Please infer computation and self-validate, then output Step2Output JSON."""
+Please infer computation and self-validate, then output Step2Output as valid JSON.
+
+Output format example:
+```json
+{{
+    "computations": [...],
+    "validation": {{"is_valid": true, "issues": []}}
+}}
+```"""
 
     def get_output_model(self) -> Type[BaseModel]:
         return Step2Output

@@ -18,7 +18,9 @@ class QueryErrorType(str, Enum):
     """Query error types."""
     # Step1/Step2 errors
     STEP1_FAILED = "step1_failed"
+    STEP1_PARSE_ERROR = "step1_parse_error"  # 新增：Step1 解析失败
     STEP2_FAILED = "step2_failed"
+    STEP2_PARSE_ERROR = "step2_parse_error"  # 新增：Step2 解析失败
     
     # Field mapping errors
     FIELD_NOT_FOUND = "field_not_found"

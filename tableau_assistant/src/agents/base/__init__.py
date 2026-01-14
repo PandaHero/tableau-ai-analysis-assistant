@@ -26,6 +26,7 @@ from .node import (
     # JSON 解析
     clean_json_output,
     parse_json_response,
+    JSONParseError,
 )
 
 from .prompt import (
@@ -71,6 +72,7 @@ __all__ = [
     # JSON 解析
     "clean_json_output",
     "parse_json_response",
+    "JSONParseError",
     
     # Prompt 基类
     "BasePrompt",

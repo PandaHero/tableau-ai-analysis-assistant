@@ -8,12 +8,14 @@
 - get_langgraph_store(): 获取 LangGraph SqliteStore 单例
 - DataModelCache: 数据模型缓存封装类
 - DataModelLoader: 数据模型加载器接口
+- VNextStore: vNext 版本化存储（Requirements 0.14）
 
 使用示例：
     from tableau_assistant.src.infra.storage import (
         get_langgraph_store,
         DataModelCache,
         DataModelLoader,
+        VNextStore,
     )
     from tableau_assistant.src.platforms.tableau import TableauDataModelLoader
     
@@ -27,6 +29,10 @@
     # 使用 DataModelCache（数据模型缓存）
     cache = DataModelCache(store)
     data_model, is_cache_hit = await cache.get_or_load(datasource_luid, loader)
+    
+    # 使用 VNextStore（vNext 版本化存储）
+    vnext_store = VNextStore(store)
+    await vnext_store.put(datasource_luid, key, value)
 """
 import logging
 
@@ -58,6 +64,10 @@ from tableau_assistant.src.infra.storage.golden_queries import (
     GoldenQueryStore,
     get_golden_query_store,
 )
+from tableau_assistant.src.infra.storage.vnext_store import (
+    VNextStore,
+    SENSITIVE_FIELDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,4 +94,7 @@ __all__ = [
     "GoldenQuery",
     "GoldenQueryStore",
     "get_golden_query_store",
+    # VNextStore (Requirements 0.14)
+    "VNextStore",
+    "SENSITIVE_FIELDS",
 ]

@@ -72,8 +72,22 @@ async def insight_node(state: VizQLState, config: RunnableConfig | None = None) 
         }
     
     # Check if query was successful
-    if hasattr(query_result, 'is_success') and not query_result.is_success():
-        error_msg = query_result.error if hasattr(query_result, 'error') else "未知错误"
+    # ⚠️ State 序列化：query_result 是 dict（ExecuteResult.model_dump()），非 Pydantic 对象
+    # 需要通过 dict 键访问，而非对象属性
+    is_success = True
+    error_msg = None
+    
+    if isinstance(query_result, dict):
+        # dict 访问方式（正确）
+        is_success = query_result.get("success", True)
+        error_msg = query_result.get("error")
+    elif hasattr(query_result, 'is_success'):
+        # 兼容旧的对象访问方式（向后兼容）
+        is_success = query_result.is_success() if callable(getattr(query_result, 'is_success', None)) else query_result.is_success
+        error_msg = getattr(query_result, 'error', None)
+    
+    if not is_success:
+        error_msg = error_msg or "未知错误"
         logger.warning(f"Query failed, skipping insight analysis: {error_msg}")
         
         user_friendly_msg = _get_user_friendly_error_message(error_msg)
@@ -87,10 +101,10 @@ async def insight_node(state: VizQLState, config: RunnableConfig | None = None) 
         
         return {
             "insights": [],
-            "insight_result": InsightResult(summary=user_friendly_msg),
             "insight_complete": True,
             "messages": new_messages,
         }
+
     
     # Build context
     context = {
@@ -100,13 +114,27 @@ async def insight_node(state: VizQLState, config: RunnableConfig | None = None) 
     }
     
     # Extract dimensions and measures from semantic_query
+    # ⚠️ State 序列化：semantic_query 是 dict（SemanticQuery.model_dump()），非 Pydantic 对象
     semantic_query = state.get("semantic_query")
-    if semantic_query:
+    if semantic_query and isinstance(semantic_query, dict):
+        # dict 访问方式（正确）
+        dimensions_list = semantic_query.get("dimensions") or []
+        measures_list = semantic_query.get("measures") or []
         context["dimensions"] = [
-            {"name": d.field_name} for d in (semantic_query.dimensions or [])
+            {"name": d.get("field_name") if isinstance(d, dict) else getattr(d, 'field_name', None)} 
+            for d in dimensions_list
         ]
         context["measures"] = [
-            {"name": m.field_name} for m in (semantic_query.measures or [])
+            {"name": m.get("field_name") if isinstance(m, dict) else getattr(m, 'field_name', None)} 
+            for m in measures_list
+        ]
+    elif semantic_query:
+        # 兼容旧的对象访问方式（向后兼容）
+        context["dimensions"] = [
+            {"name": d.field_name} for d in (getattr(semantic_query, 'dimensions', None) or [])
+        ]
+        context["measures"] = [
+            {"name": m.field_name} for m in (getattr(semantic_query, 'measures', None) or [])
         ]
     
     try:
@@ -153,16 +181,25 @@ async def insight_node(state: VizQLState, config: RunnableConfig | None = None) 
             AIMessage(content=summary_content, additional_kwargs={"source": "insight"}),
         ]
         
+        # ⚠️ State 序列化：insights / all_insights 存储为 dict 列表（.model_dump()），非 Pydantic 对象
+        # ⚠️ reducer 语义：VizQLState.insights/all_insights 使用 operator.add
+        # 因此这里必须返回“本轮新增”的洞察列表，而不是全量列表（否则会被重复累加）。
+        serialized_findings = [
+            ins.model_dump() if hasattr(ins, "model_dump") else ins
+            for ins in findings
+        ]
+
         return {
-            "insights": findings,
-            "insight_result": result,
-            "all_insights": state.get("all_insights", []) + findings,
+            "insights": serialized_findings,
+            "all_insights": serialized_findings,
             "data_insight_profile": data_insight_profile,
             "current_dimensions": current_dimensions,
             "insight_complete": True,
             "messages": new_messages,
             "answered_questions": [question],
         }
+
+
     
     except Exception as e:
         logger.exception(f"Insight node failed: {e}")
@@ -208,9 +245,11 @@ async def _run_insight_subgraph(
     result_state = await compiled.ainvoke(input_state, config)
     
     # Extract results from subgraph output
+    # ⚠️ State 序列化：insights 是 dict 列表
     accumulated_insights = result_state.get("insights") or []
     final_summary = result_state.get("final_summary") or ""
-    enhanced_profile = result_state.get("enhanced_profile")
+    # ⚠️ State 序列化：enhanced_profile 是 dict
+    enhanced_profile_dict = result_state.get("enhanced_profile")
     
     # Convert accumulated insights to Insight objects if needed
     findings = []
@@ -218,7 +257,17 @@ async def _run_insight_subgraph(
         if isinstance(ins, Insight):
             findings.append(ins)
         elif isinstance(ins, dict):
-            findings.append(Insight(**ins))
+            findings.append(Insight.model_validate(ins))
+    
+    # ⚠️ State 序列化：chunks 是 dict 列表
+    chunks_dicts = result_state.get("chunks") or []
+    analyzed_chunk_ids = result_state.get("analyzed_chunk_ids") or []
+    
+    # Calculate total_rows_analyzed from dict chunks
+    total_rows_analyzed = 0
+    for c in chunks_dicts:
+        if c and c.get("chunk_id") in analyzed_chunk_ids:
+            total_rows_analyzed += c.get("row_count", 0)
     
     # Build InsightResult
     result = InsightResult(
@@ -226,19 +275,17 @@ async def _run_insight_subgraph(
         findings=findings,
         confidence=0.8 if findings else 0.5,
         strategy_used="progressive",
-        chunks_analyzed=len(result_state.get("analyzed_chunk_ids") or []),
-        total_rows_analyzed=sum(
-            c.row_count for c in (result_state.get("chunks") or [])
-            if c.chunk_id in (result_state.get("analyzed_chunk_ids") or [])
-        ) if result_state.get("chunks") else 0,
+        chunks_analyzed=len(analyzed_chunk_ids),
+        total_rows_analyzed=total_rows_analyzed,
     )
     
     # Add data_insight_profile if available
-    if enhanced_profile:
+    # ⚠️ State 序列化：enhanced_profile 是 dict，需要访问 dict 键
+    if enhanced_profile_dict:
         result.data_insight_profile = DataInsightProfile(
             distribution_type="unknown",
             pareto_ratio=0.0,
-            statistics=enhanced_profile.statistics,
+            statistics=enhanced_profile_dict.get("statistics"),
         )
     
     return result

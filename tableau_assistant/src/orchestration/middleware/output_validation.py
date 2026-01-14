@@ -9,14 +9,26 @@ Features:
 - Pydantic Schema 校验
 - 错误记录和报告
 - 可配置的校验策略（strict/lenient）
-- retry_on_failure 触发 ModelRetryMiddleware 重试
+
+Design Principle (Requirements 0.6):
+- This middleware is a FINAL QUALITY GATE, not a retry trigger
+- Format errors (JSON parse, Pydantic validation) are handled by component-level retry
+- Semantic errors are handled by ReAct
+- This middleware only logs and alerts, does NOT trigger retries by default
+
+Error Classification:
+| Error Type | Handler | Retry Location |
+|------------|---------|----------------|
+| Format error (JSON/Pydantic) | Component | Step1/Step2 internal |
+| Semantic error (field not found) | ReAct | Agent level |
+| Final validation (fallback) | This middleware | Log + Alert only |
 
 Requirements:
 - R15.1: 校验输出是否为有效 JSON
 - R15.2: 使用 Pydantic Schema 校验
 - R15.3: strict=True 时抛出异常
-- R15.4: strict=False 且 retry_on_failure=False 时记录警告
-- R15.5: retry_on_failure=True 时抛出异常触发重试
+- R15.4: strict=False 时记录警告（默认行为）
+- R15.5: retry_on_failure=True 时抛出异常触发重试（非默认）
 - R15.6: 校验必需状态字段
 """
 
@@ -61,23 +73,34 @@ except ImportError:
 
 class OutputValidationMiddleware(AgentMiddleware):
     """
-    输出校验中间件
+    输出校验中间件 - 最终质量闸门
     
     在 after_model 钩子中校验 LLM 输出是否符合预期的 Pydantic Schema。
     在 after_agent 钩子中校验最终状态是否包含必需字段。
+    
+    Design Principle (Requirements 0.6):
+    - This is a FINAL QUALITY GATE, not a retry trigger
+    - Format errors should be handled by component-level retry (Step1/Step2)
+    - Semantic errors should be handled by ReAct
+    - This middleware only logs and alerts by default
     
     Attributes:
         expected_schema: 期望的输出 Pydantic 模型
         required_state_fields: 必需的状态字段列表
         strict: 严格模式，校验失败时抛出异常
-        retry_on_failure: 校验失败时是否触发重试（默认 True）
+        retry_on_failure: 校验失败时是否触发重试（默认 False，作为质量闸门）
     
     Example:
+        >>> # Default: quality gate mode (log + alert only)
         >>> middleware = OutputValidationMiddleware(
         ...     expected_schema=SemanticQuery,
         ...     required_state_fields=["semantic_query", "is_analysis_question"],
-        ...     strict=False,
-        ...     retry_on_failure=True,
+        ... )
+        >>> 
+        >>> # Legacy: retry mode (not recommended, use component-level retry instead)
+        >>> middleware = OutputValidationMiddleware(
+        ...     expected_schema=SemanticQuery,
+        ...     retry_on_failure=True,  # Explicitly enable retry
         ... )
     """
     
@@ -86,7 +109,7 @@ class OutputValidationMiddleware(AgentMiddleware):
         expected_schema: Optional[Type[BaseModel]] = None,
         required_state_fields: Optional[List[str]] = None,
         strict: bool = False,
-        retry_on_failure: bool = True,
+        retry_on_failure: bool = False,  # Changed: default False (quality gate mode)
     ):
         """
         初始化 OutputValidationMiddleware
@@ -96,7 +119,12 @@ class OutputValidationMiddleware(AgentMiddleware):
             required_state_fields: 必需的状态字段列表（用于 after_agent）
             strict: 严格模式，校验失败时抛出 ValueError
             retry_on_failure: 校验失败时是否抛出 OutputValidationError 触发重试
-                             默认 True，与 ModelRetryMiddleware 配合使用
+                             默认 False（质量闸门模式，只记录不重试）
+                             设为 True 可与 ModelRetryMiddleware 配合使用（不推荐）
+                             
+        Note (Requirements 0.6):
+            Format retry should be handled at component level (Step1/Step2).
+            This middleware serves as a final quality gate for monitoring.
         """
         self.expected_schema = expected_schema
         self.required_state_fields = required_state_fields or []

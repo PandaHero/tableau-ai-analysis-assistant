@@ -63,8 +63,8 @@ Query = What (measures) × Where (dimensions + filters) × How (complexity)
 - Pre-aggregated measure: aggregation = null (already aggregated)"""
 
     def get_constraints(self) -> str:
-        return """MUST: Preserve partition intent, Use business terms from question, Provide reasoning
-MUST NOT: Lose partition keywords, Invent field names, Assume missing information"""
+        return """MUST: Preserve partition intent, Use business terms from question, Provide reasoning, Output valid JSON format
+MUST NOT: Lose partition keywords, Invent field names, Assume missing information, Output anything other than JSON"""
 
     def get_user_template(self) -> str:
         return """**Current Question:** {question}
@@ -77,7 +77,18 @@ MUST NOT: Lose partition keywords, Invent field names, Assume missing informatio
 
 **Current Time:** {current_time}
 
-Please analyze this question and output Step1Output JSON."""
+Please analyze this question and output Step1Output as valid JSON.
+
+Output format example:
+```json
+{{
+    "intent": {{"type": "DATA_QUERY", "confidence": 0.95}},
+    "restated_question": "...",
+    "what": {{"measures": [...]}},
+    "where": {{"dimensions": [...], "filters": [...]}},
+    "how": {{"type": "SIMPLE"}}
+}}
+```"""
 
     def get_output_model(self) -> Type[BaseModel]:
         return Step1Output

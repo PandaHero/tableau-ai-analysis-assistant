@@ -123,8 +123,33 @@ class Settings(BaseSettings):
     
     # SemanticParser ReAct error handling configuration
     semantic_parser_max_retries: int = int(os.getenv("SEMANTIC_PARSER_MAX_RETRIES", "3"))
+    semantic_parser_max_semantic_retries: int = int(os.getenv("SEMANTIC_PARSER_MAX_SEMANTIC_RETRIES", "2"))
+    
+    # SemanticParser token limits (Requirements 0.4)
+    semantic_parser_max_history_tokens: int = int(os.getenv("SEMANTIC_PARSER_MAX_HISTORY_TOKENS", "2000"))
+    semantic_parser_max_schema_tokens: int = int(os.getenv("SEMANTIC_PARSER_MAX_SCHEMA_TOKENS", "3000"))
+    
+    # SemanticParser format retry limit (Requirements 0.6)
+    semantic_parser_max_format_retries: int = int(os.getenv("SEMANTIC_PARSER_MAX_FORMAT_RETRIES", "2"))
+    
+    # Schema Linking configuration (Requirements 0.13)
+    schema_linking_min_candidates: int = int(os.getenv("SCHEMA_LINKING_MIN_CANDIDATES", "1"))
+    schema_linking_min_confidence: float = float(os.getenv("SCHEMA_LINKING_MIN_CONFIDENCE", "0.5"))
+    schema_linking_timeout_ms: int = int(os.getenv("SCHEMA_LINKING_TIMEOUT_MS", "2000"))
+    schema_linking_min_term_hit_ratio: float = float(os.getenv("SCHEMA_LINKING_MIN_TERM_HIT_RATIO", "0.3"))
+    schema_linking_min_score_spread: float = float(os.getenv("SCHEMA_LINKING_MIN_SCORE_SPREAD", "0.1"))
+    schema_linking_min_avg_score: float = float(os.getenv("SCHEMA_LINKING_MIN_AVG_SCORE", "0.4"))
+    
+    # IntentRouter configuration (Requirements 0.12)
+    intent_router_l1_confidence_threshold: float = float(os.getenv("INTENT_ROUTER_L1_CONFIDENCE_THRESHOLD", "0.8"))
+    
+    # Preprocess component configuration (Phase 1)
+    preprocess_min_term_length: int = int(os.getenv("PREPROCESS_MIN_TERM_LENGTH", "2"))
+    preprocess_min_bigram_length: int = int(os.getenv("PREPROCESS_MIN_BIGRAM_LENGTH", "3"))
+    preprocess_max_bigram_length: int = int(os.getenv("PREPROCESS_MAX_BIGRAM_LENGTH", "8"))
     
     @property
+
     def interrupt_on(self) -> list[str] | None:
         if not self._interrupt_on_str:
             return None

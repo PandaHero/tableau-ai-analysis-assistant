@@ -65,14 +65,32 @@ async def analyzer_node(state: InsightState, config: Optional[Dict[str, Any]] = 
     
     try:
         # 1. Extract required data from state
-        current_action = state.get("current_action")
+        # ⚠️ State 序列化：current_action 现在是字符串值，需要转换为枚举
+        current_action_str = state.get("current_action")
+        current_action = None
+        if current_action_str:
+            try:
+                current_action = DirectorAction(current_action_str)
+            except ValueError:
+                logger.warning(f"Unknown action type: {current_action_str}")
+        
         current_target = state.get("current_target") or {}
-        chunks = state.get("chunks") or []
-        enhanced_profile = state.get("enhanced_profile")
+        
+        # ⚠️ State 序列化：chunks 是 dict 列表，需要转换为 PriorityChunk 对象
+        chunks_dicts = state.get("chunks") or []
+        chunks = [PriorityChunk.model_validate(c) for c in chunks_dicts if c]
+        
+        # ⚠️ State 序列化：enhanced_profile 是 dict，需要转换为 EnhancedDataProfile 对象
+        enhanced_profile_dict = state.get("enhanced_profile")
+        enhanced_profile = None
+        if enhanced_profile_dict:
+            enhanced_profile = EnhancedDataProfile.model_validate(enhanced_profile_dict)
+        
         analyzed_chunk_ids = list(state.get("analyzed_chunk_ids") or [])
         
-        # Get accumulated insights
-        accumulated_insights = state.get("insights") or []
+        # ⚠️ State 序列化：insights 是 dict 列表，需要转换为 Insight 对象
+        insights_dicts = state.get("insights") or []
+        accumulated_insights = [Insight.model_validate(i) for i in insights_dicts if i]
         
         # Get context for analysis
         context = state.get("context") or {}

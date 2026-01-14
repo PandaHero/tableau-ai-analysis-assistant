@@ -52,6 +52,8 @@ class ErrorCategory(str, Enum):
     """Error category for diagnosis.
     
     <rule>
+    FORMAT_ERROR: JSON parsing or Pydantic validation error
+      → RETRY with structured error feedback
     DUPLICATE_FIELD: Same field_name appears multiple times in query
       → Usually CORRECT: remove duplicates, keep base measure
     FIELD_NOT_FOUND: Referenced field doesn't exist in data source
@@ -72,6 +74,7 @@ class ErrorCategory(str, Enum):
       → Analyze further or ABORT
     </rule>
     """
+    FORMAT_ERROR = "format_error"  # 新增：格式错误（JSON/Pydantic）
     DUPLICATE_FIELD = "duplicate_field"
     FIELD_NOT_FOUND = "field_not_found"
     INVALID_COMPUTATION = "invalid_computation"

@@ -61,6 +61,147 @@ T = TypeVar('T', bound=BaseModel)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Tool Calls 解析（Requirements 0.8）
+# ═══════════════════════════════════════════════════════════════════════════
+
+from dataclasses import dataclass as dc_dataclass
+from typing import Optional as OptionalType
+
+
+@dc_dataclass
+class ParsedToolCall:
+    """解析后的 tool_call 数据类
+    
+    Attributes:
+        name: 工具名称
+        args: 解析后的参数字典
+        id: tool_call ID
+        parse_error: 解析错误信息（如果解析失败）
+    """
+    name: str
+    args: dict
+    id: str
+    parse_error: OptionalType[str] = None
+
+
+def _parse_tool_calls(
+    tool_calls: list[dict],
+    config: OptionalType[dict] = None,
+) -> list[ParsedToolCall]:
+    """解析 tool_calls 的 args（从字符串到字典）
+    
+    实现三层防护：
+    1. 直接 JSON 解析
+    2. json_repair 修复
+    3. 记录错误并返回空 args
+    
+    Args:
+        tool_calls: 原始 tool_calls 列表，每个元素包含 name, args (str), id
+        config: RunnableConfig，用于获取 metrics
+    
+    Returns:
+        解析后的 ParsedToolCall 列表
+    
+    Requirements: 0.8 - 流式 tool_calls 解析错误显式处理
+    """
+    import json as json_module
+    
+    # 获取 metrics（如果可用）
+    metrics = None
+    if config:
+        configurable = config.get("configurable", {})
+        metrics = configurable.get("metrics")
+    
+    parsed_tool_calls = []
+    for tc in tool_calls:
+        if not (tc.get("name") and tc.get("id")):
+            continue
+        
+        raw_args = tc.get("args", "")
+        args = {}
+        parse_error = None
+        
+        if not raw_args:
+            # 空参数，直接使用空字典
+            pass
+        else:
+            # 第一层：尝试直接 JSON 解析
+            try:
+                args = json_module.loads(raw_args)
+            except json_module.JSONDecodeError as e:
+                # 记录警告日志
+                truncated_args = raw_args[:200] + "..." if len(raw_args) > 200 else raw_args
+                logger.warning(
+                    f"Tool call args parse failed for '{tc['name']}': {e}, "
+                    f"raw args (truncated): {truncated_args}"
+                )
+                if metrics:
+                    metrics.tool_args_parse_failure_count += 1
+                
+                # 第二层：尝试 json_repair 修复
+                try:
+                    from json_repair import repair_json
+                    repaired = repair_json(raw_args)
+                    args = json_module.loads(repaired)
+                    logger.info(f"Tool call args repaired successfully for '{tc['name']}'")
+                    if metrics:
+                        metrics.tool_args_repair_success_count += 1
+                except Exception as repair_error:
+                    # 第三层：修复失败，记录错误
+                    logger.warning(
+                        f"Tool call args repair failed for '{tc['name']}': {repair_error}, "
+                        f"raw args (truncated): {truncated_args}"
+                    )
+                    parse_error = f"JSON parse failed: {str(e)[:100]}"
+                    args = {}
+        
+        parsed_tool_calls.append(ParsedToolCall(
+            name=tc["name"],
+            args=args,
+            id=tc["id"],
+            parse_error=parse_error,
+        ))
+    
+    return parsed_tool_calls
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LLM 空响应异常（Requirements 0.9）
+# ═══════════════════════════════════════════════════════════════════════════
+
+class LLMEmptyResponseError(Exception):
+    """LLM 返回空响应时抛出的异常
+    
+    包含请求上下文信息，便于问题定位。
+    
+    Attributes:
+        model: 模型名称或实例
+        message_count: 请求消息数量
+        iteration: 当前迭代次数（如果在工具调用循环中）
+    
+    Requirements: 0.9 - LLM 空响应显式处理
+    """
+    
+    def __init__(
+        self,
+        model: Any,
+        message_count: int,
+        iteration: OptionalType[int] = None,
+    ):
+        self.model = model
+        self.message_count = message_count
+        self.iteration = iteration
+        
+        # 构建错误消息
+        model_name = getattr(model, "model_name", str(model))
+        msg = f"LLM returned empty response for model '{model_name}', messages={message_count}"
+        if iteration is not None:
+            msg += f", iteration={iteration}"
+        
+        super().__init__(msg)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # LLM 获取（从 infra/ai 导入）
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -102,6 +243,7 @@ def get_agent_temperature(agent_name: str) -> float:
 def get_llm(
     agent_name: Optional[str] = None,
     temperature: Optional[float] = None,
+    enable_json_mode: bool = False,
     **kwargs
 ) -> BaseChatModel:
     """
@@ -113,6 +255,7 @@ def get_llm(
     Args:
         agent_name: Agent 名称（可选，用于自动选择 temperature）
         temperature: 温度参数（可选，覆盖 agent_name 配置）
+        enable_json_mode: 是否启用 JSON Mode（Requirements 0.7）
         **kwargs: 传递给 model_manager.get_llm 的其他参数
     
     Returns:
@@ -121,6 +264,9 @@ def get_llm(
     Examples:
         # 使用 agent 对应的 temperature
         llm = get_llm(agent_name="semantic_parser")  # temperature=0.1
+        
+        # 启用 JSON Mode（Requirements 0.7）
+        llm = get_llm(agent_name="semantic_parser", enable_json_mode=True)
         
         # 显式指定 temperature（覆盖 agent_name）
         llm = get_llm(agent_name="semantic_parser", temperature=0.3)
@@ -136,7 +282,7 @@ def get_llm(
     else:
         _temperature = None  # 使用 model_manager 的默认值
     
-    return _get_llm(temperature=_temperature, **kwargs)
+    return _get_llm(temperature=_temperature, enable_json_mode=enable_json_mode, **kwargs)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -191,6 +337,30 @@ def convert_messages(messages: List) -> List:
     return langchain_messages
 
 
+def _maybe_record_json_mode_fallback(llm: Any, config: Optional[Dict[str, Any]]) -> None:
+    """如当前 LLM 处于 JSON Mode 降级状态，则累加 metrics.json_mode_fallback_count。
+
+    设计点：
+    - infra 层仅打标（见 model_manager.py），不直接依赖 workflow/state
+    - Agent 调用侧能拿到 RunnableConfig，从而能安全地更新贯通 metrics
+    """
+    if not config:
+        return
+    configurable = config.get("configurable", {})
+    metrics = configurable.get("metrics")
+    if metrics is None:
+        return
+    if getattr(llm, "_json_mode_fallback", False):
+        metrics.json_mode_fallback_count += 1
+        provider = getattr(llm, "_json_mode_fallback_provider", None) or getattr(llm, "_provider", None)
+        if provider and hasattr(metrics, "json_mode_fallback_by_provider"):
+            metrics.json_mode_fallback_by_provider[provider] = (
+                metrics.json_mode_fallback_by_provider.get(provider, 0) + 1
+            )
+
+
+
+
 async def _call_llm_with_tools_and_middleware(
     llm: BaseChatModel,
     messages: List[Dict[str, str]],
@@ -229,10 +399,15 @@ async def _call_llm_with_tools_and_middleware(
     
     # 构建工具映射
     tool_map = {tool.name: tool for tool in tools} if tools else {}
+
+    # JSON Mode 降级计数（Requirements 0.7）
+    # middleware 场景下 model 可能被 wrap_model_call 替换/包装；这里按“每个实际 model 实例”计 1 次，避免工具迭代重复累加。
+    recorded_model_ids = set()
     
     # 迭代处理
     for iteration in range(max_iterations):
         logger.debug(f"LLM iteration {iteration + 1}/{max_iterations} (with middleware)")
+
         
         # 1. before_model hooks
         state = await runner.run_before_model(state, runtime)
@@ -242,8 +417,15 @@ async def _call_llm_with_tools_and_middleware(
             """实际的 LLM 调用"""
             _llm = request.model
             _msgs = request.messages
+
+            # JSON Mode 降级计数（Requirements 0.7）
+            _model_id = id(_llm)
+            if _model_id not in recorded_model_ids:
+                _maybe_record_json_mode_fallback(_llm, config)
+                recorded_model_ids.add(_model_id)
             
             # 绑定工具（如果有的话）
+
             if request.tools:
                 _llm = _llm.bind_tools(request.tools)
             
@@ -257,6 +439,7 @@ async def _call_llm_with_tools_and_middleware(
             return runner.build_model_response(
                 result=[response] if isinstance(response, AIMessage) else [response],
             )
+
         
         # 构建 ModelRequest
         request = runner.build_model_request(
@@ -277,9 +460,31 @@ async def _call_llm_with_tools_and_middleware(
             request=request,
         )
         
-        # 获取 LLM 响应
+        # 获取 LLM 响应 - Requirements 0.9
         if not model_response.result:
-            return ""
+            # 获取 metrics（如果可用）
+            metrics = None
+            if config:
+                configurable = config.get("configurable", {})
+                metrics = configurable.get("metrics")
+            
+            # 记录指标
+            if metrics:
+                metrics.llm_empty_response_count += 1
+            
+            # 记录错误日志
+            model_name = getattr(llm, "model_name", str(llm))
+            logger.error(
+                f"LLM returned empty response, model={model_name}, "
+                f"messages={len(langchain_messages)}, iteration={iteration + 1}"
+            )
+            
+            # 抛出明确异常
+            raise LLMEmptyResponseError(
+                model=llm,
+                message_count=len(langchain_messages),
+                iteration=iteration + 1,
+            )
         
         response = model_response.result[0]
         langchain_messages.append(response)
@@ -407,11 +612,15 @@ async def call_llm_with_tools(
     
     # 构建工具映射（用于快速查找）
     tool_map = {tool.name: tool for tool in tools} if tools else {}
+
+    # JSON Mode 降级计数（Requirements 0.7）
+    # 这里按“每次 call_llm_with_tools 调用”计 1 次，避免工具迭代导致重复累加。
+    _maybe_record_json_mode_fallback(llm, config)
     
     # 迭代处理工具调用
     for iteration in range(max_iterations):
         logger.debug(f"LLM iteration {iteration + 1}/{max_iterations}")
-        
+
         if streaming:
             # 流式调用 - 支持 token 级别输出
             # 传递 config 以便 LangGraph 的 callbacks 能捕获流式事件
@@ -425,6 +634,8 @@ async def call_llm_with_tools(
                 llm_with_tools.ainvoke(langchain_messages, config=config),
                 timeout=request_timeout
             )
+
+
         
         langchain_messages.append(response)
         
@@ -527,20 +738,17 @@ async def _stream_llm_call_internal(
                 if tc_chunk.get("args"):
                     tool_calls[tc_index]["args"] += tc_chunk["args"]
     
-    # 解析 tool_calls 的 args（从字符串到字典）
-    import json as json_module
-    parsed_tool_calls = []
-    for tc in tool_calls:
-        if tc["name"] and tc["id"]:
-            try:
-                args = json_module.loads(tc["args"]) if tc["args"] else {}
-            except json_module.JSONDecodeError:
-                args = {}
-            parsed_tool_calls.append({
-                "name": tc["name"],
-                "args": args,
-                "id": tc["id"],
-            })
+    # 解析 tool_calls 的 args（从字符串到字典）- Requirements 0.8
+    parsed_tool_call_objs = _parse_tool_calls(tool_calls, config)
+    parsed_tool_calls = [
+        {
+            "name": tc.name,
+            "args": tc.args,
+            "id": tc.id,
+            **({"parse_error": tc.parse_error} if tc.parse_error else {}),
+        }
+        for tc in parsed_tool_call_objs
+    ]
     
     # 确定最终的 content
     # 对于 R1 模型，additional_kwargs 中有 answer 字段，直接使用
@@ -631,20 +839,18 @@ async def stream_llm_with_tools(
         
         full_content = "".join(collected_content)
         
-        # 构建 AIMessage 并添加到历史
-        import json as json_module
-        parsed_tool_calls = []
-        for tc in tool_calls:
-            if tc["name"] and tc["id"]:
-                try:
-                    args = json_module.loads(tc["args"]) if tc["args"] else {}
-                except json_module.JSONDecodeError:
-                    args = {}
-                parsed_tool_calls.append({
-                    "name": tc["name"],
-                    "args": args,
-                    "id": tc["id"],
-                })
+        # 构建 AIMessage 并添加到历史 - Requirements 0.8
+        # 注意：stream_llm_with_tools 没有 config 参数，无法传递 metrics
+        parsed_tool_call_objs = _parse_tool_calls(tool_calls, config=None)
+        parsed_tool_calls = [
+            {
+                "name": tc.name,
+                "args": tc.args,
+                "id": tc.id,
+                **({"parse_error": tc.parse_error} if tc.parse_error else {}),
+            }
+            for tc in parsed_tool_call_objs
+        ]
         
         ai_message = AIMessage(content=full_content, tool_calls=parsed_tool_calls)
         langchain_messages.append(ai_message)
@@ -923,23 +1129,50 @@ async def invoke_llm(
 # JSON 解析
 # ═══════════════════════════════════════════════════════════════════════════
 
-def clean_json_output(content: str) -> str:
-    """
-    清理 LLM 输出的 JSON
+class JSONParseError(Exception):
+    """JSON 解析错误 - 结构化异常
     
+    用于提供详细的错误信息，便于调试和日志记录。
+    """
+    
+    def __init__(
+        self,
+        message: str,
+        content_preview: str,
+        error_type: str,
+        error_position: int | None = None,
+        original_error: Exception | None = None,
+    ):
+        self.message = message
+        self.content_preview = content_preview
+        self.error_type = error_type
+        self.error_position = error_position
+        self.original_error = original_error
+        super().__init__(message)
+    
+    def __str__(self) -> str:
+        parts = [self.message]
+        if self.error_position is not None:
+            parts.append(f"position={self.error_position}")
+        parts.append(f"preview={self.content_preview[:100]}...")
+        return " | ".join(parts)
+
+
+def clean_json_output(content: str) -> str:
+    """清理 LLM 输出的 JSON（不做 json_repair）。
+
+    说明：
+    - 该函数只做“提取/清洗”，不做修复尝试。
+    - 修复（包括 json_repair 与基础修复）统一在 parse_json_response() 中完成，
+      以保证 direct vs repair 指标口径清晰（Requirements 0.7）。
+
     处理常见问题：
     - Markdown 代码块
     - 额外的空白
-    - 尾随逗号
     - 尾随字符（trailing characters）
     - 多个 JSON 对象
-    
-    Args:
-        content: LLM 输出内容
-    
-    Returns:
-        清理后的 JSON 字符串
     """
+
     # Step 1: 移除 markdown 代码块
     content = re.sub(r'```json\s*', '', content)
     content = re.sub(r'```\s*', '', content)
@@ -983,57 +1216,186 @@ def clean_json_output(content: str) -> str:
     except json.JSONDecodeError:
         pass
     
-    # Step 4: 尝试使用 json-repair 库
-    try:
-        from json_repair import repair_json
-        repaired = repair_json(content)
-        json.loads(repaired)
-        logger.debug("JSON 修复成功")
-        return repaired
-    except ImportError:
-        logger.debug("json-repair 库未安装，使用基础修复")
-    except Exception as e:
-        logger.debug(f"json-repair 修复失败: {e}")
-    
-    # Step 5: 基础修复
-    # 移除尾随逗号
-    content = re.sub(r',(\s*[}\]])', r'\1', content)
-    # 修复引号
-    content = content.replace('"', '"').replace('"', '"')
-    content = content.replace(''', "'").replace(''', "'")
-    
     return content.strip()
+
 
 
 def parse_json_response(
     content: str, 
     output_model: Type[T],
+    repair_enabled: bool = True,
+    metrics: Optional[Any] = None,
+    provider: Optional[str] = None,
 ) -> T:
-    """
-    解析 LLM 响应为 Pydantic 模型
+
+    """解析 JSON 响应 - 三层防护（修正版）
+    
+    三层防护逻辑（Requirements 0.7）：
+    1. 第一层：直接 json.loads() 解析（捕获 json.JSONDecodeError）
+    2. 第二层：json_repair 修复（捕获修复后的 json.JSONDecodeError）
+    3. 第三层：Pydantic 校验（捕获 ValidationError）
+    
+    关键修正（GPT-5.2 审查）：
+    - Pydantic v2 的 model_validate_json() 对无效 JSON 抛出 ValidationError（不是 JSONDecodeError）
+    - 因此必须先用 json.loads() 验证 JSON 格式，再用 Pydantic 校验 schema
+    - 这样才能正确区分"JSON 格式错误"和"schema 不匹配"
     
     Args:
         content: LLM 响应内容
         output_model: 目标 Pydantic 模型类
+        repair_enabled: 是否启用 json_repair（默认 True）
+        metrics: 可选的 SemanticParserMetrics 实例（用于记录指标）
     
     Returns:
         解析后的模型实例
     
     Raises:
-        ValueError: 解析失败
+        JSONParseError: JSON 解析失败（格式错误，包括 json_repair 失败）
+        ValidationError: Pydantic 校验失败（JSON 格式正确但 schema 不匹配）
     
     Example:
         response = await stream_llm_call(llm, messages)
         result = parse_json_response(response, DimensionHierarchyResult)
     """
+    from pydantic import ValidationError
+    
+    original_content = content
+    first_json_error_pos: int | None = None  # 记录第一次 JSON 解析错误的位置
+    
+    # 第一层：清理并尝试直接 json.loads() 解析
     cleaned = clean_json_output(content)
     
     try:
-        return output_model.model_validate_json(cleaned)
-    except Exception as e:
-        logger.error(f"JSON 解析失败: {e}")
-        logger.error(f"内容: {cleaned[:500]}...")
-        raise ValueError(f"无法解析 LLM 响应: {e}")
+        # 先用 json.loads() 验证 JSON 格式
+        data = json.loads(cleaned)
+        # JSON 格式正确，再用 Pydantic 校验 schema
+        result = output_model.model_validate(data)
+        logger.debug("JSON direct parse succeeded")
+        # 记录指标（Requirements 0.7）
+        if metrics is not None and hasattr(metrics, 'json_direct_parse_success_count'):
+            metrics.json_direct_parse_success_count += 1
+            if provider and hasattr(metrics, "json_direct_parse_success_by_provider"):
+                metrics.json_direct_parse_success_by_provider[provider] = (
+                    metrics.json_direct_parse_success_by_provider.get(provider, 0) + 1
+                )
+
+        return result
+    except json.JSONDecodeError as e:
+        # JSON 格式错误 - 记录位置信息，继续尝试 json_repair
+        first_json_error_pos = e.pos
+        logger.debug(f"Direct JSON parse failed at position {e.pos}: {e.msg}")
+    except ValidationError:
+        # JSON 格式正确但 schema 不匹配 - 直接抛出，不需要 json_repair
+        logger.warning(f"Pydantic validation failed for {output_model.__name__}")
+        # 记录指标（Requirements 0.7）
+        if metrics is not None and hasattr(metrics, 'pydantic_validation_failure_count'):
+            metrics.pydantic_validation_failure_count += 1
+            if provider and hasattr(metrics, "pydantic_validation_failure_by_provider"):
+                metrics.pydantic_validation_failure_by_provider[provider] = (
+                    metrics.pydantic_validation_failure_by_provider.get(provider, 0) + 1
+                )
+
+        raise
+    
+    # 第二层：尝试修复（Requirements 0.7）
+    # 先做轻量 deterministic 修复，再尝试 json_repair（如安装）
+    if repair_enabled:
+        def _record_repair_attempt(attempt_type: str) -> None:
+            if metrics is None:
+                return
+            if hasattr(metrics, "json_repair_attempt_type_attempt_counts"):
+                metrics.json_repair_attempt_type_attempt_counts[attempt_type] = (
+                    metrics.json_repair_attempt_type_attempt_counts.get(attempt_type, 0) + 1
+                )
+
+        def _record_repair_success(attempt_type: str) -> None:
+            if metrics is None:
+                return
+            if hasattr(metrics, "json_repair_attempt_type_success_counts"):
+                metrics.json_repair_attempt_type_success_counts[attempt_type] = (
+                    metrics.json_repair_attempt_type_success_counts.get(attempt_type, 0) + 1
+                )
+
+        def _record_repair_success_rollup() -> None:
+            if metrics is None or not hasattr(metrics, "json_repair_success_count"):
+                return
+            metrics.json_repair_success_count += 1
+            if provider and hasattr(metrics, "json_repair_success_by_provider"):
+                metrics.json_repair_success_by_provider[provider] = (
+                    metrics.json_repair_success_by_provider.get(provider, 0) + 1
+                )
+
+        def _try_parse(repaired_str: str) -> T:
+            data = json.loads(repaired_str)
+            return output_model.model_validate(data)
+
+        # 2.1 基础修复：移除尾随逗号
+        try:
+            _record_repair_attempt("remove_trailing_commas")
+            repaired = re.sub(r",(\s*[}\]])", r"\1", cleaned)
+            result = _try_parse(repaired)
+            logger.info("JSON repaired and parsed successfully (remove_trailing_commas)")
+            _record_repair_success_rollup()
+            _record_repair_success("remove_trailing_commas")
+            return result
+        except (json.JSONDecodeError, ValidationError):
+            pass
+        except Exception as e:
+            logger.debug(f"Repair attempt remove_trailing_commas failed: {e}")
+
+        # 2.2 json_repair 库（如果存在）
+        try:
+            from json_repair import repair_json
+
+            _record_repair_attempt("json_repair_lib")
+            repaired = repair_json(original_content)
+            result = _try_parse(repaired)
+
+            logger.info("JSON repaired and parsed successfully (json_repair_lib)")
+            _record_repair_success_rollup()
+            _record_repair_success("json_repair_lib")
+            return result
+
+        except json.JSONDecodeError as repair_json_error:
+            logger.warning(
+                f"JSON repair failed (still invalid JSON): {repair_json_error}, "
+                f"original content (truncated): {original_content[:500]}"
+            )
+        except ImportError:
+            logger.debug("json-repair library not installed, skipping repair")
+        except ValidationError:
+            logger.warning(f"JSON repaired but Pydantic validation failed for {output_model.__name__}")
+            if metrics is not None and hasattr(metrics, 'pydantic_validation_failure_count'):
+                metrics.pydantic_validation_failure_count += 1
+                if provider and hasattr(metrics, "pydantic_validation_failure_by_provider"):
+                    metrics.pydantic_validation_failure_by_provider[provider] = (
+                        metrics.pydantic_validation_failure_by_provider.get(provider, 0) + 1
+                    )
+
+            raise
+        except Exception as repair_error:
+            logger.warning(
+                f"JSON repair failed (unexpected error): {repair_error}, "
+                f"original content (truncated): {original_content[:500]}"
+            )
+
+    
+    # 第三层：解析失败，抛出结构化错误
+    # 记录指标（Requirements 0.7）
+    if metrics is not None and hasattr(metrics, 'json_parse_failure_count'):
+        metrics.json_parse_failure_count += 1
+        if provider and hasattr(metrics, "json_parse_failure_by_provider"):
+            metrics.json_parse_failure_by_provider[provider] = (
+                metrics.json_parse_failure_by_provider.get(provider, 0) + 1
+            )
+
+    
+    raise JSONParseError(
+        message="Failed to parse JSON response after all attempts",
+        content_preview=original_content[:200],
+        error_type="json_parse",
+        error_position=first_json_error_pos,  # 包含错误位置（Requirements 0.7）
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1061,4 +1423,5 @@ __all__ = [
     # JSON 解析
     "clean_json_output",
     "parse_json_response",
+    "JSONParseError",
 ]

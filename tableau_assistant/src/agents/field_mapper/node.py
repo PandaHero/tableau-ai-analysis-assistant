@@ -6,7 +6,7 @@ Maps business terms from SemanticQuery to technical field names.
 Strategy:
 1. Cache lookup: check LangGraph SqliteStore cache
 2. Exact match: if term matches field_name or field_caption exactly, return directly (skip RAG)
-3. RAG retrieval: SemanticMapper.search()
+3. RAG retrieval: SemanticMapper.search() using unified RAG (HIGH_PRECISION mode)
 4. Fast path: confidence >= 0.9, return directly (no LLM)
 5. LLM fallback: confidence < 0.9, use LLM to select from top-k candidates
 
@@ -14,6 +14,11 @@ Middleware 集成：
 - 从 config 获取 middleware 栈
 - LLM fallback 时传递 middleware
 - 支持历史消息上下文
+
+统一 RAG 集成（Requirements 17.7.5）：
+- 使用 create_retriever(mode=HIGH_PRECISION) 创建检索器
+- 复用 infra/rag 的核心组件
+- 保留 FieldMapper 专用组件（assembler, semantic_mapper 等）
 
 Input: SemanticQuery (business terms)
 Output: MappedQuery (technical fields)
@@ -42,9 +47,16 @@ from tableau_assistant.src.agents.field_mapper.rag.assembler import (
     ChunkStrategy,
 )
 from tableau_assistant.src.agents.field_mapper.rag.reranker import LLMReranker
-from tableau_assistant.src.agents.field_mapper.rag.models import FieldChunk
 from tableau_assistant.src.agents.field_mapper.rag.semantic_mapper import SemanticMapper
-from tableau_assistant.src.agents.field_mapper.rag.field_indexer import FieldIndexer
+
+# 使用统一 RAG 基础设施（Requirements 17.7.5）
+from tableau_assistant.src.infra.rag import (
+    FieldIndexer,
+    FieldChunk,
+    create_retriever,
+    RetrievalMode,
+    HIGH_PRECISION_CONFIG,
+)
 from tableau_assistant.src.infra.config import settings
 
 logger = logging.getLogger(__name__)
@@ -1113,7 +1125,12 @@ def _extract_terms_from_semantic_query(
 
 
 def _get_field_mapper(state: Dict[str, Any], config: Optional[RunnableConfig] = None) -> FieldMapperNode:
-    """Get or create FieldMapper instance."""
+    """Get or create FieldMapper instance.
+    
+    使用统一 RAG 基础设施（Requirements 17.7.5）：
+    - 使用 create_retriever(mode=HIGH_PRECISION) 创建检索器
+    - 复用 infra/rag 的 FieldIndexer
+    """
     if "_field_mapper" in state:
         return state["_field_mapper"]
     
@@ -1144,22 +1161,33 @@ def _get_field_mapper(state: Dict[str, Any], config: Optional[RunnableConfig] = 
                 )
                 logger.info(f"两阶段架构已启用: {len(data_model.fields)} 个字段已索引")
             
-            # 复用 KnowledgeAssembler 的 FieldIndexer，避免重复构建索引
+            # 使用统一 RAG 的 FieldIndexer（Requirements 17.7.5）
             if mapper.assembler is not None and hasattr(mapper.assembler, '_indexer'):
                 field_indexer = mapper.assembler._indexer
                 logger.debug(f"复用 KnowledgeAssembler 的 FieldIndexer: {field_indexer.field_count} 个字段")
             else:
-                # 回退：创建新的 FieldIndexer
+                # 创建统一 RAG 的 FieldIndexer
                 field_indexer = FieldIndexer(datasource_luid=datasource_luid)
                 if hasattr(data_model, 'fields'):
                     field_indexer.index_fields(data_model.fields)
             
-            semantic_mapper = SemanticMapper(field_indexer=field_indexer)
+            # 使用统一 RAG 创建高精度检索器（Requirements 17.7.5）
+            retriever = create_retriever(
+                mode=RetrievalMode.HIGH_PRECISION,
+                field_indexer=field_indexer,
+                config=HIGH_PRECISION_CONFIG,
+            )
+            
+            semantic_mapper = SemanticMapper(
+                field_indexer=field_indexer,
+                retriever=retriever,  # 传入统一 RAG 检索器
+            )
             mapper.set_semantic_mapper(semantic_mapper)
             
         except Exception as e:
             logger.warning(f"Failed to set up two-stage architecture: {e}")
             try:
+                # 降级：使用统一 RAG 的简单模式
                 field_indexer = FieldIndexer(datasource_luid=datasource_luid)
                 if hasattr(data_model, 'fields'):
                     field_indexer.index_fields(data_model.fields)

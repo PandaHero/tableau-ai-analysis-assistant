@@ -111,6 +111,11 @@ class ModelConfig(BaseModel):
     thinking_tag: str = Field(default="think", description="思考过程标签名")
     supports_function_calling: bool = Field(default=False, description="是否支持函数调用")
     supports_vision: bool = Field(default=False, description="是否支持视觉")
+    supports_json_mode: Optional[bool] = Field(
+        default=None,
+        description="是否支持 JSON Mode（显式配置优先；None=按 provider 默认能力判断）",
+    )
+
     
     # 网络配置
     timeout: float = Field(default=120.0, ge=1.0, description="请求超时时间（秒）")
@@ -1000,12 +1005,19 @@ class ModelManager:
         
         参数处理：
         - kwargs 可覆盖配置中的参数
+        - enable_json_mode: 是否启用 JSON Mode（通过 Provider 适配层）
         """
         from langchain_openai import ChatOpenAI, AzureChatOpenAI
+        from .json_mode_adapter import (
+            get_json_mode_kwargs,
+            get_provider_from_config,
+            supports_json_mode,
+        )
         
         # 合并参数：kwargs 优先，然后是 config
         temperature = kwargs.get('temperature', config.temperature)
         max_tokens = kwargs.get('max_tokens', config.max_tokens)
+        enable_json_mode = kwargs.pop('enable_json_mode', False)
         
         # Azure OpenAI（特殊处理）
         if config.provider == "azure":
@@ -1019,12 +1031,22 @@ class ModelManager:
                 azure_kwargs["temperature"] = temperature
             if max_tokens is not None:
                 azure_kwargs["max_tokens"] = max_tokens
+            
+            # JSON Mode 支持
+            if enable_json_mode:
+                from .json_mode_adapter import ProviderType
+                json_kwargs = get_json_mode_kwargs(ProviderType.AZURE, True)
+                if json_kwargs.get("model_kwargs"):
+                    azure_kwargs["model_kwargs"] = json_kwargs["model_kwargs"]
+                    logger.debug(f"JSON Mode enabled for Azure OpenAI model {config.model_name}")
+            
             return AzureChatOpenAI(**azure_kwargs)
         
         # 非 OpenAI 兼容模型（自定义端点）→ 使用 CustomLLMChat
         if not config.openai_compatible:
             from tableau_assistant.src.infra.ai.custom_llm import CustomLLMChat, CustomLLMConfig
             from tableau_assistant.src.infra.ai.custom_llm import AuthType as CustomAuthType
+            from .json_mode_adapter import ProviderType
             
             # 转换 AuthType
             auth_type_map = {
@@ -1033,6 +1055,28 @@ class ModelManager:
                 AuthType.CUSTOM_HEADER: CustomAuthType.CUSTOM_HEADER,
                 AuthType.NONE: CustomAuthType.NONE,
             }
+            
+            # 准备 extra_body，合并 JSON Mode 参数
+            extra_body = dict(config.extra_body or {})
+            json_mode_fallback_provider = None
+            if enable_json_mode:
+                json_mode_supported = (
+                    config.supports_json_mode
+                    if config.supports_json_mode is not None
+                    else True
+                )
+                if json_mode_supported:
+                    json_kwargs = get_json_mode_kwargs(ProviderType.CUSTOM, True)
+                    if json_kwargs.get("extra_body"):
+                        extra_body.update(json_kwargs["extra_body"])
+                        logger.debug(f"JSON Mode enabled for CustomLLMChat model {config.model_name}")
+                else:
+                    json_mode_fallback_provider = ProviderType.CUSTOM.value
+                    logger.info(
+                        "JSON Mode not supported for custom provider, relying on prompt constraints",
+                        extra={"json_mode_fallback": True, "provider": ProviderType.CUSTOM.value},
+                    )
+
             
             custom_config = CustomLLMConfig(
                 name=config.name,
@@ -1052,9 +1096,21 @@ class ModelManager:
                 thinking_tag=config.thinking_tag,
                 verify_ssl=config.verify_ssl,
                 extra_headers=config.extra_headers or {},
-                extra_body=config.extra_body or {},
+                extra_body=extra_body,
             )
-            return CustomLLMChat(config=custom_config)
+            llm = CustomLLMChat(config=custom_config)
+            try:
+                setattr(llm, "_provider", ProviderType.CUSTOM.value)
+            except Exception:
+                pass
+            if enable_json_mode and json_mode_fallback_provider:
+                try:
+                    setattr(llm, "_json_mode_fallback", True)
+                    setattr(llm, "_json_mode_fallback_provider", json_mode_fallback_provider)
+                except Exception:
+                    pass
+            return llm
+
         
         # OpenAI 兼容模型 → 使用 ChatOpenAI
         openai_kwargs = {
@@ -1071,6 +1127,34 @@ class ModelManager:
         if max_tokens is not None:
             openai_kwargs["max_tokens"] = max_tokens
         
+        # JSON Mode 支持
+        json_mode_fallback_provider = None
+        if enable_json_mode:
+            provider = get_provider_from_config(
+                provider_str=config.provider,
+                base_url=config.api_base,
+                openai_compatible=config.openai_compatible,
+            )
+            json_mode_supported = (
+                config.supports_json_mode
+                if config.supports_json_mode is not None
+                else supports_json_mode(provider)
+            )
+            if json_mode_supported:
+                json_kwargs = get_json_mode_kwargs(provider, True)
+                if json_kwargs.get("model_kwargs"):
+                    openai_kwargs["model_kwargs"] = json_kwargs["model_kwargs"]
+                    logger.debug(f"JSON Mode enabled for {provider.value} model {config.model_name}")
+            else:
+                # JSON Mode 降级（Requirements 0.7）
+                # 这里只做“能力判定 + 标记”，真正的 metrics 累加在调用侧完成（避免 infra 层依赖 workflow/state）
+                json_mode_fallback_provider = provider.value
+                logger.info(
+                    f"JSON Mode not supported for {provider.value}, relying on prompt constraints",
+                    extra={"json_mode_fallback": True, "provider": provider.value},
+                )
+
+        
         # 额外 headers
         if config.extra_headers:
             openai_kwargs["default_headers"] = config.extra_headers
@@ -1080,7 +1164,22 @@ class ModelManager:
             openai_kwargs["http_client"] = httpx.Client(verify=False, timeout=config.timeout)
             openai_kwargs["http_async_client"] = httpx.AsyncClient(verify=False, timeout=config.timeout)
         
-        return ChatOpenAI(**openai_kwargs)
+        llm = ChatOpenAI(**openai_kwargs)
+        try:
+            setattr(llm, "_provider", provider.value)
+        except Exception:
+            pass
+        if enable_json_mode and json_mode_fallback_provider:
+            # 供调用侧（有 RunnableConfig/metrics）累加 json_mode_fallback_count
+            try:
+                setattr(llm, "_json_mode_fallback", True)
+                setattr(llm, "_json_mode_fallback_provider", json_mode_fallback_provider)
+            except Exception:
+                # 某些模型/封装可能禁止 setattr；忽略但保留日志。
+                pass
+        return llm
+
+
     
     def create_embedding(self, model_id: Optional[str] = None, **kwargs) -> Any:
         """创建 Embedding 实例

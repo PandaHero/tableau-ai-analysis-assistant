@@ -29,29 +29,28 @@ import operator
 from langchain_core.messages import BaseMessage
 
 # 核心模型（平台无关）
-from tableau_assistant.src.core.models import SemanticQuery
-from tableau_assistant.src.core.models.execute_result import ExecuteResult
-
-# Agent 模型
-from tableau_assistant.src.agents.replanner.models import ReplanDecision
-from tableau_assistant.src.agents.field_mapper.models import MappedQuery
+# ⚠️ State 序列化原则：这些类型仅用于类型提示和文档，
+# 实际存储时使用 Dict[str, Any]，支持 checkpoint/持久化/回放
 from tableau_assistant.src.core.models.enums import IntentType
 
-# Insight 模型（已迁移到 agents/insight/models）
-from tableau_assistant.src.agents.insight.models import Insight
-from tableau_assistant.src.agents.insight.models.profile import EnhancedDataProfile
+# 注意：以下导入已移除，State 中不再直接存储 Pydantic 对象
+# - SemanticQuery, ExecuteResult, ReplanDecision, MappedQuery, Insight, EnhancedDataProfile
+# 这些对象在写入 State 前必须调用 .model_dump() 转为 dict
+# 从 State 读取后需要重新构造对象（使用 Model.model_validate(dict)）
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 状态字段的自定义 Reducer
 # ═══════════════════════════════════════════════════════════════════════════
 
-def merge_insights(existing: List[Insight], new: List[Insight]) -> List[Insight]:
+def merge_insights(existing: List[Dict[str, Any]], new: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     合并来自并行执行分支的洞察。
     
-    此 reducer 与 Annotated[List[Insight], merge_insights] 一起使用，
+    此 reducer 与 Annotated[List[Dict[str, Any]], merge_insights] 一起使用，
     在并行分支完成时自动合并洞察。
+    
+    ⚠️ State 序列化：洞察存储为 dict（Insight.model_dump()），非 Pydantic 对象
     
     去重策略：
     - 使用洞察标题作为唯一标识符
@@ -59,11 +58,11 @@ def merge_insights(existing: List[Insight], new: List[Insight]) -> List[Insight]
     - 保持顺序：现有洞察在前，新洞察在后
     
     Args:
-        existing: 当前累积的洞察
-        new: 来自并行分支的新洞察
+        existing: 当前累积的洞察（dict 列表）
+        new: 来自并行分支的新洞察（dict 列表）
         
     Returns:
-        合并并去重后的洞察列表
+        合并并去重后的洞察列表（dict 列表）
     """
     if not new:
         return existing
@@ -71,21 +70,22 @@ def merge_insights(existing: List[Insight], new: List[Insight]) -> List[Insight]
         return new
     
     # 按标题构建现有洞察索引用于去重
-    existing_by_title: Dict[str, Insight] = {}
+    existing_by_title: Dict[str, Dict[str, Any]] = {}
     for insight in existing:
-        title = insight.title if hasattr(insight, 'title') else str(insight)
+        # insight 是 dict，直接访问 title 键
+        title = insight.get('title', str(insight))
         existing_by_title[title] = insight
     
     # 合并新洞察，处理重复
     result = list(existing)
     for new_insight in new:
-        title = new_insight.title if hasattr(new_insight, 'title') else str(new_insight)
+        title = new_insight.get('title', str(new_insight))
         
         if title in existing_by_title:
             # 发现重复 - 保留质量分数更高的
             existing_insight = existing_by_title[title]
-            existing_score = getattr(existing_insight, 'quality_score', 0) or 0
-            new_score = getattr(new_insight, 'quality_score', 0) or 0
+            existing_score = existing_insight.get('quality_score', 0) or 0
+            new_score = new_insight.get('quality_score', 0) or 0
             
             if new_score > existing_score:
                 # 用更高质量的洞察替换
@@ -179,9 +179,10 @@ class VizQLState(TypedDict):
     
     # ═══════════════════════════════════════════════════════════════════════
     # 意图分类（SemanticParser Agent 输出 - 扁平化）
+    # ⚠️ State 序列化：intent_type 存储为字符串值（IntentType.value），非枚举对象
     # ═══════════════════════════════════════════════════════════════════════
     is_analysis_question: bool
-    intent_type: Optional[IntentType]        # 意图类型（核心枚举）
+    intent_type: Optional[str]               # 意图类型（字符串值，如 "DATA_QUERY"）
     intent_reasoning: Optional[str]          # 意图分类推理
     general_response: Optional[str]
     non_analysis_response: Optional[str]
@@ -193,30 +194,34 @@ class VizQLState(TypedDict):
     
     # ═══════════════════════════════════════════════════════════════════════
     # SemanticParser Agent 输出（仅核心层类型）
+    # ⚠️ State 序列化：存储为 dict（.model_dump()），非 Pydantic 对象
     # ═══════════════════════════════════════════════════════════════════════
-    semantic_query: Optional[SemanticQuery]  # SemanticQuery（核心层）
+    semantic_query: Optional[Dict[str, Any]]  # SemanticQuery.model_dump()
     restated_question: Optional[str]         # Step 1 重述的问题
     
     # ═══════════════════════════════════════════════════════════════════════
     # QueryPipeline 输出（SemanticParser 子图内部）
+    # ⚠️ State 序列化：存储为 dict（.model_dump()），非 Pydantic 对象
     # ═══════════════════════════════════════════════════════════════════════
-    mapped_query: Optional[MappedQuery]      # 字段映射结果
+    mapped_query: Optional[Dict[str, Any]]   # MappedQuery.model_dump()
     vizql_query: Optional[Dict[str, Any]]    # 构建的查询请求（平台特定）
-    query_result: Optional[ExecuteResult]    # 执行结果（支持文件引用）
+    query_result: Optional[Dict[str, Any]]   # ExecuteResult.model_dump()
     tool_observations: Annotated[List[Dict[str, Any]], operator.add]  # 工具执行观察
     
     # ═══════════════════════════════════════════════════════════════════════
     # Insight Agent 输出（渐进累积）
+    # ⚠️ State 序列化：存储为 dict（.model_dump()），非 Pydantic 对象
     # ═══════════════════════════════════════════════════════════════════════
-    enhanced_profile: Optional[EnhancedDataProfile]  # Tableau Pulse 对齐的数据画像
-    insights: Annotated[List[Insight], operator.add]
-    all_insights: Annotated[List[Insight], operator.add]
-    accumulated_insights: Annotated[List[Insight], merge_insights]  # 并行合并并去重
+    enhanced_profile: Optional[Dict[str, Any]]  # EnhancedDataProfile.model_dump()
+    insights: Annotated[List[Dict[str, Any]], operator.add]  # [Insight.model_dump(), ...]
+    all_insights: Annotated[List[Dict[str, Any]], operator.add]
+    accumulated_insights: Annotated[List[Dict[str, Any]], merge_insights]  # 并行合并并去重
     
     # ═══════════════════════════════════════════════════════════════════════
     # Replanner Agent 输出（支持并行执行）
+    # ⚠️ State 序列化：存储为 dict（.model_dump()），非 Pydantic 对象
     # ═══════════════════════════════════════════════════════════════════════
-    replan_decision: Optional[ReplanDecision]
+    replan_decision: Optional[Dict[str, Any]]  # ReplanDecision.model_dump()
     replan_count: int
     max_replan_rounds: int
     replan_history: Annotated[List[ReplanHistoryRecord], operator.add]

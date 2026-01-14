@@ -187,9 +187,23 @@ def create_middleware_stack(
         ))
     
     # 8. OutputValidationMiddleware - Validate LLM output format (custom)
+    # Note (Requirements 0.6): This is a FINAL QUALITY GATE, not a retry trigger
+    # Format errors are handled by component-level retry (Step1/Step2)
+    # Semantic errors are handled by ReAct
+    # This middleware only logs and alerts, does NOT trigger retries
+    #
+    # Configuration:
+    # - expected_schema: Not set (format validation is done at component level)
+    # - required_state_fields: Final state fields that must be present
+    # - strict=False: Log warnings instead of raising exceptions
+    # - retry_on_failure=False: Quality gate mode, no retry trigger
     middleware.append(OutputValidationMiddleware(
+        expected_schema=None,  # Format validation at component level
+        required_state_fields=[
+            "intent_type",  # Must have intent classification
+        ],
         strict=False,
-        retry_on_failure=True,
+        retry_on_failure=False,  # Quality gate mode: log + alert only
     ))
     
     return middleware

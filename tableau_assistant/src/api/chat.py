@@ -308,13 +308,28 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
                 ))
         
         # 构建可视化数据（包含查询结果）
+        # ⚠️ State 序列化：query_result 可能是 dict（ExecuteResult.model_dump()）或 Pydantic 对象
         visualizations = []
-        if result.query_result and hasattr(result.query_result, 'data') and result.query_result.data:
+        query_result = result.query_result
+        query_data = None
+        query_columns = []
+        
+        if query_result:
+            if isinstance(query_result, dict):
+                # dict 访问方式（正确）
+                query_data = query_result.get("data")
+                query_columns = query_result.get("columns", [])
+            elif hasattr(query_result, 'data'):
+                # 兼容旧的对象访问方式（向后兼容）
+                query_data = query_result.data
+                query_columns = getattr(query_result, 'columns', [])
+        
+        if query_data:
             visualizations.append(Visualization(
                 viz_type="table",
                 title="查询结果",
-                data={"rows": result.query_result.data},
-                config={"columns": result.query_result.columns if hasattr(result.query_result, 'columns') else []}
+                data={"rows": query_data},
+                config={"columns": query_columns}
             ))
         
         return ChatResponse(
@@ -327,7 +342,7 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
                 "duration": result.duration,
                 "replan_count": result.replan_count,
                 "is_analysis_question": result.is_analysis_question,
-                "row_count": len(result.query_result.data) if result.query_result and hasattr(result.query_result, 'data') and result.query_result.data else 0,
+                "row_count": len(query_data) if query_data else 0,
             }
         )
         

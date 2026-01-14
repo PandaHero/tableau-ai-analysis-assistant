@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 def get_llm(
     model_id: Optional[str] = None,
     temperature: Optional[float] = None,
+    enable_json_mode: bool = False,
     **kwargs,
 ) -> BaseChatModel:
     """获取 LLM 实例
@@ -36,6 +37,7 @@ def get_llm(
     Args:
         model_id: 模型 ID（可选，不指定则使用默认 LLM）
         temperature: 温度参数（可选，覆盖模型配置的默认值）
+        enable_json_mode: 是否启用 JSON Mode（Requirements 0.7）
         **kwargs: 其他参数（如 max_tokens）
     
     Returns:
@@ -51,6 +53,9 @@ def get_llm(
         # 指定温度
         llm = get_llm(temperature=0.1)
         
+        # 启用 JSON Mode（Requirements 0.7）
+        llm = get_llm(enable_json_mode=True)
+        
         # 指定模型
         llm = get_llm(model_id="env-custom-llm")
         
@@ -65,6 +70,8 @@ def get_llm(
     create_kwargs = {**kwargs}
     if temperature is not None:
         create_kwargs['temperature'] = temperature
+    if enable_json_mode:
+        create_kwargs['enable_json_mode'] = enable_json_mode
     
     return manager.create_llm(model_id=model_id, **create_kwargs)
 

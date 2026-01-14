@@ -9,6 +9,11 @@ The Subgraph implements the LangGraph node routing loop architecture:
 
 Node Functions:
 - semantic_parser_node: Main node that invokes the SemanticParser Subgraph
+
+Metrics Injection (Requirements 0.5):
+- Metrics are injected into RunnableConfig at this node (subgraph entry point)
+- All subgraph nodes share the same metrics instance through config
+- This ensures metrics are properly collected across the entire subgraph lifecycle
 """
 
 import logging
@@ -22,6 +27,7 @@ from ...core.models import IntentType
 from .state import SemanticParserState
 from .models import Step1Output
 from .subgraph import create_semantic_parser_subgraph
+from ...infra.observability import ensure_metrics_in_config
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +56,12 @@ async def semantic_parser_node(
     - step2: Computation reasoning (only for non-SIMPLE queries)
     - pipeline: MapFields → BuildQuery → ExecuteQuery
     - react_error_handler: Analyze error and decide RETRY/CLARIFY/ABORT
+    - exit: Unified exit node that flattens output (single source of truth)
+    
+    ⚠️ 重要变更：扁平化逻辑已移至 subgraph 的 exit 节点
+    - 本节点不再执行扁平化，直接使用 subgraph 的输出
+    - intent_type 和 is_analysis_question 由 subgraph 的 _flatten_output() 生成
+    - 这确保了状态契约的单一事实来源
     
     Args:
         state: Current state containing:
@@ -59,12 +71,11 @@ async def semantic_parser_node(
         config: Runtime configuration
     
     Returns:
-        Updated state with flattened fields (core layer types only):
-            - intent_type: IntentType (core enum)
-            - intent_reasoning: str
+        Updated state with flattened fields (from subgraph exit node):
+            - intent_type: str (IntentType.value)
+            - is_analysis_question: bool
             - semantic_query: SemanticQuery (for DATA_QUERY intent)
             - restated_question: Restated question from Step 1
-            - is_analysis_question: True if DATA_QUERY intent
             - semantic_parser_complete: Always True after completion
             - query_result: Query execution result (if pipeline succeeded)
             - clarification_question: Clarification question (for CLARIFY action)
@@ -95,46 +106,38 @@ async def semantic_parser_node(
     }
     
     try:
+        # ⚠️ Metrics 注入（Requirements 0.5）
+        # 在 subgraph 入口统一注入 metrics 到 config
+        # 这确保所有 subgraph 节点共享同一个 metrics 实例
+        config = ensure_metrics_in_config(config)
+        
         # Get compiled subgraph and invoke
         subgraph = _get_subgraph()
         result = await subgraph.ainvoke(subgraph_input, config=config)
         
-        # Extract outputs from Subgraph result
-        step1_output: Step1Output | None = result.get("step1_output")
-        pipeline_success = result.get("pipeline_success", False)
-        needs_clarification = result.get("needs_clarification", False)
-        pipeline_aborted = result.get("pipeline_aborted", False)
+        # ⚠️ 关键变更：直接使用 subgraph 的扁平化输出
+        # intent_type 和 is_analysis_question 已由 exit 节点的 _flatten_output() 生成
+        intent_type_str = result.get("intent_type")  # 字符串值
+        is_analysis_question = result.get("is_analysis_question", False)
         
-        # Build return state with flattened fields (core layer types only)
+        # Build return state with subgraph outputs
         return_state: Dict[str, Any] = {
             "semantic_parser_complete": True,
             "current_stage": "semantic_parser",
+            "intent_type": intent_type_str,  # 直接使用 subgraph 的扁平化输出
+            "is_analysis_question": is_analysis_question,  # 直接使用 subgraph 的扁平化输出
+            "intent_reasoning": result.get("intent_reasoning"),
+            "restated_question": result.get("restated_question"),
+            "thinking": result.get("thinking", ""),
         }
         
-        # Handle case where step1 failed or returned non-DATA_QUERY intent
-        if not step1_output:
-            logger.warning("Subgraph returned no step1_output")
-            return_state["intent_type"] = None
-            return_state["intent_reasoning"] = None
-            return_state["semantic_query"] = None
-            return_state["is_analysis_question"] = False
-            return_state["error"] = result.get("error", "Step 1 failed")
-            return return_state
-        
-        # Extract intent information
-        intent_type = step1_output.intent.type
-        return_state["intent_type"] = intent_type
-        return_state["intent_reasoning"] = step1_output.intent.reasoning
-        return_state["restated_question"] = result.get("restated_question", step1_output.restated_question)
-        return_state["thinking"] = result.get("thinking", "")
-        
-        # Route based on intent type
-        if intent_type == IntentType.DATA_QUERY:
-            return_state["is_analysis_question"] = True
+        # 根据 intent_type 添加相应的输出
+        if intent_type_str == "DATA_QUERY":
+            # DATA_QUERY: 包含查询结果
             return_state["semantic_query"] = result.get("semantic_query")
-            return_state["pipeline_success"] = pipeline_success
+            return_state["pipeline_success"] = result.get("pipeline_success", False)
             
-            if pipeline_success:
+            if result.get("pipeline_success"):
                 # Pipeline succeeded - include query results
                 return_state["query_result"] = result.get("query_result")
                 return_state["columns"] = result.get("columns")
@@ -146,7 +149,8 @@ async def semantic_parser_node(
                 return_state["execution_time_ms"] = result.get("execution_time_ms")
                 
                 # Build user message
-                user_message = f"🔍 理解您的问题：{step1_output.restated_question}"
+                restated = result.get("restated_question", "")
+                user_message = f"🔍 理解您的问题：{restated}" if restated else ""
                 row_count = result.get("row_count", 0)
                 if row_count:
                     user_message += f"\n📊 查询完成，返回 {row_count} 条记录"
@@ -157,13 +161,13 @@ async def semantic_parser_node(
                     f"row_count={row_count}"
                 )
                 
-            elif needs_clarification:
+            elif result.get("needs_clarification"):
                 # ReAct decided CLARIFY
                 return_state["clarification_question"] = result.get("clarification_question")
                 return_state["user_message"] = f"❓ {result.get('clarification_question', '请提供更多信息')}"
                 logger.info("SemanticParser complete (DATA_QUERY, needs clarification)")
                 
-            elif pipeline_aborted:
+            elif result.get("pipeline_aborted"):
                 # ReAct decided ABORT
                 return_state["user_message"] = result.get("user_message", "抱歉，无法处理您的请求。")
                 return_state["pipeline_error"] = result.get("pipeline_error")
@@ -175,29 +179,47 @@ async def semantic_parser_node(
                 return_state["user_message"] = "抱歉，查询执行失败，请稍后重试。"
                 logger.warning("SemanticParser complete (DATA_QUERY, pipeline failed)")
         
-        elif intent_type == IntentType.CLARIFICATION:
-            return_state["is_analysis_question"] = False
-            # Build clarification from step1 intent reasoning
-            clarification_msg = f"请问您能具体说明一下吗？{step1_output.intent.reasoning}"
+        elif intent_type_str == "CLARIFICATION":
+            # CLARIFICATION: 需要用户澄清
+            # ⚠️ 修复（GPT-5.2 审计）：优先使用 subgraph 的 clarification_question
+            # intent_router_node 会生成更具体的澄清问题（含 slots）
+            clarification_msg = (
+                result.get("clarification_question") or  # 优先：subgraph 生成的
+                result.get("intent_reasoning") or  # 备选：旧字段
+                "请问您能具体说明一下吗？"  # 默认
+            )
             return_state["clarification_question"] = clarification_msg
             return_state["non_analysis_response"] = clarification_msg
             return_state["user_message"] = f"❓ {clarification_msg}"
             logger.info("SemanticParser complete (CLARIFICATION)")
         
-        elif intent_type == IntentType.GENERAL:
-            return_state["is_analysis_question"] = False
-            general_msg = step1_output.intent.reasoning or "您好！我是数据分析助手，可以帮您分析数据。请问您想了解什么？"
+        elif intent_type_str == "GENERAL":
+            # GENERAL: 一般性问答（元数据问题）
+            # ⚠️ 修复（GPT-5.2 审计）：优先使用 subgraph 的 user_message
+            # intent_router_node 会为 GENERAL 设置 user_message
+            general_msg = (
+                result.get("user_message") or  # 优先：subgraph 生成的
+                result.get("intent_reasoning") or  # 备选：旧字段
+                "您好！我是数据分析助手，可以帮您分析数据。请问您想了解什么？"  # 默认
+            )
             return_state["general_response"] = general_msg
             return_state["non_analysis_response"] = general_msg
             return_state["user_message"] = general_msg
+            # 标记为元数据问题，供主工作流处理
+            return_state["is_metadata_question"] = result.get("is_metadata_question", False)
             logger.info("SemanticParser complete (GENERAL)")
         
-        else:  # IRRELEVANT
-            return_state["is_analysis_question"] = False
-            irrelevant_msg = "抱歉，这个问题超出了我的能力范围。我是数据分析助手，可以帮您分析数据、查看趋势等。"
+        else:  # IRRELEVANT or None
+            # IRRELEVANT: 无关问题
+            # ⚠️ 修复（GPT-5.2 审计）：优先使用 subgraph 的 user_message
+            # intent_router_node 会为 IRRELEVANT 设置礼貌拒绝消息
+            irrelevant_msg = (
+                result.get("user_message") or  # 优先：subgraph 生成的
+                "抱歉，这个问题超出了我的能力范围。我是数据分析助手，可以帮您分析数据、查看趋势等。"  # 默认
+            )
             return_state["non_analysis_response"] = irrelevant_msg
             return_state["user_message"] = irrelevant_msg
-            logger.info("SemanticParser complete (IRRELEVANT)")
+            logger.info(f"SemanticParser complete (intent_type={intent_type_str})")
         
         return return_state
         

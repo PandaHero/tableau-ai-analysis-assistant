@@ -105,6 +105,24 @@ class MiddlewareChainError(MiddlewareError):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 钩子执行结果（Requirements 0.11）
+# ═══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class HookExecutionResult:
+    """钩子执行结果
+    
+    用于记录单个 middleware 钩子的执行状态，支持错误处理和降级策略。
+    
+    Requirements: 0.11 - 完整 middleware 钩子调用
+    """
+    success: bool
+    middleware_name: str
+    error: Optional[Exception] = None
+    duration_ms: int = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 类型定义（兼容 LangChain）
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -612,46 +630,62 @@ class MiddlewareRunner:
         self,
         state: StateT,
         runtime: Runtime,
+        skip_on_error: bool = True,
     ) -> StateT:
         """
-        执行所有 before_agent 钩子
+        执行所有 before_agent 钩子（带错误处理和降级）
         
         Args:
             state: 当前状态
             runtime: 运行时上下文
+            skip_on_error: 单个钩子失败时是否跳过继续执行（默认 True）
         
         Returns:
             更新后的状态
+        
+        Raises:
+            MiddlewareError: 当 skip_on_error=False 且钩子执行失败时
+        
+        Requirements: 0.11 - 完整 middleware 钩子调用
         """
-        return await self._run_hooks(
+        return await self._run_hooks_with_error_handling(
             self._mw_before_agent,
             'before_agent',
             'abefore_agent',
             state,
             runtime=runtime,
+            skip_on_error=skip_on_error,
         )
     
     async def run_after_agent(
         self,
         state: StateT,
         runtime: Runtime,
+        skip_on_error: bool = True,
     ) -> StateT:
         """
-        执行所有 after_agent 钩子
+        执行所有 after_agent 钩子（带错误处理和降级）
         
         Args:
             state: 当前状态
             runtime: 运行时上下文
+            skip_on_error: 单个钩子失败时是否跳过继续执行（默认 True）
         
         Returns:
             更新后的状态
+        
+        Raises:
+            MiddlewareError: 当 skip_on_error=False 且钩子执行失败时
+        
+        Requirements: 0.11 - 完整 middleware 钩子调用
         """
-        return await self._run_hooks(
+        return await self._run_hooks_with_error_handling(
             self._mw_after_agent,
             'after_agent',
             'aafter_agent',
             state,
             runtime=runtime,
+            skip_on_error=skip_on_error,
         )
     
     async def run_before_model(
@@ -782,6 +816,159 @@ class MiddlewareRunner:
                 # 否则继续执行后续 middleware
         
         return current_state
+    
+    async def _run_hooks_with_error_handling(
+        self,
+        middleware_list: List[Any],
+        sync_hook_name: str,
+        async_hook_name: str,
+        state: StateT,
+        skip_on_error: bool = True,
+        **kwargs,
+    ) -> StateT:
+        """
+        执行钩子列表（带错误处理和降级策略）
+        
+        与 _run_hooks 不同，此方法：
+        1. 记录每个钩子的执行结果（HookExecutionResult）
+        2. 支持 skip_on_error 参数控制失败时是否继续
+        3. 输出执行摘要日志
+        4. ⚠️ 修复（Requirements 0.11）：即使 skip_on_error=True，也记录失败指标
+        
+        Args:
+            middleware_list: 要执行的 middleware 列表
+            sync_hook_name: 同步钩子名称
+            async_hook_name: 异步钩子名称
+            state: 当前状态
+            skip_on_error: 单个钩子失败时是否跳过继续执行
+            **kwargs: 传递给钩子的额外参数
+        
+        Returns:
+            更新后的状态
+        
+        Raises:
+            MiddlewareError: 当 skip_on_error=False 且钩子执行失败时
+        
+        Requirements: 0.11 - 完整 middleware 钩子调用
+        """
+        current_state = dict(state)
+        results: List[HookExecutionResult] = []
+        
+        # ⚠️ 修复（Requirements 0.11）：从 kwargs 获取 runtime 以访问 metrics
+        # runtime.config 包含 RunnableConfig，可以从中获取 metrics
+        runtime = kwargs.get("runtime")
+        metrics = None
+        if runtime is not None and hasattr(runtime, "config"):
+            config = runtime.config
+            if config:
+                configurable = config.get("configurable", {})
+                metrics = configurable.get("metrics")
+        
+        for mw in middleware_list:
+            mw_name = type(mw).__name__
+            start_time = time.monotonic()
+            
+            try:
+                # 优先使用异步版本
+                async_hook = getattr(mw, async_hook_name, None)
+                sync_hook = getattr(mw, sync_hook_name, None)
+                
+                result = None
+                
+                if async_hook and self._is_overridden(mw, async_hook_name):
+                    filtered_kwargs = self._filter_kwargs_for_hook(async_hook, kwargs)
+                    result = await async_hook(state=current_state, **filtered_kwargs)
+                elif sync_hook and self._is_overridden(mw, sync_hook_name):
+                    filtered_kwargs = self._filter_kwargs_for_hook(sync_hook, kwargs)
+                    if asyncio.iscoroutinefunction(sync_hook):
+                        result = await sync_hook(state=current_state, **filtered_kwargs)
+                    else:
+                        result = sync_hook(state=current_state, **filtered_kwargs)
+                
+                # 合并状态更新
+                if result and isinstance(result, dict):
+                    current_state = self.merge_middleware_state_updates(
+                        current_state, result
+                    )
+                
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                results.append(HookExecutionResult(
+                    success=True,
+                    middleware_name=mw_name,
+                    duration_ms=duration_ms,
+                ))
+                
+            except Exception as e:
+                duration_ms = int((time.monotonic() - start_time) * 1000)
+                results.append(HookExecutionResult(
+                    success=False,
+                    middleware_name=mw_name,
+                    error=e,
+                    duration_ms=duration_ms,
+                ))
+                
+                logger.error(
+                    f"{async_hook_name} hook failed for {mw_name}: {e}",
+                    exc_info=True,
+                )
+                
+                # ⚠️ 修复（Requirements 0.11）：即使 skip_on_error=True，也记录失败指标
+                # 这是 GPT-5.2 审计发现的关键问题：之前只在 entry/exit 的 except 块中记录，
+                # 但当 skip_on_error=True 时，异常被这里捕获，entry/exit 的 except 永远不会触发
+                if metrics is not None:
+                    metrics.middleware_hook_failure_count += 1
+                    # ⚠️ 修复（GPT-5.2 审计）：使用 sync_hook_name 作为 key（before_agent 而非 abefore_agent）
+                    # 这确保指标 key 与概念一致，便于看板/告警聚合
+                    metrics.middleware_hook_failure_by_hook[sync_hook_name] = (
+                        metrics.middleware_hook_failure_by_hook.get(sync_hook_name, 0) + 1
+                    )
+                    # 按 middleware 分类
+                    metrics.middleware_hook_failure_by_middleware[mw_name] = (
+                        metrics.middleware_hook_failure_by_middleware.get(mw_name, 0) + 1
+                    )
+                
+                if not skip_on_error:
+                    # 记录摘要后抛出异常
+                    self._log_hook_summary(async_hook_name, results)
+                    raise MiddlewareError(mw_name, async_hook_name, e) from e
+                
+                logger.warning(f"Skipping failed hook {mw_name}, continuing...")
+        
+        # 记录执行摘要
+        self._log_hook_summary(async_hook_name, results)
+        return current_state
+    
+    def _log_hook_summary(
+        self,
+        hook_name: str,
+        results: List[HookExecutionResult],
+    ) -> None:
+        """
+        记录钩子执行摘要
+        
+        Args:
+            hook_name: 钩子名称（如 'before_agent', 'after_agent'）
+            results: 钩子执行结果列表
+        
+        Requirements: 0.11 - 完整 middleware 钩子调用
+        """
+        if not results:
+            return
+        
+        total = len(results)
+        success = sum(1 for r in results if r.success)
+        failed = total - success
+        total_duration = sum(r.duration_ms for r in results)
+        
+        logger.info(
+            f"{hook_name} hooks summary: "
+            f"total={total}, success={success}, failed={failed}, "
+            f"duration={total_duration}ms"
+        )
+        
+        if failed > 0:
+            failed_names = [r.middleware_name for r in results if not r.success]
+            logger.warning(f"{hook_name} failed middlewares: {failed_names}")
     
     def _filter_kwargs_for_hook(
         self,
@@ -1164,6 +1351,7 @@ __all__ = [
     'ModelResponse',
     'ToolCallRequest',
     'Runtime',
+    'HookExecutionResult',
     
     # 辅助函数
     'get_middleware_from_config',

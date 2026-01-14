@@ -8,26 +8,26 @@
 
 ### Phase 0: 工程债务清理（前置条件）
 
-- [ ] 1. 统一语义解析入口与状态契约
+- [x] 1. 统一语义解析入口与状态契约
   - 统一 `SemanticParserState` 状态定义，所有字段使用可 JSON 化类型
   - 在 subgraph 出口处实现 `_flatten_output()` 函数
   - 删除 `node.py` 中重复的扁平化逻辑
   - 修改主工作流路由统一消费扁平化字段
   - _Requirements: 0.1_
 
-- [ ] 2. 让 ReAct 覆盖 Step1/Step2 的解析失败
+- [x] 2. 让 ReAct 覆盖 Step1/Step2 的解析失败
   - 修改 `subgraph.py` 路由逻辑，增加解析失败分支
   - 在 `state.py` 新增 `step1_parse_error`、`step2_parse_error` 字段
   - 在 `ReactErrorHandler` 增加解析失败处理逻辑
   - _Requirements: 0.2_
 
-- [ ] 3. Pipeline 贯通 middleware 能力
+- [x] 3. Pipeline 贯通 middleware 能力
   - 修改 `QueryPipeline` 确保所有工具调用都经过 middleware
   - 实现 `_map_fields()` 和 `_execute_query()` 通过 middleware 调用
   - 确保 `MiddlewareRunner` 正确注入
   - _Requirements: 0.3_
 
-- [ ] 4. History/Schema token 硬性上限保护
+- [x] 4. History/Schema token 硬性上限保护
   - 在 `Step1Component` 实现 `_format_history_with_limit()` 函数
   - 在 `Step1Component` 实现 `_format_schema()` 函数
   - 添加硬性截断逻辑（history: 2000 tokens, schema: 3000 tokens）
@@ -35,108 +35,127 @@
   - _Requirements: 0.4_
 
 
-- [ ] 5. 基础可观测性
+- [x] 5. 基础可观测性
   - 新建 `infra/observability/metrics.py` 定义 `SemanticParserMetrics` 数据类
   - 实现 metrics 通过 `RunnableConfig` 传递（不进入 State）
   - 在各组件中埋点记录耗时、token 数、LLM 调用次数
   - 在 subgraph 出口处输出结构化日志
   - _Requirements: 0.5_
 
-- [ ] 6. 组件级解析重试（格式重试闭环）
-  - [ ] 6.1 实现 Step1 组件级解析重试
+- [x] 6. 组件级解析重试（格式重试闭环）
+  - [x] 6.1 实现 Step1 组件级解析重试
     - 在 `Step1Component.execute()` 实现格式重试循环（最大 2 次）
     - 实现 `_build_error_feedback()` 构建结构化错误反馈
     - 记录重试触发的原因和次数
     - _Requirements: 0.6_
   
-  - [ ] 6.2 实现 Step2 组件级解析重试
+  - [x] 6.2 实现 Step2 组件级解析重试
     - 在 `Step2Component.execute()` 实现格式重试循环（最大 2 次）
     - 实现 `_build_error_feedback()` 构建结构化错误反馈
     - 记录重试触发的原因和次数
     - _Requirements: 0.6_
   
-  - [ ] 6.3 保留 OutputValidationMiddleware 作为质量闸门
+  - [x] 6.3 保留 OutputValidationMiddleware 作为质量闸门
     - 确保 `OutputValidationMiddleware` 不触发重试，只记录和告警
     - 实现错误分类边界（格式错误 vs 语义错误）
     - 实现分类重试预算管理（格式重试 vs 语义重试独立计数）
     - _Requirements: 0.6_
 
-- [ ] 7. JSON 解析增强（JSON Mode + Provider 适配）
-  - [ ] 7.1 实现 Provider 适配层
+- [x] 7. JSON 解析增强（JSON Mode + Provider 适配）
+  - [x] 7.1 实现 Provider 适配层
     - 新建 `infra/ai/json_mode_adapter.py`
     - 实现 `ProviderType` 枚举和 `get_json_mode_kwargs()` 函数
     - 实现 `detect_provider_from_base_url()` 和 `get_provider_from_config()` 函数
     - _Requirements: 0.7_
   
-  - [ ] 7.2 集成 JSON Mode 到 model_manager
+  - [x] 7.2 集成 JSON Mode 到 model_manager
     - 修改 `create_chat_model()` 支持 `enable_json_mode` 参数
     - 根据 Provider 类型选择不同的参数传递方式
     - 记录 JSON Mode 降级指标
     - _Requirements: 0.7_
   
-  - [ ] 7.3 增强 parse_json_response（三层防护）
+  - [x] 7.3 增强 parse_json_response（三层防护）
     - 实现 `JSONParseError` 异常类
     - 增强 `parse_json_response()` 的错误处理和日志
     - 记录 JSON 解析相关指标（直接解析成功率、json_repair 修复成功率等）
     - _Requirements: 0.7_
   
-  - [ ] 7.4 更新 Step1/Step2 prompt 包含 "json" 关键词
+  - [x] 7.4 更新 Step1/Step2 prompt 包含 "json" 关键词
     - 修改 `prompts/step1.py` 确保包含 "json" 关键词和格式示例
     - 修改 `prompts/step2.py` 同上
     - _Requirements: 0.7_
 
 
-- [ ] 8. 流式 tool_calls 解析错误显式处理
+- [x] 8. 流式 tool_calls 解析错误显式处理
   - 在 `agents/base/node.py` 实现 `_parse_tool_calls()` 函数
   - 实现 `ParsedToolCall` 数据类
   - 记录 tool_calls 参数解析失败率指标
   - 尝试使用 `json_repair` 修复 tool_calls 参数
   - _Requirements: 0.8_
 
-- [ ] 9. LLM 空响应显式处理
+- [x] 9. LLM 空响应显式处理
   - 在 `agents/base/node.py` 新增 `LLMEmptyResponseError` 异常类
   - 在 `_call_llm_with_tools_and_middleware()` 增强空响应检测
   - 记录空响应发生的频率指标
   - _Requirements: 0.9_
 
-- [ ] 10. Step1 history 参数与 SummarizationMiddleware 对齐
+- [x] 10. Step1 history 参数与 SummarizationMiddleware 对齐
   - 修改 `Step1Component.execute()` 从 `state["messages"]` 读取 history
   - 实现 `_convert_messages_to_history()` 函数
   - 实现 `_format_history_with_limit()` 函数（硬性截断作为兜底）
-  - 修改 `subgraph.py` 中 Step1 调用方式
+  - 修改 `subgraph.py` 中Step1 调用方式
   - _Requirements: 0.10_
 
-- [ ] 11. 完整 middleware 钩子调用（before_agent/after_agent）
-  - [ ] 11.1 实现 subgraph 入口和出口节点
+- [x] 11. 完整 middleware 钩子调用（before_agent/after_agent）
+  - [x] 11.1 实现 subgraph 入口和出口节点
     - 在 `subgraph.py` 新增 `semantic_parser_entry()` 节点（调用 before_agent）
-    - 在 `subgraph.py` 新增 `semantic_parser_exit()` 节点（调用 after_agent）
+    - 在 `subgraph.py` 增强 `semantic_parser_exit()` 节点（调用 after_agent）
     - 确保所有终止路径都经过 exit 节点
+    - ⚠️ 修复（GPT-5.2 审计）：`semantic_parser_entry()` 使用深拷贝检测变更
+      - 浅拷贝场景下，middleware 原地修改 list/dict 时比较不出差异
+      - 现在使用 `copy.deepcopy()` 确保正确检测所有变更
     - _Requirements: 0.11_
   
-  - [ ] 11.2 增强 MiddlewareRunner 钩子执行
+  - [x] 11.2 增强 MiddlewareRunner 钩子执行
     - 在 `middleware_runner.py` 实现 `HookExecutionResult` 数据类
-    - 实现 `run_before_agent()` 方法（带错误处理和降级）
-    - 实现 `run_after_agent()` 方法（带错误处理和降级）
+    - 增强 `run_before_agent()` 方法（带 skip_on_error 参数和结果追踪）
+    - 增强 `run_after_agent()` 方法（带 skip_on_error 参数和结果追踪）
     - 实现 `_log_hook_summary()` 记录钩子执行摘要
+    - 新增 `middleware_hook_failure_count` 指标到 metrics.py
+    - ⚠️ 修复（GPT-5.2 审计）：在 `_run_hooks_with_error_handling()` 内部记录失败指标
+      - 当 `skip_on_error=True` 时，异常被内部捕获，entry/exit 的 except 块不会触发
+      - 现在在 except 块内直接更新 `middleware_hook_failure_count`、`middleware_hook_failure_by_hook`、`middleware_hook_failure_by_middleware`
+    - ⚠️ 修复（GPT-5.2 审计）：`middleware_hook_failure_by_hook` 使用 `sync_hook_name` 作为 key
+      - 之前使用 `async_hook_name`（如 `abefore_agent`），导致指标 key 不一致
+      - 现在统一使用 `before_agent`/`after_agent`，便于看板/告警聚合
     - _Requirements: 0.11_
 
-- [ ] 12. IntentRouter 意图识别（两阶段路由）
-  - [ ] 12.1 实现 IntentRouter 组件
+- [x] 12. IntentRouter 意图识别（两阶段路由）
+  - [x] 12.1 实现 IntentRouter 组件
     - 新建 `components/intent_router.py`
     - 实现 `IntentType` 枚举和 `IntentRouterOutput` 数据类
     - 实现 L0 规则层（0 LLM 调用）
-    - 实现 L1 小模型分类
+    - 实现 L1 小模型分类（占位实现，默认禁用，MVP 范围外）
     - 实现 L2 Step1 兜底
     - _Requirements: 0.12_
   
-  - [ ] 12.2 集成 IntentRouter 到 subgraph
+  - [x] 12.2 集成 IntentRouter 到 subgraph
     - 在 `subgraph.py` 新增 `intent_router` 节点
     - 修改路由逻辑，仅在 `intent_type == DATA_QUERY` 时进入重路径
     - 记录各层命中率指标
+    - ⚠️ 修复（GPT-5.2 审计）：`_flatten_output()` 现在优先从 `intent_router_output` 读取 `intent_type`
+      - 当 IntentRouter 返回 CLARIFICATION/GENERAL/IRRELEVANT 时，不会运行 Step1
+      - 之前只从 `step1_output` 读取，导致 `intent_type=None`
+      - 现在先检查 `intent_router_output`，非 DATA_QUERY 时直接使用其 intent_type
+    - ⚠️ 新增 `intent_router_l1_call_count` 指标（用于计算 L1 调用率）
+    - ⚠️ 修复（GPT-5.2 审计）：`semantic_parser_node` 现在正确读取 subgraph 的文案字段
+      - CLARIFICATION：优先使用 `clarification_question`（含 slots 的具体澄清问题）
+      - GENERAL：优先使用 `user_message`（IntentRouter 生成的元数据问答响应）
+      - IRRELEVANT：优先使用 `user_message`（IntentRouter 生成的礼貌拒绝消息）
     - _Requirements: 0.12_
 
 
-- [ ] 13. Schema Linking 回退路径（正确性护栏）
+- [x] 13. Schema Linking 回退路径（正确性护栏）
   - 在 `components/schema_linking.py` 实现 `SchemaLinkingResult` 数据类
   - 实现回退触发条件检测（候选集为空、低置信度、超时、异常）
   - 实现 `_check_low_coverage_signal()` 检测低覆盖信号
@@ -144,27 +163,27 @@
   - 支持配置回退阈值
   - _Requirements: 0.13_
 
-- [ ] 14. 灰度开关与回滚机制
-  - [ ] 14.1 实现灰度开关配置
+- [x] 14. 灰度开关与回滚机制
+  - [x] 14.1 实现灰度开关配置
     - 新建 `config/feature_flags.py` 定义 `FeatureFlags` 类
     - 实现 vNext 总开关和子功能开关
     - 支持通过环境变量控制
     - _Requirements: 0.14_
   
-  - [ ] 14.2 实现版本化存储
+  - [x] 14.2 实现版本化存储
     - 新建 `infra/storage/vnext_store.py` 实现 `VNextStore` 类
     - 使用版本化 namespace 存储 vNext 缓存
     - 实现 `_filter_sensitive_fields()` 过滤敏感字段
     - 实现 `delete_vnext_data()` 支持数据回滚
     - _Requirements: 0.14_
   
-  - [ ] 14.3 实现灰度路由
+  - [x] 14.3 实现灰度路由
     - 在 `subgraph.py` 实现 `route_by_feature_flag()` 函数
     - 支持请求级别覆盖（通过请求头）
     - 记录灰度开关状态变更日志
     - _Requirements: 0.14_
 
-- [ ] 15. Checkpoint - Phase 0 完成验证
+- [x] 15. Checkpoint - Phase 0 完成验证
   - 确保所有 Phase 0 任务的测试通过
   - 验证自愈率（Step1/Step2 解析失败后 ReAct 修复成功率 ≥ 70%）
   - 验证 JSON 解析成功率（直接解析 + json_repair 修复后 ≥ 95%）
@@ -173,14 +192,14 @@
 
 ### Phase 1: 预处理 + Schema Linking（最大增益）
 
-- [ ] 16. 实现预处理层 - Preprocess Node
-  - [ ] 16.1 定义数据结构
+- [x] 16. 实现预处理层 - Preprocess Node
+  - [x] 16.1 定义数据结构
     - 在 `components/preprocess.py` 定义 `TimeContext` 数据类
     - 定义 `MemorySlots` 数据类
     - 定义 `PreprocessResult` 数据类
     - _Requirements: 1_
   
-  - [ ] 16.2 实现 PreprocessComponent
+  - [x] 16.2 实现 PreprocessComponent
     - 实现 `normalize()` 函数（全角半角归一、空白归一、单位归一）
     - 实现 `extract_time()` 函数（规则解析相对时间）
     - 实现 `extract_slots()` 函数（从历史抽取已确认项）
@@ -193,21 +212,21 @@
     - 实现 `extract_terms()` 函数（提取候选业务术语）
     - _Requirements: 1_
   
-  - [ ] 16.3 集成到 subgraph
+  - [x] 16.3 集成到 subgraph
     - 在 `subgraph.py` 新增 `preprocess` 节点
     - 在 `SemanticParserState` 新增相关字段
     - 删除 `Step1Component` 中的 `current_time` 秒级依赖
     - _Requirements: 1_
 
 
-- [ ] 17. 实现 Schema Linking 层 - 候选字段前置检索
-  - [ ] 17.1 定义数据结构
+- [x] 17. 实现 Schema Linking 层 - 候选字段前置检索
+  - [x] 17.1 定义数据结构
     - 在 `components/schema_linking.py` 定义 `FieldCandidate` 数据类
     - 定义 `SchemaCandidates` 数据类
     - 定义 `ScoringWeights` 数据类
     - _Requirements: 2_
   
-  - [ ] 17.2 实现 FieldIndexerV2（优化版字段索引）
+  - [x] 17.2 实现 FieldIndexerV2（优化版字段索引）
     - 实现精确匹配索引（O(1) 哈希查找，使用 dict）
     - 实现 N-gram 倒排索引（支持容错）
     - 实现 `build_index()` 函数
@@ -216,21 +235,21 @@
     - 验证：10000 字段下精确匹配耗时 < 1ms
     - _Requirements: 2, 8_
   
-  - [ ] 17.3 实现 TermExtractor（增强版术语提取）
+  - [x] 17.3 实现 TermExtractor（增强版术语提取）
     - 实现字段名词典构建
     - 实现别名映射
     - 集成 jieba 自定义词典
     - 实现 N-gram 补充捕获复合词
     - _Requirements: 2_
   
-  - [ ] 17.4 实现 BatchEmbeddingOptimizer（批量 Embedding）
+  - [x] 17.4 实现 BatchEmbeddingOptimizer（批量 Embedding）
     - 实现批量 Embedding 队列管理
     - 实现 `embed_query()` 入口函数
     - 实现 `_flush_batch()` 批处理逻辑
     - 实现 `_auto_flush()` 超时自动 flush
     - _Requirements: 2, 7_
   
-  - [ ] 17.5 实现 SchemaLinkingComponent
+  - [x] 17.5 实现 SchemaLinkingComponent
     - 实现 `_determine_search_pool()` 判断检索池（维度/度量/全部）
     - 实现 `_vector_search()` 向量检索
     - 实现 `_merge_candidates()` 合并去重
@@ -238,10 +257,73 @@
     - 实现降级策略（字段数 > 2000 时）
     - _Requirements: 2_
   
-  - [ ] 17.6 集成到 subgraph
+  - [x] 17.6 集成到 subgraph
     - 在 `subgraph.py` 新增 `schema_linking` 节点
     - 在 `SemanticParserState` 新增 `schema_candidates` 字段
     - _Requirements: 2_
+
+- [x] 17.7 统一 RAG 基础设施（以 FieldMapper RAG 为基础，融合 SchemaLinking 优化）
+  - [x] 17.7.1 迁移 FieldMapper RAG 到 `infra/rag/`
+    - 将 `agents/field_mapper/rag/` 核心模块迁移到 `infra/rag/`
+    - 迁移的模块：
+      - `models.py`（FieldChunk, RetrievalResult 等数据模型）
+      - `field_indexer.py`（FAISS 索引 + 持久化）
+      - `retriever.py`（HybridRetriever + 三路召回）
+      - `reranker.py`（RRFReranker + LLMReranker）
+      - `embeddings.py`（EmbeddingProvider）
+      - `cache.py`（LangGraph SqliteStore 缓存 + CachedEmbeddingProvider）
+      - `observability.py`（RAGMetrics + LatencyBreakdown）
+    - 保留在 field_mapper/rag/ 的专用模块：
+      - `assembler.py`（知识组装器，FieldMapper 专用）
+      - `dimension_pattern.py`（维度模式，FieldMapper 专用）
+      - `field_value_indexer.py`（字段值索引，FieldMapper 专用）
+      - `semantic_mapper.py`（语义映射器，FieldMapper 专用）
+    - 更新 `field_mapper/rag/__init__.py` 从 infra/rag 重新导出（向后兼容）
+    - 更新 `infra/rag/__init__.py` 的导出
+    - _Requirements: 技术债务清理_
+  
+  - [x] 17.7.2 融合 SchemaLinking 的优化到统一 RAG
+    - 新增 `infra/rag/exact_retriever.py` 实现 O(1) 精确匹配
+      - 从 SchemaLinking 的 `FieldIndexerV2.exact_match()` 提取
+      - 实现 `ExactRetriever` 类
+      - 支持 name/caption 双索引
+      - 性能目标：10000 字段下耗时 < 1ms
+    - 新增 `infra/rag/batch_optimizer.py` 实现批量 Embedding 优化
+      - 从 SchemaLinking 的 `BatchEmbeddingOptimizer` 提取
+      - 实现批量队列管理（accumulate → flush）
+      - 实现自动 flush（timeout=50ms）
+      - 与 `CachedEmbeddingProvider` 配合使用
+    - （待实现）`infra/rag/cascade_retriever.py` 级联检索
+    - _Requirements: 技术债务清理_
+  
+  - [x] 17.7.3 实现 `RetrievalMode` 配置
+    - 在 `infra/rag/config.py` 定义 `RetrievalMode` 枚举
+      - `FAST_RECALL`：快速召回模式（SchemaLinking 用）
+      - `HIGH_PRECISION`：高精度模式（FieldMapper 用）
+    - 实现 `create_retriever(mode: RetrievalMode, field_indexer: FieldIndexer)` 工厂函数
+    - 定义预设配置：`FAST_RECALL_CONFIG`, `HIGH_PRECISION_CONFIG`
+    - _Requirements: 技术债务清理_
+  
+  - [x] 17.7.4 迁移 SchemaLinking 使用统一 RAG
+    - 修改 `schema_linking.py` 使用 `create_retriever(mode=FAST_RECALL)`
+    - 删除以下类（已迁移到 infra/rag）：
+      - `FieldIndexerV2`（→ ExactRetriever + 复用 FieldIndexer）
+      - `BatchEmbeddingOptimizer`（→ infra/rag/batch_optimizer.py）
+    - 保留以下组件（应用层逻辑）：
+      - `TermExtractor`（术语提取，与 Preprocess 配合）
+      - `SchemaLinkingComponent`（应用层封装）
+      - 降级策略（字段数 > 2000）
+      - 回退护栏（低覆盖度检测）
+    - 统一数据模型：`FieldCandidate` 在应用层转换为 `RetrievalResult`
+    - 确保所有 SchemaLinking 测试通过
+    - _Requirements: 技术债务清理_
+  
+  - [x] 17.7.5 更新 FieldMapper 使用统一 RAG
+    - 修改 `field_mapper/node.py` 使用 `create_retriever(mode=HIGH_PRECISION)`
+    - 保留 `field_mapper/rag/` 目录中的专用模块（assembler, dimension_pattern, field_value_indexer, semantic_mapper）
+    - 保留 `SemanticMapper` 作为应用层封装
+    - 确保所有 FieldMapper 测试通过
+    - _Requirements: 技术债务清理_
 
 - [ ] 18. 重构 Step1 - 受约束生成
   - [ ] 18.1 定义新的数据结构

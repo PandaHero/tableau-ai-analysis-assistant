@@ -1,52 +1,78 @@
 """
 RAG (Retrieval-Augmented Generation) Package
 
-Provides field semantic retrieval and mapping capabilities.
+⚠️ 注意：核心 RAG 组件已迁移到 infra/rag/
+本模块保留向后兼容性，从 infra/rag 重新导出。
 
-Main components:
-- EmbeddingProvider: Embedding provider abstraction
-- FieldIndexer: Field indexer
-- SemanticMapper: Semantic mapper
-- Retriever: Retriever abstraction layer
-- Reranker: Reranker
-- KnowledgeAssembler: Knowledge assembler
-- CachedEmbeddingProvider: Cached embedding provider (uses LangGraph SqliteStore)
-
-Usage:
-    from tableau_assistant.src.agents.field_mapper.rag import (
-        EmbeddingProvider,
-        ZhipuEmbedding,
-        EmbeddingProviderFactory,
+推荐直接使用：
+    from tableau_assistant.src.infra.rag import (
+        FieldIndexer,
+        create_retriever,
+        RetrievalMode,
     )
-    
-    # Method 1: Auto-detect available embedding provider (recommended)
-    provider = EmbeddingProviderFactory.get_default()
-    if provider:
-        vectors = provider.embed_documents(["sales", "profit"])
-        query_vector = provider.embed_query("sales amount")
-    
-    # Method 2: Explicitly specify provider
-    provider = EmbeddingProviderFactory.create("zhipu")  # or "openai"
+
+FieldMapper 专用组件（保留在此处）：
+- KnowledgeAssembler: 知识组装器
+- DimensionPattern: 维度模式
+- FieldValueIndexer: 字段值索引
+- SemanticMapper: 语义映射器
 """
 
-from .models import (
+# 从 infra/rag 重新导出核心组件（向后兼容）
+from tableau_assistant.src.infra.rag import (
+    # 数据模型
     EmbeddingResult,
     RetrievalResult,
     FieldChunk,
     MappingResult,
     RetrievalSource,
-)
-from .embeddings import (
+    # 嵌入提供者
     EmbeddingProvider,
     ZhipuEmbedding,
     EmbeddingProviderFactory,
-)
-from .cache import (
+    # 缓存
     CachedEmbeddingProvider,
-)
-from .field_indexer import (
+    # 索引器
     FieldIndexer,
     IndexConfig,
+    # 检索器
+    BaseRetriever,
+    EmbeddingRetriever,
+    KeywordRetriever,
+    HybridRetriever,
+    RetrievalPipeline,
+    RetrieverFactory,
+    RetrievalConfig,
+    MetadataFilter,
+    Tokenizer,
+    # 重排序器
+    BaseReranker,
+    DefaultReranker,
+    RRFReranker,
+    LLMReranker,
+    # 可观测性
+    RAGStage,
+    RetrievalLogEntry,
+    RerankLogEntry,
+    ErrorLogEntry,
+    RAGMetrics,
+    RAGObserver,
+    get_observer,
+    set_verbose,
+    observe_retrieval,
+)
+
+# FieldMapper 专用组件（保留在此处）
+from .assembler import (
+    ChunkStrategy,
+    AssemblerConfig,
+    KnowledgeAssembler,
+)
+from .dimension_pattern import (
+    DimensionPattern,
+    PatternSearchResult,
+    DimensionPatternStore,
+    DimensionHierarchyRAG,
 )
 from .field_value_indexer import (
     FieldValueIndexer,
@@ -59,69 +85,24 @@ from .semantic_mapper import (
     FieldMappingResult,
     MappingSource,
 )
-from .retriever import (
-    BaseRetriever,
-    EmbeddingRetriever,
-    KeywordRetriever,
-    HybridRetriever,
-    RetrievalPipeline,
-    RetrieverFactory,
-    RetrievalConfig,
-    MetadataFilter,
-    Tokenizer,
-)
-from .reranker import (
-    BaseReranker,
-    DefaultReranker,
-    RRFReranker,
-    LLMReranker,
-)
-from .assembler import (
-    ChunkStrategy,
-    AssemblerConfig,
-    KnowledgeAssembler,
-)
-# MappingCache and CacheManager removed, use LangGraph SqliteStore instead
-from .dimension_pattern import (
-    DimensionPattern,
-    PatternSearchResult,
-    DimensionPatternStore,
-    DimensionHierarchyRAG,
-)
-from .observability import (
-    RAGStage,
-    RetrievalLogEntry,
-    RerankLogEntry,
-    ErrorLogEntry,
-    RAGMetrics,
-    RAGObserver,
-    get_observer,
-    set_verbose,
-    observe_retrieval,
-)
 
 __all__ = [
-    # Data models
+    # 数据模型（从 infra/rag 重新导出）
     "EmbeddingResult",
     "RetrievalResult", 
     "FieldChunk",
     "MappingResult",
     "RetrievalSource",
-    # Embedding providers
+    # 嵌入提供者（从 infra/rag 重新导出）
     "EmbeddingProvider",
     "ZhipuEmbedding",
     "EmbeddingProviderFactory",
-    # Cache (VectorCache, MappingCache, CacheManager removed, use LangGraph SqliteStore instead)
+    # 缓存（从 infra/rag 重新导出）
     "CachedEmbeddingProvider",
-    # Indexers
+    # 索引器（从 infra/rag 重新导出）
     "FieldIndexer",
     "IndexConfig",
-    # Semantic mapper
-    "SemanticMapper",
-    "MappingConfig",
-    "FieldMappingResult",
-    "MappingSource",
-    # Retrievers
+    # 检索器（从 infra/rag 重新导出）
     "BaseRetriever",
     "EmbeddingRetriever",
     "KeywordRetriever",
@@ -131,21 +112,27 @@ __all__ = [
     "RetrievalConfig",
     "MetadataFilter",
     "Tokenizer",
-    # Rerankers
+    # 重排序器（从 infra/rag 重新导出）
     "BaseReranker",
     "DefaultReranker",
     "RRFReranker",
     "LLMReranker",
-    # Knowledge assembler
+    # FieldMapper 专用组件
     "ChunkStrategy",
     "AssemblerConfig",
     "KnowledgeAssembler",
-    # Dimension hierarchy RAG
     "DimensionPattern",
     "PatternSearchResult",
     "DimensionPatternStore",
     "DimensionHierarchyRAG",
-    # Observability
+    "FieldValueIndexer",
+    "ValueMatchResult",
+    "DistinctValuesResult",
+    "SemanticMapper",
+    "MappingConfig",
+    "FieldMappingResult",
+    "MappingSource",
+    # 可观测性（从 infra/rag 重新导出）
     "RAGStage",
     "RetrievalLogEntry",
     "RerankLogEntry",

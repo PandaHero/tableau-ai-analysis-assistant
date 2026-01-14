@@ -42,6 +42,8 @@ from tableau_assistant.src.agents.base import (
     call_llm_with_tools,
     parse_json_response,
 )
+from ....infra.observability import get_metrics_from_config
+from ....infra.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +85,13 @@ class ReActErrorHandler:
     def __init__(
         self,
         llm: Optional[BaseChatModel] = None,
-        max_retries_per_step: int = 2,
+        max_retries_per_step: int = settings.semantic_parser_max_semantic_retries,
     ):
         """Initialize ReAct error handler.
         
         Args:
             llm: Language model for error analysis (uses default if None)
-            max_retries_per_step: Maximum retries per step (default: 2)
+            max_retries_per_step: Maximum retries per step (default from config)
         """
         self._llm = llm
         self.max_retries_per_step = max_retries_per_step
@@ -129,6 +131,13 @@ class ReActErrorHandler:
         """
         retry_history = retry_history or []
         pipeline_context = pipeline_context or {}
+        
+        # 新增：处理解析失败错误
+        from ..models.pipeline import QueryErrorType
+        if error.type in (QueryErrorType.STEP1_PARSE_ERROR, QueryErrorType.STEP2_PARSE_ERROR):
+            logger.info(f"处理解析失败错误: {error.type}")
+            output = self._handle_parse_error(error, retry_history)
+            return output, step1_output, step2_output
         
         # Check if max retries reached for this step
         step_retry_count = self._count_retries_for_step(retry_history, error.step)
@@ -244,9 +253,14 @@ class ReActErrorHandler:
             config=config,
         )
         
+        # Record react_call_count metric (Requirements 0.5)
+        metrics = get_metrics_from_config(config)
+        if metrics is not None:
+            metrics.react_call_count += 1
+        
         # Parse JSON response into ReActOutput
         try:
-            result = parse_json_response(response.content, ReActOutput)
+            result = parse_json_response(response.content, ReActOutput, metrics=metrics)
             return result
         except ValueError as e:
             logger.warning(f"Failed to parse ReAct output: {e}")
@@ -616,6 +630,127 @@ class ReActErrorHandler:
     def _count_retries_for_step(self, history: List[RetryRecord], step: str) -> int:
         """Count how many times a step has been retried."""
         return sum(1 for record in history if record.step == step and not record.success)
+    
+    def _handle_parse_error(
+        self,
+        error: QueryError,
+        retry_history: List[RetryRecord],
+    ) -> ReActOutput:
+        """处理 Step1/Step2 的解析失败错误。
+        
+        解析失败通常是由于：
+        1. JSON 格式错误
+        2. Pydantic 校验失败
+        3. 枚举值不合法
+        4. 必填字段缺失
+        
+        策略：
+        - 如果重试次数 < max_retries：RETRY 并提供结构化错误反馈
+        - 否则：ABORT
+        
+        Args:
+            error: QueryError（type 为 STEP1_PARSE_ERROR 或 STEP2_PARSE_ERROR）
+            retry_history: 重试历史
+        
+        Returns:
+            ReActOutput
+        """
+        step = error.step
+        step_retry_count = self._count_retries_for_step(retry_history, step)
+        
+        if step_retry_count >= self.max_retries_per_step:
+            # 达到最大重试次数，放弃
+            logger.info(f"解析失败已达最大重试次数 ({self.max_retries_per_step})，放弃")
+            
+            thought = ReActThought(
+                error_source=step,
+                error_category=ErrorCategory.FORMAT_ERROR,
+                root_cause_analysis=f"{step} 输出解析失败，已重试 {step_retry_count} 次仍然失败",
+                can_correct=False,
+                can_retry=False,
+                needs_clarification=False,
+                reasoning=f"解析失败通常是模型输出格式问题，已重试多次仍失败，需要放弃",
+            )
+            
+            action = ReActAction(
+                action_type=ReActActionType.ABORT,
+                user_message=f"抱歉，处理您的请求时遇到问题。请尝试换一种方式描述您的问题。",
+            )
+            
+            return ReActOutput(thought=thought, action=action)
+        
+        # 构建重试指导
+        error_details = error.details or {}
+        original_error = error_details.get("original_error", error.message)
+        
+        # 根据错误类型提供具体指导
+        retry_guidance = self._build_parse_error_guidance(original_error)
+        
+        thought = ReActThought(
+            error_source=step,
+            error_category=ErrorCategory.FORMAT_ERROR,
+            root_cause_analysis=f"{step} 输出解析失败: {original_error}",
+            can_correct=False,
+            can_retry=True,
+            needs_clarification=False,
+            reasoning=f"解析失败可以通过重试并提供错误反馈来修复",
+        )
+        
+        action = ReActAction(
+            action_type=ReActActionType.RETRY,
+            retry_from=step,
+            retry_guidance=retry_guidance,
+        )
+        
+        logger.info(f"解析失败处理: RETRY {step} with guidance")
+        
+        return ReActOutput(thought=thought, action=action)
+    
+    def _build_parse_error_guidance(self, error_message: str) -> str:
+        """根据解析错误类型构建重试指导。
+        
+        Args:
+            error_message: 原始错误信息
+        
+        Returns:
+            结构化的重试指导
+        """
+        error_lower = error_message.lower()
+        
+        if "json" in error_lower and "decode" in error_lower:
+            return (
+                "解析失败：输出不是有效的 JSON 格式。\n"
+                "请确保：\n"
+                "1. 输出是完整的 JSON 对象（以 { 开始，以 } 结束）\n"
+                "2. 所有字符串都用双引号包裹\n"
+                "3. 没有多余的逗号或缺少逗号\n"
+                "4. 布尔值使用 true/false（小写）\n"
+                "请重新生成符合 JSON 格式的输出。"
+            )
+        
+        if "validation" in error_lower or "pydantic" in error_lower:
+            return (
+                "解析失败：输出格式不符合预期的数据结构。\n"
+                f"错误详情：{error_message}\n"
+                "请检查：\n"
+                "1. 所有必填字段都已提供\n"
+                "2. 字段类型正确（字符串、数字、列表等）\n"
+                "3. 枚举值使用正确的选项\n"
+                "请根据错误提示修正后重新输出。"
+            )
+        
+        if "enum" in error_lower or "not a valid" in error_lower:
+            return (
+                "解析失败：使用了不合法的枚举值。\n"
+                f"错误详情：{error_message}\n"
+                "请使用文档中定义的合法枚举值，并确保大小写完全匹配。"
+            )
+        
+        # 通用指导
+        return (
+            f"解析失败：{error_message}\n"
+            "请严格按照 JSON 格式输出，确保所有字段都符合预期的数据结构。"
+        )
     
     def _create_max_retry_output(self, error: QueryError, step: str) -> ReActOutput:
         """Create output when max retries reached."""

@@ -113,10 +113,11 @@ def profiler_node(state: InsightState) -> Dict[str, Any]:
         
         logger.info(f"Chunking complete: {len(chunks)} chunks created")
         
+        # ⚠️ State 序列化：将 Pydantic 对象转换为 dict 后存入 state
         return {
-            "enhanced_profile": enhanced_profile,
+            "enhanced_profile": enhanced_profile.model_dump() if enhanced_profile else None,
             "insight_profile": insight_profile,  # Store for analyzer_node to use
-            "chunks": chunks,
+            "chunks": [chunk.model_dump() for chunk in chunks] if chunks else [],
             "error_message": None,
         }
         

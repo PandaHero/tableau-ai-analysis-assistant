@@ -71,24 +71,28 @@ class EventType(str, Enum):
 
 
 class NodeOutput(BaseModel):
-    """节点输出数据结构 - 包含各节点可能的输出"""
+    """节点输出数据结构 - 包含各节点可能的输出。
+    
+    ⚠️ State 序列化：state 中的复杂对象存储为 dict，此处也使用 dict 类型。
+    如需 Pydantic 对象，调用者应使用 Model.model_validate(dict) 重构。
+    """
     model_config = {"extra": "allow"}  # 允许额外字段
     
-    # SemanticParser 节点输出
-    semantic_query: Optional[SemanticQuery] = None
+    # SemanticParser 节点输出（存储为 dict）
+    semantic_query: Optional[Dict[str, Any]] = None
     is_analysis_question: Optional[bool] = None
     
-    # FieldMapper 节点输出
-    mapped_query: Optional[MappedQuery] = None
+    # FieldMapper 节点输出（存储为 dict）
+    mapped_query: Optional[Dict[str, Any]] = None
     
     # QueryBuilder 节点输出
     vizql_query: Optional[VizQLQuery] = None
     
-    # Execute 节点输出
-    query_result: Optional[ExecuteResult] = None
+    # Execute 节点输出（存储为 dict）
+    query_result: Optional[Dict[str, Any]] = None
     
-    # Replanner 节点输出
-    replan_decision: Optional[ReplanDecision] = None
+    # Replanner 节点输出（存储为 dict）
+    replan_decision: Optional[Dict[str, Any]] = None
     
     # 通用字段
     errors: Optional[List[object]] = None
@@ -130,17 +134,43 @@ class WorkflowResult:
     
     @classmethod
     def from_state(cls, question: str, state: Dict[str, object], duration: float) -> "WorkflowResult":
-        """从工作流状态创建结果"""
+        """从工作流状态创建结果。
+        
+        ⚠️ State 序列化：state 中的复杂对象存储为 dict，需要重构为 Pydantic 对象。
+        """
+        # 从 dict 重构 Pydantic 对象（如果存在）
+        semantic_query = None
+        if state.get("semantic_query"):
+            semantic_query = SemanticQuery.model_validate(state["semantic_query"])
+        
+        mapped_query = None
+        if state.get("mapped_query"):
+            mapped_query = MappedQuery.model_validate(state["mapped_query"])
+        
+        query_result = None
+        if state.get("query_result"):
+            query_result = ExecuteResult.model_validate(state["query_result"])
+        
+        replan_decision = None
+        if state.get("replan_decision"):
+            replan_decision = ReplanDecision.model_validate(state["replan_decision"])
+        
+        # insights 是 dict 列表，需要逐个重构
+        insights = []
+        for insight_dict in state.get("insights", []):
+            if insight_dict:
+                insights.append(Insight.model_validate(insight_dict))
+        
         return cls(
             question=question,
             success=state.get("errors") is None or len(state.get("errors", [])) == 0,
             duration=duration,
-            semantic_query=state.get("semantic_query"),
-            mapped_query=state.get("mapped_query"),
-            vizql_query=state.get("vizql_query"),
-            query_result=state.get("query_result"),
-            insights=state.get("insights", []),
-            replan_decision=state.get("replan_decision"),
+            semantic_query=semantic_query,
+            mapped_query=mapped_query,
+            vizql_query=state.get("vizql_query"),  # vizql_query 本身就是 dict
+            query_result=query_result,
+            insights=insights,
+            replan_decision=replan_decision,
             is_analysis_question=state.get("is_analysis_question", True),
             replan_count=state.get("replan_count", 0),
             error=state.get("errors", [{}])[0].get("error") if state.get("errors") else None,
