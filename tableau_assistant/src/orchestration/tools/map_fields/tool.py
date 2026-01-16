@@ -22,7 +22,8 @@ from tableau_assistant.src.core.models.query import SemanticQuery
 from tableau_assistant.src.agents.field_mapper.models import MappedQuery, FieldMapping
 from tableau_assistant.src.agents.field_mapper.node import FieldMapperNode
 from tableau_assistant.src.agents.field_mapper.rag.semantic_mapper import SemanticMapper
-from tableau_assistant.src.agents.field_mapper.rag.field_indexer import FieldIndexer
+from tableau_assistant.src.infra.rag import FieldIndexer
+
 from tableau_assistant.src.orchestration.tools.map_fields.models import (
     MapFieldsInput,
     MapFieldsOutput,

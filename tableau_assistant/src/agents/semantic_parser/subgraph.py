@@ -24,9 +24,10 @@
    - build_canonical(): 生成稳定的 canonical_question
    - extract_terms(): 提取候选业务术语
 4. Schema Linking: 候选字段前置检索（0 LLM 调用）（Requirements 2 - Phase 1）
-   - 精确匹配 + N-gram 模糊匹配
-   - 判断检索池（维度/度量/全部）
-   - 向量检索（可选）
+    - 精确匹配
+    - 判断检索池（维度/度量/全部）
+    - 向量检索（可选）
+
    - 两阶段打分融合
 5. Step1: 语义理解（仅 DATA_QUERY 时运行）
 6. Step2: 计算推理（仅用于非 SIMPLE 查询）
@@ -63,13 +64,13 @@ from .components import (
     PreprocessResult,
     QueryPipeline,
     ReActErrorHandler,
-    SchemaLinkingComponent,
-    FieldIndexerV2,
-    TermExtractor,
     SchemaCandidates,
+    SchemaLinking,
+    SchemaLinkingComponentConfig,
     Step1Component,
     Step2Component,
 )
+
 from .components.react_error_handler import RetryRecord
 from ...core.models import IntentType as CoreIntentType, HowType
 from ...infra.config.settings import settings
@@ -430,29 +431,11 @@ async def schema_linking_node(
                 "current_stage": "semantic_parser.schema_linking",
             }
         
-        # 创建 FieldIndexerV2 并构建索引
-        field_indexer = FieldIndexerV2()
-        field_indexer.build_index(fields)
-        
-        # 创建 TermExtractor 并构建词典
-        term_extractor = TermExtractor()
-        term_extractor.build_dictionary(fields)
-        
-        # 创建 SchemaLinkingComponent
-        # 注意：embedding_optimizer 和 vector_store 是可选的，Phase 1 先不使用
-        component = SchemaLinkingComponent(
-            field_indexer=field_indexer,
-            term_extractor=term_extractor,
-            embedding_optimizer=None,  # Phase 1 暂不使用向量检索
-            vector_store=None,
-        )
-        
-        # 执行 Schema Linking
-        candidates = await component.execute(
-            canonical_question=canonical_question,
+        schema_linking = SchemaLinking()
+        result = await schema_linking.link(
+            question=canonical_question,
             data_model=data_model,
-            datasource_luid=datasource_luid,
-            extracted_terms=extracted_terms,
+            config=config,
         )
         
         # 记录耗时
@@ -460,21 +443,47 @@ async def schema_linking_node(
         if metrics is not None:
             metrics.schema_linking_ms = elapsed_ms
         
+        if result.fallback_triggered:
+            logger.warning(
+                f"Schema Linking fallback: reason={result.fallback_reason}, "
+                f"details={result.fallback_details}"
+            )
+            return {
+                "schema_candidates": None,
+                "schema_linking_fallback": {
+                    "reason": result.fallback_reason,
+                    "details": result.fallback_details,
+                },
+                "current_stage": "semantic_parser.schema_linking",
+            }
+        
+        component_config = SchemaLinkingComponentConfig()
+        dimensions = [c for c in result.candidates if c.field_type == "dimension"]
+        measures = [c for c in result.candidates if c.field_type != "dimension"]
+        schema_candidates = SchemaCandidates(
+            dimensions=dimensions,
+            measures=measures,
+            total_fields=len(fields),
+            is_degraded=len(fields) > component_config.degradation_threshold,
+            search_pool="both",
+        )
+        
         logger.info(
             f"Schema Linking 完成: "
-            f"dims={len(candidates.dimensions)}, "
-            f"meas={len(candidates.measures)}, "
-            f"search_pool={candidates.search_pool}, "
-            f"is_degraded={candidates.is_degraded}, "
+            f"dims={len(schema_candidates.dimensions)}, "
+            f"meas={len(schema_candidates.measures)}, "
+            f"search_pool={schema_candidates.search_pool}, "
+            f"is_degraded={schema_candidates.is_degraded}, "
             f"elapsed_ms={elapsed_ms}"
         )
         
         return {
-            "schema_candidates": candidates.model_dump(),  # 序列化为 dict
+            "schema_candidates": schema_candidates.model_dump(),  # 序列化为 dict
             "current_stage": "semantic_parser.schema_linking",
         }
         
     except Exception as e:
+
         logger.error(f"Schema Linking 执行失败: {e}", exc_info=True)
         
         # Schema Linking 失败不阻塞流程，继续进入 Step1（使用全量字段）

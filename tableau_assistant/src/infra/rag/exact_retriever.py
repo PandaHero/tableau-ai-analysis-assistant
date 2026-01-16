@@ -1,7 +1,8 @@
 """
 精确匹配检索器
 
-实现 O(1) 精确匹配检索，从 SchemaLinking 的 FieldIndexerV2.exact_match() 提取。
+实现 O(1) 精确匹配检索，用于 SchemaLinking 与 FieldMapper 的精确匹配路径。
+
 
 性能目标：10000 字段下耗时 < 1ms
 

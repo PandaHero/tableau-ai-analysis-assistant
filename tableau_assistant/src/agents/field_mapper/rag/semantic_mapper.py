@@ -21,19 +21,17 @@ from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .models import (
+from tableau_assistant.src.infra.rag import (
     FieldChunk,
     RetrievalResult,
     RetrievalSource,
-)
-from .field_indexer import FieldIndexer
-from .retriever import (
+    FieldIndexer,
     BaseRetriever,
     HybridRetriever,
     RetrievalPipeline,
     MetadataFilter,
+    BaseReranker,
 )
-from .reranker import BaseReranker
 
 logger = logging.getLogger(__name__)
 
@@ -259,11 +257,10 @@ class SemanticMapper:
         """
         创建默认"LLMReranker
         
-        直接使用 get_llm 获取 LLM 实例，创"LLMReranker"
-        使用流式输出收集完整响应"
+        直接使用 get_llm 获取 LLM 实例,创建 LLMReranker。
+        使用流式输出收集完整响应。
         """
         try:
-            from .reranker import LLMReranker
             from tableau_assistant.src.infra.ai.llm import get_llm
             
             llm = get_llm()
@@ -305,11 +302,12 @@ class SemanticMapper:
         if self.config.use_hybrid:
             # 使用混合检索器（向"+ BM25"
             try:
-                from .retriever import (
+                from tableau_assistant.src.infra.rag import (
                     EmbeddingRetriever,
                     KeywordRetriever,
                     HybridRetriever,
                     RetrievalConfig,
+                    LLMReranker,
                 )
                 
                 retrieval_config = RetrievalConfig(
@@ -318,6 +316,7 @@ class SemanticMapper:
                 
                 embedding_retriever = EmbeddingRetriever(self.field_indexer, retrieval_config)
                 keyword_retriever = KeywordRetriever(self.field_indexer, retrieval_config)
+
                 
                 self._hybrid_retriever = HybridRetriever(
                     embedding_retriever=embedding_retriever,
@@ -390,8 +389,8 @@ class SemanticMapper:
         # 根据配置选择检索方"
         if self._retriever is not None and self.config.use_hybrid:
             # 使用混合检索器
-            from .retriever import MetadataFilter
             filters = MetadataFilter(role=role_filter, category=category_filter)
+
             
             # 如果启用两阶段检索，获取更多候选用"Rerank
             search_k = self.config.rerank_candidates if self.config.use_two_stage else self.config.top_k
@@ -561,8 +560,8 @@ class SemanticMapper:
         
         # 根据配置选择检索方"
         if self._retriever is not None and self.config.use_hybrid:
-            from .retriever import MetadataFilter
             filters = MetadataFilter(role=role_filter, category=category_filter)
+
             search_k = self.config.rerank_candidates if self.config.use_two_stage else self.config.top_k
             
             # 使用异步检"

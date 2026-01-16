@@ -47,6 +47,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+
+
 from pydantic import BaseModel, Field
 from langgraph.types import RunnableConfig
 
@@ -88,21 +90,22 @@ class SchemaLinkingFallbackReason(str, Enum):
 class ScoringWeights:
     """两阶段打分融合权重配置。
     
-    用于融合多路召回的分数：精确匹配 + N-gram 模糊匹配 + embedding + reranker。
+    用于融合多路召回的分数：精确匹配 + embedding + reranker。
     
     Attributes:
         exact_match: 精确匹配权重（最高优先级，命中直接置顶）
-        fuzzy_match: N-gram 模糊匹配权重
         embedding: 向量相似度权重
         reranker: Reranker 分数权重（可选）
     """
     exact_match: float = 1.0      # 精确匹配（最高优先级）
-    fuzzy_match: float = 0.8      # N-gram 模糊匹配
     embedding: float = 0.6        # 向量相似度
     reranker: float = 0.4         # Reranker 分数（可选）
 
 
+
 class FieldCandidate(BaseModel):
+
+
     """字段候选数据类。
     
     表示 Schema Linking 检索到的候选字段，支持两阶段打分融合。
@@ -121,9 +124,9 @@ class FieldCandidate(BaseModel):
         
         # 两阶段打分字段
         exact_match: 是否精确匹配命中
-        fuzzy_score: N-gram 模糊匹配分数（0-1）
         embedding_score: 向量相似度分数（0-1）
         reranker_score: Reranker 分数（0-1，可选）
+
     """
     # 必填字段
     candidate_id: str  # 格式: "{role}_{index}" 如 "dim_0", "meas_1"
@@ -141,9 +144,9 @@ class FieldCandidate(BaseModel):
     
     # 两阶段打分字段
     exact_match: bool = False
-    fuzzy_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     embedding_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     reranker_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
     
     # 原始术语（用于追溯）
     original_term: Optional[str] = None
@@ -152,7 +155,6 @@ class FieldCandidate(BaseModel):
     def compute_final_score(
         cls,
         exact_match: bool,
-        fuzzy_score: Optional[float],
         embedding_score: Optional[float],
         reranker_score: Optional[float],
         weights: Optional[ScoringWeights] = None,
@@ -169,9 +171,6 @@ class FieldCandidate(BaseModel):
         score = 0.0
         total_weight = 0.0
         
-        if fuzzy_score is not None:
-            score += weights.fuzzy_match * fuzzy_score
-            total_weight += weights.fuzzy_match
         if embedding_score is not None:
             score += weights.embedding * embedding_score
             total_weight += weights.embedding
@@ -182,6 +181,7 @@ class FieldCandidate(BaseModel):
         if total_weight > 0:
             return score / total_weight
         return 0.0
+
     
     @classmethod
     def from_retrieval_result(
@@ -558,6 +558,8 @@ class SchemaLinkingComponent:
         # 预计算中心向量（用于判断检索池）
         self._dim_centroid: Optional[List[float]] = None
         self._meas_centroid: Optional[List[float]] = None
+
+
     
     def build_index(self, fields: List[Any]) -> None:
         """构建索引。
@@ -574,6 +576,8 @@ class SchemaLinkingComponent:
         
         # 构建术语词典
         self.term_extractor.build_dictionary(chunks)
+
+
         
         logger.debug(f"SchemaLinkingComponent index built: {len(chunks)} fields")
     
@@ -608,6 +612,8 @@ class SchemaLinkingComponent:
         
         # 4. 向量检索（使用统一 RAG 的 create_retriever）
         vector_results: List[RetrievalResult] = []
+
+
         try:
             vector_results = await self._retriever.aretrieve(
                 canonical_question,
@@ -622,6 +628,8 @@ class SchemaLinkingComponent:
             vector_results=vector_results,
             data_model=data_model,
         )
+
+
         
         # 6. 设置元信息
         candidates.total_fields = len(data_model.fields) if hasattr(data_model, 'fields') else 0
@@ -689,7 +697,6 @@ class SchemaLinkingComponent:
             # 计算融合分数
             confidence = FieldCandidate.compute_final_score(
                 exact_match=scores["exact_match"],
-                fuzzy_score=None,
                 embedding_score=scores["embedding_score"],
                 reranker_score=None,
                 weights=self.scoring_weights,
@@ -731,6 +738,8 @@ class SchemaLinkingComponent:
         measures.sort(key=lambda x: x.confidence, reverse=True)
         
         return SchemaCandidates(dimensions=dimensions, measures=measures)
+
+
     
     def _build_cache_key(self, question: str, datasource_luid: str) -> str:
         """构建缓存键。"""
@@ -829,9 +838,32 @@ class SchemaLinking:
         config: Optional[RunnableConfig] = None,
     ) -> List[FieldCandidate]:
         """执行实际的 Schema Linking 逻辑。"""
-        # TODO: Phase 1 实现完整的 Schema Linking 逻辑
-        logger.debug("Schema linking placeholder - returning empty candidates")
-        return []
+        fields = getattr(data_model, "fields", []) if data_model is not None else []
+        if not fields:
+            logger.warning("Schema linking skipped: no fields in data_model")
+            return []
+        
+        # 优先使用 data_model 上的 datasource_luid（如有）
+        datasource_luid = getattr(data_model, "datasource_luid", None) or "default"
+        
+        # 构建索引与组件
+        field_indexer = FieldIndexer(datasource_luid=datasource_luid)
+        term_extractor = TermExtractor()
+        component = SchemaLinkingComponent(
+            field_indexer=field_indexer,
+            term_extractor=term_extractor,
+        )
+        component.build_index(fields)
+        
+        # 执行检索
+        schema_candidates = await component.execute(
+            canonical_question=question,
+            data_model=data_model,
+            datasource_luid=datasource_luid,
+        )
+        
+        return schema_candidates.get_all_candidates()
+
     
     def _check_candidates_quality(
         self,

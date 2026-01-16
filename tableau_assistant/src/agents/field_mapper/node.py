@@ -46,7 +46,6 @@ from tableau_assistant.src.agents.field_mapper.rag.assembler import (
     AssemblerConfig,
     ChunkStrategy,
 )
-from tableau_assistant.src.agents.field_mapper.rag.reranker import LLMReranker
 from tableau_assistant.src.agents.field_mapper.rag.semantic_mapper import SemanticMapper
 
 # 使用统一 RAG 基础设施（Requirements 17.7.5）
@@ -56,6 +55,7 @@ from tableau_assistant.src.infra.rag import (
     create_retriever,
     RetrievalMode,
     HIGH_PRECISION_CONFIG,
+    LLMReranker,
 )
 from tableau_assistant.src.infra.config import settings
 

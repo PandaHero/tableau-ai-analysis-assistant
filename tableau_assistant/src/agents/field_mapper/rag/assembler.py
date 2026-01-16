@@ -15,21 +15,21 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict, Any, Union
 
-from .models import FieldChunk, RetrievalResult
-from .embeddings import (
+from tableau_assistant.src.infra.rag import (
+    FieldChunk,
+    RetrievalResult,
     EmbeddingProvider,
     EmbeddingProviderFactory,
-)
-from .field_indexer import FieldIndexer, IndexConfig
-from .retriever import (
+    FieldIndexer,
+    IndexConfig,
     BaseRetriever,
     EmbeddingRetriever,
     KeywordRetriever,
     HybridRetriever,
     RetrievalConfig,
     MetadataFilter,
+    BaseReranker,
 )
-from .reranker import BaseReranker
 from tableau_assistant.src.infra.storage.data_model import DataModel, FieldMetadata
 
 logger = logging.getLogger(__name__)

@@ -27,9 +27,8 @@ from .schema_linking import (
     BatchEmbeddingOptimizer,
     COMPUTATION_WORDS,
     FieldCandidate,
-    FieldIndexerV2,
-    FieldIndexerV2Config,
     SchemaCandidates,
+
     SchemaLinking,
     SchemaLinkingComponent,
     SchemaLinkingComponentConfig,
@@ -42,6 +41,8 @@ from .schema_linking import (
     TermExtractor,
     TermExtractorConfig,
 )
+
+
 from .preprocess import (
     PreprocessComponent,
     PreprocessResult,
@@ -55,10 +56,11 @@ __all__ = [
     "BatchEmbeddingOptimizer",
     "COMPUTATION_WORDS",
     "FieldCandidate",
-    "FieldIndexerV2",
-    "FieldIndexerV2Config",
     "IntentRouter",
+
+
     "IntentRouterOutput",
+
     "IntentType",
     "MemorySlots",
     "PreprocessComponent",
