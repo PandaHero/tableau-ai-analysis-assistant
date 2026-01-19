@@ -25,13 +25,17 @@ from tableau_assistant.src.agents.base.node import (
     stream_llm_call,
     parse_json_response,
 )
+
+
 from tableau_assistant.src.agents.dimension_hierarchy.models import (
     DimensionHierarchyResult,
 )
 from tableau_assistant.src.agents.dimension_hierarchy.prompt import (
     DIMENSION_HIERARCHY_PROMPT,
 )
-from .seed_data import get_seed_few_shot_examples
+
+from tableau_assistant.src.agents.dimension_hierarchy.seed_data import get_seed_few_shot_examples
+
 
 logger = logging.getLogger(__name__)
 

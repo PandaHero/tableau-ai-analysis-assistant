@@ -15,12 +15,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
-from .models import (
+from tableau_assistant.src.infra.rag.models import (
     FieldChunk,
     RetrievalResult,
     RetrievalSource,
 )
-from .field_indexer import FieldIndexer
+from tableau_assistant.src.infra.rag.field_indexer import FieldIndexer
+
 
 # 注意：此文件从 field_mapper/rag/retriever.py 迁移到 infra/rag/
 # 保持向后兼容性
@@ -903,11 +904,12 @@ def _create_reranker(
     Returns:
         重排序器实例
     """
-    from .reranker import (
+    from tableau_assistant.src.infra.rag.reranker import (
         DefaultReranker,
         RRFReranker,
         LLMReranker,
     )
+
     
     if reranker_type == "default":
         return DefaultReranker(top_k)

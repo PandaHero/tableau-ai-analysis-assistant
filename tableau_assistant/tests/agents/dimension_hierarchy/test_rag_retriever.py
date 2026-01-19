@@ -19,17 +19,15 @@ import shutil
 from tableau_assistant.src.agents.dimension_hierarchy.rag_retriever import (
     DimensionRAGRetriever,
 )
-from tableau_assistant.src.agents.dimension_hierarchy.faiss_store import (
-    DimensionPatternFAISS,
-    DEFAULT_DIMENSION,
-)
 from tableau_assistant.src.agents.dimension_hierarchy.cache_storage import (
     DimensionHierarchyCacheStorage,
     RAG_SIMILARITY_THRESHOLD,
     RAG_SIMILARITY_THRESHOLD_UNVERIFIED,
     PatternSource,
 )
+from tableau_assistant.src.infra.rag import FieldIndexer, IndexConfig
 from tableau_assistant.src.infra.ai.embeddings import EmbeddingProviderFactory
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -54,15 +52,21 @@ def temp_index_path():
 
 
 @pytest.fixture
-def faiss_store(embedding_provider, temp_index_path):
-    """创建 FAISS 存储实例"""
-    store = DimensionPatternFAISS(
-        embedding_provider=embedding_provider,
-        index_path=temp_index_path,
-        dimension=DEFAULT_DIMENSION,
+def field_indexer(embedding_provider, temp_index_path):
+    """创建向量索引器实例"""
+    index_config = IndexConfig(
+        max_samples=0,
+        include_formula=False,
+        include_table_caption=False,
+        include_category=False,
     )
-    store.load_or_create()
-    return store
+    return FieldIndexer(
+        embedding_provider=embedding_provider,
+        index_config=index_config,
+        datasource_luid="dimension_patterns_test",
+        index_dir=temp_index_path,
+        use_cache=False,
+    )
 
 
 @pytest.fixture
@@ -74,12 +78,13 @@ def cache_storage():
 
 
 @pytest.fixture
-def rag_retriever(faiss_store, cache_storage):
+def rag_retriever(field_indexer, cache_storage):
     """创建 RAG 检索器实例"""
     return DimensionRAGRetriever(
-        faiss_store=faiss_store,
         cache_storage=cache_storage,
+        field_indexer=field_indexer,
     )
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -174,35 +179,38 @@ class TestPatternIdGeneration:
 class TestQueryTextBuilding:
     """查询文本构建测试"""
     
-    def test_build_query_text_metadata_only(self):
+    def test_build_query_text_metadata_only(self, rag_retriever):
         """测试查询文本构建"""
-        query_text = DimensionRAGRetriever._build_query_text_metadata_only(
+        query_text = rag_retriever._build_query_text_metadata_only(
             field_caption="年份",
             data_type="integer",
         )
         
         assert "年份" in query_text
         assert "integer" in query_text
-        assert query_text == "字段名: 年份 | 数据类型: integer"
+        assert query_text == "字段 年份 | 角色: dimension | 类型: integer"
+
     
-    def test_build_query_text_chinese(self):
+    def test_build_query_text_chinese(self, rag_retriever):
         """测试中文字段名"""
-        query_text = DimensionRAGRetriever._build_query_text_metadata_only(
+        query_text = rag_retriever._build_query_text_metadata_only(
             field_caption="产品类别",
             data_type="string",
         )
         
         assert "产品类别" in query_text
         assert "string" in query_text
+
     
-    def test_build_query_text_english(self):
+    def test_build_query_text_english(self, rag_retriever):
         """测试英文字段名"""
-        query_text = DimensionRAGRetriever._build_query_text_metadata_only(
+        query_text = rag_retriever._build_query_text_metadata_only(
             field_caption="Category",
             data_type="string",
         )
         
         assert "Category" in query_text
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -499,8 +507,9 @@ class TestThresholdTiering:
         
         assert threshold == RAG_SIMILARITY_THRESHOLD  # 0.92
     
-    def test_threshold_tiering_in_search(self, rag_retriever, cache_storage, faiss_store):
+    def test_threshold_tiering_in_search(self, rag_retriever, cache_storage):
         """测试检索时阈值分层生效"""
+
         # 添加一个未验证的 LLM 模式
         rag_retriever.store_pattern(
             field_caption="客户名称",

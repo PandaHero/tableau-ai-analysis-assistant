@@ -16,8 +16,9 @@ Nodes:
 - analyzer_node: Phase 3 - Chunk analysis with historical insight processing
 """
 
-from .profiler_node import profiler_node
-from .director_node import director_node
-from .analyzer_node import analyzer_node
+from tableau_assistant.src.agents.insight.nodes.profiler_node import profiler_node
+from tableau_assistant.src.agents.insight.nodes.director_node import director_node
+from tableau_assistant.src.agents.insight.nodes.analyzer_node import analyzer_node
+
 
 __all__ = ["profiler_node", "director_node", "analyzer_node"]

@@ -17,9 +17,9 @@ Requirements: 3.1, 3.2, 3.3
 from typing import List, Dict, Any
 import logging
 
-from .rag_retriever import DimensionRAGRetriever
-from .faiss_store import DimensionPatternFAISS
-from .cache_storage import DimensionHierarchyCacheStorage
+from tableau_assistant.src.agents.dimension_hierarchy.rag_retriever import DimensionRAGRetriever
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -634,7 +634,8 @@ def initialize_seed_patterns(
     rag_retriever: DimensionRAGRetriever,
 ) -> int:
     """
-    初始化种子数据到 RAG（FAISS + LangGraph Store）
+    初始化种子数据到 RAG（向量索引 + LangGraph Store）
+
 
     流程：
     1. 批量添加所有种子模式到 RAG

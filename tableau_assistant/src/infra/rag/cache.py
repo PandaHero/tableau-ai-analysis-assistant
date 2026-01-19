@@ -46,7 +46,8 @@ class CachedEmbeddingProvider:
             self._store_manager = store_manager
         else:
             try:
-                from ..storage import get_langgraph_store
+                from tableau_assistant.src.infra.storage import get_langgraph_store
+
                 self._store_manager = get_langgraph_store()
             except Exception as e:
                 logger.warning(f"无法获取 LangGraph Store，缓存将不可用: {e}")

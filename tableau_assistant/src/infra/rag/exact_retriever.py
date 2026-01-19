@@ -12,7 +12,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
-from .models import FieldChunk, RetrievalResult, RetrievalSource
+from tableau_assistant.src.infra.rag.models import FieldChunk, RetrievalResult, RetrievalSource
+
 
 logger = logging.getLogger(__name__)
 

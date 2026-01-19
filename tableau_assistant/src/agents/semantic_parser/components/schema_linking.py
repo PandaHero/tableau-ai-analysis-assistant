@@ -53,7 +53,7 @@ from pydantic import BaseModel, Field
 from langgraph.types import RunnableConfig
 
 # 从统一 RAG 基础设施导入
-from ....infra.rag import (
+from tableau_assistant.src.infra.rag import (
     FieldIndexer,
     FieldChunk,
     RetrievalResult,
@@ -66,8 +66,11 @@ from ....infra.rag import (
     BatchEmbeddingOptimizer,
     BatchEmbeddingConfig,
 )
-from ....infra.observability import get_metrics_from_config
-from ....infra.config.settings import settings
+from tableau_assistant.src.infra.observability import get_metrics_from_config
+from tableau_assistant.src.infra.config.settings import settings
+from tableau_assistant.src.infra.storage import get_langgraph_store, FieldIndexCache
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +272,50 @@ class SchemaCandidates(BaseModel):
         return len(self.dimensions) == 0 and len(self.measures) == 0
 
 
+SCHEMA_LINKING_NAMESPACE = ("schema_linking",)
+DEFAULT_SCHEMA_LINKING_TTL_MINUTES = max(1, int(settings.schema_linking_cache_ttl / 60))
+
+
+class SchemaLinkingQueryCache:
+    """Schema Linking 查询缓存（LangGraph SqliteStore）。"""
+
+    def __init__(self, store: Any, datasource_luid: str, ttl_minutes: int = DEFAULT_SCHEMA_LINKING_TTL_MINUTES):
+        self._store = store
+        self._datasource_luid = datasource_luid
+        self._ttl_minutes = ttl_minutes
+
+    def get(self, cache_key: str) -> Optional[SchemaCandidates]:
+        try:
+            item = self._store.get(
+                namespace=(*SCHEMA_LINKING_NAMESPACE, self._datasource_luid),
+                key=cache_key,
+            )
+            if item is None:
+                return None
+            value = item.value
+            if isinstance(value, SchemaCandidates):
+                return value
+            if isinstance(value, dict):
+                return SchemaCandidates.model_validate(value)
+            return None
+        except Exception as e:
+            logger.debug(f"SchemaLinking query cache get failed: {e}")
+            return None
+
+    def set(self, cache_key: str, candidates: SchemaCandidates) -> None:
+        try:
+            self._store.put(
+                namespace=(*SCHEMA_LINKING_NAMESPACE, self._datasource_luid),
+                key=cache_key,
+                value=candidates.model_dump(),
+                ttl=self._ttl_minutes,
+            )
+        except Exception as e:
+            logger.debug(f"SchemaLinking query cache set failed: {e}")
+
+
 # 停用词集合（中英文）
+
 STOPWORDS: set = {
     # 中文停用词
     "的", "是", "在", "有", "和", "与", "或", "了", "吗", "呢", "吧",
@@ -499,7 +545,9 @@ class SchemaLinkingComponentConfig:
     """SchemaLinkingComponent 配置。"""
     top_k_question: int = 30
     top_k_term: int = 10
+    exact_skip_threshold: int = 3
     min_score: float = 0.3
+
     max_terms: int = 10
     dedup_key: str = "field_name"
     fallback_on_empty: bool = True
@@ -544,8 +592,10 @@ class SchemaLinkingComponent:
         self.cache = cache
         self.config = config or SchemaLinkingComponentConfig()
         self.scoring_weights = scoring_weights or ScoringWeights()
+        self._last_cache_hit: bool = False
         
         # 使用统一 RAG 创建检索器
+
         self._retriever = create_retriever(
             mode=RetrievalMode.FAST_RECALL,
             field_indexer=field_indexer,
@@ -559,16 +609,21 @@ class SchemaLinkingComponent:
         self._dim_centroid: Optional[List[float]] = None
         self._meas_centroid: Optional[List[float]] = None
 
+    @property
+    def last_cache_hit(self) -> bool:
+        return self._last_cache_hit
 
-    
-    def build_index(self, fields: List[Any]) -> None:
+    def build_index(self, fields: List[Any], skip_indexing: bool = False) -> None:
+
         """构建索引。
         
         Args:
             fields: 字段元数据列表
+            skip_indexing: 是否跳过向量索引构建（已从缓存恢复时使用）
         """
         # 构建统一 RAG 索引
-        self.field_indexer.index_fields(fields)
+        if not skip_indexing:
+            self.field_indexer.index_fields(fields)
         
         # 构建精确匹配索引
         chunks = self.field_indexer.get_all_chunks()
@@ -577,28 +632,34 @@ class SchemaLinkingComponent:
         # 构建术语词典
         self.term_extractor.build_dictionary(chunks)
 
-
         
         logger.debug(f"SchemaLinkingComponent index built: {len(chunks)} fields")
+
     
     async def execute(
         self,
         canonical_question: str,
         data_model: Any,
         datasource_luid: str,
+        schema_hash: Optional[str] = None,
         extracted_terms: Optional[List[str]] = None,
     ) -> SchemaCandidates:
+
         """执行 Schema Linking。"""
         import time
         start_time = time.monotonic()
         
         # 1. 检查缓存
-        cache_key = self._build_cache_key(canonical_question, datasource_luid)
+        self._last_cache_hit = False
+        cache_key = self._build_cache_key(canonical_question, datasource_luid, schema_hash)
+
         if self.cache:
             cached = self.cache.get(cache_key)
             if cached:
                 logger.debug(f"Schema linking cache hit: {cache_key[:50]}")
+                self._last_cache_hit = True
                 return cached
+
         
         # 2. 提取术语
         if extracted_terms is None:
@@ -609,18 +670,31 @@ class SchemaLinkingComponent:
         for term in extracted_terms[:self.config.max_terms]:
             results = self._exact_retriever.retrieve(term)
             exact_results.extend(results)
-        
+
         # 4. 向量检索（使用统一 RAG 的 create_retriever）
         vector_results: List[RetrievalResult] = []
 
+        exact_field_names = {r.field_chunk.field_name for r in exact_results}
+        skip_threshold = max(1, int(self.config.exact_skip_threshold))
+        if len(exact_field_names) < skip_threshold:
+            try:
+                vector_results = await self._retriever.aretrieve(
+                    canonical_question,
+                    top_k=self.config.top_k_question,
+                )
+            except Exception as e:
+                logger.warning(f"Vector search failed: {e}")
+        else:
+            try:
+                vector_results = await self._retriever.aretrieve(
+                    canonical_question,
+                    top_k=max(1, int(self.config.top_k_term)),
+                )
+            except Exception as e:
+                logger.warning(f"Vector search (small top_k) failed: {e}")
 
-        try:
-            vector_results = await self._retriever.aretrieve(
-                canonical_question,
-                top_k=self.config.top_k_question,
-            )
-        except Exception as e:
-            logger.warning(f"Vector search failed: {e}")
+
+
         
         # 5. 合并去重 + 两阶段打分融合
         candidates = self._merge_results(
@@ -741,11 +815,13 @@ class SchemaLinkingComponent:
 
 
     
-    def _build_cache_key(self, question: str, datasource_luid: str) -> str:
+    def _build_cache_key(self, question: str, datasource_luid: str, schema_hash: Optional[str] = None) -> str:
         """构建缓存键。"""
         import hashlib
-        content = f"{question}|{datasource_luid}"
+        schema_part = schema_hash or ""
+        content = f"{question}|{datasource_luid}|{schema_part}"
         return hashlib.md5(content.encode()).hexdigest()
+
 
 
 class SchemaLinking:
@@ -778,7 +854,9 @@ class SchemaLinking:
         question: str,
         data_model: Any,
         config: Optional[RunnableConfig] = None,
+        extracted_terms: Optional[List[str]] = None,
     ) -> SchemaLinkingResult:
+
         """执行 Schema Linking - 带回退路径。"""
         import time
         start_time = time.monotonic()
@@ -787,9 +865,10 @@ class SchemaLinking:
         
         try:
             candidates = await asyncio.wait_for(
-                self._do_schema_linking(question, data_model, config),
+                self._do_schema_linking(question, data_model, config, extracted_terms=extracted_terms),
                 timeout=self.config.timeout_ms / 1000,
             )
+
             execution_time_ms = int((time.monotonic() - start_time) * 1000)
             
         except asyncio.TimeoutError:
@@ -836,7 +915,9 @@ class SchemaLinking:
         question: str,
         data_model: Any,
         config: Optional[RunnableConfig] = None,
+        extracted_terms: Optional[List[str]] = None,
     ) -> List[FieldCandidate]:
+
         """执行实际的 Schema Linking 逻辑。"""
         fields = getattr(data_model, "fields", []) if data_model is not None else []
         if not fields:
@@ -846,23 +927,58 @@ class SchemaLinking:
         # 优先使用 data_model 上的 datasource_luid（如有）
         datasource_luid = getattr(data_model, "datasource_luid", None) or "default"
         
-        # 构建索引与组件
+        # 构建索引与组件（优先使用统一缓存）
         field_indexer = FieldIndexer(datasource_luid=datasource_luid)
+        index_cache: Optional[FieldIndexCache] = None
+        query_cache: Optional[SchemaLinkingQueryCache] = None
+        try:
+            store = get_langgraph_store()
+            index_cache = FieldIndexCache(store)
+            query_cache = SchemaLinkingQueryCache(store, datasource_luid)
+        except Exception as e:
+            logger.warning(f"无法获取缓存，将不使用缓存: {e}")
+
+        current_hash = self._compute_metadata_hash(fields)
+        cache_restored = False
+        if index_cache:
+            cached_data = index_cache.get(datasource_luid)
+            if cached_data:
+                cached_hash = cached_data.get("metadata_hash")
+                if cached_hash == current_hash:
+                    cache_restored = field_indexer.restore_from_cache(cached_data)
+                    if cache_restored:
+                        logger.info(f"SchemaLinking 索引缓存命中: {datasource_luid}")
+
+        if not cache_restored:
+            field_indexer.index_fields(fields)
+            if index_cache and field_indexer.field_count > 0:
+                index_cache.put(datasource_luid, field_indexer.export_for_cache())
+
         term_extractor = TermExtractor()
         component = SchemaLinkingComponent(
             field_indexer=field_indexer,
             term_extractor=term_extractor,
+            cache=query_cache,
         )
-        component.build_index(fields)
+        component.build_index(fields, skip_indexing=True)
+
         
         # 执行检索
         schema_candidates = await component.execute(
             canonical_question=question,
             data_model=data_model,
             datasource_luid=datasource_luid,
+            schema_hash=current_hash,
+            extracted_terms=extracted_terms,
         )
+
+
+        metrics = get_metrics_from_config(config)
+        if metrics is not None and component.last_cache_hit:
+            metrics.schema_cache_hit = True
         
         return schema_candidates.get_all_candidates()
+
 
     
     def _check_candidates_quality(
@@ -954,6 +1070,21 @@ class SchemaLinking:
         
         return None
     
+    def _compute_metadata_hash(self, fields: List[Any]) -> str:
+        """计算元数据哈希（用于索引缓存命中判断）。"""
+        import hashlib
+        import json
+        field_data = []
+        for f in sorted(fields, key=lambda x: getattr(x, "name", "")):
+            field_data.append({
+                "name": getattr(f, "name", ""),
+                "caption": getattr(f, "fieldCaption", ""),
+                "role": getattr(f, "role", ""),
+                "dataType": getattr(f, "dataType", ""),
+            })
+        content = json.dumps(field_data, sort_keys=True)
+        return hashlib.md5(content.encode()).hexdigest()
+
     def _extract_terms(self, question: str) -> List[str]:
         """从问题中提取候选业务术语。"""
         chinese_pattern = r'[\u4e00-\u9fa5]{2,4}'
@@ -962,6 +1093,7 @@ class SchemaLinking:
         english_terms = re.findall(english_pattern, question)
         all_terms = chinese_terms + english_terms
         return [t for t in all_terms if t.lower() not in STOPWORDS]
+
     
     def _record_fallback_metric(
         self,

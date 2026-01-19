@@ -7,14 +7,15 @@ SemanticQuery → validate → build VizQL → execute → ExecuteResult
 import logging
 from typing import Any
 
-from ...core.interfaces import BasePlatformAdapter
-from ...core.models import (
+from tableau_assistant.src.core.interfaces import BasePlatformAdapter
+from tableau_assistant.src.core.models import (
     ColumnInfo,
     ExecuteResult,
     SemanticQuery,
     ValidationResult,
 )
-from .query_builder import TableauQueryBuilder
+from tableau_assistant.src.platforms.tableau.query_builder import TableauQueryBuilder
+
 
 logger = logging.getLogger(__name__)
 

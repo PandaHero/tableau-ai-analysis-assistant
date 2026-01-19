@@ -13,12 +13,13 @@ This is the unified Tableau platform module that combines:
 - VizQL Data Service client
 """
 
-from .adapter import TableauAdapter
-from .query_builder import TableauQueryBuilder
-from .field_mapper import TableauFieldMapper
+from tableau_assistant.src.platforms.tableau.adapter import TableauAdapter
+from tableau_assistant.src.platforms.tableau.query_builder import TableauQueryBuilder
+from tableau_assistant.src.platforms.tableau.field_mapper import TableauFieldMapper
 
 # Authentication
-from .auth import (
+from tableau_assistant.src.platforms.tableau.auth import (
+
     # Auth Context
     TableauAuthContext,
     TableauAuthError,
@@ -33,7 +34,7 @@ from .auth import (
 )
 
 # Metadata Services
-from .data_model import (
+from tableau_assistant.src.platforms.tableau.data_model import (
     get_data_dictionary,
     get_data_dictionary_async,
     get_datasource_luid_by_name,
@@ -41,17 +42,19 @@ from .data_model import (
 )
 
 # VizQL Client
-from .vizql_client import VizQLClient, VizQLClientConfig
+from tableau_assistant.src.platforms.tableau.vizql_client import VizQLClient, VizQLClientConfig
 
 # Data Model Loader
-from .data_model_loader import TableauDataModelLoader
+from tableau_assistant.src.platforms.tableau.data_model_loader import TableauDataModelLoader
+
 
 
 # Register Tableau adapter with platform registry
 def _register():
     """Register Tableau adapter with platform registry."""
     try:
-        from ..base import register_adapter
+        from tableau_assistant.src.platforms.base import register_adapter
+
         register_adapter("tableau", TableauAdapter)
     except ImportError:
         pass  # Registry not available

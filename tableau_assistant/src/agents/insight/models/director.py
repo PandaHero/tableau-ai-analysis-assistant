@@ -15,7 +15,8 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Dict, List, Any, Optional, Literal
 from enum import Enum
 
-from .insight import Insight, InsightQuality
+from tableau_assistant.src.agents.insight.models.insight import Insight, InsightQuality
+
 
 
 class DirectorAction(str, Enum):

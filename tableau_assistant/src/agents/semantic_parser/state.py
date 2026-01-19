@@ -29,10 +29,11 @@ LangGraph 节点路由循环：
 from typing import Any, Dict, List, Optional
 
 # 从编排层导入（正确的依赖方向）
-from ...orchestration.workflow.state import VizQLState
-from .models import Step1Output, Step2Output
-from .models.pipeline import QueryError
-from .models.react import ReActActionType
+from tableau_assistant.src.orchestration.workflow.state import VizQLState
+from tableau_assistant.src.agents.semantic_parser.models import Step1Output, Step2Output
+from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError
+from tableau_assistant.src.agents.semantic_parser.models.react import ReActActionType
+
 
 
 class SemanticParserState(VizQLState):

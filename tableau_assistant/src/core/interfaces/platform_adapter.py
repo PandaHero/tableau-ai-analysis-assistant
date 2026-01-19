@@ -7,7 +7,8 @@ Each BI platform (Tableau, Power BI, Superset) implements this interface.
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..models import ExecuteResult, SemanticQuery, ValidationResult
+from tableau_assistant.src.core.models import ExecuteResult, SemanticQuery, ValidationResult
+
 
 
 class BasePlatformAdapter(ABC):

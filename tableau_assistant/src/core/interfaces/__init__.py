@@ -3,9 +3,10 @@
 This module defines the contracts that platform-specific implementations must follow.
 """
 
-from .field_mapper import BaseFieldMapper
-from .platform_adapter import BasePlatformAdapter
-from .query_builder import BaseQueryBuilder
+from tableau_assistant.src.core.interfaces.field_mapper import BaseFieldMapper
+from tableau_assistant.src.core.interfaces.platform_adapter import BasePlatformAdapter
+from tableau_assistant.src.core.interfaces.query_builder import BaseQueryBuilder
+
 
 __all__ = [
     "BaseFieldMapper",

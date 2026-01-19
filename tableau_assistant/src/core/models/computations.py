@@ -4,14 +4,15 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .enums import (
+from tableau_assistant.src.core.models.enums import (
     AggregationType,
     RankStyle,
     RelativeTo,
     SortDirection,
     WindowAggregation,
 )
-from .fields import DimensionField
+from tableau_assistant.src.core.models.fields import DimensionField
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════

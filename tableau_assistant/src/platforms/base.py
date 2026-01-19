@@ -5,7 +5,8 @@ Provides centralized platform adapter registration and retrieval.
 
 from typing import Type
 
-from ..core.interfaces import BasePlatformAdapter
+from tableau_assistant.src.core.interfaces import BasePlatformAdapter
+
 
 
 class PlatformRegistry:

@@ -18,11 +18,12 @@ import re
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any, Callable
 
-from .models import (
+from tableau_assistant.src.infra.rag.models import (
     FieldChunk,
     RetrievalResult,
     RetrievalSource,
 )
+
 
 # 注意：此文件从 field_mapper/rag/reranker.py 迁移到 infra/rag/
 # 保持向后兼容性

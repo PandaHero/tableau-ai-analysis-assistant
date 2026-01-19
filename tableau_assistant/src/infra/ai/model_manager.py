@@ -1008,7 +1008,7 @@ class ModelManager:
         - enable_json_mode: 是否启用 JSON Mode（通过 Provider 适配层）
         """
         from langchain_openai import ChatOpenAI, AzureChatOpenAI
-        from .json_mode_adapter import (
+        from tableau_assistant.src.infra.ai.json_mode_adapter import (
             get_json_mode_kwargs,
             get_provider_from_config,
             supports_json_mode,
@@ -1034,7 +1034,8 @@ class ModelManager:
             
             # JSON Mode 支持
             if enable_json_mode:
-                from .json_mode_adapter import ProviderType
+                from tableau_assistant.src.infra.ai.json_mode_adapter import ProviderType
+
                 json_kwargs = get_json_mode_kwargs(ProviderType.AZURE, True)
                 if json_kwargs.get("model_kwargs"):
                     azure_kwargs["model_kwargs"] = json_kwargs["model_kwargs"]
@@ -1046,7 +1047,8 @@ class ModelManager:
         if not config.openai_compatible:
             from tableau_assistant.src.infra.ai.custom_llm import CustomLLMChat, CustomLLMConfig
             from tableau_assistant.src.infra.ai.custom_llm import AuthType as CustomAuthType
-            from .json_mode_adapter import ProviderType
+            from tableau_assistant.src.infra.ai.json_mode_adapter import ProviderType
+
             
             # 转换 AuthType
             auth_type_map = {

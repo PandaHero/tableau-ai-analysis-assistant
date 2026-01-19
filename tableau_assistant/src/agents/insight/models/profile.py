@@ -17,7 +17,8 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import Dict, List, Any, Optional, Literal, Tuple
 from enum import Enum
 
-from .insight import ColumnStats
+from tableau_assistant.src.agents.insight.models.insight import ColumnStats
+
 
 
 class ChunkingStrategy(str, Enum):

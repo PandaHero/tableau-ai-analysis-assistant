@@ -15,10 +15,11 @@ Design Reference:
 - ReplanDecision 是 Agent 特有的决策输出，无核心层基类
 """
 
-from .output import (
+from tableau_assistant.src.agents.replanner.models.output import (
     ExplorationQuestion,
     ReplanDecision,
 )
+
 
 __all__ = [
     "ExplorationQuestion",

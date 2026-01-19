@@ -22,7 +22,8 @@ from typing import Dict, List, Any, Optional
 from tableau_assistant.src.agents.replanner.models import ReplanDecision, ExplorationQuestion
 from tableau_assistant.src.agents.insight.models import Insight
 from tableau_assistant.src.agents.base import clean_json_output, get_llm, call_llm_with_tools
-from .prompts import REPLANNER_PROMPT
+from tableau_assistant.src.agents.replanner.prompts import REPLANNER_PROMPT
+
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +310,8 @@ class ReplannerAgent:
             return "（无已回答问题）"
         
         # 使用 trim_answered_questions 限制长度
-        from .utils import trim_answered_questions
+        from tableau_assistant.src.agents.replanner.utils import trim_answered_questions
+
         trimmed = trim_answered_questions(questions)
         
         lines = []

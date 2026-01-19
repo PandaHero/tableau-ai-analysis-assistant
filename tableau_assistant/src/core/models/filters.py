@@ -9,11 +9,12 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .enums import (
+from tableau_assistant.src.core.models.enums import (
     FilterType,
     SortDirection,
     TextMatchType,
 )
+
 
 
 class Filter(BaseModel):

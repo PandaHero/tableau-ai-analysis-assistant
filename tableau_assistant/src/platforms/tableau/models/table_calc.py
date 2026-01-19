@@ -13,7 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .vizql_types import VizQLFunction, VizQLSortDirection
+from tableau_assistant.src.platforms.tableau.models.vizql_types import VizQLFunction, VizQLSortDirection
+
 
 
 class TableCalcType(str, Enum):

@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from enum import Enum
 
-from .insight import Insight
+from tableau_assistant.src.agents.insight.models.insight import Insight
+
 
 
 class AnalystLLMOutput(BaseModel):

@@ -39,7 +39,7 @@ Usage:
 """
 
 # 数据模型
-from .models import (
+from tableau_assistant.src.infra.rag.models import (
     EmbeddingResult,
     RetrievalResult,
     FieldChunk,
@@ -48,25 +48,25 @@ from .models import (
 )
 
 # 嵌入提供者
-from .embeddings import (
+from tableau_assistant.src.infra.rag.embeddings import (
     EmbeddingProvider,
     ZhipuEmbedding,
     EmbeddingProviderFactory,
 )
 
 # 缓存
-from .cache import (
+from tableau_assistant.src.infra.rag.cache import (
     CachedEmbeddingProvider,
 )
 
 # 索引器
-from .field_indexer import (
+from tableau_assistant.src.infra.rag.field_indexer import (
     FieldIndexer,
     IndexConfig,
 )
 
 # 检索器
-from .retriever import (
+from tableau_assistant.src.infra.rag.retriever import (
     BaseRetriever,
     EmbeddingRetriever,
     KeywordRetriever,
@@ -79,7 +79,7 @@ from .retriever import (
 )
 
 # 重排序器
-from .reranker import (
+from tableau_assistant.src.infra.rag.reranker import (
     BaseReranker,
     DefaultReranker,
     RRFReranker,
@@ -87,7 +87,7 @@ from .reranker import (
 )
 
 # 可观测性
-from .observability import (
+from tableau_assistant.src.infra.rag.observability import (
     RAGStage,
     RetrievalLogEntry,
     RerankLogEntry,
@@ -100,7 +100,7 @@ from .observability import (
 )
 
 # 检索模式配置
-from .config import (
+from tableau_assistant.src.infra.rag.config import (
     RetrievalMode,
     FAST_RECALL_CONFIG,
     HIGH_PRECISION_CONFIG,
@@ -108,16 +108,17 @@ from .config import (
 )
 
 # 新增：精确匹配检索器
-from .exact_retriever import (
+from tableau_assistant.src.infra.rag.exact_retriever import (
     ExactRetriever,
     ExactRetrieverConfig,
 )
 
 # 新增：批量 Embedding 优化器
-from .batch_optimizer import (
+from tableau_assistant.src.infra.rag.batch_optimizer import (
     BatchEmbeddingOptimizer,
     BatchEmbeddingConfig,
 )
+
 
 __all__ = [
     # 数据模型

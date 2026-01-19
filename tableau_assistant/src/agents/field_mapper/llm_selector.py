@@ -23,7 +23,7 @@ from tableau_assistant.src.agents.base import (
     call_llm_with_tools,
     parse_json_response,
 )
-from .prompt import FIELD_MAPPER_PROMPT, SingleSelectionResult
+from tableau_assistant.src.agents.field_mapper.prompt import FIELD_MAPPER_PROMPT, SingleSelectionResult
 
 logger = logging.getLogger(__name__)
 

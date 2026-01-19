@@ -36,7 +36,8 @@ from tableau_assistant.src.agents.insight.models.director import (
     InsightAction,
 )
 from tableau_assistant.src.agents.insight.prompts import DIRECTOR_PROMPT
-from .utils import format_insights_with_index
+from tableau_assistant.src.agents.insight.components.utils import format_insights_with_index
+
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,8 @@ Models:
 - analyst.py: AnalystOutputWithHistory, HistoricalInsightAction
 """
 
-from .insight import (
+from tableau_assistant.src.agents.insight.models.insight import (
+
     # Priority and Stats
     ChunkPriority,
     ColumnStats,
@@ -35,7 +36,8 @@ from .insight import (
     DataInsightProfile,
 )
 
-from .profile import (
+from tableau_assistant.src.agents.insight.models.profile import (
+
     ContributorAnalysis,
     ConcentrationRisk,
     PeriodChangeAnalysis,
@@ -46,7 +48,8 @@ from .profile import (
     ChunkingStrategy,
 )
 
-from .director import (
+from tableau_assistant.src.agents.insight.models.director import (
+
     DirectorAction,
     DirectorLLMOutput,
     DirectorInput,
@@ -56,7 +59,8 @@ from .director import (
     DirectorOutputWithAccumulation,
 )
 
-from .analyst import (
+from tableau_assistant.src.agents.insight.models.analyst import (
+
     AnalystLLMOutput,
     HistoricalInsightActionType,
     HistoricalInsightAction,

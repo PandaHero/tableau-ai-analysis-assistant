@@ -5,7 +5,8 @@
 测试种子数据模块的功能：
 - 种子数据定义验证（44 个模式，6 个类别）
 - few-shot 示例获取
-- 种子数据初始化（批量添加到 FAISS + LangGraph Store）
+- 种子数据初始化（批量添加到向量索引 + LangGraph Store）
+
 
 使用真实 Embedding API，不使用 mock。
 
@@ -23,14 +24,12 @@ from tableau_assistant.src.agents.dimension_hierarchy.seed_data import (
 from tableau_assistant.src.agents.dimension_hierarchy.rag_retriever import (
     DimensionRAGRetriever,
 )
-from tableau_assistant.src.agents.dimension_hierarchy.faiss_store import (
-    DimensionPatternFAISS,
-    DEFAULT_DIMENSION,
-)
 from tableau_assistant.src.agents.dimension_hierarchy.cache_storage import (
     DimensionHierarchyCacheStorage,
 )
+from tableau_assistant.src.infra.rag import FieldIndexer, IndexConfig
 from tableau_assistant.src.infra.ai.embeddings import EmbeddingProviderFactory
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -55,15 +54,21 @@ def temp_index_path():
 
 
 @pytest.fixture
-def faiss_store(embedding_provider, temp_index_path):
-    """创建 FAISS 存储实例"""
-    store = DimensionPatternFAISS(
-        embedding_provider=embedding_provider,
-        index_path=temp_index_path,
-        dimension=DEFAULT_DIMENSION,
+def field_indexer(embedding_provider, temp_index_path):
+    """创建向量索引器实例"""
+    index_config = IndexConfig(
+        max_samples=0,
+        include_formula=False,
+        include_table_caption=False,
+        include_category=False,
     )
-    store.load_or_create()
-    return store
+    return FieldIndexer(
+        embedding_provider=embedding_provider,
+        index_config=index_config,
+        datasource_luid="dimension_patterns_test",
+        index_dir=temp_index_path,
+        use_cache=False,
+    )
 
 
 @pytest.fixture
@@ -75,12 +80,13 @@ def cache_storage():
 
 
 @pytest.fixture
-def rag_retriever(faiss_store, cache_storage):
+def rag_retriever(field_indexer, cache_storage):
     """创建 RAG 检索器实例"""
     return DimensionRAGRetriever(
-        faiss_store=faiss_store,
         cache_storage=cache_storage,
+        field_indexer=field_indexer,
     )
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -228,17 +234,18 @@ class TestGetSeedFewShotExamples:
 class TestInitializeSeedPatterns:
     """种子数据初始化测试"""
     
-    def test_initialize_all_patterns(self, rag_retriever, faiss_store, cache_storage):
+    def test_initialize_all_patterns(self, rag_retriever, cache_storage):
         """测试初始化所有种子数据"""
         count = initialize_seed_patterns(rag_retriever)
         
         # 应该成功添加 44 个模式
         assert count == 44
         
-        # 验证 FAISS 索引包含 44 个向量
-        assert faiss_store.count == 44
+        # 验证向量索引包含 44 个向量
+        assert rag_retriever.get_index_count() == 44
+
     
-    def test_initialize_idempotent(self, rag_retriever, faiss_store):
+    def test_initialize_idempotent(self, rag_retriever):
         """测试初始化幂等性（重复调用不会重复添加）"""
         # 第一次初始化
         count1 = initialize_seed_patterns(rag_retriever)
@@ -248,8 +255,9 @@ class TestInitializeSeedPatterns:
         count2 = initialize_seed_patterns(rag_retriever)
         assert count2 == 44  # 返回成功数（包括跳过的）
         
-        # FAISS 索引仍然只有 44 个向量
-        assert faiss_store.count == 44
+        # 向量索引仍然只有 44 个向量
+        assert rag_retriever.get_index_count() == 44
+
     
     def test_initialized_patterns_searchable(self, rag_retriever):
         """测试初始化后的模式可被检索"""

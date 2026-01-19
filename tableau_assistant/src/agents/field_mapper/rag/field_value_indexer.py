@@ -116,10 +116,11 @@ class FieldValueIndexer:
     def _create_embedding_provider(self) -> Optional[Any]:
         """创建 Embedding 提供者"""
         try:
-            from .embeddings import EmbeddingProviderFactory
-            from .cache import CachedEmbeddingProvider
+            from tableau_assistant.src.infra.rag import EmbeddingProviderFactory
+            from tableau_assistant.src.infra.rag.cache import CachedEmbeddingProvider
             
             base_provider = EmbeddingProviderFactory.get_default()
+
             if base_provider:
                 return CachedEmbeddingProvider(base_provider)
             return None

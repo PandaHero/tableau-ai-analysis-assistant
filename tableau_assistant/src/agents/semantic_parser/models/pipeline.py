@@ -8,10 +8,11 @@ from typing import Any, Dict, List, Optional
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 
-from .step1 import Step1Output
-from .step2 import Step2Output
-from ....core.models import IntentType
-from ....core.models.execute_result import ExecuteResult
+from tableau_assistant.src.agents.semantic_parser.models.step1 import Step1Output
+from tableau_assistant.src.agents.semantic_parser.models.step2 import Step2Output
+from tableau_assistant.src.core.models import IntentType
+from tableau_assistant.src.core.models.execute_result import ExecuteResult
+
 
 
 class QueryErrorType(str, Enum):

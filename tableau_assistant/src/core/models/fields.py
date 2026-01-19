@@ -2,7 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .enums import AggregationType, DateGranularity, SortDirection
+from tableau_assistant.src.core.models.enums import AggregationType, DateGranularity, SortDirection
+
 
 
 class SortSpec(BaseModel):

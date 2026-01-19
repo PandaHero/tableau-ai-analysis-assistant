@@ -29,9 +29,10 @@ except ImportError:
     FAISS_AVAILABLE = False
     logging.warning("FAISS 未安装，将使用简单向量搜索。安装命 pip install faiss-cpu")
 
-from .models import FieldChunk, RetrievalResult, RetrievalSource
-from .embeddings import EmbeddingProvider, EmbeddingProviderFactory
-from .cache import CachedEmbeddingProvider
+from tableau_assistant.src.infra.rag.models import FieldChunk, RetrievalResult, RetrievalSource
+from tableau_assistant.src.infra.rag.embeddings import EmbeddingProvider, EmbeddingProviderFactory
+from tableau_assistant.src.infra.rag.cache import CachedEmbeddingProvider
+
 
 # 注意：此文件从 field_mapper/rag/field_indexer.py 迁移到 infra/rag/
 # 保持向后兼容性

@@ -12,8 +12,9 @@ from enum import Enum
 from typing import Optional, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .retriever import BaseRetriever
-    from .field_indexer import FieldIndexer
+    from tableau_assistant.src.infra.rag.retriever import BaseRetriever
+    from tableau_assistant.src.infra.rag.field_indexer import FieldIndexer
+
 
 
 class RetrievalMode(Enum):
@@ -133,14 +134,15 @@ def create_retriever(
             field_indexer=indexer,
         )
     """
-    from .retriever import (
+    from tableau_assistant.src.infra.rag.retriever import (
         RetrievalConfig,
         EmbeddingRetriever,
         KeywordRetriever,
         HybridRetriever,
         RetrievalPipeline,
     )
-    from .reranker import DefaultReranker, RRFReranker, LLMReranker
+    from tableau_assistant.src.infra.rag.reranker import DefaultReranker, RRFReranker, LLMReranker
+
     
     # 使用预设配置或自定义配置
     if config is None:
@@ -180,7 +182,8 @@ def create_retriever(
         if config.use_reranker:
             if config.reranker_type == "llm":
                 try:
-                    from ..ai.llm import get_llm
+                    from tableau_assistant.src.infra.ai.llm import get_llm
+
                     llm = get_llm()
                     reranker = LLMReranker(
                         top_k=config.top_k,

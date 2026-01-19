@@ -34,17 +34,18 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 from langgraph.types import RunnableConfig
 
-from ..models.pipeline import PipelineResult, QueryError, QueryErrorType
-from ..models import Step1Output, Step2Output
-from ....core.models import SemanticQuery
-from ....infra.storage.data_model import DataModel
-from ....agents.field_mapper.models import MappedQuery
-from ....agents.base import (
+from tableau_assistant.src.agents.semantic_parser.models.pipeline import PipelineResult, QueryError, QueryErrorType
+from tableau_assistant.src.agents.semantic_parser.models import Step1Output, Step2Output
+from tableau_assistant.src.core.models import SemanticQuery
+from tableau_assistant.src.infra.storage.data_model import DataModel
+from tableau_assistant.src.agents.field_mapper.models import MappedQuery
+from tableau_assistant.src.agents.base import (
     MiddlewareRunner,
     Runtime,
     get_middleware_from_config,
 )
-from ....infra.observability import get_metrics_from_config
+from tableau_assistant.src.infra.observability import get_metrics_from_config
+
 
 logger = logging.getLogger(__name__)
 
@@ -519,7 +520,8 @@ class QueryPipeline:
         Requirements: 0.3 - Pipeline 贯通 middleware 能力
         """
         try:
-            from ....orchestration.tools.map_fields import map_fields_async
+            from tableau_assistant.src.orchestration.tools.map_fields import map_fields_async
+
             
             # Run through middleware wrapper with actual workflow state
             result = await self._run_tool_with_middleware(
@@ -599,7 +601,8 @@ class QueryPipeline:
             if error_feedback:
                 logger.info(f"BuildQuery retry with feedback: {error_feedback[:100]}...")
             
-            from ....orchestration.tools.build_query import build_query_async
+            from tableau_assistant.src.orchestration.tools.build_query import build_query_async
+
             
             # Run through middleware wrapper with actual workflow state
             result = await self._run_tool_with_middleware(
@@ -667,7 +670,8 @@ class QueryPipeline:
         Requirements: 0.3 - Pipeline 贯通 middleware 能力
         """
         try:
-            from ....orchestration.tools.execute_query import execute_query_async
+            from tableau_assistant.src.orchestration.tools.execute_query import execute_query_async
+
             
             # Run through middleware wrapper with actual workflow state
             result = await self._run_tool_with_middleware(

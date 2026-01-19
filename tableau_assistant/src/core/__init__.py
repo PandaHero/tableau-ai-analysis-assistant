@@ -15,12 +15,13 @@ Note:
     - FieldMapping models are in agents/field_mapper/models/mapping.py
 """
 
-from .interfaces import (
+from tableau_assistant.src.core.interfaces import (
     BaseFieldMapper,
     BasePlatformAdapter,
     BaseQueryBuilder,
 )
-from .models import (
+from tableau_assistant.src.core.models import (
+
     # Enums
     AggregationType,
     DateGranularity,

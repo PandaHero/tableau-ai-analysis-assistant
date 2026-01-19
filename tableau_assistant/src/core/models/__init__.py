@@ -22,7 +22,7 @@ Core Data Models - 平台无关的语义层模型
 """
 
 # Enums
-from .enums import (
+from tableau_assistant.src.core.models.enums import (
     AggregationType,
     DateGranularity,
     DateRangeType,
@@ -41,14 +41,14 @@ from .enums import (
 )
 
 # Fields
-from .fields import (
+from tableau_assistant.src.core.models.fields import (
     DimensionField,
     MeasureField,
     SortSpec,
 )
 
 # Computations
-from .computations import (
+from tableau_assistant.src.core.models.computations import (
     # LOD types
     LODFixed,
     LODInclude,
@@ -69,7 +69,7 @@ from .computations import (
 )
 
 # Filters
-from .filters import (
+from tableau_assistant.src.core.models.filters import (
     DateRangeFilter,
     Filter,
     NumericRangeFilter,
@@ -79,22 +79,23 @@ from .filters import (
 )
 
 # Query
-from .query import SemanticQuery
+from tableau_assistant.src.core.models.query import SemanticQuery
 
 # Validation
-from .validation import (
+from tableau_assistant.src.core.models.validation import (
     ValidationError,
     ValidationErrorType,
     ValidationResult,
 )
 
 # Execute Result
-from .execute_result import (
+from tableau_assistant.src.core.models.execute_result import (
     ExecuteResult,
     ColumnInfo,
     RowData,
     RowValue,
 )
+
 
 
 __all__ = [

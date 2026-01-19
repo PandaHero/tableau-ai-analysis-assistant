@@ -27,7 +27,7 @@ import hashlib
 import logging
 import time
 
-from .cache_storage import (
+from tableau_assistant.src.agents.dimension_hierarchy.cache_storage import (
     DimensionHierarchyCacheStorage,
     compute_field_hash_metadata_only,
     compute_single_field_hash,
@@ -35,11 +35,13 @@ from .cache_storage import (
     MAX_LOCKS,
     LOCK_EXPIRE_SECONDS,
 )
-from .faiss_store import DimensionPatternFAISS
-from .rag_retriever import DimensionRAGRetriever
-from .seed_data import initialize_seed_patterns, SEED_PATTERNS
-from .llm_inference import infer_dimensions_once, MAX_FIELDS_PER_INFERENCE
-from .models import DimensionHierarchyResult, DimensionAttributes
+from tableau_assistant.src.agents.dimension_hierarchy.rag_retriever import DimensionRAGRetriever
+
+from tableau_assistant.src.agents.dimension_hierarchy.seed_data import initialize_seed_patterns
+
+from tableau_assistant.src.agents.dimension_hierarchy.llm_inference import infer_dimensions_once, MAX_FIELDS_PER_INFERENCE
+from tableau_assistant.src.agents.dimension_hierarchy.models import DimensionHierarchyResult, DimensionAttributes
+
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +214,6 @@ class DimensionHierarchyInference:
     
     使用方式：
         inference = DimensionHierarchyInference(
-            faiss_store=faiss_store,
             cache_storage=cache_storage,
         )
         result = await inference.infer(
@@ -223,22 +224,19 @@ class DimensionHierarchyInference:
     
     def __init__(
         self,
-        faiss_store: DimensionPatternFAISS,
         cache_storage: DimensionHierarchyCacheStorage,
         rag_retriever: Optional[DimensionRAGRetriever] = None,
     ):
         """
         Args:
-            faiss_store: FAISS 向量存储实例
             cache_storage: 缓存存储实例
             rag_retriever: RAG 检索器实例（可选，不传则自动创建）
         """
-        self._faiss_store = faiss_store
         self._cache_storage = cache_storage
         self._rag_retriever = rag_retriever or DimensionRAGRetriever(
-            faiss_store=faiss_store,
             cache_storage=cache_storage,
         )
+
         
         # 并发控制
         self._locks: Dict[str, asyncio.Lock] = {}
@@ -310,138 +308,57 @@ class DimensionHierarchyInference:
         首次调用时自动初始化种子数据到 RAG，并检查一致性。
         
         修复场景：
-        1. FAISS=0 & metadata=0: 初始化种子数据
-        2. FAISS=0 & metadata>0: 从 metadata 重建 FAISS（关键修复）
-        3. FAISS>0 & metadata 数量不一致: 一致性修复
+        1. index=0 & metadata=0: 初始化种子数据
+        2. index=0 & metadata>0: 从 metadata 重建索引
+        3. index>0 & metadata 数量不一致: 一致性修复
         """
         if self._seed_initialized:
             return
         
-        faiss_count = self._faiss_store.count
-        metadata_count = len(self._cache_storage.get_all_pattern_metadata())
+        index_count = self._rag_retriever.get_index_count()
+        metadata_count = self._rag_retriever.get_metadata_count()
         
-        logger.debug(f"一致性检查: FAISS={faiss_count}, metadata={metadata_count}")
+        logger.debug(f"一致性检查: index={index_count}, metadata={metadata_count}")
         
-        if faiss_count == 0 and metadata_count == 0:
-            # 场景 1: 全新系统，初始化种子数据
-            logger.info("FAISS 和 metadata 均为空，初始化种子数据")
+        if index_count == 0 and metadata_count == 0:
+            logger.info("索引和 metadata 均为空，初始化种子数据")
             count = initialize_seed_patterns(self._rag_retriever)
             logger.info(f"种子数据初始化完成: {count} 个模式")
-        elif faiss_count == 0 and metadata_count > 0:
-            # 场景 2: FAISS 丢失但 metadata 存在（关键修复场景）
-            # 这可能是索引目录被清理/损坏导致的
+        elif index_count == 0 and metadata_count > 0:
             logger.warning(
-                f"FAISS 索引丢失但 metadata 存在 ({metadata_count} 个)，"
-                f"从 metadata 重建 FAISS 索引"
+                f"索引丢失但 metadata 存在 ({metadata_count} 个)，"
+                f"从 metadata 重建索引"
             )
-            self._rebuild_faiss_from_metadata()
-        elif faiss_count != metadata_count:
-            # 场景 3: 数量不一致，执行一致性修复
-            logger.debug(f"FAISS 索引已有 {faiss_count} 个向量")
+            self._rebuild_index_from_metadata()
+        elif index_count != metadata_count:
+            logger.debug(f"索引已有 {index_count} 个向量")
             self._auto_repair_consistency()
         else:
-            logger.debug(f"FAISS 和 metadata 数量一致: {faiss_count}")
+            logger.debug(f"索引和 metadata 数量一致: {index_count}")
         
         self._seed_initialized = True
     
-    def _rebuild_faiss_from_metadata(self) -> bool:
-        """
-        从 metadata 重建 FAISS 索引
-        
-        用于 FAISS 索引丢失但 metadata 仍存在的场景。
-        
-        Returns:
-            是否成功重建
-        """
-        all_metadata = self._cache_storage.get_all_pattern_metadata()
-        
-        if not all_metadata:
-            logger.warning("无 metadata 可用于重建 FAISS")
-            return False
-        
-        # 从 metadata 构建 patterns 列表
-        patterns = []
-        for metadata in all_metadata:
-            pattern_id = metadata.get("pattern_id")
-            if not pattern_id:
-                continue
-            
-            query_text = self._rag_retriever._build_query_text_metadata_only(
-                metadata["field_caption"],
-                metadata["data_type"],
-            )
-            patterns.append({
-                "pattern_id": pattern_id,
-                "text": query_text,
-                "metadata": {
-                    "field_caption": metadata["field_caption"],
-                    "data_type": metadata["data_type"],
-                },
-            })
-        
-        if not patterns:
-            logger.warning("无有效 pattern 可用于重建 FAISS")
-            return False
-        
-        # 重建索引
-        self._faiss_store.rebuild_index(patterns)
-        logger.info(f"FAISS 索引重建完成: {len(patterns)} 个向量")
-        return True
+    def _rebuild_index_from_metadata(self) -> bool:
+        """从 metadata 重建索引"""
+        return self._rag_retriever.rebuild_index_from_metadata()
     
     def _auto_repair_consistency(self) -> bool:
-        """
-        自动修复 FAISS 和 metadata 的一致性
-        
-        从 metadata 重新构造 query_text，再 rebuild FAISS。
-        
-        Returns:
-            是否执行了修复
-        """
-        # 获取所有 metadata（返回列表）
-        all_metadata = self._cache_storage.get_all_pattern_metadata()
-        
-        if not all_metadata:
+        """自动修复索引与 metadata 的一致性"""
+        metadata_count = self._rag_retriever.get_metadata_count()
+        if metadata_count == 0:
             logger.debug("无 metadata，跳过一致性修复")
             return False
         
-        # 检查 FAISS 数量是否匹配
-        faiss_count = self._faiss_store.count
-        metadata_count = len(all_metadata)
-        
-        if faiss_count == metadata_count:
-            logger.debug(f"FAISS 和 metadata 数量一致: {faiss_count}")
+        index_count = self._rag_retriever.get_index_count()
+        if index_count == metadata_count:
+            logger.debug(f"索引和 metadata 数量一致: {index_count}")
             return False
         
         logger.warning(
-            f"FAISS ({faiss_count}) 和 metadata ({metadata_count}) 数量不一致，"
-            f"开始自动修复"
+            f"索引 ({index_count}) 和 metadata ({metadata_count}) 数量不一致，开始自动修复"
         )
-        
-        # 从 metadata 重建 FAISS（all_metadata 是列表）
-        patterns = []
-        for metadata in all_metadata:
-            pattern_id = metadata.get("pattern_id")
-            if not pattern_id:
-                continue
-            
-            query_text = self._rag_retriever._build_query_text_metadata_only(
-                metadata["field_caption"],
-                metadata["data_type"],
-            )
-            patterns.append({
-                "pattern_id": pattern_id,
-                "text": query_text,
-                "metadata": {
-                    "field_caption": metadata["field_caption"],
-                    "data_type": metadata["data_type"],
-                },
-            })
-        
-        # 重建索引
-        self._faiss_store.rebuild_index(patterns)
-        
-        logger.info(f"一致性修复完成: 重建 {len(patterns)} 个向量")
-        return True
+        return self._rag_retriever.rebuild_index_from_metadata()
+
     
     # ═══════════════════════════════════════════════════════════
     # RAG 存储

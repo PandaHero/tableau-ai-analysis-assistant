@@ -6,8 +6,8 @@
 - 使用 RAG + LLM 混合策略
 - 支持缓存和批量处理
 """
-from .node import field_mapper_node, FieldMapperNode
-from .llm_selector import LLMCandidateSelector, FieldCandidate, SingleSelectionResult
+from tableau_assistant.src.agents.field_mapper.node import field_mapper_node, FieldMapperNode
+from tableau_assistant.src.agents.field_mapper.llm_selector import LLMCandidateSelector, FieldCandidate, SingleSelectionResult
 
 __all__ = [
     "field_mapper_node",

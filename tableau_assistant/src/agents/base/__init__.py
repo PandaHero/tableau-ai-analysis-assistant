@@ -5,7 +5,7 @@ Agent 基础模块
 1. node.py - LLM 调用、工具处理、JSON 解析
 2. prompt.py - Prompt 模板基类
 """
-from .node import (
+from tableau_assistant.src.agents.base.node import (
     # LLM 获取
     get_llm,
     get_agent_temperature,
@@ -29,7 +29,7 @@ from .node import (
     JSONParseError,
 )
 
-from .prompt import (
+from tableau_assistant.src.agents.base.prompt import (
     # Prompt 基类
     BasePrompt,
     StructuredPrompt,
@@ -37,7 +37,7 @@ from .prompt import (
     VizQLPrompt,
 )
 
-from .middleware_runner import (
+from tableau_assistant.src.agents.base.middleware_runner import (
     # Middleware 运行器
     MiddlewareRunner,
     MiddlewareError,

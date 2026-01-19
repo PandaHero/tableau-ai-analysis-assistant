@@ -22,8 +22,9 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from langgraph.types import RunnableConfig
 
-from ....infra.observability import get_metrics_from_config
-from ....infra.config.settings import settings
+from tableau_assistant.src.infra.observability import get_metrics_from_config
+from tableau_assistant.src.infra.config.settings import settings
+
 
 logger = logging.getLogger(__name__)
 

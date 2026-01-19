@@ -19,14 +19,15 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 
-from .config import (
+from tableau_assistant.src.infra.certs.config import (
     CertificateConfig, get_certificate_config, get_cert_config,
     CertConfigData, ServiceCertConfig
 )
-from .fetcher import CertificateFetcher
-from .validator import CertificateValidator
-from .self_signed import SelfSignedGenerator
-from .hot_reload import HotReloader
+from tableau_assistant.src.infra.certs.fetcher import CertificateFetcher
+from tableau_assistant.src.infra.certs.validator import CertificateValidator
+from tableau_assistant.src.infra.certs.self_signed import SelfSignedGenerator
+from tableau_assistant.src.infra.certs.hot_reload import HotReloader
+
 
 logger = logging.getLogger(__name__)
 

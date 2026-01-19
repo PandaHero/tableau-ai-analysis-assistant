@@ -103,8 +103,10 @@ class Settings(BaseSettings):
     dimension_hierarchy_cache_ttl: int = int(os.getenv("DIMENSION_HIERARCHY_CACHE_TTL", "86400"))
     data_model_cache_ttl: int = int(os.getenv("DATA_MODEL_CACHE_TTL", "86400"))
     field_mapping_cache_ttl: int = int(os.getenv("FIELD_MAPPING_CACHE_TTL", "86400"))
+    schema_linking_cache_ttl: int = int(os.getenv("SCHEMA_LINKING_CACHE_TTL", "3600"))
     
     # LLM 超时配置
+
     llm_request_timeout: int = int(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
 
     # 任务调度配置

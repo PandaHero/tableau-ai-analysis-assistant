@@ -60,9 +60,10 @@ from tableau_assistant.src.agents.insight.models.profile import (
     AnomalyIndex,
     ChunkingStrategy,
 )
-from .statistical_analyzer import StatisticalAnalyzer
-from .anomaly_detector import AnomalyDetector
-from .utils import to_dataframe
+from tableau_assistant.src.agents.insight.components.statistical_analyzer import StatisticalAnalyzer
+from tableau_assistant.src.agents.insight.components.anomaly_detector import AnomalyDetector
+from tableau_assistant.src.agents.insight.components.utils import to_dataframe
+
 
 logger = logging.getLogger(__name__)
 

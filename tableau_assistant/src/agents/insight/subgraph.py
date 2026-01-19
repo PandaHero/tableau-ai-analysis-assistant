@@ -28,9 +28,10 @@ from typing import Any, Dict, Literal, Optional
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import RunnableConfig
 
-from .state import InsightState
-from .nodes import profiler_node, director_node, analyzer_node
-from .models.director import DirectorAction
+from tableau_assistant.src.agents.insight.state import InsightState
+from tableau_assistant.src.agents.insight.nodes import profiler_node, director_node, analyzer_node
+from tableau_assistant.src.agents.insight.models.director import DirectorAction
+
 
 logger = logging.getLogger(__name__)
 

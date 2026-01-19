@@ -13,7 +13,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .vizql_types import VizQLFunction
+from tableau_assistant.src.platforms.tableau.models.vizql_types import VizQLFunction
+
 
 
 class LODType(str, Enum):

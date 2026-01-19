@@ -31,7 +31,8 @@ from tableau_assistant.src.agents.insight.prompts import (
     ANALYST_PROMPT,
     ANALYST_PROMPT_WITH_HISTORY,
 )
-from .utils import format_insights_with_index
+from tableau_assistant.src.agents.insight.components.utils import format_insights_with_index
+
 
 from tableau_assistant.src.agents.base import call_llm_with_tools
 

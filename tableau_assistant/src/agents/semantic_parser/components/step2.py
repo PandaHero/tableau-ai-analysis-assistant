@@ -32,10 +32,11 @@ from typing import Any, Dict, Optional
 
 from pydantic import ValidationError as PydanticValidationError
 
-from ..models import Step1Output, Step2Output
-from ....core.exceptions import ValidationError
-from ....infra.observability import get_metrics_from_config, SemanticParserMetrics
-from ..prompts.step2 import STEP2_PROMPT
+from tableau_assistant.src.agents.semantic_parser.models import Step1Output, Step2Output
+from tableau_assistant.src.core.exceptions import ValidationError
+from tableau_assistant.src.infra.observability import get_metrics_from_config, SemanticParserMetrics
+from tableau_assistant.src.agents.semantic_parser.prompts.step2 import STEP2_PROMPT
+
 from tableau_assistant.src.agents.base import (
     get_llm,
     call_llm_with_tools,

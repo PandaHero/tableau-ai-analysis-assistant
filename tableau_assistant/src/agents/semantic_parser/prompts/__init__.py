@@ -8,9 +8,10 @@ Prompt templates follow the design principles from appendix-e-prompt-model-guide
 Note: Observer prompts have been removed. ReAct error handling replaces Observer.
 """
 
-from .step1 import Step1Prompt, STEP1_PROMPT
-from .step2 import Step2Prompt, STEP2_PROMPT
-from .react_error import ReActErrorHandlerPrompt, REACT_ERROR_PROMPT
+from tableau_assistant.src.agents.semantic_parser.prompts.step1 import Step1Prompt, STEP1_PROMPT
+from tableau_assistant.src.agents.semantic_parser.prompts.step2 import Step2Prompt, STEP2_PROMPT
+from tableau_assistant.src.agents.semantic_parser.prompts.react_error import ReActErrorHandlerPrompt, REACT_ERROR_PROMPT
+
 
 __all__ = [
     # Prompt classes

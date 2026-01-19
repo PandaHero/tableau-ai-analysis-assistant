@@ -10,19 +10,19 @@ Design Specification: insight-design.md
 """
 
 # Models first (no dependencies on other modules in this package)
-from .models import (
+from tableau_assistant.src.agents.replanner.models import (
     ExplorationQuestion,
     ReplanDecision,
 )
 
 # Then prompts (depends on models)
-from .prompts import (
+from tableau_assistant.src.agents.replanner.prompts import (
     REPLANNER_PROMPT,
     ReplannerPrompt,
 )
 
 # Then agent (depends on models and prompts)
-from .agent import ReplannerAgent
+from tableau_assistant.src.agents.replanner.agent import ReplannerAgent
 
 __all__ = [
     # Models

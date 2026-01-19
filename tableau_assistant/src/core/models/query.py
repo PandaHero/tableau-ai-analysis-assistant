@@ -7,9 +7,9 @@ Platform adapters convert it to platform-specific queries.
 from typing import List, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 
-from .computations import Computation
-from .fields import DimensionField, MeasureField, SortSpec
-from .filters import (
+from tableau_assistant.src.core.models.computations import Computation
+from tableau_assistant.src.core.models.fields import DimensionField, MeasureField, SortSpec
+from tableau_assistant.src.core.models.filters import (
     DateRangeFilter,
     Filter,
     NumericRangeFilter,
@@ -17,6 +17,7 @@ from .filters import (
     TextMatchFilter,
     TopNFilter,
 )
+
 
 
 class SemanticQuery(BaseModel):

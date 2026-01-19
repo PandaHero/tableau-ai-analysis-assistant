@@ -23,11 +23,12 @@ from langgraph.types import RunnableConfig
 from langchain_core.messages import BaseMessage
 
 # Import from core layer only (correct dependency direction)
-from ...core.models import IntentType
-from .state import SemanticParserState
-from .models import Step1Output
-from .subgraph import create_semantic_parser_subgraph
-from ...infra.observability import ensure_metrics_in_config
+from tableau_assistant.src.core.models import IntentType
+from tableau_assistant.src.agents.semantic_parser.state import SemanticParserState
+from tableau_assistant.src.agents.semantic_parser.models import Step1Output
+from tableau_assistant.src.agents.semantic_parser.subgraph import create_semantic_parser_subgraph
+from tableau_assistant.src.infra.observability import ensure_metrics_in_config
+
 
 logger = logging.getLogger(__name__)
 

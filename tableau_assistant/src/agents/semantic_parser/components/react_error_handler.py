@@ -26,8 +26,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from langchain_core.language_models import BaseChatModel
 from langgraph.types import RunnableConfig
 
-from ..models.pipeline import QueryError
-from ..models.react import (
+from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError
+from tableau_assistant.src.agents.semantic_parser.models.react import (
     ReActActionType,
     ErrorCategory,
     CorrectionOperation,
@@ -36,14 +36,15 @@ from ..models.react import (
     ReActAction,
     ReActOutput,
 )
-from ..prompts.react_error import REACT_ERROR_PROMPT
+from tableau_assistant.src.agents.semantic_parser.prompts.react_error import REACT_ERROR_PROMPT
 from tableau_assistant.src.agents.base import (
     get_llm,
     call_llm_with_tools,
     parse_json_response,
 )
-from ....infra.observability import get_metrics_from_config
-from ....infra.config.settings import settings
+from tableau_assistant.src.infra.observability import get_metrics_from_config
+from tableau_assistant.src.infra.config.settings import settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,8 @@ class ReActErrorHandler:
         pipeline_context = pipeline_context or {}
         
         # 新增：处理解析失败错误
-        from ..models.pipeline import QueryErrorType
+        from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryErrorType
+
         if error.type in (QueryErrorType.STEP1_PARSE_ERROR, QueryErrorType.STEP2_PARSE_ERROR):
             logger.info(f"处理解析失败错误: {error.type}")
             output = self._handle_parse_error(error, retry_history)

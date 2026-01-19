@@ -11,8 +11,9 @@ Main exports:
 - create_semantic_parser_subgraph: Factory function to create the subgraph
 """
 
-from .node import semantic_parser_node
-from .subgraph import create_semantic_parser_subgraph
+from tableau_assistant.src.agents.semantic_parser.node import semantic_parser_node
+from tableau_assistant.src.agents.semantic_parser.subgraph import create_semantic_parser_subgraph
+
 
 __all__ = [
     "semantic_parser_node",

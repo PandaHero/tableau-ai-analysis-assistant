@@ -7,6 +7,9 @@
 - 识别父子关系
 - 支持单字段推断（供 FieldMapper 调用）
 """
-from .node import dimension_hierarchy_node, infer_single_field
+from tableau_assistant.src.agents.dimension_hierarchy.node import (
+    dimension_hierarchy_node,
+    infer_single_field,
+)
 
 __all__ = ["dimension_hierarchy_node", "infer_single_field"]

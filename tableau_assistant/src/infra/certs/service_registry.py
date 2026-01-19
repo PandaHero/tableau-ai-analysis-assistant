@@ -9,8 +9,9 @@ import logging
 from datetime import datetime, timezone
 from dataclasses import dataclass
 
-from .fetcher import CertificateFetcher
-from .validator import CertificateValidator
+from tableau_assistant.src.infra.certs.fetcher import CertificateFetcher
+from tableau_assistant.src.infra.certs.validator import CertificateValidator
+
 
 logger = logging.getLogger(__name__)
 

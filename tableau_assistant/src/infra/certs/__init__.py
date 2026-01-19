@@ -26,8 +26,8 @@
     ssl_config = manager.get_app_ssl_config()
 """
 
-from .manager import CertificateManager
-from .config import (
+from tableau_assistant.src.infra.certs.manager import CertificateManager
+from tableau_assistant.src.infra.certs.config import (
     CertificateConfig,
     get_certificate_config,
     get_cert_config,
@@ -39,11 +39,12 @@ from .config import (
     CompanyCertConfig,
     ServiceCertConfig,
 )
-from .fetcher import CertificateFetcher
-from .validator import CertificateValidator
-from .self_signed import SelfSignedGenerator
-from .hot_reload import HotReloader
-from .service_registry import ServiceRegistry, ServiceConfig
+from tableau_assistant.src.infra.certs.fetcher import CertificateFetcher
+from tableau_assistant.src.infra.certs.validator import CertificateValidator
+from tableau_assistant.src.infra.certs.self_signed import SelfSignedGenerator
+from tableau_assistant.src.infra.certs.hot_reload import HotReloader
+from tableau_assistant.src.infra.certs.service_registry import ServiceRegistry, ServiceConfig
+
 
 # 全局证书管理器实例
 _certificate_manager: CertificateManager | None = None

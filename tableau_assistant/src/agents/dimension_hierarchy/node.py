@@ -11,9 +11,8 @@
 
 使用新的推断系统：
 - DimensionHierarchyInference: 主推断类
-- DimensionPatternFAISS: FAISS 向量索引
 - DimensionHierarchyCacheStorage: 缓存存储
-- DimensionRAGRetriever: RAG 检索器
+- DimensionRAGRetriever: RAG 检索器（基于 infra/rag）
 
 输出：DimensionHierarchyResult 模型
 
@@ -30,10 +29,6 @@ from tableau_assistant.src.agents.dimension_hierarchy.models import (
 )
 
 logger = logging.getLogger(__name__)
-
-# 默认索引路径
-DEFAULT_INDEX_PATH = "data/indexes/dimension_patterns"
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 全局单例（延迟初始化）
@@ -61,10 +56,6 @@ async def _get_inference_instance():
         
         try:
             from tableau_assistant.src.infra.ai.embeddings import EmbeddingProviderFactory
-            from tableau_assistant.src.agents.dimension_hierarchy.faiss_store import (
-                DimensionPatternFAISS,
-                DEFAULT_DIMENSION,
-            )
             from tableau_assistant.src.agents.dimension_hierarchy.cache_storage import (
                 DimensionHierarchyCacheStorage,
             )
@@ -81,26 +72,16 @@ async def _get_inference_instance():
                 logger.warning("未配置 Embedding API Key，使用降级模式（仅 LLM）")
                 return None
             
-            # 创建 FAISS 存储
-            faiss_store = DimensionPatternFAISS(
-                embedding_provider=embedding_provider,
-                index_path=DEFAULT_INDEX_PATH,
-                dimension=DEFAULT_DIMENSION,
-            )
-            faiss_store.load_or_create()
-            
             # 创建缓存存储
             cache_storage = DimensionHierarchyCacheStorage()
             
-            # 创建 RAG 检索器
+            # 创建 RAG 检索器（使用 infra/rag 通用组件）
             rag_retriever = DimensionRAGRetriever(
-                faiss_store=faiss_store,
                 cache_storage=cache_storage,
             )
             
             # 创建推断实例
             _inference_instance = DimensionHierarchyInference(
-                faiss_store=faiss_store,
                 cache_storage=cache_storage,
                 rag_retriever=rag_retriever,
             )

@@ -33,12 +33,13 @@ from dataclasses import dataclass, field
 
 from langgraph.types import RunnableConfig
 
-from .llm_selector import (
+from tableau_assistant.src.agents.field_mapper.llm_selector import (
     LLMCandidateSelector,
     FieldCandidate,
     SingleSelectionResult,
 )
-from .models import MappedQuery, FieldMapping
+from tableau_assistant.src.agents.field_mapper.models import MappedQuery, FieldMapping
+
 
 from tableau_assistant.src.core.models.query import SemanticQuery
 from tableau_assistant.src.agents.field_mapper.rag.assembler import (

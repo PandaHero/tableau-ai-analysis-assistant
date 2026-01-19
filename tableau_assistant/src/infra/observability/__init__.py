@@ -14,12 +14,13 @@ Design principles:
 - Metrics support both simple increment and counter-style (.inc()) patterns
 """
 
-from .metrics import (
+from tableau_assistant.src.infra.observability.metrics import (
     SemanticParserMetrics,
     get_metrics_from_config,
     set_metrics_to_config,
     ensure_metrics_in_config,
 )
+
 
 __all__ = [
     "SemanticParserMetrics",

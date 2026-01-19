@@ -25,7 +25,7 @@ When you need to use subgraph or node, import directly:
     from tableau_assistant.src.agents.insight.node import insight_node
 """
 
-from .prompts import (
+from tableau_assistant.src.agents.insight.prompts import (
     # Prompt Classes
     AnalystPrompt,
     AnalystPromptWithHistory,
@@ -37,7 +37,7 @@ from .prompts import (
 )
 
 # Components - Insight analysis components
-from .components import (
+from tableau_assistant.src.agents.insight.components import (
     EnhancedDataProfiler,
     AnomalyDetector,
     SemanticChunker,

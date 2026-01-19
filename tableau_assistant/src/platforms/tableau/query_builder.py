@@ -12,8 +12,9 @@
 import logging
 from typing import Any
 
-from ...core.interfaces import BaseQueryBuilder
-from ...core.models import (
+from tableau_assistant.src.core.interfaces import BaseQueryBuilder
+from tableau_assistant.src.core.models import (
+
     AggregationType,
     Computation,
     DateRangeFilter,
@@ -34,13 +35,14 @@ from ...core.models import (
     DateGranularity,
     WindowAggregation,
 )
-from .models import (
+from tableau_assistant.src.platforms.tableau.models import (
     LODExpression,
     LODType,
     VizQLFunction,
     VizQLSortDirection,
     determine_lod_type,
 )
+
 
 logger = logging.getLogger(__name__)
 

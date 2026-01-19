@@ -13,7 +13,8 @@ import pandas as pd
 import numpy as np
 
 from tableau_assistant.src.agents.insight.models import AnomalyResult, AnomalyDetail
-from .utils import to_dataframe
+from tableau_assistant.src.agents.insight.components.utils import to_dataframe
+
 
 logger = logging.getLogger(__name__)
 

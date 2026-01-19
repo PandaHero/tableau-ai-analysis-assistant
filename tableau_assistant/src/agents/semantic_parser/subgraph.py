@@ -52,11 +52,11 @@ from typing import Any, Dict, List, Literal, Optional
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import RunnableConfig
 
-from .state import SemanticParserState
-from .models import Step1Output, Step2Output
-from .models.pipeline import PipelineResult, QueryError, QueryErrorType
-from .models.react import ReActActionType, ReActOutput
-from .components import (
+from tableau_assistant.src.agents.semantic_parser.state import SemanticParserState
+from tableau_assistant.src.agents.semantic_parser.models import Step1Output, Step2Output
+from tableau_assistant.src.agents.semantic_parser.models.pipeline import PipelineResult, QueryError, QueryErrorType
+from tableau_assistant.src.agents.semantic_parser.models.react import ReActActionType, ReActOutput
+from tableau_assistant.src.agents.semantic_parser.components import (
     IntentRouter,
     IntentType,
     IntentRouterOutput,
@@ -71,10 +71,11 @@ from .components import (
     Step2Component,
 )
 
-from .components.react_error_handler import RetryRecord
-from ...core.models import IntentType as CoreIntentType, HowType
-from ...infra.config.settings import settings
-from ...infra.observability import get_metrics_from_config
+from tableau_assistant.src.agents.semantic_parser.components.react_error_handler import RetryRecord
+from tableau_assistant.src.core.models import IntentType as CoreIntentType, HowType
+from tableau_assistant.src.infra.config.settings import settings
+from tableau_assistant.src.infra.observability import get_metrics_from_config
+
 
 logger = logging.getLogger(__name__)
 
@@ -105,10 +106,11 @@ async def semantic_parser_entry(
     logger.info("子图入口节点：调用 before_agent 钩子")
     
     # 获取 middleware 配置
-    from ...agents.base.middleware_runner import (
+    from tableau_assistant.src.agents.base.middleware_runner import (
         MiddlewareRunner,
         get_middleware_from_config,
     )
+
     
     middleware_list = get_middleware_from_config(config)
     
@@ -436,7 +438,9 @@ async def schema_linking_node(
             question=canonical_question,
             data_model=data_model,
             config=config,
+            extracted_terms=extracted_terms,
         )
+
         
         # 记录耗时
         elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -521,10 +525,11 @@ async def semantic_parser_exit(
     logger.info("子图出口节点：调用 after_agent 钩子 + 扁平化输出")
     
     # 获取 middleware 配置
-    from ...agents.base.middleware_runner import (
+    from tableau_assistant.src.agents.base.middleware_runner import (
         MiddlewareRunner,
         get_middleware_from_config,
     )
+
     
     middleware_list = get_middleware_from_config(config)
     current_state = dict(state)
@@ -680,7 +685,8 @@ async def step1_node(
             logger.error(f"Step 1 解析失败: {e}", exc_info=True)
             
             # 构建结构化错误信息，携带原始输出（Requirements 0.2）
-            from .models.pipeline import QueryError, QueryErrorType
+            from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError, QueryErrorType
+
             
             # 尝试获取原始输出（如果异常携带）
             original_output = None
@@ -709,7 +715,8 @@ async def step1_node(
             # 其他执行错误
             logger.error(f"Step 1 执行失败: {e}", exc_info=True)
             
-            from .models.pipeline import QueryError, QueryErrorType
+            from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError, QueryErrorType
+
             error_obj = QueryError(
                 type=QueryErrorType.STEP1_FAILED,
                 message=str(e),
@@ -747,7 +754,8 @@ async def step2_node(
         logger.error("Step 2 被调用但没有 step1_output")
         
         # ⚠️ 序列化：将 QueryError 转换为 dict
-        from .models.pipeline import QueryError, QueryErrorType
+        from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError, QueryErrorType
+
         error_obj = QueryError(
             type=QueryErrorType.STEP2_FAILED,
             message="Step 2 需要 step1_output",
@@ -814,7 +822,8 @@ async def step2_node(
             logger.error(f"Step 2 解析失败: {e}", exc_info=True)
             
             # 构建结构化错误信息，携带原始输出（Requirements 0.2）
-            from .models.pipeline import QueryError, QueryErrorType
+            from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError, QueryErrorType
+
             
             # 尝试获取原始输出（如果异常携带）
             original_output = None
@@ -843,7 +852,8 @@ async def step2_node(
             # 其他执行错误
             logger.error(f"Step 2 执行失败: {e}", exc_info=True)
             
-            from .models.pipeline import QueryError, QueryErrorType
+            from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError, QueryErrorType
+
             error_obj = QueryError(
                 type=QueryErrorType.STEP2_FAILED,
                 message=str(e),
@@ -885,7 +895,8 @@ async def pipeline_node(
         logger.error("Pipeline 被调用但没有 step1_output")
         
         # ⚠️ 序列化：将 QueryError 转换为 dict
-        from .models.pipeline import QueryError, QueryErrorType
+        from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError, QueryErrorType
+
         error_obj = QueryError(
             type=QueryErrorType.BUILD_FAILED,
             message="Pipeline 需要 step1_output",
@@ -1013,7 +1024,8 @@ async def pipeline_node(
         logger.error(f"Pipeline 执行失败: {e}", exc_info=True)
         
         # ⚠️ 序列化：将 QueryError 转换为 dict
-        from .models.pipeline import QueryError, QueryErrorType
+        from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError, QueryErrorType
+
         error_obj = QueryError(
             type=QueryErrorType.BUILD_FAILED,
             message=str(e),
@@ -1064,7 +1076,8 @@ async def react_error_handler_node(
         }
     
     # ⚠️ 反序列化：从 dict 重构对象
-    from .models.pipeline import QueryError
+    from tableau_assistant.src.agents.semantic_parser.models.pipeline import QueryError
+
     pipeline_error = QueryError.model_validate(pipeline_error_dict)
     
     step1_output = Step1Output.model_validate(step1_output_dict) if step1_output_dict else None
@@ -1078,7 +1091,8 @@ async def react_error_handler_node(
     }
     
     # 将重试历史转换为 RetryRecord 对象（统一类型处理）
-    from .components.react_error_handler import RetryRecord
+    from tableau_assistant.src.agents.semantic_parser.components.react_error_handler import RetryRecord
+
     retry_records: List[RetryRecord] = []
     for record in retry_history:
         if isinstance(record, RetryRecord):
@@ -1133,7 +1147,8 @@ async def react_error_handler_node(
             "current_stage": "semantic_parser.react_error_handler",
         }
         
-        from .models.react import ReActActionType
+        from tableau_assistant.src.agents.semantic_parser.models.react import ReActActionType
+
         
         # 更新语义重试计数（Requirements 0.6 - 分类重试预算管理）
         # 只有 RETRY 和 CORRECT 动作才算语义重试
@@ -1348,7 +1363,8 @@ def route_after_react(
     
     ⚠️ State 序列化：react_action 是字符串值，需要转换为枚举比较
     """
-    from ...infra.config.settings import settings
+    from tableau_assistant.src.infra.config.settings import settings
+
     max_retries = settings.semantic_parser_max_retries
     max_semantic_retries = getattr(settings, "semantic_parser_max_semantic_retries", 2)
     
@@ -1458,7 +1474,8 @@ def _flatten_output(state: Dict[str, Any] | SemanticParserState) -> Dict[str, An
     if step1_output_dict:
         try:
             # 从 dict 重构 Step1Output 对象以获取字段
-            from .models import Step1Output
+            from tableau_assistant.src.agents.semantic_parser.models import Step1Output
+
             step1 = Step1Output.model_validate(step1_output_dict)
             
             # 扁平化：intent_type 存储为字符串值，非枚举对象
@@ -1654,7 +1671,8 @@ def route_by_feature_flag(
     Returns:
         路由目标节点名称
     """
-    from ...infra.config.feature_flags import feature_flags
+    from tableau_assistant.src.infra.config.feature_flags import feature_flags
+
     
     # 1. 请求级别覆盖
     if config:

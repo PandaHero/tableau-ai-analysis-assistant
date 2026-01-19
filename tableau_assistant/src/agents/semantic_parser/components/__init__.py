@@ -17,12 +17,12 @@ Note:
   intent_router_node, preprocess_node) are defined in subgraph.py for the LangGraph node routing loop.
 """
 
-from .step1 import Step1Component
-from .step2 import Step2Component
-from .query_pipeline import QueryPipeline
-from .react_error_handler import ReActErrorHandler, RetryRecord
-from .intent_router import IntentRouter, IntentType, IntentRouterOutput
-from .schema_linking import (
+from tableau_assistant.src.agents.semantic_parser.components.step1 import Step1Component
+from tableau_assistant.src.agents.semantic_parser.components.step2 import Step2Component
+from tableau_assistant.src.agents.semantic_parser.components.query_pipeline import QueryPipeline
+from tableau_assistant.src.agents.semantic_parser.components.react_error_handler import ReActErrorHandler, RetryRecord
+from tableau_assistant.src.agents.semantic_parser.components.intent_router import IntentRouter, IntentType, IntentRouterOutput
+from tableau_assistant.src.agents.semantic_parser.components.schema_linking import (
     BatchEmbeddingConfig,
     BatchEmbeddingOptimizer,
     COMPUTATION_WORDS,
@@ -43,13 +43,14 @@ from .schema_linking import (
 )
 
 
-from .preprocess import (
+from tableau_assistant.src.agents.semantic_parser.components.preprocess import (
     PreprocessComponent,
     PreprocessResult,
     TimeContext,
     MemorySlots,
     TimeGrain,
 )
+
 
 __all__ = [
     "BatchEmbeddingConfig",

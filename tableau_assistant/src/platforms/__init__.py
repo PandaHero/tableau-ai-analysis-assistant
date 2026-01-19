@@ -9,7 +9,12 @@ Supported platforms:
 - (Future) Looker: LookML integration
 """
 
-from .base import PlatformRegistry, get_adapter, register_adapter
+from tableau_assistant.src.platforms.base import (
+    PlatformRegistry,
+    get_adapter,
+    register_adapter,
+)
+
 
 __all__ = [
     "PlatformRegistry",

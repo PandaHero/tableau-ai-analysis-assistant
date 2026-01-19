@@ -414,7 +414,11 @@ class PreprocessComponent:
         # 5. 标点符号归一（中文标点转英文）
         result = self._normalize_punctuation(result)
         
+        # 6. 单位归一（数值+单位）
+        result = self._normalize_units(result)
+        
         return result
+
     
     def _fullwidth_to_halfwidth(self, text: str) -> str:
         """全角字符转半角字符"""
@@ -469,8 +473,35 @@ class PreprocessComponent:
         for old, new in replacements.items():
             text = text.replace(old, new)
         return text
+
+    def _normalize_units(self, text: str) -> str:
+        """单位归一化：将数值+单位转换为标准数值。"""
+        if not text:
+            return text
+
+        pattern = re.compile(r"(\d+(?:\.\d+)?)(\s*)(万|千|百|亿|k|K|m|M|b|B)")
+
+        def _format_number(value: float) -> str:
+            if value.is_integer():
+                return str(int(value))
+            return str(value)
+
+        def _replace(match: re.Match) -> str:
+            number_str = match.group(1)
+            unit = match.group(3)
+            multiplier = UNIT_NORMALIZATION.get(unit)
+            if multiplier is None:
+                return match.group(0)
+            try:
+                value = float(number_str) * float(multiplier)
+                return _format_number(value)
+            except Exception:
+                return match.group(0)
+
+        return pattern.sub(_replace, text)
     
     def extract_time(
+
         self,
         question: str,
         current_date: date,

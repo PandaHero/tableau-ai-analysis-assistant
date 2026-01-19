@@ -4,7 +4,8 @@ Contains VizQL types, table calculation specifications,
 and LOD expression models aligned with Tableau's API.
 """
 
-from .vizql_types import (
+from tableau_assistant.src.platforms.tableau.models.vizql_types import (
+
     VizQLFunction,
     VizQLSortDirection,
     VizQLDataType,
@@ -26,7 +27,8 @@ from .vizql_types import (
     VizQLQueryResponse,
 )
 
-from .table_calc import (
+from tableau_assistant.src.platforms.tableau.models.table_calc import (
+
     TableCalcType,
     TableCalcAggregation,
     RankType,
@@ -43,7 +45,8 @@ from .table_calc import (
     TableCalcField,
 )
 
-from .lod import (
+from tableau_assistant.src.platforms.tableau.models.lod import (
+
     LODType,
     LODExpression,
     determine_lod_type,

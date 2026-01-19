@@ -31,10 +31,6 @@ from tableau_assistant.src.agents.dimension_hierarchy.inference import (
 from tableau_assistant.src.agents.dimension_hierarchy.rag_retriever import (
     DimensionRAGRetriever,
 )
-from tableau_assistant.src.agents.dimension_hierarchy.faiss_store import (
-    DimensionPatternFAISS,
-    DEFAULT_DIMENSION,
-)
 from tableau_assistant.src.agents.dimension_hierarchy.cache_storage import (
     DimensionHierarchyCacheStorage,
     compute_single_field_hash,
@@ -42,7 +38,9 @@ from tableau_assistant.src.agents.dimension_hierarchy.cache_storage import (
 from tableau_assistant.src.agents.dimension_hierarchy.seed_data import (
     SEED_PATTERNS,
 )
+from tableau_assistant.src.infra.rag import FieldIndexer, IndexConfig
 from tableau_assistant.src.infra.ai.embeddings import EmbeddingProviderFactory
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -67,15 +65,21 @@ def temp_index_path():
 
 
 @pytest.fixture
-def faiss_store(embedding_provider, temp_index_path):
-    """创建 FAISS 存储实例"""
-    store = DimensionPatternFAISS(
-        embedding_provider=embedding_provider,
-        index_path=temp_index_path,
-        dimension=DEFAULT_DIMENSION,
+def field_indexer(embedding_provider, temp_index_path):
+    """创建向量索引器实例"""
+    index_config = IndexConfig(
+        max_samples=0,
+        include_formula=False,
+        include_table_caption=False,
+        include_category=False,
     )
-    store.load_or_create()
-    return store
+    return FieldIndexer(
+        embedding_provider=embedding_provider,
+        index_config=index_config,
+        datasource_luid="dimension_patterns_test",
+        index_dir=temp_index_path,
+        use_cache=False,
+    )
 
 
 @pytest.fixture
@@ -87,22 +91,22 @@ def cache_storage():
 
 
 @pytest.fixture
-def rag_retriever(faiss_store, cache_storage):
+def rag_retriever(field_indexer, cache_storage):
     """创建 RAG 检索器实例"""
     return DimensionRAGRetriever(
-        faiss_store=faiss_store,
         cache_storage=cache_storage,
+        field_indexer=field_indexer,
     )
 
 
 @pytest.fixture
-def inference(faiss_store, cache_storage, rag_retriever):
+def inference(cache_storage, rag_retriever):
     """创建推断实例"""
     return DimensionHierarchyInference(
-        faiss_store=faiss_store,
         cache_storage=cache_storage,
         rag_retriever=rag_retriever,
     )
+
 
 
 # ═══════════════════════════════════════════════════════════
@@ -499,9 +503,16 @@ class TestSkipRAGStore:
     """跳过 RAG 存储测试"""
     
     @pytest.mark.asyncio
-    async def test_skip_rag_store(self, inference, faiss_store):
+    async def test_skip_rag_store(self, inference, rag_retriever):
         """测试 skip_rag_store 参数"""
-        initial_count = faiss_store.count
+        # 先触发种子数据初始化（不写入推断结果）
+        await inference.infer(
+            datasource_luid="ds-skip-rag-init",
+            fields=[{"field_name": "seed_init", "field_caption": "初始化", "data_type": "string"}],
+            skip_rag_store=True,
+        )
+        inference.reset_stats()
+        initial_count = rag_retriever.get_index_count()
         
         fields = [
             {"field_name": "custom_field", "field_caption": "自定义字段XYZ", "data_type": "string"},
@@ -513,11 +524,11 @@ class TestSkipRAGStore:
             skip_rag_store=True,
         )
         
-        # FAISS 索引数量不应该增加（除了种子数据）
-        # 注意：种子数据可能在第一次调用时初始化
-        # 所以我们只验证 skip_rag_store 不会额外增加
+        # 向量索引数量不应增加（仅允许种子数据）
+        assert rag_retriever.get_index_count() == initial_count
         stats = inference.get_stats()
         assert stats["rag_stores"] == 0
+
 
 
 class TestConcurrency:
@@ -586,7 +597,7 @@ class TestSeedDataInitialization:
     """种子数据初始化测试"""
     
     @pytest.mark.asyncio
-    async def test_auto_initialize_seed_data(self, inference, faiss_store):
+    async def test_auto_initialize_seed_data(self, inference, rag_retriever):
         """测试自动初始化种子数据"""
         # 首次调用应该初始化种子数据
         fields = [
@@ -598,15 +609,17 @@ class TestSeedDataInitialization:
             fields=fields,
         )
         
-        # FAISS 索引应该包含种子数据
-        assert faiss_store.count >= len(SEED_PATTERNS)
+        # 向量索引应该包含种子数据
+        assert rag_retriever.get_index_count() >= len(SEED_PATTERNS)
+
 
 
 class TestConsistencyRepair:
     """一致性修复测试"""
     
-    def test_auto_repair_consistency(self, inference, faiss_store, cache_storage, rag_retriever):
+    def test_auto_repair_consistency(self, inference, cache_storage, rag_retriever):
         """测试一致性自动修复"""
+
         # 先添加一些 metadata
         cache_storage.store_pattern_metadata(
             pattern_id="test-pattern-1",

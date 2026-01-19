@@ -25,7 +25,8 @@ from tableau_assistant.src.agents.insight.models import (
     DataInsightProfile,
     ColumnStats,
 )
-from .utils import to_dataframe
+from tableau_assistant.src.agents.insight.components.utils import to_dataframe
+
 
 logger = logging.getLogger(__name__)
 

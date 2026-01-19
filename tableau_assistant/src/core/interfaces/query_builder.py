@@ -7,7 +7,8 @@ Converts SemanticQuery to platform-native query format.
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ..models import SemanticQuery, ValidationResult
+from tableau_assistant.src.core.models import SemanticQuery, ValidationResult
+
 
 
 class BaseQueryBuilder(ABC):

@@ -7,8 +7,9 @@ This is a thin wrapper that implements the BaseFieldMapper interface.
 import logging
 from typing import Any
 
-from ...core.interfaces import BaseFieldMapper
-from ...core.models import SemanticQuery
+from tableau_assistant.src.core.interfaces import BaseFieldMapper
+from tableau_assistant.src.core.models import SemanticQuery
+
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,8 @@ class TableauFieldMapper(BaseFieldMapper):
                 for p in comp.partition_by:
                     if hasattr(p, 'field_name'):
                         # It's a DimensionField, create a new one with mapped field_name
-                        from ...core.models import DimensionField
+                        from tableau_assistant.src.core.models import DimensionField
+
                         new_p = DimensionField(
                             field_name=mapping.get(p.field_name, p.field_name),
                             date_granularity=p.date_granularity,
