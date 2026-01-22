@@ -184,10 +184,18 @@ class ModelManager:
     2. 提供统一的模型获取接口
     3. 智能路由（根据任务类型选择最优模型）
     4. 健康检查和统计信息
-    5. 持久化存储（LangGraph SqliteStore）
+    5. 持久化存储（使用 CacheManager）
+    
+    持久化策略：
+    - YAML 配置文件中的模型：只读，不持久化（重启后从 YAML 重新加载）
+    - 通过 API 动态添加的模型：持久化到 SQLite（重启后自动恢复）
     """
     
     _instance = None
+    
+    # 持久化存储的命名空间
+    PERSISTENCE_NAMESPACE = "model_manager"
+    PERSISTENCE_KEY = "dynamic_configs"
     
     def __new__(cls):
         if cls._instance is None:
@@ -199,45 +207,210 @@ class ModelManager:
             self._initialized = True
             self._configs: Dict[str, ModelConfig] = {}
             self._defaults: Dict[ModelType, str] = {}
-            self._store = None  # LangGraph SqliteStore（阶段 1.3 实现）
+            self._dynamic_config_ids: set = set()  # 记录动态添加的配置 ID
+            self._persistence_enabled = False
+            self._cache_manager = None
             logger.info("ModelManager initialized")
             
-            # 从环境变量加载配置
-            self._load_from_env()
+            # 初始化持久化存储
+            self._init_persistence()
             
-            # 从 YAML 文件加载配置（如果存在）
-            self._load_from_yaml()
+            # 从统一配置文件加载配置
+            self._load_from_unified_config()
+            
+            # 从持久化存储加载动态配置
+            self._load_from_persistence()
     
     # ═══════════════════════════════════════════════════════════════════════
-    # 配置加载
+    # 持久化存储
     # ═══════════════════════════════════════════════════════════════════════
     
-    def _load_from_yaml(self, config_path: str = "config/models.yaml"):
-        """从 YAML 文件加载配置"""
+    def _init_persistence(self):
+        """初始化持久化存储"""
         try:
-            from .config_loader import load_models_from_yaml
+            from ..config.config_loader import get_config
             
-            # 加载配置
-            config_data = load_models_from_yaml(config_path)
+            # 检查是否启用持久化
+            app_config = get_config()
+            ai_config = app_config.config.get("ai", {})
+            global_config = ai_config.get("global", {})
+            self._persistence_enabled = global_config.get("enable_persistence", False)
+            
+            if not self._persistence_enabled:
+                logger.info("ModelManager 持久化已禁用")
+                return
+            
+            # 创建 CacheManager
+            from ..storage import CacheManager
+            self._cache_manager = CacheManager(
+                namespace=self.PERSISTENCE_NAMESPACE,
+                default_ttl=None,  # 永久存储
+                enable_stats=False
+            )
+            
+            logger.info("ModelManager 持久化存储已初始化")
+            
+        except Exception as e:
+            logger.warning(f"初始化持久化存储失败: {e}")
+            self._persistence_enabled = False
+    
+    def _load_from_persistence(self):
+        """从持久化存储加载动态配置"""
+        if not self._persistence_enabled or self._cache_manager is None:
+            return
+        
+        try:
+            # 获取持久化的配置列表
+            stored_data = self._cache_manager.get(self.PERSISTENCE_KEY)
+            
+            if stored_data is None:
+                logger.debug("没有持久化的动态配置")
+                return
+            
+            # 解析并加载配置
+            for config_data in stored_data:
+                try:
+                    config_id = config_data.get("id")
+                    
+                    # 跳过已存在的配置（YAML 配置优先）
+                    if config_id in self._configs:
+                        logger.debug(f"跳过已存在的配置: {config_id}")
+                        continue
+                    
+                    # 创建配置
+                    self._create_from_dict(config_data)
+                    self._dynamic_config_ids.add(config_id)
+                    
+                except Exception as e:
+                    logger.warning(f"加载持久化配置失败: {e}")
+            
+            logger.info(f"从持久化存储加载了 {len(self._dynamic_config_ids)} 个动态配置")
+            
+        except Exception as e:
+            logger.warning(f"加载持久化配置失败: {e}")
+    
+    def _save_to_persistence(self):
+        """保存动态配置到持久化存储"""
+        if not self._persistence_enabled or self._cache_manager is None:
+            return
+        
+        try:
+            # 只保存动态添加的配置
+            dynamic_configs = []
+            for config_id in self._dynamic_config_ids:
+                config = self._configs.get(config_id)
+                if config:
+                    dynamic_configs.append(self._config_to_dict(config))
+            
+            # 保存到持久化存储
+            self._cache_manager.set(self.PERSISTENCE_KEY, dynamic_configs)
+            
+            logger.debug(f"保存了 {len(dynamic_configs)} 个动态配置到持久化存储")
+            
+        except Exception as e:
+            logger.warning(f"保存持久化配置失败: {e}")
+    
+    def _config_to_dict(self, config: ModelConfig) -> Dict[str, Any]:
+        """将 ModelConfig 转换为字典（用于持久化）"""
+        return {
+            "id": config.id,
+            "name": config.name,
+            "description": config.description,
+            "model_type": config.model_type.value,
+            "provider": config.provider,
+            "api_base": config.api_base,
+            "api_endpoint": config.api_endpoint,
+            "model_name": config.model_name,
+            "openai_compatible": config.openai_compatible,
+            "auth_type": config.auth_type.value,
+            "auth_header": config.auth_header,
+            "api_key": config.api_key,
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+            "top_p": config.top_p,
+            "supports_streaming": config.supports_streaming,
+            "supports_json_mode": config.supports_json_mode,
+            "supports_function_calling": config.supports_function_calling,
+            "supports_vision": config.supports_vision,
+            "is_reasoning_model": config.is_reasoning_model,
+            "suitable_tasks": [t.value for t in config.suitable_tasks],
+            "priority": config.priority,
+            "timeout": config.timeout,
+            "verify_ssl": config.verify_ssl,
+            "proxy": config.proxy,
+            "extra_headers": config.extra_headers,
+            "extra_body": config.extra_body,
+            "status": config.status.value,
+            "is_default": config.is_default,
+            "tags": config.tags,
+        }
+    
+    def enable_persistence(self, enable: bool = True):
+        """
+        启用或禁用持久化
+        
+        Args:
+            enable: 是否启用持久化
+        """
+        if enable and self._cache_manager is None:
+            # 尝试初始化 CacheManager
+            try:
+                from ..storage import CacheManager
+                self._cache_manager = CacheManager(
+                    namespace=self.PERSISTENCE_NAMESPACE,
+                    default_ttl=None,  # 永久存储
+                    enable_stats=False
+                )
+                self._persistence_enabled = True
+                logger.info("ModelManager 持久化存储已启用")
+            except Exception as e:
+                logger.warning(f"启用持久化失败: {e}")
+                self._persistence_enabled = False
+        elif enable:
+            self._persistence_enabled = True
+        else:
+            self._persistence_enabled = False
+        
+        logger.info(f"ModelManager 持久化: {'启用' if self._persistence_enabled else '禁用'}")
+    
+    def is_persistence_enabled(self) -> bool:
+        """检查持久化是否启用"""
+        return self._persistence_enabled and self._cache_manager is not None
+    
+    def get_dynamic_config_ids(self) -> List[str]:
+        """获取动态添加的配置 ID 列表"""
+        return list(self._dynamic_config_ids)
+    
+    def _load_from_unified_config(self):
+        """从统一配置文件加载配置"""
+        try:
+            from ..config.config_loader import get_config
+            
+            # 获取统一配置
+            app_config = get_config()
             
             # 加载 LLM 模型
-            for model_data in config_data.get('llm_models', []):
+            llm_models = app_config.get_llm_models()
+            for model_data in llm_models:
                 try:
                     self._create_from_dict(model_data)
                 except Exception as e:
                     logger.warning(f"加载 LLM 模型配置失败 {model_data.get('id')}: {e}")
             
             # 加载 Embedding 模型
-            for model_data in config_data.get('embedding_models', []):
+            embedding_models = app_config.get_embedding_models()
+            for model_data in embedding_models:
                 try:
                     self._create_from_dict(model_data)
                 except Exception as e:
                     logger.warning(f"加载 Embedding 模型配置失败 {model_data.get('id')}: {e}")
             
-            logger.info(f"从 YAML 加载了 {len(self._configs)} 个模型配置")
+            logger.info(f"从统一配置加载了 {len(self._configs)} 个模型配置")
             
         except Exception as e:
-            logger.debug(f"YAML 配置加载失败（将使用环境变量配置）: {e}")
+            logger.warning(f"统一配置加载失败: {e}")
+            logger.info("将使用空配置，请确保 config/app.yaml 存在")
+    
     
     def _create_from_dict(self, data: Dict[str, Any]) -> ModelConfig:
         """从字典创建模型配置"""
@@ -295,73 +468,11 @@ class ModelManager:
         return config
     
     # ═══════════════════════════════════════════════════════════════════════
-    # 环境变量加载
-    # ═══════════════════════════════════════════════════════════════════════
-    
-    def _load_from_env(self):
-        """从环境变量加载默认配置"""
-        # 加载 LLM 配置
-        llm_api_base = os.getenv("LLM_API_BASE")
-        llm_api_key = os.getenv("LLM_API_KEY")
-        llm_model_name = os.getenv("LLM_MODEL_NAME", "qwen3")
-        
-        if llm_api_base and llm_api_key:
-            # 创建默认 LLM 配置
-            default_llm_config = ModelConfig(
-                id="env-default-llm",
-                name="Default LLM (from env)",
-                model_type=ModelType.LLM,
-                provider="local",
-                api_base=llm_api_base,
-                model_name=llm_model_name,
-                api_key=llm_api_key,
-                openai_compatible=True,
-                temperature=0.7,
-                supports_streaming=True,
-                supports_json_mode=True,
-                suitable_tasks=[
-                    TaskType.SEMANTIC_PARSING,
-                    TaskType.FIELD_MAPPING,
-                    TaskType.DIMENSION_HIERARCHY,
-                    TaskType.INSIGHT_GENERATION,
-                    TaskType.REPLANNING,
-                ],
-                priority=10,
-                is_default=True,
-                status=ModelStatus.ACTIVE,
-            )
-            self._configs[default_llm_config.id] = default_llm_config
-            self._defaults[ModelType.LLM] = default_llm_config.id
-            logger.info(f"Loaded default LLM from env: {llm_model_name} at {llm_api_base}")
-        
-        # 加载 Embedding 配置
-        zhipu_api_key = os.getenv("ZHIPUAI_API_KEY") or os.getenv("ZHIPU_API_KEY")
-        if zhipu_api_key:
-            # 创建智谱 Embedding 配置
-            zhipu_embedding_config = ModelConfig(
-                id="env-zhipu-embedding",
-                name="Zhipu Embedding (from env)",
-                model_type=ModelType.EMBEDDING,
-                provider="zhipu",
-                api_base="https://open.bigmodel.cn/api/paas/v4",
-                model_name="embedding-2",
-                api_key=zhipu_api_key,
-                openai_compatible=True,
-                suitable_tasks=[TaskType.EMBEDDING],
-                priority=10,
-                is_default=True,
-                status=ModelStatus.ACTIVE,
-            )
-            self._configs[zhipu_embedding_config.id] = zhipu_embedding_config
-            self._defaults[ModelType.EMBEDDING] = zhipu_embedding_config.id
-            logger.info("Loaded Zhipu Embedding from env")
-    
-    # ═══════════════════════════════════════════════════════════════════════
     # CRUD 操作
     # ═══════════════════════════════════════════════════════════════════════
     
     def create(self, request: ModelCreateRequest) -> ModelConfig:
-        """创建新模型配置"""
+        """创建新模型配置（动态添加，支持持久化）"""
         # 生成唯一 ID
         model_id = f"{request.provider}-{request.model_name}".replace("/", "-").replace(":", "-")
         
@@ -393,9 +504,15 @@ class ModelManager:
         
         self._configs[model_id] = config
         
+        # 标记为动态配置
+        self._dynamic_config_ids.add(model_id)
+        
         # 如果是默认模型，更新默认配置
         if request.is_default:
             self._defaults[request.model_type] = model_id
+        
+        # 持久化
+        self._save_to_persistence()
         
         logger.info(f"Created model config: {model_id}")
         return config
@@ -451,6 +568,10 @@ class ModelManager:
         
         config.updated_at = datetime.now()
         
+        # 如果是动态配置，持久化
+        if model_id in self._dynamic_config_ids:
+            self._save_to_persistence()
+        
         logger.info(f"Updated model config: {model_id}")
         return config
     
@@ -458,6 +579,12 @@ class ModelManager:
         """删除模型配置"""
         if model_id in self._configs:
             del self._configs[model_id]
+            
+            # 如果是动态配置，从集合中移除并持久化
+            if model_id in self._dynamic_config_ids:
+                self._dynamic_config_ids.discard(model_id)
+                self._save_to_persistence()
+            
             logger.info(f"Deleted model config: {model_id}")
             return True
         return False
@@ -778,9 +905,40 @@ def get_model_manager() -> ModelManager:
     return _model_manager_instance
 
 
+def get_embeddings(model_id: Optional[str] = None, **kwargs) -> Embeddings:
+    """
+    获取 Embedding 实例（便捷函数）
+    
+    统一的 Embedding 获取入口，从 ModelManager 获取模型配置并创建实例。
+    
+    Args:
+        model_id: 模型 ID（可选，不指定则使用默认 Embedding）
+        **kwargs: 其他参数
+    
+    Returns:
+        配置好的 LangChain Embeddings 实例
+    
+    Examples:
+        from analytics_assistant.src.infra.ai import get_embeddings
+        
+        # 使用默认 Embedding
+        embeddings = get_embeddings()
+        
+        # 指定模型
+        embeddings = get_embeddings(model_id="zhipu-embedding")
+        
+        # 使用
+        vectors = embeddings.embed_documents(["文本1", "文本2"])
+        query_vector = embeddings.embed_query("查询文本")
+    """
+    manager = get_model_manager()
+    return manager.create_embedding(model_id=model_id, **kwargs)
+
+
 __all__ = [
     "ModelManager",
     "get_model_manager",
+    "get_embeddings",
     "ModelType",
     "ModelStatus",
     "TaskType",

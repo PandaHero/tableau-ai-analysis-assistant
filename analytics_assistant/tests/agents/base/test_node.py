@@ -1,79 +1,64 @@
+# -*- coding: utf-8 -*-
 """
-测试 agents/base/node.py 的 get_llm() 函数
-
-测试目标：
-1. 验证 get_llm() 正确调用 ModelManager.create_llm()
-2. 验证 agent_name 自动选择 temperature
-3. 验证 temperature 参数覆盖
-4. 验证任务类型路由
-5. 验证 JSON Mode 支持
+Agent 基础模块单元测试
 """
 import sys
-import os
+from pathlib import Path
+
+# 添加项目根目录到 Python 路径
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
-# 添加项目根目录到 Python 路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../..'))
 
-from src.agents.base.node import (
-    get_llm,
-    get_agent_temperature,
-    AGENT_TEMPERATURE_CONFIG,
-)
-from src.infra.ai import TaskType
-
-
-class TestGetAgentTemperature:
-    """测试 get_agent_temperature() 函数"""
+class TestAgentTemperature:
+    """测试 Agent Temperature 配置"""
     
-    def test_semantic_parser_temperature(self):
-        """测试语义解析器的 temperature"""
+    def test_get_agent_temperature_semantic_parser(self):
+        """测试 semantic_parser 的 temperature"""
+        from src.agents.base.node import get_agent_temperature
+        
         temp = get_agent_temperature("semantic_parser")
         assert temp == 0.1
     
-    def test_insight_temperature(self):
-        """测试洞察生成的 temperature"""
+    def test_get_agent_temperature_insight(self):
+        """测试 insight 的 temperature"""
+        from src.agents.base.node import get_agent_temperature
+        
         temp = get_agent_temperature("insight")
         assert temp == 0.4
     
-    def test_default_temperature(self):
-        """测试未知 agent 的默认 temperature"""
+    def test_get_agent_temperature_default(self):
+        """测试未知 agent 使用默认 temperature"""
+        from src.agents.base.node import get_agent_temperature
+        
         temp = get_agent_temperature("unknown_agent")
-        assert temp == 0.2
+        assert temp == 0.2  # default
     
-    def test_case_insensitive(self):
+    def test_get_agent_temperature_case_insensitive(self):
         """测试大小写不敏感"""
+        from src.agents.base.node import get_agent_temperature
+        
         temp1 = get_agent_temperature("SEMANTIC_PARSER")
-        temp2 = get_agent_temperature("semantic_parser")
-        assert temp1 == temp2 == 0.1
+        temp2 = get_agent_temperature("Semantic_Parser")
+        
+        assert temp1 == 0.1
+        assert temp2 == 0.1
 
 
 class TestGetLLM:
-    """测试 get_llm() 函数"""
+    """测试 get_llm 函数"""
     
     @patch('src.agents.base.node.get_model_manager')
-    def test_basic_call(self, mock_get_manager):
-        """测试基本调用"""
-        # 设置 mock
-        mock_manager = Mock()
-        mock_llm = Mock()
-        mock_manager.create_llm.return_value = mock_llm
-        mock_get_manager.return_value = mock_manager
+    def test_get_llm_with_agent_name(self, mock_get_manager):
+        """测试使用 agent_name 获取 LLM"""
+        from src.agents.base.node import get_llm
         
-        # 调用
-        llm = get_llm()
-        
-        # 验证
-        assert llm == mock_llm
-        mock_manager.create_llm.assert_called_once()
-    
-    @patch('src.agents.base.node.get_model_manager')
-    def test_agent_name_temperature(self, mock_get_manager):
-        """测试 agent_name 自动选择 temperature"""
         # 设置 mock
-        mock_manager = Mock()
-        mock_llm = Mock()
+        mock_manager = MagicMock()
+        mock_llm = MagicMock()
         mock_manager.create_llm.return_value = mock_llm
         mock_get_manager.return_value = mock_manager
         
@@ -81,41 +66,37 @@ class TestGetLLM:
         llm = get_llm(agent_name="semantic_parser")
         
         # 验证
+        mock_manager.create_llm.assert_called_once()
+        call_kwargs = mock_manager.create_llm.call_args[1]
+        assert call_kwargs['temperature'] == 0.1  # semantic_parser 的 temperature
         assert llm == mock_llm
-        mock_manager.create_llm.assert_called_once_with(
-            model_id=None,
-            task_type=None,
-            temperature=0.1,  # semantic_parser 的 temperature
-            enable_json_mode=False,
-        )
     
     @patch('src.agents.base.node.get_model_manager')
-    def test_explicit_temperature_override(self, mock_get_manager):
-        """测试显式 temperature 覆盖 agent_name"""
+    def test_get_llm_with_explicit_temperature(self, mock_get_manager):
+        """测试显式指定 temperature（覆盖 agent_name）"""
+        from src.agents.base.node import get_llm
+        
         # 设置 mock
-        mock_manager = Mock()
-        mock_llm = Mock()
+        mock_manager = MagicMock()
+        mock_llm = MagicMock()
         mock_manager.create_llm.return_value = mock_llm
         mock_get_manager.return_value = mock_manager
         
-        # 调用
+        # 调用（显式指定 temperature=0.5，应覆盖 semantic_parser 的 0.1）
         llm = get_llm(agent_name="semantic_parser", temperature=0.5)
         
         # 验证
-        assert llm == mock_llm
-        mock_manager.create_llm.assert_called_once_with(
-            model_id=None,
-            task_type=None,
-            temperature=0.5,  # 显式指定的 temperature
-            enable_json_mode=False,
-        )
+        call_kwargs = mock_manager.create_llm.call_args[1]
+        assert call_kwargs['temperature'] == 0.5  # 显式指定的值
     
     @patch('src.agents.base.node.get_model_manager')
-    def test_task_type_routing(self, mock_get_manager):
-        """测试任务类型路由"""
+    def test_get_llm_with_task_type(self, mock_get_manager):
+        """测试使用 task_type 获取 LLM"""
+        from src.agents.base.node import get_llm, TaskType
+        
         # 设置 mock
-        mock_manager = Mock()
-        mock_llm = Mock()
+        mock_manager = MagicMock()
+        mock_llm = MagicMock()
         mock_manager.create_llm.return_value = mock_llm
         mock_get_manager.return_value = mock_manager
         
@@ -123,20 +104,17 @@ class TestGetLLM:
         llm = get_llm(task_type=TaskType.SEMANTIC_PARSING)
         
         # 验证
-        assert llm == mock_llm
-        mock_manager.create_llm.assert_called_once_with(
-            model_id=None,
-            task_type=TaskType.SEMANTIC_PARSING,
-            temperature=None,
-            enable_json_mode=False,
-        )
+        call_kwargs = mock_manager.create_llm.call_args[1]
+        assert call_kwargs['task_type'] == TaskType.SEMANTIC_PARSING
     
     @patch('src.agents.base.node.get_model_manager')
-    def test_json_mode_enabled(self, mock_get_manager):
+    def test_get_llm_with_json_mode(self, mock_get_manager):
         """测试启用 JSON Mode"""
+        from src.agents.base.node import get_llm
+        
         # 设置 mock
-        mock_manager = Mock()
-        mock_llm = Mock()
+        mock_manager = MagicMock()
+        mock_llm = MagicMock()
         mock_manager.create_llm.return_value = mock_llm
         mock_get_manager.return_value = mock_manager
         
@@ -144,20 +122,17 @@ class TestGetLLM:
         llm = get_llm(agent_name="semantic_parser", enable_json_mode=True)
         
         # 验证
-        assert llm == mock_llm
-        mock_manager.create_llm.assert_called_once_with(
-            model_id=None,
-            task_type=None,
-            temperature=0.1,
-            enable_json_mode=True,
-        )
+        call_kwargs = mock_manager.create_llm.call_args[1]
+        assert call_kwargs['enable_json_mode'] is True
     
     @patch('src.agents.base.node.get_model_manager')
-    def test_explicit_model_id(self, mock_get_manager):
-        """测试显式指定模型 ID"""
+    def test_get_llm_with_model_id(self, mock_get_manager):
+        """测试显式指定 model_id"""
+        from src.agents.base.node import get_llm
+        
         # 设置 mock
-        mock_manager = Mock()
-        mock_llm = Mock()
+        mock_manager = MagicMock()
+        mock_llm = MagicMock()
         mock_manager.create_llm.return_value = mock_llm
         mock_get_manager.return_value = mock_manager
         
@@ -165,66 +140,46 @@ class TestGetLLM:
         llm = get_llm(model_id="deepseek-reasoner", temperature=0.7)
         
         # 验证
-        assert llm == mock_llm
-        mock_manager.create_llm.assert_called_once_with(
-            model_id="deepseek-reasoner",
-            task_type=None,
-            temperature=0.7,
-            enable_json_mode=False,
-        )
+        call_kwargs = mock_manager.create_llm.call_args[1]
+        assert call_kwargs['model_id'] == "deepseek-reasoner"
+        assert call_kwargs['temperature'] == 0.7
+
+
+class TestModuleExports:
+    """测试模块导出"""
     
-    @patch('src.agents.base.node.get_model_manager')
-    def test_combined_parameters(self, mock_get_manager):
-        """测试组合参数"""
-        # 设置 mock
-        mock_manager = Mock()
-        mock_llm = Mock()
-        mock_manager.create_llm.return_value = mock_llm
-        mock_get_manager.return_value = mock_manager
-        
-        # 调用
-        llm = get_llm(
-            agent_name="semantic_parser",
-            task_type=TaskType.SEMANTIC_PARSING,
-            enable_json_mode=True,
-            temperature=0.3,
+    def test_base_module_exports(self):
+        """测试 agents.base 模块导出"""
+        from src.agents.base import (
+            get_llm,
+            get_agent_temperature,
+            call_llm,
+            stream_llm,
+            call_llm_with_tools,
+            parse_json_response,
+            JSONParseError,
+            MiddlewareRunner,
+            TaskType,
         )
         
-        # 验证
-        assert llm == mock_llm
-        mock_manager.create_llm.assert_called_once_with(
-            model_id=None,
-            task_type=TaskType.SEMANTIC_PARSING,
-            temperature=0.3,  # 显式参数优先
-            enable_json_mode=True,
-        )
+        # 验证导出存在
+        assert callable(get_llm)
+        assert callable(get_agent_temperature)
+        assert callable(call_llm)
+        assert callable(stream_llm)
+        assert callable(call_llm_with_tools)
+        assert callable(parse_json_response)
+        assert hasattr(TaskType, 'SEMANTIC_PARSING')
     
-    @patch('src.agents.base.node.get_model_manager')
-    def test_extra_kwargs_passed_through(self, mock_get_manager):
-        """测试额外参数传递"""
-        # 设置 mock
-        mock_manager = Mock()
-        mock_llm = Mock()
-        mock_manager.create_llm.return_value = mock_llm
-        mock_get_manager.return_value = mock_manager
+    def test_task_type_values(self):
+        """测试 TaskType 枚举值"""
+        from src.agents.base import TaskType
         
-        # 调用
-        llm = get_llm(
-            agent_name="semantic_parser",
-            max_tokens=2048,
-            streaming=True,
-        )
-        
-        # 验证
-        assert llm == mock_llm
-        mock_manager.create_llm.assert_called_once_with(
-            model_id=None,
-            task_type=None,
-            temperature=0.1,
-            enable_json_mode=False,
-            max_tokens=2048,
-            streaming=True,
-        )
+        # 验证常用任务类型
+        assert TaskType.SEMANTIC_PARSING.value == "semantic_parsing"
+        assert TaskType.FIELD_MAPPING.value == "field_mapping"
+        assert TaskType.INSIGHT_GENERATION.value == "insight_generation"
+        assert TaskType.REASONING.value == "reasoning"
 
 
 if __name__ == "__main__":

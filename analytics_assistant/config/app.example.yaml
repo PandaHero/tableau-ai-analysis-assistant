@@ -1,0 +1,116 @@
+# 应用统一配置文件
+#
+# 所有模块的配置都在这个文件中定义
+# 支持环境变量展开：${VAR_NAME:-default}
+
+# ============================================
+# AI 模型配置
+# ============================================
+ai:
+  # LLM 模型配置
+  llm_models:
+    - name: gpt-4
+      provider: openai
+      api_key: ${OPENAI_API_KEY}
+      base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      temperature: 0.7
+      max_tokens: 4096
+    
+    - name: deepseek-chat
+      provider: deepseek
+      api_key: ${DEEPSEEK_API_KEY}
+      base_url: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      temperature: 0.7
+  
+  # Embedding 模型配置
+  embedding_models:
+    - name: text-embedding-3-small
+      provider: openai
+      api_key: ${OPENAI_API_KEY}
+      base_url: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      dimensions: 1536
+    
+    - name: zhipu-embedding
+      provider: zhipu
+      api_key: ${ZHIPU_API_KEY}
+      dimensions: 1024
+  
+  # 全局配置
+  global:
+    default_llm: gpt-4
+    default_embedding: text-embedding-3-small
+    timeout: 60
+    max_retries: 3
+
+# ============================================
+# 存储配置
+# ============================================
+storage:
+  # 默认后端类型：sqlite/redis/memory
+  backend: ${STORAGE_BACKEND:-sqlite}
+  
+  # 连接字符串
+  connection_string: ${STORAGE_CONNECTION_STRING:-data/storage.db}
+  
+  # 默认 TTL（秒）
+  ttl: ${STORAGE_TTL:-3600}
+  
+  # 命名空间特定配置
+  namespaces:
+    # 缓存命名空间
+    cache:
+      backend: redis
+      connection_string: ${REDIS_URL:-redis://localhost:6379/0}
+      ttl: 3600
+    
+    # 会话命名空间
+    session:
+      backend: redis
+      connection_string: ${REDIS_URL:-redis://localhost:6379/0}
+      ttl: 604800  # 7 天
+    
+    # 模型缓存命名空间
+    model_cache:
+      backend: sqlite
+      connection_string: data/model_cache.db
+      ttl: null  # 永不过期
+    
+    # 临时数据命名空间
+    temp:
+      backend: memory
+      ttl: 600  # 10 分钟
+
+# ============================================
+# 向量存储配置
+# ============================================
+vector_store:
+  # 后端类型：faiss/chroma
+  backend: ${VECTOR_STORE_BACKEND:-faiss}
+  
+  # 持久化目录
+  persist_directory: ${VECTOR_STORE_DIR:-data/indexes}
+  
+  # 向量维度（根据 embedding 模型设置）
+  embedding_dimension: 1024
+
+# ============================================
+# RAG 配置
+# ============================================
+rag:
+  # 向量检索配置
+  retrieval:
+    top_k: 20
+    score_threshold: 0.7
+  
+  # 重排序配置
+  reranking:
+    enabled: true
+    model: bge-reranker-base
+
+# ============================================
+# 日志配置（未来扩展）
+# ============================================
+logging:
+  level: ${LOG_LEVEL:-INFO}
+  format: json
+  output: ${LOG_OUTPUT:-stdout}

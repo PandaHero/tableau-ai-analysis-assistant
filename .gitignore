@@ -40,6 +40,10 @@ env/
 .env.local
 .env.*.local
 
+# Configuration files with sensitive data
+config/app.yaml
+analytics_assistant/config/app.yaml
+
 # Logs
 *.log
 logs/

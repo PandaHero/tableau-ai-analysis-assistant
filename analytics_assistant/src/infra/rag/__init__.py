@@ -1,7 +1,8 @@
 """
 RAG (Retrieval-Augmented Generation) Infrastructure
 
-This module provides unified retrieval capabilities for the analytics assistant.
+检索策略：精确匹配 → Embedding 检索 → LLM 重排序
+不使用 BM25，避免分词依赖。
 """
 
 from .models import (
@@ -16,17 +17,12 @@ from .retriever import (
     RetrievalConfig,
     MetadataFilter,
     BaseRetriever,
+    ExactRetriever,
     EmbeddingRetriever,
-    KeywordRetriever,
-    HybridRetriever,
+    CascadeRetriever,
     RetrievalPipeline,
     RetrieverFactory,
-    Tokenizer,
-)
-
-from .vector_index_manager import (
-    IndexConfig,
-    VectorIndexManager,
+    create_retriever,
 )
 
 from .reranker import (
@@ -47,15 +43,12 @@ __all__ = [
     "RetrievalConfig",
     "MetadataFilter",
     "BaseRetriever",
+    "ExactRetriever",
     "EmbeddingRetriever",
-    "KeywordRetriever",
-    "HybridRetriever",
+    "CascadeRetriever",
     "RetrievalPipeline",
     "RetrieverFactory",
-    "Tokenizer",
-    # Vector Index Manager
-    "IndexConfig",
-    "VectorIndexManager",
+    "create_retriever",
     # Reranker
     "BaseReranker",
     "DefaultReranker",

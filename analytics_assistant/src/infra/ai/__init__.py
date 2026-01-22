@@ -8,6 +8,7 @@ AI 基础设施模块
 from .model_manager import (
     ModelManager,
     get_model_manager,
+    get_embeddings,
     ModelType,
     ModelStatus,
     TaskType,
@@ -15,16 +16,15 @@ from .model_manager import (
     ModelCreateRequest,
     ModelUpdateRequest,
 )
-from .embeddings_wrapper import get_embeddings
 
 __all__ = [
     "ModelManager",
     "get_model_manager",
+    "get_embeddings",
     "ModelType",
     "ModelStatus",
     "TaskType",
     "ModelConfig",
     "ModelCreateRequest",
     "ModelUpdateRequest",
-    "get_embeddings",
 ]

@@ -1,4 +1,4 @@
-"""测试配置文件路径"""
+"""测试统一配置文件路径"""
 from pathlib import Path
 
 # 当前文件路径
@@ -9,10 +9,16 @@ print(f"当前文件: {current_file}")
 analytics_root = current_file.parent.parent.parent
 print(f"analytics-assistant 根目录: {analytics_root}")
 
-# 配置文件路径
-config_path = analytics_root / "config" / "models.yaml"
+# 统一配置文件路径
+config_path = analytics_root / "config" / "app.yaml"
 print(f"配置文件路径: {config_path}")
 print(f"配置文件存在: {config_path.exists()}")
+
+# 如果不存在，尝试示例配置
+if not config_path.exists():
+    config_path = analytics_root / "config" / "app.example.yaml"
+    print(f"使用示例配置: {config_path}")
+    print(f"示例配置存在: {config_path.exists()}")
 
 if config_path.exists():
     print("\n配置文件内容（前20行）:")
