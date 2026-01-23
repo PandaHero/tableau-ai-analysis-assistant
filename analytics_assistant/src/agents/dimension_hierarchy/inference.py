@@ -32,14 +32,6 @@ from analytics_assistant.src.infra.config import get_config
 logger = logging.getLogger(__name__)
 
 
-# ══════════════════════════════════════════════════════════════
-# 常量
-# ══════════════════════════════════════════════════════════════
-
-RAG_THRESHOLD_SEED = 0.85       # seed/verified 数据阈值
-RAG_THRESHOLD_UNVERIFIED = 0.90 # llm/unverified 数据阈值
-
-
 class PatternSource(str, Enum):
     """RAG 模式来源"""
     SEED = "seed"
@@ -55,6 +47,16 @@ def _get_config() -> Dict[str, Any]:
     """从 YAML 读取配置"""
     config = get_config()
     return config.get("dimension_hierarchy", {})
+
+
+def _get_rag_threshold_seed() -> float:
+    """获取 RAG seed/verified 数据阈值"""
+    return get_config().get_rag_threshold_seed()
+
+
+def _get_rag_threshold_unverified() -> float:
+    """获取 RAG llm/unverified 数据阈值"""
+    return get_config().get_rag_threshold_unverified()
 
 
 def compute_fields_hash(fields: List[Field]) -> str:
@@ -312,7 +314,8 @@ class DimensionHierarchyInference:
                 return
             
             # 5. 创建检索器
-            config = RetrievalConfig(top_k=5, score_threshold=RAG_THRESHOLD_SEED)
+            rag_threshold = _get_rag_threshold_seed()
+            config = RetrievalConfig(top_k=5, score_threshold=rag_threshold)
             self._rag_retriever = CascadeRetriever(
                 ExactRetriever(chunks, config),
                 EmbeddingRetriever(vector_store, chunks, config),
@@ -375,10 +378,14 @@ class DimensionHierarchyInference:
         results: Dict[str, DimensionAttributes] = {}
         misses: List[Field] = []
         
+        # 从配置获取阈值
+        rag_threshold_seed = _get_rag_threshold_seed()
+        rag_threshold_unverified = _get_rag_threshold_unverified()
+        
         for f in fields:
             name = f.caption or f.name
             try:
-                search_results = await self._rag_retriever.aretrieve(query=name, top_k=3, score_threshold=RAG_THRESHOLD_SEED)
+                search_results = await self._rag_retriever.aretrieve(query=name, top_k=3, score_threshold=rag_threshold_seed)
                 if not search_results:
                     misses.append(f)
                     continue
@@ -392,7 +399,7 @@ class DimensionHierarchyInference:
                 # 阈值分层
                 source = pattern.get("source", "llm")
                 verified = pattern.get("verified", False)
-                threshold = RAG_THRESHOLD_SEED if source == PatternSource.SEED.value or verified else RAG_THRESHOLD_UNVERIFIED
+                threshold = rag_threshold_seed if source == PatternSource.SEED.value or verified else rag_threshold_unverified
                 
                 if best.score < threshold:
                     misses.append(f)

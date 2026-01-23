@@ -893,13 +893,27 @@ class ModelManager:
     # 批量 Embedding
     # ═══════════════════════════════════════════════════════════════════════
     
+    def _get_batch_embedding_defaults(self) -> Dict[str, Any]:
+        """从配置获取批量 Embedding 默认参数"""
+        try:
+            from ..config import get_config
+            config = get_config()
+            batch_config = config.get_batch_embedding_config()
+            return {
+                'batch_size': batch_config.get('batch_size', 20),
+                'max_concurrency': batch_config.get('max_concurrency', 5),
+                'use_cache': batch_config.get('use_cache', True),
+            }
+        except Exception:
+            return {'batch_size': 20, 'max_concurrency': 5, 'use_cache': True}
+    
     def embed_documents_batch(
         self,
         texts: List[str],
         model_id: Optional[str] = None,
-        batch_size: int = 20,
-        max_concurrency: int = 5,
-        use_cache: bool = True,
+        batch_size: int = None,
+        max_concurrency: int = None,
+        use_cache: bool = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[List[float]]:
         """
@@ -918,9 +932,9 @@ class ModelManager:
         Args:
             texts: 文本列表
             model_id: 模型 ID（可选）
-            batch_size: 每批文本数量（默认 20）
-            max_concurrency: 最大并发批次数（默认 5）
-            use_cache: 是否使用缓存（默认 True）
+            batch_size: 每批文本数量（默认从配置读取）
+            max_concurrency: 最大并发批次数（默认从配置读取）
+            use_cache: 是否使用缓存（默认从配置读取）
             progress_callback: 进度回调函数 (completed, total)
         
         Returns:
@@ -932,12 +946,16 @@ class ModelManager:
             texts = ["文本1", "文本2", "文本3", ...]
             vectors = manager.embed_documents_batch(
                 texts,
-                batch_size=20,
-                max_concurrency=5,
                 progress_callback=lambda done, total: print(f"{done}/{total}")
             )
         """
         import asyncio
+        
+        # 从配置获取默认值
+        defaults = self._get_batch_embedding_defaults()
+        actual_batch_size = batch_size if batch_size is not None else defaults['batch_size']
+        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults['max_concurrency']
+        actual_use_cache = use_cache if use_cache is not None else defaults['use_cache']
         
         # 在新的事件循环中运行异步版本
         try:
@@ -949,24 +967,24 @@ class ModelManager:
                     future = executor.submit(
                         asyncio.run,
                         self.embed_documents_batch_async(
-                            texts, model_id, batch_size, max_concurrency, 
-                            use_cache, progress_callback
+                            texts, model_id, actual_batch_size, actual_max_concurrency, 
+                            actual_use_cache, progress_callback
                         )
                     )
                     return future.result()
             else:
                 return loop.run_until_complete(
                     self.embed_documents_batch_async(
-                        texts, model_id, batch_size, max_concurrency,
-                        use_cache, progress_callback
+                        texts, model_id, actual_batch_size, actual_max_concurrency,
+                        actual_use_cache, progress_callback
                     )
                 )
         except RuntimeError:
             # 没有事件循环，创建新的
             return asyncio.run(
                 self.embed_documents_batch_async(
-                    texts, model_id, batch_size, max_concurrency,
-                    use_cache, progress_callback
+                    texts, model_id, actual_batch_size, actual_max_concurrency,
+                    actual_use_cache, progress_callback
                 )
             )
     
@@ -974,9 +992,9 @@ class ModelManager:
         self,
         texts: List[str],
         model_id: Optional[str] = None,
-        batch_size: int = 20,
-        max_concurrency: int = 5,
-        use_cache: bool = True,
+        batch_size: int = None,
+        max_concurrency: int = None,
+        use_cache: bool = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[List[float]]:
         """
@@ -985,9 +1003,9 @@ class ModelManager:
         Args:
             texts: 文本列表
             model_id: 模型 ID（可选）
-            batch_size: 每批文本数量（默认 20）
-            max_concurrency: 最大并发批次数（默认 5）
-            use_cache: 是否使用缓存
+            batch_size: 每批文本数量（默认从配置读取）
+            max_concurrency: 最大并发批次数（默认从配置读取）
+            use_cache: 是否使用缓存（默认从配置读取）
             progress_callback: 进度回调函数
         
         Returns:
@@ -1000,12 +1018,18 @@ class ModelManager:
         if not texts:
             return []
         
+        # 从配置获取默认值
+        defaults = self._get_batch_embedding_defaults()
+        actual_batch_size = batch_size if batch_size is not None else defaults['batch_size']
+        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults['max_concurrency']
+        actual_use_cache = use_cache if use_cache is not None else defaults['use_cache']
+        
         total = len(texts)
         results: List[Optional[List[float]]] = [None] * total
         
         # 初始化缓存
         cache = None
-        if use_cache:
+        if actual_use_cache:
             try:
                 from ..storage import CacheManager
                 cache = CacheManager(namespace="embedding", default_ttl=3600)
@@ -1053,18 +1077,18 @@ class ModelManager:
         
         # 分批处理未缓存的文本
         batches = [
-            uncached_texts[i:i + batch_size]
-            for i in range(0, len(uncached_texts), batch_size)
+            uncached_texts[i:i + actual_batch_size]
+            for i in range(0, len(uncached_texts), actual_batch_size)
         ]
         batch_indices = [
-            uncached_indices[i:i + batch_size]
-            for i in range(0, len(uncached_indices), batch_size)
+            uncached_indices[i:i + actual_batch_size]
+            for i in range(0, len(uncached_indices), actual_batch_size)
         ]
         
-        logger.info(f"开始批量 Embedding: {len(uncached_texts)} 条文本, {len(batches)} 批次, 并发={max_concurrency}")
+        logger.info(f"开始批量 Embedding: {len(uncached_texts)} 条文本, {len(batches)} 批次, 并发={actual_max_concurrency}")
         
         # 并发控制
-        semaphore = asyncio.Semaphore(max_concurrency)
+        semaphore = asyncio.Semaphore(actual_max_concurrency)
         completed = cached_count
         completed_lock = asyncio.Lock()
         
@@ -1182,9 +1206,9 @@ def get_embeddings(model_id: Optional[str] = None, **kwargs) -> Embeddings:
 def embed_documents_batch(
     texts: List[str],
     model_id: Optional[str] = None,
-    batch_size: int = 20,
-    max_concurrency: int = 5,
-    use_cache: bool = True,
+    batch_size: int = None,
+    max_concurrency: int = None,
+    use_cache: bool = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[List[float]]:
     """
@@ -1198,9 +1222,9 @@ def embed_documents_batch(
     Args:
         texts: 文本列表
         model_id: 模型 ID（可选）
-        batch_size: 每批文本数量（默认 20）
-        max_concurrency: 最大并发批次数（默认 5）
-        use_cache: 是否使用缓存（默认 True）
+        batch_size: 每批文本数量（默认从配置读取）
+        max_concurrency: 最大并发批次数（默认从配置读取）
+        use_cache: 是否使用缓存（默认从配置读取）
         progress_callback: 进度回调函数 (completed, total)
     
     Returns:
@@ -1212,8 +1236,6 @@ def embed_documents_batch(
         texts = ["文本1", "文本2", "文本3", ...]
         vectors = embed_documents_batch(
             texts,
-            batch_size=20,
-            max_concurrency=5,
             progress_callback=lambda done, total: print(f"进度: {done}/{total}")
         )
     """

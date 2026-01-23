@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
 """
 统一应用配置管理器
 
@@ -267,6 +266,42 @@ class AppConfig:
     def get_logging_config(self) -> Dict[str, Any]:
         """获取日志配置"""
         return self.config.get('logging', {})
+    
+    # ============================================
+    # 维度层级配置
+    # ============================================
+    
+    def get_dimension_hierarchy_config(self) -> Dict[str, Any]:
+        """获取维度层级推断配置"""
+        return self.config.get('dimension_hierarchy', {})
+    
+    def get_rag_threshold_seed(self) -> float:
+        """获取 RAG seed/verified 数据阈值"""
+        return self.get_dimension_hierarchy_config().get('rag_threshold_seed', 0.85)
+    
+    def get_rag_threshold_unverified(self) -> float:
+        """获取 RAG llm/unverified 数据阈值"""
+        return self.get_dimension_hierarchy_config().get('rag_threshold_unverified', 0.90)
+    
+    # ============================================
+    # 批量 Embedding 配置
+    # ============================================
+    
+    def get_batch_embedding_config(self) -> Dict[str, Any]:
+        """获取批量 Embedding 配置"""
+        return self.config.get('batch_embedding', {})
+    
+    def get_batch_embedding_batch_size(self) -> int:
+        """获取批量 Embedding 每批数量"""
+        return self.get_batch_embedding_config().get('batch_size', 20)
+    
+    def get_batch_embedding_max_concurrency(self) -> int:
+        """获取批量 Embedding 最大并发数"""
+        return self.get_batch_embedding_config().get('max_concurrency', 5)
+    
+    def get_batch_embedding_use_cache(self) -> bool:
+        """获取批量 Embedding 是否使用缓存"""
+        return self.get_batch_embedding_config().get('use_cache', True)
     
     # ============================================
     # 通用方法

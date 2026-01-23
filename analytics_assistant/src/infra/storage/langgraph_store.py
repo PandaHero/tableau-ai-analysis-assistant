@@ -35,6 +35,43 @@ from typing import Optional, List, Dict, Any, Callable, Union
 
 logger = logging.getLogger(__name__)
 
+
+# ============================================
+# 配置获取
+# ============================================
+
+def _get_storage_config():
+    """从统一配置获取存储配置"""
+    try:
+        from ..config import get_config
+        config = get_config()
+        return config.get_storage_config()
+    except Exception:
+        return {}
+
+
+def _get_default_db_path() -> str:
+    """获取默认数据库路径"""
+    storage_config = _get_storage_config()
+    return storage_config.get('connection_string', 'analytics_assistant/data/storage.db')
+
+
+def _get_default_ttl_minutes() -> int:
+    """获取默认 TTL（分钟）"""
+    storage_config = _get_storage_config()
+    return storage_config.get('ttl', 1440)  # 默认 24 小时
+
+
+def _get_batch_embedding_config():
+    """获取批量 Embedding 配置"""
+    try:
+        from ..config import get_config
+        config = get_config()
+        return config.get_batch_embedding_config()
+    except Exception:
+        return {}
+
+
 # ============================================
 # KV 存储（LangGraph SqliteStore 单例）
 # ============================================
@@ -42,16 +79,17 @@ logger = logging.getLogger(__name__)
 _kv_store = None
 _kv_store_lock = threading.Lock()
 
+# 保留常量用于向后兼容（但实际值从配置读取）
 DEFAULT_DB_PATH = "analytics_assistant/data/storage.db"
 DEFAULT_TTL_MINUTES = 1440  # 24 小时
 
 
-def get_kv_store(db_path: str = DEFAULT_DB_PATH):
+def get_kv_store(db_path: str = None):
     """
     获取全局 KV 存储实例（LangGraph SqliteStore 单例）
     
     Args:
-        db_path: SQLite 数据库路径
+        db_path: SQLite 数据库路径（可选，默认从配置读取）
     
     Returns:
         LangGraph SqliteStore 实例
@@ -61,7 +99,8 @@ def get_kv_store(db_path: str = DEFAULT_DB_PATH):
     if _kv_store is None:
         with _kv_store_lock:
             if _kv_store is None:
-                _kv_store = _create_kv_store(db_path)
+                actual_db_path = db_path or _get_default_db_path()
+                _kv_store = _create_kv_store(actual_db_path)
     
     return _kv_store
 
@@ -76,8 +115,9 @@ def _create_kv_store(db_path: str):
     
     conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
     
+    ttl_minutes = _get_default_ttl_minutes()
     ttl_config: TTLConfig = {
-        "default_ttl": DEFAULT_TTL_MINUTES,
+        "default_ttl": ttl_minutes,
         "refresh_on_read": True,
         "sweep_interval_minutes": 60,
     }
@@ -85,7 +125,7 @@ def _create_kv_store(db_path: str):
     store = SqliteStore(conn, ttl=ttl_config)
     store.setup()
     
-    logger.info(f"KV 存储已初始化: {db_path}, TTL={DEFAULT_TTL_MINUTES}min")
+    logger.info(f"KV 存储已初始化: {db_path}, TTL={ttl_minutes}min")
     return store
 
 
@@ -116,8 +156,8 @@ def get_vector_store(
     texts: Optional[List[str]] = None,
     metadatas: Optional[List[Dict[str, Any]]] = None,
     use_batch_embedding: bool = True,
-    batch_size: int = 20,
-    max_concurrency: int = 5,
+    batch_size: int = None,
+    max_concurrency: int = None,
 ):
     """
     获取向量存储实例
@@ -130,8 +170,8 @@ def get_vector_store(
         texts: 初始文本列表（创建新 FAISS 索引时必需）
         metadatas: 文本元数据列表（可选）
         use_batch_embedding: 是否使用批量 embedding（默认 True，首次创建时更快）
-        batch_size: 每批文本数量（默认 20，与智谱 API 限制匹配）
-        max_concurrency: 最大并发批次数（默认 5，即同时处理 5 个批次）
+        batch_size: 每批文本数量（默认从配置读取，智谱 API 限制 20）
+        max_concurrency: 最大并发批次数（默认从配置读取）
     
     Returns:
         LangChain 向量存储实例（FAISS 或 Chroma）
@@ -146,9 +186,7 @@ def get_vector_store(
             "faiss", embeddings, "my_fields",
             texts=["text1", "text2"],
             metadatas=[{"field": "a"}, {"field": "b"}],
-            use_batch_embedding=True,
-            batch_size=20,
-            max_concurrency=5  # 5 个批次并发 = 100 条/轮
+            use_batch_embedding=True
         )
         
         # FAISS - 加载已有索引
@@ -159,10 +197,15 @@ def get_vector_store(
     """
     backend = backend.lower()
     
+    # 从配置获取默认值
+    batch_config = _get_batch_embedding_config()
+    actual_batch_size = batch_size if batch_size is not None else batch_config.get('batch_size', 20)
+    actual_max_concurrency = max_concurrency if max_concurrency is not None else batch_config.get('max_concurrency', 5)
+    
     if backend == "faiss":
         return _create_faiss_store(
             embeddings, collection_name, persist_directory, texts, metadatas,
-            use_batch_embedding, batch_size, max_concurrency
+            use_batch_embedding, actual_batch_size, actual_max_concurrency
         )
     elif backend == "chroma":
         return _create_chroma_store(embeddings, collection_name, persist_directory)
