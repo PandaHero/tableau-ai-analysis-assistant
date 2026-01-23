@@ -9,7 +9,7 @@ import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Dict, Any, Optional, AsyncIterator, Tuple, Set
+from typing import List, Dict, Any, Optional, Tuple, Set, Callable, Awaitable
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -18,13 +18,14 @@ from analytics_assistant.src.agents.dimension_hierarchy.schema import (
     DimensionCategory,
     DimensionAttributes,
     DimensionHierarchyResult,
+    LLMDimensionOutput,
 )
 from analytics_assistant.src.agents.dimension_hierarchy.prompt import (
     SYSTEM_PROMPT,
     build_user_prompt,
 )
 from analytics_assistant.src.agents.dimension_hierarchy.seed_data import SEED_PATTERNS
-from analytics_assistant.src.agents.base import get_llm, stream_llm
+from analytics_assistant.src.agents.base import get_llm, stream_llm_structured
 from analytics_assistant.src.infra.storage import CacheManager
 from analytics_assistant.src.infra.config import get_config
 
@@ -556,22 +557,24 @@ class DimensionHierarchyInference:
         fields: List[Field],
         table_id: Optional[str] = None,
         skip_cache: bool = False,
-    ) -> AsyncIterator[str]:
+        on_token: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> DimensionHierarchyResult:
         """
-        流式推断维度层级
+        推断维度层级
         
         Args:
             datasource_luid: 数据源 LUID
             fields: Field 模型列表
             table_id: 逻辑表 ID（多表数据源时使用）
             skip_cache: 是否跳过缓存
+            on_token: Token 回调（用于流式输出展示）
         
-        Yields:
-            LLM 生成的 token
+        Returns:
+            DimensionHierarchyResult 推断结果
         """
         if not fields:
             self._last_result = DimensionHierarchyResult(dimension_hierarchy={})
-            return
+            return self._last_result
         
         cache_key = build_cache_key(datasource_luid, table_id)
         results: Dict[str, DimensionAttributes] = {}
@@ -590,7 +593,7 @@ class DimensionHierarchyInference:
                     for name, data in cached_data.items():
                         results[name] = self._deserialize_attrs(data)
                     self._last_result = DimensionHierarchyResult(dimension_hierarchy=results)
-                    return
+                    return self._last_result
         
         # 2. 增量计算
         incremental = compute_incremental_fields(fields, cached_hashes, cached_names)
@@ -606,7 +609,7 @@ class DimensionHierarchyInference:
             logger.info(f"增量检测: 无需推断，复用 {len(results)} 个缓存")
             self._update_cache(cache_key, fields, results)
             self._last_result = DimensionHierarchyResult(dimension_hierarchy=results)
-            return
+            return self._last_result
         
         logger.info(f"增量推断: 新增={len(incremental.new_fields)}, 变更={len(incremental.changed_fields)}")
 
@@ -638,8 +641,7 @@ class DimensionHierarchyInference:
         
         # 5. LLM 推断
         if fields_after_rag:
-            async for token in self._llm_infer(fields_after_rag, results):
-                yield token
+            await self._llm_infer(fields_after_rag, results, on_token)
         
         # 6. 自学习
         if self._enable_self_learning:
@@ -652,6 +654,7 @@ class DimensionHierarchyInference:
         rag_count = len(fields_after_seed) - len(fields_after_rag)
         logger.info(f"推断完成: 种子={seed_count}, RAG={rag_count}, LLM={len(fields_after_rag)}, 总计={len(results)}")
         self._last_result = DimensionHierarchyResult(dimension_hierarchy=results)
+        return self._last_result
     
     def _update_cache(self, key: str, fields: List[Field], results: Dict[str, DimensionAttributes]) -> None:
         """更新缓存"""
@@ -667,8 +670,13 @@ class DimensionHierarchyInference:
     # LLM 推断
     # ─────────────────────────────────────────────────────────
     
-    async def _llm_infer(self, fields: List[Field], results: Dict[str, DimensionAttributes]) -> AsyncIterator[str]:
-        """LLM 流式推断"""
+    async def _llm_infer(
+        self,
+        fields: List[Field],
+        results: Dict[str, DimensionAttributes],
+        on_token: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> None:
+        """LLM 推断"""
         if not fields:
             return
         
@@ -676,58 +684,36 @@ class DimensionHierarchyInference:
         user_prompt = build_user_prompt(fields_input, include_few_shot=True)
         messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
         
-        llm = get_llm(agent_name="dimension_hierarchy")
-        full_response = ""
+        llm = get_llm(agent_name="dimension_hierarchy", enable_json_mode=True)
         
         for attempt in range(self._max_retry):
             try:
-                async for token in stream_llm(llm, messages):
-                    full_response += token
-                    yield token
+                # 使用 stream_llm_structured 获取结构化输出
+                llm_output: LLMDimensionOutput = await stream_llm_structured(
+                    llm, messages, LLMDimensionOutput,
+                    on_token=on_token,
+                )
                 
-                parsed = self._parse_response(full_response)
-                if parsed:
-                    for name, data in parsed.items():
-                        results[name] = self._deserialize_attrs(data)
-                    for f in fields:
-                        name = f.caption or f.name
-                        if name not in results:
-                            results[name] = self._default_attrs(name)
-                    return
-                else:
-                    logger.warning(f"LLM 响应解析失败 (尝试 {attempt + 1}/{self._max_retry})")
+                # 转换为 DimensionAttributes 并更新 results
+                hierarchy_result = llm_output.to_dimension_hierarchy_result()
+                for name, attrs in hierarchy_result.dimension_hierarchy.items():
+                    results[name] = attrs
+                
+                # 为未推断的字段设置默认值
+                for f in fields:
+                    name = f.caption or f.name
+                    if name not in results:
+                        results[name] = self._default_attrs(name)
+                return
+                
             except Exception as e:
                 logger.warning(f"LLM 推断失败 (尝试 {attempt + 1}/{self._max_retry}): {e}")
-                full_response = ""
         
         logger.error(f"LLM 推断失败，使用默认值: {len(fields)} 个字段")
         for f in fields:
             name = f.caption or f.name
             if name not in results:
                 results[name] = self._default_attrs(name)
-    
-    def _parse_response(self, response: str) -> Optional[Dict[str, Dict[str, Any]]]:
-        """解析 LLM 响应"""
-        if not response:
-            return None
-        text = response.strip()
-        
-        # 移除 markdown 代码块
-        for marker in ["```json", "```"]:
-            if marker in text:
-                start = text.find(marker) + len(marker)
-                end = text.find("```", start)
-                if end > start:
-                    text = text[start:end].strip()
-                    break
-        
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict):
-                return data.get("dimension_hierarchy", data) if "dimension_hierarchy" in data or all(isinstance(v, dict) for v in data.values()) else None
-            return None
-        except json.JSONDecodeError:
-            return None
     
     def _default_attrs(self, name: str) -> DimensionAttributes:
         """默认属性"""
@@ -781,12 +767,11 @@ async def infer_dimension_hierarchy(
     datasource_luid: str,
     fields: List[Field],
     table_id: Optional[str] = None,
+    on_token: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> DimensionHierarchyResult:
     """便捷函数：推断维度层级"""
     inference = DimensionHierarchyInference()
-    async for _ in inference.infer(datasource_luid, fields, table_id):
-        pass
-    return inference.get_result()
+    return await inference.infer(datasource_luid, fields, table_id, on_token=on_token)
 
 
 __all__ = [

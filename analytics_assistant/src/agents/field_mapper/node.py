@@ -32,8 +32,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from analytics_assistant.src.agents.base import (
     get_llm,
-    call_llm,
-    parse_json_response,
+    stream_llm_structured,
 )
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import CacheManager
@@ -720,11 +719,8 @@ class FieldMapperNode:
         # 获取 LLM
         llm = get_llm(agent_name="field_mapper", enable_json_mode=True)
         
-        # 调用 LLM
-        response = await call_llm(llm, messages)
-        
-        # 解析响应
-        result = parse_json_response(response.content, SingleSelectionResult)
+        # 使用 stream_llm_structured 获取结构化输出
+        result = await stream_llm_structured(llm, messages, SingleSelectionResult)
         
         # 验证选择的字段是否在候选列表中
         if result.selected_field:

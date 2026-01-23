@@ -4,30 +4,38 @@ Agent 基础模块
 
 提供所有 Agent 节点共用的基础能力：
 1. LLM 获取和配置（通过 ModelManager）
-2. LLM 调用（支持流式输出和工具调用）
-3. Middleware 支持
-4. JSON 解析
+2. 流式结构化输出（统一方案，支持 tools + middleware）
+
+公开 API（仅 2 个函数）：
+- get_llm(): 获取 LLM 实例
+- stream_llm_structured(): 流式+结构化输出 ⭐推荐
 
 使用示例：
     from analytics_assistant.src.agents.base import (
         get_llm,
-        call_llm,
-        call_llm_with_tools,
-        parse_json_response,
+        stream_llm_structured,
         TaskType,
     )
     
     # 获取 LLM
-    llm = get_llm(agent_name="semantic_parser")
+    llm = get_llm(agent_name="semantic_parser", enable_json_mode=True)
     
-    # 调用 LLM（流式）
-    response = await call_llm(llm, messages)
+    # 流式结构化输出（推荐）
+    result = await stream_llm_structured(llm, messages, MyOutputModel)
     
-    # 带工具调用
-    response = await call_llm_with_tools(llm, messages, tools)
+    # 带 thinking（R1 模型）
+    result, thinking = await stream_llm_structured(
+        llm, messages, MyOutputModel,
+        return_thinking=True,
+    )
     
-    # 解析 JSON
-    result = parse_json_response(response.content, MyOutputModel)
+    # 带工具 + middleware
+    result = await stream_llm_structured(
+        llm, messages, MyOutputModel,
+        tools=[search_tool],
+        middleware=[my_middleware],
+        state=current_state,
+    )
 """
 
 from .node import (
@@ -35,35 +43,13 @@ from .node import (
     get_llm,
     get_agent_temperature,
     
-    # LLM 调用
-    call_llm,
+    # 流式输出
     stream_llm,
-    call_llm_with_tools,
     
-    # JSON 解析
-    parse_json_response,
-    JSONParseError,
+    # 流式结构化输出（统一方案）⭐推荐
+    stream_llm_structured,
 )
 
-from .middleware_runner import (
-    # 主类
-    MiddlewareRunner,
-    
-    # 异常
-    MiddlewareError,
-    MiddlewareChainError,
-    
-    # 类型
-    ModelRequest,
-    ModelResponse,
-    ToolCallRequest,
-    Runtime,
-    
-    # 辅助函数
-    get_middleware_from_config,
-)
-
-# 从 infra/ai 导入 TaskType，方便 Agent 层使用
 from ...infra.ai import TaskType
 
 __all__ = [
@@ -71,24 +57,11 @@ __all__ = [
     "get_llm",
     "get_agent_temperature",
     
-    # LLM 调用
-    "call_llm",
+    # 流式输出
     "stream_llm",
-    "call_llm_with_tools",
     
-    # JSON 解析
-    "parse_json_response",
-    "JSONParseError",
-    
-    # Middleware
-    "MiddlewareRunner",
-    "MiddlewareError",
-    "MiddlewareChainError",
-    "ModelRequest",
-    "ModelResponse",
-    "ToolCallRequest",
-    "Runtime",
-    "get_middleware_from_config",
+    # 流式结构化输出（统一方案）
+    "stream_llm_structured",
     
     # 任务类型
     "TaskType",

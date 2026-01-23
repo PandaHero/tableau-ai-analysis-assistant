@@ -6,6 +6,7 @@
 - DimensionCategory: 维度类别枚举
 - DimensionAttributes: 单个维度的层级属性
 - DimensionHierarchyResult: 推断结果
+- LLMDimensionOutput: LLM 输出 schema（用于 stream_llm_structured）
 """
 from enum import Enum
 from typing import Dict, List, Literal, Optional
@@ -66,4 +67,54 @@ class DimensionHierarchyResult(BaseModel):
     )
 
 
-__all__ = ["DimensionCategory", "DimensionAttributes", "DimensionHierarchyResult"]
+# ══════════════════════════════════════════════════════════════
+# LLM 输出 Schema（用于 stream_llm_structured）
+# ══════════════════════════════════════════════════════════════
+
+class LLMDimensionItem(BaseModel):
+    """LLM 输出的单个维度属性（简化版）"""
+    category: str = Field(description="维度类别: time/geography/product/customer/organization/channel/financial/other")
+    category_detail: str = Field(description="详细类别，格式 'category-subcategory'")
+    level: int = Field(ge=1, le=5, description="层级 1-5，1 最粗，5 最细")
+    granularity: str = Field(description="粒度: coarsest/coarse/medium/fine/finest")
+    level_confidence: float = Field(ge=0.0, le=1.0, description="置信度 0-1")
+    reasoning: Optional[str] = Field(default=None, description="推断理由")
+
+
+class LLMDimensionOutput(BaseModel):
+    """LLM 输出的维度层级结果（用于 stream_llm_structured）"""
+    dimension_hierarchy: Dict[str, LLMDimensionItem] = Field(
+        description="维度层级字典，key 为字段名"
+    )
+    
+    def to_dimension_hierarchy_result(self) -> DimensionHierarchyResult:
+        """转换为完整的 DimensionHierarchyResult"""
+        result = {}
+        for name, item in self.dimension_hierarchy.items():
+            try:
+                category = DimensionCategory(item.category)
+            except ValueError:
+                category = DimensionCategory.OTHER
+            
+            # 确保 granularity 有效
+            valid_granularities = {"coarsest", "coarse", "medium", "fine", "finest"}
+            granularity = item.granularity if item.granularity in valid_granularities else "medium"
+            
+            result[name] = DimensionAttributes(
+                category=category,
+                category_detail=item.category_detail,
+                level=item.level,
+                granularity=granularity,
+                level_confidence=item.level_confidence,
+                reasoning=item.reasoning or f"LLM 推断: {name}",
+            )
+        return DimensionHierarchyResult(dimension_hierarchy=result)
+
+
+__all__ = [
+    "DimensionCategory",
+    "DimensionAttributes",
+    "DimensionHierarchyResult",
+    "LLMDimensionItem",
+    "LLMDimensionOutput",
+]

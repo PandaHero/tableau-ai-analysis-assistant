@@ -86,16 +86,19 @@ async def test_dimension_inference(skip_cache: bool = False):
     
     inference = DimensionHierarchyInference()
     
-    async for token in inference.infer(
+    # 定义 token 回调用于流式输出
+    async def on_token(token: str) -> None:
+        print(token, end="", flush=True)
+    
+    result = await inference.infer(
         datasource_luid=data_model.datasource_id,
         fields=visible_dims,
         skip_cache=skip_cache,
-    ):
-        print(token, end="", flush=True)
+        on_token=on_token,
+    )
     
     print("\n" + "-" * 60)
     
-    result = inference.get_result()
     if not result:
         print("推断失败")
         return

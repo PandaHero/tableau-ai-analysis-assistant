@@ -153,22 +153,16 @@ class TestModuleExports:
         from src.agents.base import (
             get_llm,
             get_agent_temperature,
-            call_llm,
             stream_llm,
-            call_llm_with_tools,
-            parse_json_response,
-            JSONParseError,
-            MiddlewareRunner,
+            stream_llm_structured,
             TaskType,
         )
         
         # 验证导出存在
         assert callable(get_llm)
         assert callable(get_agent_temperature)
-        assert callable(call_llm)
         assert callable(stream_llm)
-        assert callable(call_llm_with_tools)
-        assert callable(parse_json_response)
+        assert callable(stream_llm_structured)
         assert hasattr(TaskType, 'SEMANTIC_PARSING')
     
     def test_task_type_values(self):
