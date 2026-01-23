@@ -228,7 +228,7 @@ class RAGMetrics:
     
     @property
     def avg_rerank_latency(self) -> float:
-        """平均重排序延迟（毫秒�)"""
+        """平均重排序延迟（毫秒）"""
         if self.rerank_count == 0:
             return 0.0
         return self.total_rerank_latency_ms / self.rerank_count

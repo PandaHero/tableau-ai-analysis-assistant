@@ -8,13 +8,13 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from analytics_assistant.src.core.models.enums import (
+from analytics_assistant.src.core.schemas.enums import (
     AggregationType,
     RankStyle,
     RelativeTo,
     SortDirection,
 )
-from analytics_assistant.src.core.models.fields import DimensionField
+from analytics_assistant.src.core.schemas.fields import DimensionField
 
 
 # ═══════════════════════════════════════════════════════════════════════════

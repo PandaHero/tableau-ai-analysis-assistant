@@ -91,7 +91,15 @@ faiss-cpu==1.13.1
 # ============================================
 # Optional: Chinese Text Processing & BM25
 # ============================================
-jieba==0.42.1
+# LAC (百度中文分词) - 比 jieba 更准确
+# 优势：更好的专有名词识别、时间表达式识别
+# Windows 安装注意：需要 Visual C++ Build Tools
+# 安装方法：
+#   1. 安装 Visual Studio Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+#   2. 选择 "C++ build tools" 工作负载
+#   3. pip install lac
+# 或使用预编译包（如果可用）：pip install lac --prefer-binary
+lac>=2.1.2
 rank-bm25==0.2.2
 
 # ============================================

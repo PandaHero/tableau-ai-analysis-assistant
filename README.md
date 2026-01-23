@@ -14,7 +14,7 @@
 - **Step2 计算推理**：计算类型推断、LLM 自我验证
 - **ReAct 错误修正**：智能错误分类、CORRECT/RETRY/CLARIFY 决策
 
-### �  Token 级流式输出
+### 🚀 Token 级流式输出
 - 实时推送 LLM 生成的每个 token
 - SSE (Server-Sent Events) 协议
 - 提供流畅的用户体验

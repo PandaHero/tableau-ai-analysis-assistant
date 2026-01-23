@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from analytics_assistant.src.core.models.enums import (
+from analytics_assistant.src.core.schemas.enums import (
     FilterType,
     SortDirection,
     TextMatchType,

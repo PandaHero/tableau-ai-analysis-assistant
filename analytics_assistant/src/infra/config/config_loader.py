@@ -189,12 +189,76 @@ class AppConfig:
         return namespaces.get(namespace, {})
     
     # ============================================
-    # RAG 配置（未来扩展）
+    # RAG 配置
     # ============================================
     
     def get_rag_config(self) -> Dict[str, Any]:
         """获取 RAG 配置"""
         return self.config.get('rag', {})
+    
+    # ============================================
+    # Tableau 配置
+    # ============================================
+    
+    def get_tableau_config(self) -> Dict[str, Any]:
+        """获取 Tableau 配置"""
+        return self.config.get('tableau', {})
+    
+    def get_tableau_domain(self) -> str:
+        """获取 Tableau 域名"""
+        return self.get_tableau_config().get('domain', '')
+    
+    def get_tableau_site(self) -> str:
+        """获取 Tableau site"""
+        return self.get_tableau_config().get('site', '')
+    
+    def get_tableau_api_version(self) -> str:
+        """获取 Tableau API 版本"""
+        return self.get_tableau_config().get('api_version', '3.21')
+    
+    def get_tableau_jwt_config(self) -> Dict[str, Any]:
+        """获取 Tableau JWT 配置"""
+        return self.get_tableau_config().get('jwt', {})
+    
+    def get_tableau_pat_config(self) -> Dict[str, Any]:
+        """获取 Tableau PAT 配置"""
+        return self.get_tableau_config().get('pat', {})
+    
+    def get_tableau_token_cache_ttl(self) -> int:
+        """获取 Tableau token 缓存 TTL（秒）"""
+        return self.get_tableau_config().get('token_cache_ttl', 600)
+    
+    # ============================================
+    # VizQL 配置
+    # ============================================
+    
+    def get_vizql_config(self) -> Dict[str, Any]:
+        """获取 VizQL 配置"""
+        return self.config.get('vizql', {})
+    
+    def get_vizql_timeout(self) -> int:
+        """获取 VizQL 请求超时（秒）"""
+        return self.get_vizql_config().get('timeout', 60)
+    
+    def get_vizql_max_retries(self) -> int:
+        """获取 VizQL 最大重试次数"""
+        return self.get_vizql_config().get('max_retries', 3)
+    
+    # ============================================
+    # SSL 配置
+    # ============================================
+    
+    def get_ssl_config(self) -> Dict[str, Any]:
+        """获取 SSL 配置"""
+        return self.config.get('ssl', {})
+    
+    def get_ssl_verify(self) -> bool:
+        """获取是否验证 SSL 证书"""
+        return self.get_ssl_config().get('verify', True)
+    
+    def get_ssl_ca_bundle(self) -> Optional[str]:
+        """获取 SSL CA 证书路径"""
+        return self.get_ssl_config().get('ca_bundle')
     
     # ============================================
     # 日志配置（未来扩展）

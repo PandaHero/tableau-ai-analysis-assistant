@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from analytics_assistant.src.core.interfaces import BaseQueryBuilder
-from analytics_assistant.src.core.models import (
+from analytics_assistant.src.core.schemas import (
     AggregationType,
     Computation,
     DateGranularity,

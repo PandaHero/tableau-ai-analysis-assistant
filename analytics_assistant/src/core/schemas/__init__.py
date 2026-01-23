@@ -11,7 +11,7 @@ Core Data Models - 平台无关的语义层模型
 """
 
 # Enums
-from analytics_assistant.src.core.models.enums import (
+from analytics_assistant.src.core.schemas.enums import (
     AggregationType,
     DateGranularity,
     DateRangeType,
@@ -29,14 +29,14 @@ from analytics_assistant.src.core.models.enums import (
 )
 
 # Fields
-from analytics_assistant.src.core.models.fields import (
+from analytics_assistant.src.core.schemas.fields import (
     DimensionField,
     MeasureField,
     SortSpec,
 )
 
 # Computations
-from analytics_assistant.src.core.models.computations import (
+from analytics_assistant.src.core.schemas.computations import (
     # LOD types
     LODFixed,
     LODInclude,
@@ -57,7 +57,7 @@ from analytics_assistant.src.core.models.computations import (
 )
 
 # Filters
-from analytics_assistant.src.core.models.filters import (
+from analytics_assistant.src.core.schemas.filters import (
     DateRangeFilter,
     Filter,
     NumericRangeFilter,
@@ -67,21 +67,29 @@ from analytics_assistant.src.core.models.filters import (
 )
 
 # Query
-from analytics_assistant.src.core.models.query import SemanticQuery
+from analytics_assistant.src.core.schemas.query import SemanticQuery
 
 # Validation
-from analytics_assistant.src.core.models.validation import (
+from analytics_assistant.src.core.schemas.validation import (
     ValidationError,
     ValidationErrorType,
     ValidationResult,
 )
 
 # Execute Result
-from analytics_assistant.src.core.models.execute_result import (
+from analytics_assistant.src.core.schemas.execute_result import (
     ExecuteResult,
     ColumnInfo,
     RowData,
     RowValue,
+)
+
+# Data Model
+from analytics_assistant.src.core.schemas.data_model import (
+    Field,
+    LogicalTable,
+    TableRelationship,
+    DataModel,
 )
 
 
@@ -138,4 +146,9 @@ __all__ = [
     "ColumnInfo",
     "RowData",
     "RowValue",
+    # Data Model
+    "Field",
+    "LogicalTable",
+    "TableRelationship",
+    "DataModel",
 ]

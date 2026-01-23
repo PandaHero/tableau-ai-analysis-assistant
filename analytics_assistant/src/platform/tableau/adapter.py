@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from analytics_assistant.src.core.interfaces import BasePlatformAdapter
-from analytics_assistant.src.core.models import (
+from analytics_assistant.src.core.schemas import (
     ColumnInfo,
     ExecuteResult,
     SemanticQuery,

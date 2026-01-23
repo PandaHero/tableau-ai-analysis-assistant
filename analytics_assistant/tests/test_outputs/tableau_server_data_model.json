@@ -1,0 +1,2907 @@
+{
+  "datasource_id": "3e78cd8e-f45e-4939-8d03-25ebcf724f47",
+  "datasource_name": "正大益生业绩总览数据 (IMPALA)",
+  "datasource_description": "",
+  "datasource_owner": "tableauAdmin",
+  "is_multi_table": false,
+  "table_count": 1,
+  "field_count": 165,
+  "dimension_count": 79,
+  "measure_count": 86,
+  "relationship_count": 0,
+  "tables": [
+    {
+      "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+      "name": "dwm_nbu_yhoney_ads",
+      "field_count": 82
+    }
+  ],
+  "relationships": [],
+  "fields": [
+    {
+      "name": "freight_costs",
+      "caption": "freight_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "pre_tax_profit",
+      "caption": "pre_tax_profit",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "净利润-预算",
+      "caption": "净利润-预算",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[net_profit_est]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sale_weg",
+      "caption": "sale_weg",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "other_variable_costs",
+      "caption": "other_variable_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "所得税",
+      "caption": "所得税",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[income_tax_expense]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "促销费",
+      "caption": "促销费",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[promotion_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "变动人员费用",
+      "caption": "变动人员费用",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[variable_personnel_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "客户县",
+      "caption": "客户县",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[ship_to__zcity_2]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "business_name",
+      "caption": "business_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "channel_2_name",
+      "caption": "channel_2_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sale_num",
+      "caption": "sale_num",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "含税销售收入总额",
+      "caption": "含税销售收入总额",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[sale_amt]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "net_profit_est",
+      "caption": "net_profit_est",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "saleper_company",
+      "caption": "saleper_company",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "management_costs",
+      "caption": "management_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "一级领导ID",
+      "caption": "一级领导ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[leader1_id]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "公司名称",
+      "caption": "公司名称",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[comp_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "interest_all",
+      "caption": "interest_all",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sale_amt",
+      "caption": "sale_amt",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "interest_costs",
+      "caption": "interest_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "一级销售渠道ID",
+      "caption": "一级销售渠道ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[channel_1_id]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "material__zchzhus01___t",
+      "caption": "material__zchzhus01___t",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "lease_costs",
+      "caption": "lease_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "毛利率-预算",
+      "caption": "毛利率-预算",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "FLOAT([gross_profit_rate_est])",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "depreciation_amortization_costs",
+      "caption": "depreciation_amortization_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "客户省ID",
+      "caption": "客户省ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[ship_to__0region]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "人员费用",
+      "caption": "人员费用",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[personnel_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "事业线名称",
+      "caption": "事业线名称",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[business_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "销售额-预算",
+      "caption": "销售额-预算",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[sale_amt_est]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "省区",
+      "caption": "省区",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[pro_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "express_costs",
+      "caption": "express_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "边界贡献",
+      "caption": "边界贡献",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[contribution_fees]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "三费合计",
+      "caption": "三费合计",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[three_total_fees]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "不含税净收入总额",
+      "caption": "不含税净收入总额",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[income_no_tax]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "二级销售渠道ID",
+      "caption": "二级销售渠道ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[channel_2_id]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "含税净收入总额",
+      "caption": "含税净收入总额",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[income_include_tax]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "material",
+      "caption": "material",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "zkatr6___t",
+      "caption": "zkatr6___t",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "storage_costs",
+      "caption": "storage_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "总营业费用",
+      "caption": "总营业费用",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[total_operating_expense]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "cost_amt",
+      "caption": "cost_amt",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "leader2_id",
+      "caption": "leader2_id",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "快递费",
+      "caption": "快递费",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[express_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "内外销",
+      "caption": "内外销",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[sold_in_out]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "material_name",
+      "caption": "material_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "channel_1_name",
+      "caption": "channel_1_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sold_to",
+      "caption": "sold_to",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "客户省",
+      "caption": "客户省",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[ship_to__zbezeit]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "客户县ID",
+      "caption": "客户县ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[ship_to__zcity2_no]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "财务费用-预算",
+      "caption": "财务费用-预算",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[financial_est]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "售达方代码",
+      "caption": "售达方代码",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[sold_to]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "gross_profit_rate_est",
+      "caption": "gross_profit_rate_est",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "品牌名称",
+      "caption": "品牌名称",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[zkatr6___t]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "其他固定费用",
+      "caption": "其他固定费用",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[other_fixed_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "material__zchzhus02___t",
+      "caption": "material__zchzhus02___t",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "variable_personnel_costs",
+      "caption": "variable_personnel_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "广告费",
+      "caption": "广告费",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[ad_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "manage_est",
+      "caption": "manage_est",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "公司代码",
+      "caption": "公司代码",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[comp_code]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "业务员名称",
+      "caption": "业务员名称",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[zsaleper_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "中国区",
+      "caption": "中国区",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[china_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "leader1_name",
+      "caption": "leader1_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "财务费用合计",
+      "caption": "财务费用合计",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[interest_all]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "material__zchzhus02",
+      "caption": "material__zchzhus02",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "total_operating_expense",
+      "caption": "total_operating_expense",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "ship_to___0street",
+      "caption": "ship_to___0street",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "ship_to__zcity_2",
+      "caption": "ship_to__zcity_2",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "品牌id",
+      "caption": "品牌id",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[zkatr6]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "net_profit",
+      "caption": "net_profit",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "其他变动费用",
+      "caption": "其他变动费用",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[other_variable_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "discount",
+      "caption": "discount",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "销售费用-预算",
+      "caption": "销售费用-预算",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[sales_expense_est]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "channel_1_id",
+      "caption": "channel_1_id",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "折旧摊销费",
+      "caption": "折旧摊销费",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[depreciation_amortization_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "operating_profit",
+      "caption": "operating_profit",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "zsaleper",
+      "caption": "zsaleper",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "增值税",
+      "caption": "增值税",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[se]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "ship_to__zbezeit",
+      "caption": "ship_to__zbezeit",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "一级销售渠道",
+      "caption": "一级销售渠道",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[channel_1_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "二级领导ID",
+      "caption": "二级领导ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[leader2_id]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "业务员代码",
+      "caption": "业务员代码",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[zsaleper]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "仓储费",
+      "caption": "仓储费",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[storage_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "产品编码",
+      "caption": "产品编码",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[material]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "other_fixed_costs",
+      "caption": "other_fixed_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "channel_2_id",
+      "caption": "channel_2_id",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "leader1_id",
+      "caption": "leader1_id",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "income_no_tax",
+      "caption": "income_no_tax",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "ship_to__0region",
+      "caption": "ship_to__0region",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "毛利-预算",
+      "caption": "毛利-预算",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[gross_profit_est]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "二级销售渠道",
+      "caption": "二级销售渠道",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[channel_2_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "管理费用",
+      "caption": "管理费用",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[management_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "three_est",
+      "caption": "three_est",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "毛利",
+      "caption": "毛利",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[gross_profit]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "ad_costs",
+      "caption": "ad_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "技术服务费",
+      "caption": "技术服务费",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[technical_service_fee]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sales_unit",
+      "caption": "sales_unit",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "promotion_costs",
+      "caption": "promotion_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "折扣",
+      "caption": "折扣",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[discount]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "zkatr6",
+      "caption": "zkatr6",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "leader2_name",
+      "caption": "leader2_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "销售部门",
+      "caption": "销售部门",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[saleper_company]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "客户市id",
+      "caption": "客户市id",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[ship_to__zcity_no]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "财务费用→非利息支出",
+      "caption": "财务费用→非利息支出",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[non_interest_expense]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "other_business_profit",
+      "caption": "other_business_profit",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "运输费",
+      "caption": "运输费",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[freight_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "zsaleper_name",
+      "caption": "zsaleper_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "income_tax_expense",
+      "caption": "income_tax_expense",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "不含税收入总额",
+      "caption": "不含税收入总额",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[sale_amtws]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "一级产品大类ID",
+      "caption": "一级产品大类ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[material__zchzhus01]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "technical_service_fee",
+      "caption": "technical_service_fee",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "财务费用→利息支出",
+      "caption": "财务费用→利息支出",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[interest_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "ship_to__zcity2_no",
+      "caption": "ship_to__zcity2_no",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "销量",
+      "caption": "销量",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[sale_num]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "二级领导",
+      "caption": "二级领导",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[leader2_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "省代码",
+      "caption": "省代码",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[pro_id]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "二级产品大类ID",
+      "caption": "二级产品大类ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[material__zchzhus02]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "客户市",
+      "caption": "客户市",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[ship_to__zcity]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "自定义 SQL 查询",
+      "caption": "自定义 SQL 查询",
+      "data_type": "TABLE",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "china_name",
+      "caption": "china_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "income_include_tax",
+      "caption": "income_include_tax",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "销售成本",
+      "caption": "销售成本",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[cost_amt]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "三费-预算",
+      "caption": "三费-预算",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[three_est]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "pro_name",
+      "caption": "pro_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "se",
+      "caption": "se",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "销售单位",
+      "caption": "销售单位",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[sales_unit]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "gross_profit",
+      "caption": "gross_profit",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "ship_to__zcity",
+      "caption": "ship_to__zcity",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "一级产品大类",
+      "caption": "一级产品大类",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[material__zchzhus01___t]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sku名称",
+      "caption": "sku名称",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[material_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "non_interest_expense",
+      "caption": "non_interest_expense",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "financial_est",
+      "caption": "financial_est",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sale_amtws",
+      "caption": "sale_amtws",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "calday",
+      "caption": "calday",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "销售重量(基本单位)",
+      "caption": "销售重量(基本单位)",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[sale_weg]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sold_to___t",
+      "caption": "sold_to___t",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "客户地址",
+      "caption": "客户地址",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[ship_to___0street]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "personnel_costs",
+      "caption": "personnel_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "three_total_fees",
+      "caption": "three_total_fees",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sold_in_out",
+      "caption": "sold_in_out",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "事业线ID",
+      "caption": "事业线ID",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[business_id]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "租赁费",
+      "caption": "租赁费",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[lease_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "business_id",
+      "caption": "business_id",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "fixed_personnel_costs",
+      "caption": "fixed_personnel_costs",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "gross_profit_est",
+      "caption": "gross_profit_est",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "pro_id",
+      "caption": "pro_id",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sale_amt_est",
+      "caption": "sale_amt_est",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "净利润",
+      "caption": "净利润",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[net_profit]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "一级领导",
+      "caption": "一级领导",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[leader1_name]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "基本单位",
+      "caption": "基本单位",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[base_uom]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "contribution_fees",
+      "caption": "contribution_fees",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "ship_to__zcity_no",
+      "caption": "ship_to__zcity_no",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "comp_code",
+      "caption": "comp_code",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "material__zchzhus01",
+      "caption": "material__zchzhus01",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "费前利润",
+      "caption": "费前利润",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[pre_tax_profit]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "其他业务利润",
+      "caption": "其他业务利润",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[other_business_profit]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "sales_expense_est",
+      "caption": "sales_expense_est",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": "Sum",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "二级产品大类",
+      "caption": "二级产品大类",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[material__zchzhus02___t]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "管理费用-预算",
+      "caption": "管理费用-预算",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[manage_est]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "售达方名称",
+      "caption": "售达方名称",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[sold_to___t]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "固定人员费用",
+      "caption": "固定人员费用",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[fixed_personnel_costs]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "comp_name",
+      "caption": "comp_name",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "base_uom",
+      "caption": "base_uom",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": "Count",
+      "calculation": null,
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [
+        {
+          "id": "d4375488-e3f4-5ac7-302d-4a30f9bd76e7",
+          "name": "dwm_nbu_yhoney_ads"
+        }
+      ],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "日期",
+      "caption": "日期",
+      "data_type": "STRING",
+      "role": "DIMENSION",
+      "data_category": "NOMINAL",
+      "aggregation": null,
+      "calculation": "[calday]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    },
+    {
+      "name": "营业利润",
+      "caption": "营业利润",
+      "data_type": "REAL",
+      "role": "MEASURE",
+      "data_category": "QUANTITATIVE",
+      "aggregation": null,
+      "calculation": "[operating_profit]",
+      "description": null,
+      "folder": null,
+      "hidden": false,
+      "upstream_tables": [],
+      "synonyms": [],
+      "tags": []
+    }
+  ]
+}

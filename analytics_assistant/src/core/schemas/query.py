@@ -8,9 +8,9 @@ SemanticQuery 是平台无关的，表示用户意图。
 from typing import List, Tuple
 from pydantic import BaseModel, ConfigDict, Field
 
-from analytics_assistant.src.core.models.computations import Computation
-from analytics_assistant.src.core.models.fields import DimensionField, MeasureField, SortSpec
-from analytics_assistant.src.core.models.filters import (
+from analytics_assistant.src.core.schemas.computations import Computation
+from analytics_assistant.src.core.schemas.fields import DimensionField, MeasureField, SortSpec
+from analytics_assistant.src.core.schemas.filters import (
     DateRangeFilter,
     NumericRangeFilter,
     SetFilter,

@@ -32,3 +32,111 @@ class ValidationError(Exception):
     
     def __str__(self) -> str:
         return f"[{self.step}] {self.message}"
+
+
+class TableauAuthError(Exception):
+    """Tableau 认证错误。
+    
+    当 Tableau 认证失败时抛出此异常。
+    """
+    
+    def __init__(self, message: str, details: str | None = None, auth_method: str | None = None):
+        """初始化 TableauAuthError。
+        
+        Args:
+            message: 错误消息
+            details: 详细错误信息
+            auth_method: 认证方式
+        """
+        super().__init__(message)
+        self.message = message
+        self.details = details
+        self.auth_method = auth_method
+    
+    def __str__(self) -> str:
+        if self.details:
+            return f"{self.message}: {self.details}"
+        return self.message
+
+
+class VizQLError(Exception):
+    """VizQL API 基础错误。"""
+    
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        error_code: str | None = None,
+        debug: str | None = None,
+    ):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.error_code = error_code
+        self.debug = debug
+    
+    @property
+    def is_retryable(self) -> bool:
+        """是否可重试。"""
+        if self.status_code:
+            return self.status_code >= 500 or self.status_code == 429
+        return False
+    
+    def __str__(self) -> str:
+        parts = [self.message]
+        if self.error_code:
+            parts.append(f"[{self.error_code}]")
+        if self.status_code:
+            parts.append(f"(HTTP {self.status_code})")
+        return " ".join(parts)
+
+
+class VizQLAuthError(VizQLError):
+    """VizQL 认证错误 (401/403)。"""
+    pass
+
+
+class VizQLValidationError(VizQLError):
+    """VizQL 验证错误 (400)。"""
+    pass
+
+
+class VizQLServerError(VizQLError):
+    """VizQL 服务器错误 (5xx)。"""
+    pass
+
+
+class VizQLRateLimitError(VizQLError):
+    """VizQL 限流错误 (429)。"""
+    
+    def __init__(
+        self,
+        message: str,
+        retry_after: int | None = None,
+        error_code: str | None = None,
+        debug: str | None = None,
+    ):
+        super().__init__(message, status_code=429, error_code=error_code, debug=debug)
+        self.retry_after = retry_after
+
+
+class VizQLTimeoutError(VizQLError):
+    """VizQL 超时错误。"""
+    
+    def __init__(self, message: str):
+        super().__init__(message)
+    
+    @property
+    def is_retryable(self) -> bool:
+        return True
+
+
+class VizQLNetworkError(VizQLError):
+    """VizQL 网络错误。"""
+    
+    def __init__(self, message: str):
+        super().__init__(message)
+    
+    @property
+    def is_retryable(self) -> bool:
+        return True

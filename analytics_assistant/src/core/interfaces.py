@@ -10,7 +10,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from analytics_assistant.src.core.models import (
+from analytics_assistant.src.core.schemas import (
     ExecuteResult,
     SemanticQuery,
     ValidationResult,
