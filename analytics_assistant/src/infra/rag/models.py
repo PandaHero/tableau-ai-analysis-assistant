@@ -80,6 +80,10 @@ class FieldChunk:
         """
         从 FieldMetadata 创建 FieldChunk
         
+        支持两种字段格式：
+        - 旧格式：fieldCaption, dataType 等
+        - 新格式：caption, data_type 等（core/schemas/data_model.py 的 Field）
+        
         Args:
             field_metadata: FieldMetadata 对象
             max_samples: 最大样本值数量（默认 5）
@@ -87,45 +91,70 @@ class FieldChunk:
         Returns:
             FieldChunk 实例
         """
+        # 兼容新旧格式
+        field_name = getattr(field_metadata, 'name', None) or getattr(field_metadata, 'field_name', '')
+        field_caption = (
+            getattr(field_metadata, 'caption', None) or 
+            getattr(field_metadata, 'fieldCaption', None) or 
+            field_name
+        )
+        role = getattr(field_metadata, 'role', 'DIMENSION')
+        data_type = (
+            getattr(field_metadata, 'data_type', None) or 
+            getattr(field_metadata, 'dataType', 'STRING')
+        )
+        
         # 构建索引文本
         index_parts = [
-            field_metadata.fieldCaption,
-            field_metadata.name,
-            field_metadata.role,
-            field_metadata.dataType,
+            field_caption,
+            field_name,
+            role,
+            data_type,
         ]
         
         # 添加可选信息
-        if hasattr(field_metadata, 'category') and field_metadata.category:
-            index_parts.append(field_metadata.category)
+        category = getattr(field_metadata, 'category', None)
+        if category:
+            index_parts.append(category)
         
-        if hasattr(field_metadata, 'logicalTableCaption') and field_metadata.logicalTableCaption:
-            index_parts.append(field_metadata.logicalTableCaption)
+        logical_table_caption = (
+            getattr(field_metadata, 'logical_table_caption', None) or
+            getattr(field_metadata, 'logicalTableCaption', None)
+        )
+        if logical_table_caption:
+            index_parts.append(logical_table_caption)
         
-        if hasattr(field_metadata, 'formula') and field_metadata.formula:
-            index_parts.append(field_metadata.formula)
+        formula = getattr(field_metadata, 'calculation', None) or getattr(field_metadata, 'formula', None)
+        if formula:
+            index_parts.append(formula)
         
-        if hasattr(field_metadata, 'sample_values') and field_metadata.sample_values:
+        sample_values = getattr(field_metadata, 'sample_values', None)
+        if sample_values:
             # 取样本值
-            samples = field_metadata.sample_values[:max_samples]
+            samples = sample_values[:max_samples]
             index_parts.extend(samples)
         
         index_text = " | ".join(filter(None, index_parts))
         
+        logical_table_id = (
+            getattr(field_metadata, 'logical_table_id', None) or
+            getattr(field_metadata, 'logicalTableId', None)
+        )
+        
         return cls(
-            field_name=field_metadata.name,
-            field_caption=field_metadata.fieldCaption,
-            role=field_metadata.role,
-            data_type=field_metadata.dataType,
+            field_name=field_name,
+            field_caption=field_caption,
+            role=role,
+            data_type=data_type,
             index_text=index_text,
-            column_class=getattr(field_metadata, 'columnClass', None),
-            category=getattr(field_metadata, 'category', None),
-            formula=getattr(field_metadata, 'formula', None),
-            logical_table_id=getattr(field_metadata, 'logicalTableId', None),
-            logical_table_caption=getattr(field_metadata, 'logicalTableCaption', None),
-            sample_values=getattr(field_metadata, 'sample_values', None),
+            column_class=getattr(field_metadata, 'columnClass', None) or getattr(field_metadata, 'column_class', None),
+            category=category,
+            formula=formula,
+            logical_table_id=logical_table_id,
+            logical_table_caption=logical_table_caption,
+            sample_values=sample_values,
             metadata={
-                "data_category": getattr(field_metadata, 'dataCategory', None),
+                "data_category": getattr(field_metadata, 'data_category', None) or getattr(field_metadata, 'dataCategory', None),
                 "aggregation": getattr(field_metadata, 'aggregation', None),
             }
         )

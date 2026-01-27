@@ -647,7 +647,10 @@ class DimensionHierarchyInference:
         if self._enable_self_learning:
             self._store_to_rag(results, fields, datasource_luid)
         
-        # 7. 更新缓存
+        # 7. 建立父子关系
+        self._build_parent_child_relations(results)
+        
+        # 8. 更新缓存
         self._update_cache(cache_key, fields, results)
         
         seed_count = len(fields_to_infer) - len(fields_after_seed)
@@ -655,6 +658,183 @@ class DimensionHierarchyInference:
         logger.info(f"推断完成: 种子={seed_count}, RAG={rag_count}, LLM={len(fields_after_rag)}, 总计={len(results)}")
         self._last_result = DimensionHierarchyResult(dimension_hierarchy=results)
         return self._last_result
+    
+    def _build_parent_child_relations(self, results: Dict[str, DimensionAttributes]) -> None:
+        """根据 category + level 建立父子关系
+        
+        策略：
+        1. 按 category（大类）分组
+        2. 在同一 category 内，按 level 排序
+        3. 相邻 level 建立父子关系
+        4. 同一 level 有多个字段时，优先匹配相同 category_detail 前缀的
+        """
+        # 按 category 分组
+        by_category: Dict[str, List[tuple]] = {}
+        for name, attrs in results.items():
+            cat = attrs.category.value
+            if cat not in by_category:
+                by_category[cat] = []
+            by_category[cat].append((name, attrs))
+        
+        # 对每个 category 建立父子关系
+        for cat, items in by_category.items():
+            if len(items) < 2:
+                continue
+            
+            # 按 level 分组
+            by_level: Dict[int, List[tuple]] = {}
+            for name, attrs in items:
+                level = attrs.level
+                if level not in by_level:
+                    by_level[level] = []
+                by_level[level].append((name, attrs))
+            
+            # 获取排序后的 level 列表
+            levels = sorted(by_level.keys())
+            
+            # 对相邻 level 建立关系
+            for i in range(len(levels) - 1):
+                parent_level = levels[i]
+                child_level = levels[i + 1]
+                
+                parent_items = by_level[parent_level]
+                child_items = by_level[child_level]
+                
+                # 匹配父子关系
+                self._match_by_level(parent_items, child_items)
+    
+    def _match_by_level(
+        self,
+        parent_items: List[tuple],
+        child_items: List[tuple],
+    ) -> None:
+        """在相邻 level 之间匹配父子关系
+        
+        策略：
+        1. 一对一直接匹配
+        2. 多对多时，优先匹配 category_detail 前缀相同的
+        3. 其次用名称相似度辅助
+        """
+        # 过滤已有关系的
+        available_parents = [(n, a) for n, a in parent_items if not a.child_dimension]
+        available_children = [(n, a) for n, a in child_items if not a.parent_dimension]
+        
+        if not available_parents or not available_children:
+            return
+        
+        # 一对一直接匹配
+        if len(available_parents) == 1 and len(available_children) == 1:
+            parent_name, parent_attrs = available_parents[0]
+            child_name, child_attrs = available_children[0]
+            parent_attrs.child_dimension = child_name
+            child_attrs.parent_dimension = parent_name
+            return
+        
+        # 多对多：按优先级匹配
+        matched_children = set()
+        for parent_name, parent_attrs in available_parents:
+            if parent_attrs.child_dimension:
+                continue
+            
+            best_match = None
+            best_score = -1
+            
+            for child_name, child_attrs in available_children:
+                if child_name in matched_children or child_attrs.parent_dimension:
+                    continue
+                
+                # 计算匹配分数
+                score = self._compute_match_score(
+                    parent_name, parent_attrs,
+                    child_name, child_attrs
+                )
+                
+                if score > best_score:
+                    best_score = score
+                    best_match = (child_name, child_attrs)
+            
+            # 建立关系
+            if best_match:
+                child_name, child_attrs = best_match
+                parent_attrs.child_dimension = child_name
+                child_attrs.parent_dimension = parent_name
+                matched_children.add(child_name)
+    
+    def _compute_match_score(
+        self,
+        parent_name: str, parent_attrs: DimensionAttributes,
+        child_name: str, child_attrs: DimensionAttributes,
+    ) -> float:
+        """计算父子匹配分数
+        
+        优先级：
+        1. category_detail 前缀匹配（如 geography-province 和 geography-city 共享 geography）
+        2. 名称相似度
+        """
+        score = 0.0
+        
+        # 1. category_detail 前缀匹配（基础分）
+        # 同一 category 内的字段，category_detail 前缀一定相同
+        # 这里主要是为了区分不同子类（如 geography-region vs geography-province）
+        parent_detail = parent_attrs.category_detail
+        child_detail = child_attrs.category_detail
+        
+        # 提取 category_detail 的子类部分（如 geography-province -> province）
+        parent_sub = parent_detail.split('-')[-1] if '-' in parent_detail else parent_detail
+        child_sub = child_detail.split('-')[-1] if '-' in child_detail else child_detail
+        
+        # 如果子类名称有包含关系，加分（如 province 和 city 都是地理概念）
+        # 这里简单处理：同一 category 内默认有基础分
+        score = 0.5
+        
+        # 2. 名称相似度加分
+        name_sim = self._compute_name_similarity(parent_name, child_name)
+        score += name_sim * 0.5
+        
+        return score
+    
+    def _compute_name_similarity(self, parent_name: str, child_name: str) -> float:
+        """计算两个字段名的相似度
+        
+        返回 0-1 之间的分数
+        """
+        import re
+        
+        # 提取中文部分
+        parent_cn = ''.join(re.findall(r'[\u4e00-\u9fff]+', parent_name))
+        child_cn = ''.join(re.findall(r'[\u4e00-\u9fff]+', child_name))
+        
+        score = 0.0
+        
+        # 1. 检查中文共同前缀（如 "客户省" 和 "客户市" 共享 "客户"）
+        if parent_cn and child_cn:
+            common_prefix_len = 0
+            for i in range(min(len(parent_cn), len(child_cn))):
+                if parent_cn[i] == child_cn[i]:
+                    common_prefix_len += 1
+                else:
+                    break
+            
+            if common_prefix_len > 0:
+                score = common_prefix_len / max(len(parent_cn), len(child_cn))
+        
+        # 2. 检查英文共同前缀
+        parent_en = ''.join(re.findall(r'[a-zA-Z_]+', parent_name.lower()))
+        child_en = ''.join(re.findall(r'[a-zA-Z_]+', child_name.lower()))
+        
+        if parent_en and child_en:
+            common_prefix_len = 0
+            for i in range(min(len(parent_en), len(child_en))):
+                if parent_en[i] == child_en[i]:
+                    common_prefix_len += 1
+                else:
+                    break
+            
+            if common_prefix_len > 0:
+                en_score = common_prefix_len / max(len(parent_en), len(child_en))
+                score = max(score, en_score * 0.8)
+        
+        return score
     
     def _update_cache(self, key: str, fields: List[Field], results: Dict[str, DimensionAttributes]) -> None:
         """更新缓存"""

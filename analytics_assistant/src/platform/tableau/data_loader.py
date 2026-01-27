@@ -142,6 +142,8 @@ class TableauDataLoader:
         logger.info(f"GraphQL 获取到 {len(raw_fields)} 个字段")
         
         # 转换为 Field 对象，并提取逻辑表信息
+        # 注意：GraphQL 的 upstreamTables 只对 ColumnField 有效
+        # CalculatedField 没有 upstreamTables 是正确的（计算字段不属于任何原始表）
         fields, tables = self._convert_graphql_fields(raw_fields)
         
         # 如果是多表数据源，获取表关系
@@ -172,11 +174,18 @@ class TableauDataLoader:
             raw_metadata=graphql_data,
         )
     
-    def _convert_graphql_fields(self, raw_fields: List[Dict[str, Any]]) -> tuple[List[Field], List[LogicalTable]]:
+    def _convert_graphql_fields(
+        self,
+        raw_fields: List[Dict[str, Any]],
+    ) -> tuple[List[Field], List[LogicalTable]]:
         """
         从 GraphQL 字段数据转换为 Field 对象，并提取逻辑表信息
         
         GraphQL 的 name 就是用户友好的显示名称，不需要额外处理。
+        
+        逻辑表信息来自 GraphQL 的 upstreamTables：
+        - ColumnField 有 upstreamTables（来自数据库表的列）
+        - CalculatedField 没有 upstreamTables（在 Tableau 中定义的计算字段，不属于任何原始表）
         
         Args:
             raw_fields: GraphQL 返回的字段列表
@@ -191,7 +200,8 @@ class TableauDataLoader:
             # GraphQL 的 name 就是显示名（等于 VizQL 的 fieldCaption）
             name = raw.get("name", "")
             
-            # 处理上游表信息
+            # 处理上游表信息（来自 GraphQL 的 upstreamTables）
+            # 只有 ColumnField 有 upstreamTables，CalculatedField 没有（这是正确的）
             upstream_tables = []
             for table in raw.get("upstreamTables", []) or []:
                 table_id = table.get("id", "")
@@ -383,26 +393,50 @@ class TableauDataLoader:
         self,
         datasource_id: str,
         auth: Optional[TableauAuthContext] = None,
-    ) -> Dict[str, Any]:
+    ) -> Optional[Dict[str, Any]]:
         """
         加载数据源模型（逻辑表和关系）
+        
+        注意：此方法依赖 get-datasource-model API，该 API 是 VizQL Data Service 2025.3 (2025年10月) 新增的功能。
+        如果 Tableau Server 版本低于 2025.3，此方法会返回 None（优雅降级）。
+        
+        对于低版本 Tableau Server，建议使用 load_data_model() 方法，它会自动从
+        GraphQL upstreamTables 或 VizQL logicalTableId 获取逻辑表信息。
+        
+        参考：https://help.tableau.com/current/api/vizql-data-service/en-us/docs/vds_whats_new.html
         
         Args:
             datasource_id: 数据源 LUID
             auth: 认证上下文（可选）
         
         Returns:
-            数据源模型字典
+            数据源模型字典，如果 API 不可用则返回 None
         """
+        from analytics_assistant.src.core.exceptions import VizQLServerError, VizQLError
+        
         if auth is None:
             auth = await get_tableau_auth_async()
         
         client = await self._get_client()
-        return await client.get_datasource_model(
-            datasource_luid=datasource_id,
-            api_key=auth.api_key,
-            site=auth.site,
-        )
+        
+        try:
+            return await client.get_datasource_model(
+                datasource_luid=datasource_id,
+                api_key=auth.api_key,
+                site=auth.site,
+            )
+        except VizQLServerError as e:
+            # get-datasource-model API 需要 VizQL Data Service 2025.3+
+            # 低版本 Tableau Server 会返回 500 错误，优雅降级返回 None
+            logger.warning(
+                f"get-datasource-model API 不可用（需要 VizQL Data Service 2025.3+）: {e}。"
+                f"建议使用 load_data_model() 方法获取逻辑表信息。"
+            )
+            return None
+        except VizQLError as e:
+            # 其他 VizQL 错误也优雅降级
+            logger.warning(f"获取数据源模型失败: {e}")
+            return None
     
     async def _load_table_relationships(
         self,
@@ -415,22 +449,43 @@ class TableauDataLoader:
         
         通过 VizQL get-datasource-model 接口获取逻辑表之间的关系。
         
+        注意：get-datasource-model API 是 VizQL Data Service 2025.3 (2025年10月) 新增的功能。
+        如果 Tableau Server 版本低于 2025.3，此方法会返回空列表（优雅降级）。
+        
+        对于低版本 Tableau Server，表关系信息无法获取，但逻辑表信息仍然可以从
+        GraphQL upstreamTables 或 VizQL logicalTableId 获取。
+        
         Args:
             datasource_id: 数据源 LUID
             tables: 逻辑表列表（用于 ID 到名称的映射）
             auth: 认证上下文
         
         Returns:
-            TableRelationship 列表
+            TableRelationship 列表，如果 API 不可用则返回空列表
         """
+        from analytics_assistant.src.core.exceptions import VizQLServerError, VizQLError
+        
         client = await self._get_client()
         
         # 调用 VizQL 获取数据源模型
-        model = await client.get_datasource_model(
-            datasource_luid=datasource_id,
-            api_key=auth.api_key,
-            site=auth.site,
-        )
+        try:
+            model = await client.get_datasource_model(
+                datasource_luid=datasource_id,
+                api_key=auth.api_key,
+                site=auth.site,
+            )
+        except VizQLServerError as e:
+            # get-datasource-model API 需要 VizQL Data Service 2025.3+
+            # 低版本 Tableau Server 会返回 500 错误，优雅降级返回空列表
+            logger.warning(
+                f"get-datasource-model API 不可用（需要 VizQL Data Service 2025.3+），"
+                f"跳过表关系加载。逻辑表信息仍可从 GraphQL/VizQL 获取: {e}"
+            )
+            return []
+        except VizQLError as e:
+            # 其他 VizQL 错误也优雅降级
+            logger.warning(f"获取数据源模型失败，跳过表关系加载: {e}")
+            return []
         
         # 构建表 ID 到名称的映射
         # VizQL 返回的 logicalTableId 格式: TableName_HEXID

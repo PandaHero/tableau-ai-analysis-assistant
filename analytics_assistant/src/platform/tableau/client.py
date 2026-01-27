@@ -50,10 +50,12 @@ def _get_ssl_verify() -> Any:
     获取 SSL 验证参数
     
     Returns:
-        - 证书文件路径（如果配置了 ca_bundle）
+        - ssl.SSLContext（如果配置了 ca_bundle）
         - True（使用系统证书）
         - False（禁用 SSL 验证）
     """
+    import ssl
+    
     config = get_config()
     
     if not config.get_ssl_verify():
@@ -61,12 +63,15 @@ def _get_ssl_verify() -> Any:
     
     ca_bundle = config.get_ssl_ca_bundle()
     if ca_bundle:
-        return ca_bundle
+        # 使用新的 ssl.create_default_context API
+        ssl_context = ssl.create_default_context(cafile=ca_bundle)
+        return ssl_context
     
     # 尝试使用 certifi
     try:
         import certifi
-        return certifi.where()
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        return ssl_context
     except ImportError:
         return True
 
@@ -365,6 +370,11 @@ class VizQLClient:
         """
         获取数据源数据模型（逻辑表和关系）
         
+        注意：此 API 是 VizQL Data Service 2025.3 (2025年10月) 新增的功能。
+        如果 Tableau Server 版本低于 2025.3，此 API 会返回 500 错误。
+        
+        参考：https://help.tableau.com/current/api/vizql-data-service/en-us/docs/vds_whats_new.html
+        
         Args:
             datasource_luid: 数据源 LUID
             api_key: Tableau 认证 token
@@ -374,7 +384,8 @@ class VizQLClient:
             数据模型字典，包含 'logicalTables' 和 'logicalTableRelationships'
         
         Raises:
-            VizQLError: API 调用失败
+            VizQLServerError: Tableau Server 版本低于 2025.3 时返回 500 错误
+            VizQLError: 其他 API 调用失败
         """
         url = f"{self.base_url}/api/v1/vizql-data-service/get-datasource-model"
         

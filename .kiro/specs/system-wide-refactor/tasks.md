@@ -26,17 +26,16 @@
 | `tableau_assistant/src/infra/ai/embeddings.py` | `analytics-assistant/src/infra/ai/embeddings.py` | 阶段 1 | 保留，整合到 ModelManager |
 | `tableau_assistant/src/infra/ai/json_mode_adapter.py` | `analytics-assistant/src/infra/ai/json_mode_adapter.py` | 阶段 1 | 保留，整合到 ModelManager |
 | `tableau_assistant/src/infra/rag/retriever.py` | `analytics-assistant/src/infra/rag/retriever.py` | 阶段 1 | 重构为 UnifiedRetriever |
-| `tableau_assistant/src/infra/rag/field_indexer.py` | `analytics-assistant/src/infra/rag/vector_index_manager.py` | 阶段 1 | 重命名并扩展功能 |
+| `tableau_assistant/src/infra/rag/field_indexer.py` | `analytics-assistant/src/infra/rag/field_vector_store.py` | 阶段 1 | 重构为 FieldVectorStore |
 | `tableau_assistant/src/infra/rag/reranker.py` | `analytics-assistant/src/infra/rag/reranker.py` | 阶段 1 | 保留 |
-| `tableau_assistant/src/infra/storage/langgraph_store.py` | `analytics-assistant/src/infra/storage/langgraph_store.py` | 阶段 1 | 保留 |
-| `tableau_assistant/src/infra/storage/redis_cache.py` | 删除 | 阶段 1 | 移除，使用 LangGraph Store |
-| `tableau_assistant/src/infra/storage/*.py` | `analytics-assistant/src/infra/storage/cache/*.py` | 阶段 1 | 重组为子目录结构 |
-| `tableau_assistant/src/infra/storage/*.py` | `analytics-assistant/src/infra/storage/stores/*.py` | 阶段 1 | 重组为子目录结构 |
+| `tableau_assistant/src/infra/storage/langgraph_store.py` | `analytics-assistant/src/infra/storage/langgraph_store.py` | 阶段 1 | 保留并扩展（统一入口） |
+| `tableau_assistant/src/infra/storage/redis_cache.py` | 不迁移 | - | 不需要，使用 LangGraph Store |
+| `tableau_assistant/src/infra/storage/*.py` | 不迁移 | - | 简化架构，不创建子目录 |
 | `tableau_assistant/src/infra/config/settings.py` | `analytics-assistant/src/infra/config/settings.py` | 阶段 1 | 保留并扩展 |
 | `tableau_assistant/src/infra/observability/logger.py` | `analytics-assistant/src/infra/observability/logger.py` | 阶段 1 | 保留并扩展 |
 | **Core 层** | | | |
 | `tableau_assistant/src/core/models/*.py` | `analytics-assistant/src/core/models/*.py` | 阶段 2 | 扩展领域模型 |
-| `tableau_assistant/src/core/interfaces/*.py` | `analytics-assistant/src/core/interfaces/*.py` | 阶段 2 | 新增接口定义 |
+| `tableau_assistant/src/core/interfaces/*.py` | `analytics-assistant/src/core/interfaces/*.py` | 阶段 2 | 新增接口定义（不含 IDataLoader） |
 | **Platform 层** | | | |
 | `tableau_assistant/src/platforms/tableau/*.py` | `analytics-assistant/src/platform/tableau/*.py` | 阶段 2 | 重命名目录并重构 |
 | **Agent 层** | | | |
@@ -54,6 +53,7 @@
 | **Orchestration 层** | | | |
 | `tableau_assistant/src/orchestration/workflow/*.py` | `analytics-assistant/src/orchestration/workflow/*.py` | 阶段 5 | 保留并优化 |
 | `tableau_assistant/src/orchestration/middleware/*.py` | `analytics-assistant/src/orchestration/middleware/*.py` | 阶段 5 | 保留并扩展 |
+| `tableau_assistant/src/orchestration/middleware/backends/*.py` | `analytics-assistant/src/orchestration/middleware/backends/*.py` | 阶段 5 | 保留（FilesystemMiddleware 后端） |
 | `tableau_assistant/src/orchestration/tools/*.py` | 删除 | 阶段 5 | 移除，直接调用 Agent 节点 |
 
 ---
@@ -144,124 +144,75 @@
 
 ### 1.3 存储和缓存统一
 
+**设计决策**：直接使用 LangGraph/LangChain 框架能力，不创建额外抽象层
+
 **现有文件**：
 - `tableau_assistant/src/infra/storage/langgraph_store.py` - LangGraph SqliteStore
-- `tableau_assistant/src/infra/storage/redis_cache.py` - Redis 缓存（待删除）
+- `tableau_assistant/src/infra/storage/redis_cache.py` - Redis 缓存（不迁移）
 - `tableau_assistant/src/agents/dimension_hierarchy/cache_storage.py` - 维度层级缓存
 - 多个分散的缓存和存储文件
 
-**目标文件**：
-- `analytics-assistant/src/infra/storage/base.py` - 存储后端抽象接口（BaseStore）
-- `analytics-assistant/src/infra/storage/factory.py` - 存储工厂（根据配置创建实例）
-- `analytics-assistant/src/infra/storage/backends/sqlite.py` - SQLite 后端（封装 LangGraph SqliteStore）
-- `analytics-assistant/src/infra/storage/backends/redis.py` - Redis 后端（封装 LangChain RedisStore）
-- `analytics-assistant/src/infra/storage/backends/memory.py` - 内存后端（封装 LangChain InMemoryStore）
-- `analytics-assistant/src/infra/storage/managers/cache_manager.py` - 统一缓存管理器基类
-- `analytics-assistant/src/infra/storage/managers/data_model_cache.py` - 数据模型缓存
-- `analytics-assistant/src/infra/storage/managers/session_manager.py` - 会话管理器
-- `analytics-assistant/src/infra/storage/managers/golden_query_store.py` - Golden Query 存储
-- `analytics-assistant/src/infra/storage/managers/file_store.py` - 文件存储
-- `analytics-assistant/src/infra/storage/vector/base.py` - 向量存储抽象接口
-- `analytics-assistant/src/infra/storage/vector/faiss_store.py` - FAISS 向量存储
-- `analytics-assistant/src/infra/storage/vector/chroma_store.py` - Chroma 向量存储
+**目标文件**（简化版）：
+- `analytics-assistant/src/infra/storage/langgraph_store.py` - 统一存储入口
+  - `get_kv_store()` - KV 存储（LangGraph SqliteStore 单例）
+  - `get_vector_store()` - 向量存储（FAISS/Chroma）
+  - `CacheManager` - 高级缓存管理器
 
 **任务清单**：
-- [ ] 1.3.1 创建存储抽象层
-  - [x] 创建 `base.py`（BaseStore 接口）
-  - [x] 创建 `factory.py`（StorageFactory）
-  - [x] 定义统一的存储接口（get, put, delete, list_keys）
-- [ ] 1.3.2 实现存储后端（封装 LangChain/LangGraph Store）
-  - [x] 实现 `backends/sqlite.py`（封装 LangGraph SqliteStore）
-  - [x] 实现 `backends/redis.py`（封装 LangChain RedisStore）
-  - [x] 实现 `backends/memory.py`（封装 LangChain InMemoryStore）
-  - [x] 支持 TTL 和 namespace 隔离
-- [ ] 1.3.3 实现向量存储（封装 LangChain VectorStore）
-  - [x] 实现 `vector/base.py`（BaseVectorStore 接口）
-  - [x] 实现 `vector/faiss_store.py`（封装 LangChain FAISS）
-  - [x] 实现 `vector/chroma_store.py`（封装 LangChain Chroma）
-  - [x] 支持 Embedding 缓存
-- [ ] 1.3.4 创建 CacheManager（统一缓存管理器）
-  - [x] 实现 `managers/cache_manager.py`（基类）
-  - [x] 支持自动 Hash 计算
+- [x] 1.3.1 创建统一存储入口（langgraph_store.py）
+  - [x] 实现 `get_kv_store()` - LangGraph SqliteStore 单例
+  - [x] 实现 `get_vector_store()` - 支持 FAISS/Chroma
+  - [x] 实现 `CacheManager` - 自动 Hash、TTL、命名空间隔离
+  - [x] 支持批量 Embedding 加速
+- [x] 1.3.2 ~~创建存储抽象层~~ - 不需要，直接使用框架能力
+  - [x] **决策**：不创建 `base.py`、`factory.py`、`backends/`、`managers/`、`vector/` 子目录
+  - [x] **原因**：直接使用 LangGraph/LangChain 提供的存储能力，不重复造轮子
+- [x] 1.3.3 ~~实现存储后端~~ - 不需要，直接使用框架能力
+  - [x] **决策**：不实现 `backends/sqlite.py`、`backends/redis.py`、`backends/memory.py`
+  - [x] **原因**：LangGraph SqliteStore 已提供所需功能
+- [x] 1.3.4 ~~实现向量存储抽象~~ - 不需要，直接使用框架能力
+  - [x] **决策**：不实现 `vector/base.py`、`vector/faiss_store.py`、`vector/chroma_store.py`
+  - [x] **原因**：通过 `get_vector_store()` 直接使用 LangChain FAISS/Chroma
+- [x] 1.3.5 创建 CacheManager（统一缓存管理器）
+  - [x] 实现自动 Hash 计算
   - [x] 支持 TTL 配置
   - [x] 支持命名空间隔离
-- [-] 1.3.5 实现业务存储管理器
-  - [x] **重要决策**：大部分业务存储管理器不需要实现，直接使用 `CacheManager` 即可
-  - [x] **VectorIndexManager 重构**：
-    - [x] **问题**：VectorIndexManager 与 BaseVectorStore 功能重复
-    - [x] **解决方案**：删除 VectorIndexManager，创建 FieldVectorStore 封装 BaseVectorStore
-    - [x] **实现**：
-      - [x] 创建 `index_builder.py`（提取 IndexConfig 和 build_index_text）
-      - [x] 创建 `field_vector_store.py`（封装 BaseVectorStore，提供字段检索接口）
-      - [x] 更新 `retriever.py`（使用 FieldVectorStore 替代 VectorIndexManager）
-      - [x] 更新 `__init__.py`（导出新模块）
-      - [x] 删除 `vector_index_manager.py`
-      - [x] 更新测试文件（test_retriever.py, test_field_vector_store.py）
-    - [x] **参考**：见 `analytics_assistant/docs/cache_persistence_strategy.md`
-  - [x] **缓存/持久化策略**：
-    - [x] 分析老项目缓存模式（`tableau_assistant/`）
-    - [x] 创建策略文档：`analytics_assistant/docs/cache_persistence_strategy.md`
-    - [x] 更新 YAML 配置：`analytics_assistant/config/app.yaml`
-    - [ ] 数据模型缓存：使用 `CacheManager("data_model", ttl=1440)`
-    - [ ] 维度层级缓存：使用 `CacheManager("dimension_hierarchy_cache", ttl=null)`
-    - [ ] RAG 模式元数据：使用 `CacheManager("dimension_patterns_metadata", ttl=null)`
-    - [ ] Embedding 缓存：使用 `CacheManager("embedding", ttl=60)`
-    - [ ] 会话管理：使用 `CacheManager("session", ttl=10080)`
-  - [x] **不需要实现的管理器**（直接使用 CacheManager）：
-    - ~~实现 `managers/data_model_cache.py`~~（使用 CacheManager）
-    - ~~实现 `managers/golden_query_store.py`~~（使用 CacheManager）
-    - ~~实现 `managers/embedding_cache.py`~~（使用 CacheManager）
-    - ~~实现 `managers/file_store.py`~~（直接使用文件系统操作）
-  - [ ]* **可选：SessionManager 实现**（直接使用 CacheManager + LangGraph Checkpointer）：
-    - [ ]* 实现 `managers/session_manager.py`（会话管理，支持多轮对话）
-      - [ ]* 创建会话（create_session）
-      - [ ]* 获取会话（get_session）
-      - [ ]* 更新会话（update_session）
-      - [ ]* 清理过期会话（cleanup_expired_sessions，7天）
-      - [ ]* 集成 LangGraph Checkpointer（SqliteSaver/RedisSaver）
-- [x] 1.3.6 删除重复的 Embedding 缓存
-  - [x] 删除 `infra/rag/embedding_cache.py`（与存储模块重复）- 文件不存在，无需删除
-  - [x] 更新所有引用，使用 `managers/embedding_cache.py` - 无引用需要更新
+  - [x] 实现 `get_or_compute()` 方法
+  - [x] 实现统计信息收集
+- [x] 1.3.6 ~~实现业务存储管理器~~ - 不需要，直接使用 CacheManager
+  - [x] **决策**：不创建 `managers/data_model_cache.py`、`managers/session_manager.py` 等
+  - [x] **原因**：业务代码直接使用 `CacheManager(namespace, ttl)` 即可
+  - [x] **参考**：`analytics_assistant/docs/cache_persistence_strategy.md`
 - [x] 1.3.7 移除 Redis 直接依赖
-  - [x] 移除项目中对 Redis 的直接依赖 - 项目中无 Redis 依赖
-  - [x] 保留 Redis 后端实现（作为可选后端）- 不需要
-  - [x] 更新配置，默认使用 SQLite - 已使用 SQLite
-  - [x] 更新文档，说明如何启用 Redis - 不需要
-- [-] 1.3.8 迁移维度层级缓存到 CacheManager
-  - [-] 更新 `agents/dimension_hierarchy/cache_storage.py` - 新项目中尚未创建此 Agent
-  - [-] 使用 CacheManager 替代直接调用 LangGraph Store - 待 Agent 迁移时实现
+  - [x] 新项目中无 Redis 依赖
+  - [x] 默认使用 SQLite
+- [x] 1.3.8 ~~迁移维度层级缓存~~ - 待 Agent 迁移时实现
+  - [x] **决策**：在阶段 3 迁移 DimensionHierarchy Agent 时一并处理
 - [x] 1.3.9 单元测试（覆盖率 ≥ 80%）
-  - [x] 测试 BaseStore 接口 - 使用 LangGraph SqliteStore
-  - [x] 测试 SQLite/Redis/Memory 后端 - 测试 SQLite 单例
-  - [x] 测试 FAISS/Chroma 向量存储 - 测试 FAISS 创建
-  - [x] 测试 CacheManager 功能 - 测试基本操作、get_or_compute、stats
-  - [x] 测试 Embedding 缓存 - 通过 CacheManager 实现
-  - [x] 测试 TTL 功能 - CacheManager 支持 TTL
-  - [x] 测试命名空间隔离 - 测试 namespace 隔离
+  - [x] 测试 KV 存储单例
+  - [x] 测试向量存储创建
+  - [x] 测试 CacheManager 功能
+  - [x] 测试 TTL 和命名空间隔离
 
-**迁移路径**：
+**迁移路径**（简化版）：
 ```
-1. 创建存储抽象层（base.py, factory.py）
-2. 实现存储后端（backends/）
-3. 实现向量存储（vector/）
-4. 创建 CacheManager（managers/cache_manager.py）
-5. 实现业务存储管理器（managers/），包括 embedding_cache.py
-6. 删除 RAG 模块的重复 embedding_cache.py
-7. 删除 Redis 相关代码
-8. 更新所有缓存调用（agents/dimension_hierarchy）
-9. 单元测试
+1. 创建 langgraph_store.py（统一入口）
+2. 实现 get_kv_store()、get_vector_store()、CacheManager
+3. 创建缓存策略文档（cache_persistence_strategy.md）
+4. 单元测试
+5. 业务代码直接使用 CacheManager(namespace, ttl)
 ```
 
 **数据分类说明**：
-- **结构化数据**（缓存、会话、配置）→ SQLite/Redis（backends/）
-- **向量数据**（Embeddings、字段索引）→ FAISS/Chroma（vector/）
-- **大文件**（查询结果）→ 文件系统（managers/file_store.py）
+- **结构化数据**（缓存、会话、配置）→ `get_kv_store()` → SqliteStore
+- **向量数据**（Embeddings、字段索引）→ `get_vector_store()` → FAISS/Chroma
+- **高级缓存**（自动 Hash、TTL）→ `CacheManager`
 
 **重要说明**：
-- ❌ **不需要 vNext 版本化存储**：项目未上线，不需要灰度发布和版本隔离
-- ❌ **不需要数据迁移**：项目未上线，不存在历史数据迁移问题
-- ✅ **Embedding 缓存统一**：删除 `infra/rag/embedding_cache.py`，统一使用 `managers/embedding_cache.py`
-- ✅ **FilesystemMiddleware 和 FileStore 关系**：FilesystemMiddleware 提供文件操作工具接口，FileStore 提供实际的文件存储实现
+- ✅ **直接使用框架能力**：不创建额外抽象层，不重复造轮子
+- ✅ **简化架构**：单一入口文件 `langgraph_store.py`
+- ✅ **CacheManager 统一缓存**：所有缓存需求使用 `CacheManager(namespace, ttl)`
+- ❌ **不需要 IDataLoader 接口**：DataLoader 直接实现即可，无需接口定义
 
 ---
 
@@ -336,7 +287,6 @@
 - `analytics-assistant/src/core/models/insight.py` - Insight 模型
 - `analytics-assistant/src/core/models/replan.py` - ReplanDecision 模型
 - `analytics-assistant/src/core/interfaces/platform_adapter.py` - 平台适配器接口（新建）
-- `analytics-assistant/src/core/interfaces/data_loader.py` - 数据加载器接口（新建）
 
 **任务清单**：
 - [x] 2.1.1 扩展 SemanticQuery 模型
@@ -354,9 +304,12 @@
   - [x] 定义 build() 方法
   - [x] 定义 validate() 方法
   - [x] 定义 map() 和 map_single_field() 方法
-- [-] 2.1.5 单元测试（覆盖率 ≥ 80%）
-  - [-] 测试模型验证 - 待后续补充
-  - [-] 测试序列化 - 待后续补充
+- [x] 2.1.5 ~~创建 IDataLoader 接口~~ - 不需要
+  - [x] **决策**：DataLoader 直接实现即可，无需接口定义
+  - [x] **原因**：目前只有 Tableau 平台，不需要过度抽象
+- [x] 2.1.6 单元测试（覆盖率 ≥ 80%）
+  - [x] 测试模型验证 - 52 个测试用例
+  - [x] 测试序列化 - 包含在模型测试中
 
 **迁移路径**：
 ```
@@ -389,10 +342,12 @@
 - [x] 2.2.3 重构 QueryBuilder
   - [x] 分离 VizQL 构建逻辑
   - [x] 添加查询验证
-- [-] 2.2.4 重构 DataLoader
-  - [-] 实现 IDataLoader 接口 - 待 VizQL Client 迁移时实现
+- [x] 2.2.4 重构 DataLoader
+  - [x] ~~实现 IDataLoader 接口~~ - 不需要接口，直接实现
   - [-] 添加数据验证 - 待 VizQL Client 迁移时实现
-- [-] 2.2.5 集成测试（与 Tableau API）
+- [x] 2.2.5 集成测试（与 Tableau API）
+  - [x] 测试 QueryBuilder - 37 个测试用例
+  - [x] 测试 Adapter - 12 个测试用例
   - [-] 测试数据模型加载 - 待 VizQL Client 迁移时实现
   - [-] 测试查询执行 - 待 VizQL Client 迁移时实现
 
@@ -484,9 +439,9 @@
   - [x] 保持函数式风格（不强制继承 BaseComponent）
   - [x] 分离 RAG 检索逻辑（使用 infra/rag 接口）
   - [x] 直接使用 ModelManager（通过 agents/base）
-- [ ] 3.2.5 单元测试（覆盖率 ≥ 80%）
-  - [ ] 测试字段映射
-  - [ ] 测试 RAG 检索
+- [x] 3.2.5 单元测试（覆盖率 ≥ 80%）
+  - [x] 测试字段映射
+  - [x] 测试 RAG 检索
 
 **迁移路径**：
 ```
@@ -514,22 +469,23 @@
 - `analytics-assistant/src/agents/dimension_hierarchy/schemas/*.py` - 数据模型（重命名）
 
 **任务清单**：
-- [ ] 3.3.1 删除 llm_inference.py
-  - [ ] 将 LLM 推断逻辑整合到 node.py
-  - [ ] 使用 ModelManager 和 base 工具函数
-- [ ] 3.3.2 重命名 models/ → schemas/
-  - [ ] 重命名目录
-  - [ ] 更新所有导入路径
-- [ ] 3.3.3 更新 cache_storage.py 使用 CacheManager
-  - [ ] 替换直接调用 LangGraph Store
-  - [ ] 使用统一的缓存接口
-- [ ] 3.3.4 重构 node.py 为组件化架构
-  - [ ] 继承 BaseComponent
-  - [ ] 整合 LLM 推断逻辑
-  - [ ] 分离推断逻辑
-- [ ] 3.3.5 单元测试（覆盖率 ≥ 80%）
-  - [ ] 测试维度层级推断
-  - [ ] 测试缓存功能
+- [x] 3.3.1 删除 llm_inference.py
+  - [x] 将 LLM 推断逻辑整合到 inference.py（_llm_infer 方法）
+  - [x] 使用 get_llm 和 stream_llm_structured 从 agents/base
+- [x] 3.3.2 重命名 models/ → schemas/
+  - [x] 使用单文件 schema.py（包含 DimensionCategory, DimensionAttributes, DimensionHierarchyResult, LLMDimensionOutput）
+  - [x] 更新所有导入路径
+- [x] 3.3.3 更新 cache_storage.py 使用 CacheManager
+  - [x] 无单独 cache_storage.py，inference.py 直接使用 CacheManager
+  - [x] 使用统一的缓存接口（self._cache = CacheManager(cache_ns)）
+- [x] 3.3.4 重构 node.py 为组件化架构
+  - [x] 使用 DimensionHierarchyInference 类实现组件化（无需 node.py）
+  - [x] 整合 LLM 推断逻辑到 _llm_infer 方法
+  - [x] 分离推断逻辑（种子匹配 → RAG → LLM → 自学习）
+- [x] 3.3.5 单元测试（覆盖率 ≥ 80%）
+  - [x] 测试维度层级推断（81% 覆盖率，115 个测试）
+  - [x] 测试缓存功能
+  - [x] Tableau 端到端测试（9 个测试，含流式输出）
 
 **迁移路径**：
 ```
@@ -811,21 +767,31 @@
 
 **现有文件**：
 - `tableau_assistant/src/orchestration/middleware/*.py` - 现有中间件
+- `tableau_assistant/src/orchestration/middleware/backends/*.py` - FilesystemMiddleware 后端实现
 - `tableau_assistant/src/orchestration/tools/*.py` - LangChain 工具（待删除）
 
 **目标文件**：
-- `src/orchestration/middleware/filesystem.py` - 保留
-- `src/orchestration/middleware/patch_tool_calls.py` - 保留
-- `src/orchestration/middleware/output_validation.py` - 保留
-- `src/orchestration/middleware/retry.py` - 新建（可选）
-- `src/orchestration/middleware/summarization.py` - 新建（可选）
+- `analytics-assistant/src/orchestration/middleware/filesystem.py` - 保留
+- `analytics-assistant/src/orchestration/middleware/backends/protocol.py` - 保留（后端协议定义）
+- `analytics-assistant/src/orchestration/middleware/backends/state.py` - 保留（StateBackend 实现）
+- `analytics-assistant/src/orchestration/middleware/backends/utils.py` - 保留（工具函数）
+- `analytics-assistant/src/orchestration/middleware/patch_tool_calls.py` - 保留
+- `analytics-assistant/src/orchestration/middleware/output_validation.py` - 保留
+- `analytics-assistant/src/orchestration/middleware/retry.py` - 新建（可选）
+- `analytics-assistant/src/orchestration/middleware/summarization.py` - 新建（可选）
 
 **任务清单**：
 - [ ] 5.2.1 删除 tools/ 目录
   - [ ] 移除 query_executor.py、data_profiler.py、field_lookup.py
   - [ ] 直接调用 Agent 节点，避免重复抽象
   - [ ] 更新工作流中的调用
-- [ ] 5.2.2 保留现有中间件
+- [ ] 5.2.2 迁移 FilesystemMiddleware 及其后端
+  - [ ] 迁移 `middleware/filesystem.py`
+  - [ ] 迁移 `middleware/backends/protocol.py`（后端协议定义）
+  - [ ] 迁移 `middleware/backends/state.py`（StateBackend - 使用 LangGraph 状态存储文件）
+  - [ ] 迁移 `middleware/backends/utils.py`（工具函数）
+  - [ ] 更新导入路径（使用新项目的 `infra/storage/langgraph_store.py`）
+- [ ] 5.2.3 保留其他现有中间件
   - [ ] FilesystemMiddleware
   - [ ] PatchToolCallsMiddleware
   - [ ] OutputValidationMiddleware

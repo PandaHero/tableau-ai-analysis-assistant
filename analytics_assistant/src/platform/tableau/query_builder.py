@@ -184,16 +184,18 @@ class TableauQueryBuilder(BaseQueryBuilder):
                         suggestion=f"将 '{comp.target}' 添加到度量或使用现有度量",
                     ))
                 
-                # 检查 partition_by 是否是维度的子集
-                for p in comp.partition_by:
-                    p_name = p.field_name if hasattr(p, 'field_name') else p
-                    if p_name not in view_dims:
-                        errors.append(ValidationError(
-                            error_type=ValidationErrorType.FIELD_NOT_FOUND,
-                            field_path=f"computations[{i}].partition_by",
-                            message=f"分区维度 '{p_name}' 不在查询维度中",
-                            suggestion=f"将 '{p_name}' 添加到维度或从 partition_by 中移除",
-                        ))
+                # 检查 partition_by 是否是维度的子集（仅表计算有 partition_by）
+                partition_by = getattr(comp, 'partition_by', None)
+                if partition_by:
+                    for p in partition_by:
+                        p_name = p.field_name if hasattr(p, 'field_name') else p
+                        if p_name not in view_dims:
+                            errors.append(ValidationError(
+                                error_type=ValidationErrorType.FIELD_NOT_FOUND,
+                                field_path=f"computations[{i}].partition_by",
+                                message=f"分区维度 '{p_name}' 不在查询维度中",
+                                suggestion=f"将 '{p_name}' 添加到维度或从 partition_by 中移除",
+                            ))
         
         return ValidationResult(
             is_valid=len(errors) == 0,

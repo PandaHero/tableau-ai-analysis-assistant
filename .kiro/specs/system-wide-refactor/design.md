@@ -83,7 +83,7 @@
 
 | 层次 | 职责 | 关键组件 | 依赖方向 |
 |------|------|---------|---------|
-| **Core 层** | 领域模型、业务逻辑、平台无关接口 | SemanticQuery, DataModel, IPlatformAdapter | 不依赖任何层 |
+| **Core 层** | 领域模型、业务逻辑、平台无关接口 | SemanticQuery, DataModel, BasePlatformAdapter | 不依赖任何层 |
 | **Platform 层** | 平台特定实现、API 调用、数据转换 | TableauAdapter, QueryBuilder | 依赖 Core |
 | **Agent 层** | 专业化 AI Agent、任务处理 | SemanticParser, FieldMapper, Insight | 依赖 Platform + Core |
 | **Orchestration 层** | 工作流编排、中间件、工具 | LangGraph Workflow, Middleware | 依赖 Agent + Platform + Core |
@@ -115,32 +115,35 @@
 ### 存储架构设计
 
 **设计原则**：
-1. **不重复造轮子**：封装 LangChain/LangGraph 自带的存储抽象，不重新实现
-2. **支持多后端**：SQLite（开发，默认）、Redis（生产，可选）、FAISS/Chroma（向量）
-3. **明确数据分类**：结构化数据、向量数据、大文件分别存储
-4. **简化部署**：项目未上线，不需要版本化存储和数据迁移
-5. **移除直接依赖**：移除当前项目对 Redis 的直接依赖，通过配置可选启用
+1. **直接使用框架能力**：直接使用 LangGraph/LangChain 提供的存储能力，不重复造轮子
+2. **简化架构**：不创建额外的抽象层（如 `backends/`、`managers/`、`vector/` 子目录），直接封装框架 API
+3. **单一入口**：通过 `langgraph_store.py` 提供统一的存储入口
+4. **支持多后端**：SQLite（默认）、FAISS/Chroma（向量）
+5. **简化部署**：项目未上线，不需要版本化存储和数据迁移
 
-**存储分层架构**：
+**存储架构**（简化版）：
 ```
-业务层（managers/）
+业务代码
   ↓
-抽象层（base.py, factory.py）
+langgraph_store.py（统一入口）
+  ├── get_kv_store()      → LangGraph SqliteStore（单例）
+  ├── get_vector_store()  → LangChain FAISS / ChromaDB
+  └── CacheManager        → 基于 KV 存储的高级缓存
   ↓
-后端层（backends/）+ 向量层（vector/）
-  ↓
-LangChain/LangGraph 原生存储
+LangGraph/LangChain 原生存储
 ```
 
 **数据分类和存储策略**：
 
-| 数据类型 | 存储位置 | 后端选择 | 说明 |
-|---------|---------|---------|------|
-| **结构化数据** | `backends/` | SQLite/Redis | 缓存、会话、配置等 |
-| **向量数据** | `vector/` | FAISS/Chroma | Embeddings、字段索引 |
-| **大文件** | `managers/file_store.py` | 文件系统 | 查询结果、大型数据 |
+| 数据类型 | 存储方式 | 说明 |
+|---------|---------|------|
+| **结构化数据** | `get_kv_store()` → SqliteStore | 缓存、会话、配置等 |
+| **向量数据** | `get_vector_store()` → FAISS/Chroma | Embeddings、字段索引 |
+| **高级缓存** | `CacheManager` | 自动 Hash、TTL、命名空间隔离 |
 
-详细设计请参考：[附件 7：目录结构 - 存储架构详细说明](./attachments/07-directory-structure.md#存储架构详细说明)
+**关键实现**：
+- `analytics_assistant/src/infra/storage/langgraph_store.py` - 统一存储入口
+- 详细缓存策略请参考：`analytics_assistant/docs/cache_persistence_strategy.md`
 
 ### 语义理解优化（降低 token 消耗 30%）
 
@@ -263,36 +266,37 @@ feature/phase-2 → merge → tag v2.0
 - **检索器**: 5+ 个，职责不清
 - **重复代码估计**: 40-50%
 
-### 需要重构的重复代码
+### 需要重构的重复代码（状态更新）
 
-| 类别 | 文件/组件 | 优先级 | 问题 | 建议 |
+| 类别 | 文件/组件 | 优先级 | 问题 | 状态 |
 |------|----------|--------|------|------|
-| **LLM 管理** | `agents/field_mapper/llm_selector.py` | 🔴 高 | 简单封装，无额外价值 | 移除，使用 base 工具函数 |
-| **存储后端** | Redis 依赖 | 🔴 高 | 与 SqliteStore 重复 | 移除，统一使用 SqliteStore |
-| **缓存** | 7+ 个缓存类 | 🔴 高 | 重复逻辑（Hash、TTL、序列化） | 创建统一 CacheManager |
-| **索引** | `FieldValueIndexer` | 🔴 高 | 与 FieldIndexer 重复 | 合并为 VectorIndexManager |
-| **RAG** | 多个检索器 | 🟡 中 | 职责不清，层级混乱 | 明确检索器层级 |
-| **模块化** | Agent 层基础设施代码 | 🔴 高 | 违反分层原则 | 移动到 Infra 层 |
-| **中间件** | `PatchToolCallsMiddleware` | 🟡 中 | 可能不再需要 | 阶段 1 后测试 |
-| **中间件** | `OutputValidationMiddleware` | 🟡 中 | 可能不再需要 | 阶段 1 后测试 |
+| **LLM 管理** | `agents/field_mapper/llm_selector.py` | 🔴 高 | 简单封装，无额外价值 | ✅ 已移除 |
+| **存储后端** | Redis 依赖 | 🔴 高 | 与 SqliteStore 重复 | ✅ 已移除 |
+| **缓存** | 7+ 个缓存类 | 🔴 高 | 重复逻辑（Hash、TTL、序列化） | ✅ 统一为 CacheManager |
+| **索引** | `FieldValueIndexer` | 🔴 高 | 与 FieldIndexer 重复 | ✅ 统一为 get_vector_store() |
+| **RAG** | 多个检索器 | 🟡 中 | 职责不清，层级混乱 | ✅ 已重构 |
+| **模块化** | Agent 层基础设施代码 | 🔴 高 | 违反分层原则 | 🔄 进行中 |
+| **中间件** | `PatchToolCallsMiddleware` | 🟡 中 | 可能不再需要 | 待评估 |
+| **中间件** | `OutputValidationMiddleware` | 🟡 中 | 可能不再需要 | 待评估 |
 
 ### 具体问题分析
 
-#### 1. 存储后端重复
+#### 1. 存储后端简化
 
-**问题**：
-- Redis 与 LangGraph SqliteStore 功能重复
-- FAISS 文件存储分散
-- 缺乏统一的存储抽象
+**问题**（已解决）：
+- ~~Redis 与 LangGraph SqliteStore 功能重复~~
+- ~~FAISS 文件存储分散~~
+- ~~缺乏统一的存储抽象~~
 
-**解决方案**：
-- 创建 `StorageBackend` 接口
-- 统一使用 SqliteStore
-- 将 FAISS 索引序列化后存入 SqliteStore
+**解决方案**（已实现）：
+- 直接使用 LangGraph SqliteStore（单例模式）
+- 通过 `get_vector_store()` 统一管理 FAISS/Chroma
+- 通过 `CacheManager` 提供高级缓存功能
+- 不创建额外的抽象层（`backends/`、`managers/` 等）
 
-#### 2. 缓存层级混乱
+#### 2. 缓存层级简化
 
-**发现的缓存类**：
+**发现的缓存类**（老项目）：
 1. `DataModelCache` - 数据模型元数据
 2. `FieldIndexCache` - 字段索引
 3. `GoldenQueryStore` - Golden Query
@@ -303,22 +307,24 @@ feature/phase-2 → merge → tag v2.0
 
 **问题**：每个缓存类都重新实现了相同的逻辑（Hash 计算、TTL 管理、序列化）
 
-**解决方案**：
-- 创建统一的 `CacheManager` 基类
-- 所有缓存类继承 `CacheManager`
-- 统一 TTL 策略和失效机制
+**解决方案**（已实现）：
+- 创建统一的 `CacheManager` 类（基于 LangGraph SqliteStore）
+- 所有缓存需求直接使用 `CacheManager(namespace, ttl)`
+- 不需要为每种数据类型创建单独的缓存类
+- 详细策略见 `analytics_assistant/docs/cache_persistence_strategy.md`
 
-#### 3. 索引功能重复
+#### 3. 索引功能简化
 
-**问题**：
-- `FieldIndexer` 和 `FieldValueIndexer` 功能重复
-- 都在构建 FAISS 索引
-- 持久化策略不一致
+**问题**（已解决）：
+- ~~`FieldIndexer` 和 `FieldValueIndexer` 功能重复~~
+- ~~都在构建 FAISS 索引~~
+- ~~持久化策略不一致~~
 
-**解决方案**：
-- 合并为统一的 `VectorIndexManager`
-- 统一 Embedding 缓存策略
-- 统一持久化策略
+**解决方案**（已实现）：
+- 通过 `get_vector_store()` 统一管理向量索引
+- 支持 FAISS 和 Chroma 两种后端
+- 支持批量 Embedding 加速首次创建
+- 统一持久化策略（自动保存/加载）
 
 #### 4. 模块化问题
 
@@ -332,17 +338,15 @@ feature/phase-2 → merge → tag v2.0
 - 清理依赖关系
 - 明确分层边界
 
-### 重构优先级和时间表
+### 重构优先级和时间表（已更新）
 
-| 优先级 | 任务 | 预期收益 | 时间 |
+| 优先级 | 任务 | 预期收益 | 状态 |
 |-------|------|---------|------|
-| 🔴 高 | 统一存储层（移除 Redis） | 减少 30% 存储代码 | 2-3 周 |
-| 🔴 高 | 统一缓存管理器 | 减少 40% 缓存代码 | 2-3 周 |
-| 🟡 中 | 统一索引管理器 | 减少 35% 索引代码 | 3-4 周 |
-| 🟡 中 | 统一检索器层级 | 减少 25% 检索代码 | 2-3 周 |
-| 🟡 中 | 模块化重组 | 清晰分层边界 | 1-2 周 |
-
-**总计**：11-16 周（约 3-4 个月）
+| 🔴 高 | 统一存储层（简化架构） | 减少 30% 存储代码 | ✅ 已完成 |
+| 🔴 高 | 统一缓存管理器 | 减少 40% 缓存代码 | ✅ 已完成 |
+| 🟡 中 | 统一索引管理器 | 减少 35% 索引代码 | ✅ 已完成 |
+| 🟡 中 | 统一检索器层级 | 减少 25% 检索代码 | ✅ 已完成 |
+| 🟡 中 | 模块化重组 | 清晰分层边界 | 🔄 进行中 |
 
 ### 预期收益
 

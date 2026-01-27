@@ -377,6 +377,18 @@ class RetrieverFactory:
     """检索器工厂"""
     
     @staticmethod
+    def _index_exists(collection_name: str, persist_directory: Optional[str] = None) -> bool:
+        """检查索引是否已存在"""
+        if not persist_directory:
+            app_config = get_config()
+            vector_config = app_config.config.get("vector_storage", {})
+            persist_directory = vector_config.get("index_dir", "data/indexes")
+        
+        from pathlib import Path
+        index_path = Path(persist_directory) / collection_name
+        return index_path.exists()
+    
+    @staticmethod
     def create_exact_retriever(
         fields: List[Any],
         config: Optional[RetrievalConfig] = None
@@ -391,9 +403,19 @@ class RetrieverFactory:
         config: Optional[RetrievalConfig] = None,
         collection_name: str = "fields",
         persist_directory: Optional[str] = None,
-        embedding_model_id: Optional[str] = None
+        embedding_model_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> EmbeddingRetriever:
-        """创建向量检索器"""
+        """创建向量检索器
+        
+        Args:
+            fields: 字段元数据列表
+            config: 检索配置
+            collection_name: 集合名称（用于索引文件名）
+            persist_directory: 持久化目录
+            embedding_model_id: Embedding 模型 ID
+            force_rebuild: 强制重建索引（忽略已有索引）
+        """
         chunks, texts, metadatas = _build_chunks_and_metadata(fields)
         
         app_config = get_config()
@@ -402,14 +424,27 @@ class RetrieverFactory:
         index_dir = persist_directory or vector_config.get("index_dir", "data/indexes")
         
         embeddings = get_embeddings(model_id=embedding_model_id)
-        vector_store = get_vector_store(
-            backend=backend,
-            embeddings=embeddings,
-            collection_name=collection_name,
-            persist_directory=index_dir,
-            texts=texts,
-            metadatas=metadatas
-        )
+        
+        # 检查索引是否已存在，如果存在且不强制重建，则复用
+        if not force_rebuild and RetrieverFactory._index_exists(collection_name, index_dir):
+            logger.info(f"复用已有索引: {collection_name}")
+            vector_store = get_vector_store(
+                backend=backend,
+                embeddings=embeddings,
+                collection_name=collection_name,
+                persist_directory=index_dir,
+                texts=None,  # 不传 texts，触发加载已有索引
+                metadatas=None
+            )
+        else:
+            vector_store = get_vector_store(
+                backend=backend,
+                embeddings=embeddings,
+                collection_name=collection_name,
+                persist_directory=index_dir,
+                texts=texts,
+                metadatas=metadatas
+            )
         
         return EmbeddingRetriever(vector_store, chunks, config)
     
@@ -419,9 +454,19 @@ class RetrieverFactory:
         config: Optional[RetrievalConfig] = None,
         collection_name: str = "fields",
         persist_directory: Optional[str] = None,
-        embedding_model_id: Optional[str] = None
+        embedding_model_id: Optional[str] = None,
+        force_rebuild: bool = False,
     ) -> CascadeRetriever:
-        """创建级联检索器（精确匹配 → 向量检索）"""
+        """创建级联检索器（精确匹配 → 向量检索）
+        
+        Args:
+            fields: 字段元数据列表
+            config: 检索配置
+            collection_name: 集合名称（用于索引文件名）
+            persist_directory: 持久化目录
+            embedding_model_id: Embedding 模型 ID
+            force_rebuild: 强制重建索引（忽略已有索引）
+        """
         chunks, texts, metadatas = _build_chunks_and_metadata(fields)
         
         app_config = get_config()
@@ -430,14 +475,27 @@ class RetrieverFactory:
         index_dir = persist_directory or vector_config.get("index_dir", "data/indexes")
         
         embeddings = get_embeddings(model_id=embedding_model_id)
-        vector_store = get_vector_store(
-            backend=backend,
-            embeddings=embeddings,
-            collection_name=collection_name,
-            persist_directory=index_dir,
-            texts=texts,
-            metadatas=metadatas
-        )
+        
+        # 检查索引是否已存在，如果存在且不强制重建，则复用
+        if not force_rebuild and RetrieverFactory._index_exists(collection_name, index_dir):
+            logger.info(f"复用已有索引: {collection_name}")
+            vector_store = get_vector_store(
+                backend=backend,
+                embeddings=embeddings,
+                collection_name=collection_name,
+                persist_directory=index_dir,
+                texts=None,  # 不传 texts，触发加载已有索引
+                metadatas=None
+            )
+        else:
+            vector_store = get_vector_store(
+                backend=backend,
+                embeddings=embeddings,
+                collection_name=collection_name,
+                persist_directory=index_dir,
+                texts=texts,
+                metadatas=metadatas
+            )
         
         exact_retriever = ExactRetriever(chunks, config)
         embedding_retriever = EmbeddingRetriever(vector_store, chunks, config)
@@ -453,6 +511,7 @@ class RetrieverFactory:
         collection_name: str = "fields",
         persist_directory: Optional[str] = None,
         embedding_model_id: Optional[str] = None,
+        force_rebuild: bool = False,
         **kwargs
     ) -> RetrievalPipeline:
         """
@@ -463,16 +522,20 @@ class RetrieverFactory:
             retriever_type: 检索器类型（exact/embedding/cascade）
             reranker_type: 重排序器类型（llm/rrf/default，None 表示不重排序）
             config: 检索配置
+            collection_name: 集合名称
+            persist_directory: 持久化目录
+            embedding_model_id: Embedding 模型 ID
+            force_rebuild: 强制重建索引
         """
         if retriever_type == "exact":
             retriever = RetrieverFactory.create_exact_retriever(fields, config)
         elif retriever_type == "embedding":
             retriever = RetrieverFactory.create_embedding_retriever(
-                fields, config, collection_name, persist_directory, embedding_model_id
+                fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild
             )
         else:  # cascade
             retriever = RetrieverFactory.create_cascade_retriever(
-                fields, config, collection_name, persist_directory, embedding_model_id
+                fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild
             )
         
         reranker = None
@@ -514,18 +577,29 @@ def create_retriever(
     config: Optional[RetrievalConfig] = None,
     collection_name: str = "fields",
     persist_directory: Optional[str] = None,
-    embedding_model_id: Optional[str] = None
+    embedding_model_id: Optional[str] = None,
+    force_rebuild: bool = False,
 ) -> BaseRetriever:
-    """创建检索器（便捷函数）"""
+    """创建检索器（便捷函数）
+    
+    Args:
+        fields: 字段元数据列表
+        retriever_type: 检索器类型（exact/embedding/cascade）
+        config: 检索配置
+        collection_name: 集合名称
+        persist_directory: 持久化目录
+        embedding_model_id: Embedding 模型 ID
+        force_rebuild: 强制重建索引
+    """
     if retriever_type == "exact":
         return RetrieverFactory.create_exact_retriever(fields, config)
     elif retriever_type == "embedding":
         return RetrieverFactory.create_embedding_retriever(
-            fields, config, collection_name, persist_directory, embedding_model_id
+            fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild
         )
     else:  # cascade
         return RetrieverFactory.create_cascade_retriever(
-            fields, config, collection_name, persist_directory, embedding_model_id
+            fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild
         )
 
 

@@ -84,10 +84,12 @@ def _get_ssl_verify() -> Any:
     获取 SSL 验证参数
     
     Returns:
-        - 证书文件路径（如果配置了 ca_bundle）
+        - ssl.SSLContext（如果配置了 ca_bundle）
         - True（使用系统证书）
         - False（禁用 SSL 验证）
     """
+    import ssl
+    
     config = get_config()
     
     if not config.get_ssl_verify():
@@ -95,12 +97,15 @@ def _get_ssl_verify() -> Any:
     
     ca_bundle = config.get_ssl_ca_bundle()
     if ca_bundle:
-        return ca_bundle
+        # 使用新的 ssl.create_default_context API
+        ssl_context = ssl.create_default_context(cafile=ca_bundle)
+        return ssl_context
     
     # 尝试使用 certifi
     try:
         import certifi
-        return certifi.where()
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        return ssl_context
     except ImportError:
         return True
 

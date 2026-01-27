@@ -148,7 +148,7 @@ class FieldMapperNode:
             try:
                 self._cache = CacheManager(
                     namespace="field_mapping",
-                    ttl=self.config.cache_ttl,
+                    default_ttl=self.config.cache_ttl,
                 )
             except Exception as e:
                 logger.warning(f"无法创建 CacheManager，缓存将不可用: {e}")
@@ -198,7 +198,7 @@ class FieldMapperNode:
         
         try:
             key = self._make_cache_key(term, datasource_luid, role_filter)
-            self._cache.put(key, {
+            self._cache.set(key, {
                 "business_term": term,
                 "technical_field": technical_field,
                 "confidence": confidence,

@@ -71,12 +71,42 @@ class AppConfig:
         if self._initialized:
             return
         
-        self.config_path = Path(config_path) if config_path else Path("analytics_assistant/config/app.yaml")
-        self.fallback_path = Path("analytics_assistant/config/app.example.yaml")
+        self.config_path = Path(config_path) if config_path else self._find_config_path()
+        self.fallback_path = self._find_fallback_path()
         self.config: Dict[str, Any] = {}
         
         self._load_config()
         self._initialized = True
+    
+    def _find_config_path(self) -> Path:
+        """查找配置文件路径"""
+        # 尝试多个可能的路径
+        candidates = [
+            Path("analytics_assistant/config/app.yaml"),  # 从项目根目录运行
+            Path("config/app.yaml"),  # 从 analytics_assistant 目录运行
+            Path(__file__).parent.parent.parent.parent / "config" / "app.yaml",  # 相对于模块位置
+        ]
+        
+        for path in candidates:
+            if path.exists():
+                return path
+        
+        # 默认返回第一个候选路径
+        return candidates[0]
+    
+    def _find_fallback_path(self) -> Path:
+        """查找备用配置文件路径"""
+        candidates = [
+            Path("analytics_assistant/config/app.example.yaml"),
+            Path("config/app.example.yaml"),
+            Path(__file__).parent.parent.parent.parent / "config" / "app.example.yaml",
+        ]
+        
+        for path in candidates:
+            if path.exists():
+                return path
+        
+        return candidates[0]
     
     def _load_config(self):
         """加载配置文件"""
