@@ -18,7 +18,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from analytics_assistant.src.core.schemas.enums import HowType
 from analytics_assistant.src.core.schemas.fields import MeasureField, DimensionField
-from analytics_assistant.src.core.schemas.filters import Filter
+from analytics_assistant.src.core.schemas.filters import (
+    Filter,
+    SetFilter,
+    DateRangeFilter,
+    NumericRangeFilter,
+    TextMatchFilter,
+    TopNFilter,
+)
+
+# Filter Union 类型（不使用 discriminator，让 Pydantic 按顺序尝试匹配）
+FilterUnion = SetFilter | DateRangeFilter | NumericRangeFilter | TextMatchFilter | TopNFilter | Filter
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -33,7 +43,7 @@ class CalcType(str, Enum):
     **何时需要派生计算**：
     - 查询基础度量（如"各地区销售额"）→ 不需要派生计算，直接用 what.measures
     - 多个度量间的公式计算（如"利润率"）→ 简单计算
-    - 单个度量 + 维度上下文（如"销售额增长率"）→ 表计算或 LOD
+    - 单个度量 + 维度上下文（如"销售额增长率"）→ 表计算或子查询
     
     分为两大类：
     1. 简单计算（多个基础度量间的公式计算）：
@@ -43,10 +53,13 @@ class CalcType(str, Enum):
        - PRODUCT: 乘积计算 (A*B)，如总价 = 单价 * 数量
        - FORMULA: 自定义公式，如毛利率 = (销售额-成本)/销售额
     
-    2. 复杂计算（单个度量 + 维度上下文，需要 LOD 或表计算）：
-       - LOD_FIXED: 固定粒度计算，如客户首购日期
-       - LOD_INCLUDE: 添加维度计算，如订单平均金额
-       - LOD_EXCLUDE: 移除维度计算，如类别总计
+    2. 复杂计算（单个度量 + 维度上下文，需要子查询或表计算）：
+       - SUBQUERY: 子查询/聚合粒度控制（平台无关）
+         - 语义：在不同于视图粒度的维度上进行聚合
+         - 示例：客户首购日期、每个产品的平均订单金额
+         - 适配器转换：
+           - Tableau → LOD 表达式 (FIXED/INCLUDE/EXCLUDE，根据上下文决定)
+           - SQL → 子查询 (SELECT ... FROM (SELECT ...))
        - TABLE_CALC_RANK: 排名计算
        - TABLE_CALC_PERCENTILE: 百分位计算
        - TABLE_CALC_DIFFERENCE: 差异计算（同比/环比绝对值）
@@ -61,6 +74,16 @@ class CalcType(str, Enum):
     - "总成本" → SUM，formula: "[固定成本]+[可变成本]"
     - "销售额增长率" → TABLE_CALC_PERCENT_DIFF（单个度量 + 时间维度）
     - "市场份额" → TABLE_CALC_PERCENT_OF_TOTAL（单个度量 + 分区维度）
+    - "每个客户的首次购买日期" → SUBQUERY（适配器决定具体实现）
+    
+    **SUBQUERY 与平台适配**：
+    语义解析器只输出 SUBQUERY 类型，不指定具体的 LOD 类型。
+    QueryAdapter 根据以下规则决定具体实现：
+    
+    Tableau LOD 类型选择规则：
+    - subquery_dimensions 与视图维度无关 → FIXED
+    - subquery_dimensions 是视图维度的超集 → INCLUDE  
+    - subquery_dimensions 是视图维度的子集 → EXCLUDE
     """
     # 简单计算（多个基础度量间的公式）
     RATIO = "RATIO"                              # 比率: A/B
@@ -69,10 +92,8 @@ class CalcType(str, Enum):
     PRODUCT = "PRODUCT"                          # 乘积: A*B
     FORMULA = "FORMULA"                          # 自定义公式: 复合计算
     
-    # LOD 表达式（单个度量 + 维度粒度控制）
-    LOD_FIXED = "LOD_FIXED"                      # FIXED LOD
-    LOD_INCLUDE = "LOD_INCLUDE"                  # INCLUDE LOD
-    LOD_EXCLUDE = "LOD_EXCLUDE"                  # EXCLUDE LOD
+    # 子查询/聚合粒度控制（平台无关，适配器决定具体实现）
+    SUBQUERY = "SUBQUERY"                        # 子查询（Tableau: LOD, SQL: 子查询）
     
     # 表计算（单个度量 + 维度上下文）
     TABLE_CALC_RANK = "TABLE_CALC_RANK"          # 排名
@@ -107,7 +128,7 @@ class DerivedComputation(BaseModel):
     
     **判断逻辑**：
     - 多个度量间的计算 → RATIO（简单计算）
-    - 单个度量 + 维度上下文 → 表计算或 LOD
+    - 单个度量 + 维度上下文 → 表计算或子查询
     
     示例：
     - 利润率: name="profit_rate", formula="[利润]/[销售额]", calc_type=RATIO
@@ -116,8 +137,16 @@ class DerivedComputation(BaseModel):
       （单个度量：销售额，需要时间维度）
     - 市场份额: name="market_share", calc_type=TABLE_CALC_PERCENT_OF_TOTAL
       （单个度量：销售额，需要分区维度）
-    - 客户首购: name="first_purchase", calc_type=LOD_FIXED
+    - 客户首购: name="first_purchase", calc_type=SUBQUERY
       （单个度量：订单日期，固定到客户维度）
+      
+    **SUBQUERY 类型说明**：
+    当 calc_type=SUBQUERY 时，语义解析器只指定：
+    - subquery_dimensions: 子查询的聚合维度
+    - subquery_aggregation: 聚合函数（MIN/MAX/SUM/AVG/COUNT）
+    
+    QueryAdapter 根据 subquery_dimensions 与视图维度的关系，
+    决定具体的实现方式（Tableau: FIXED/INCLUDE/EXCLUDE, SQL: 子查询）
     """
     model_config = ConfigDict(extra="forbid")
     
@@ -138,10 +167,14 @@ class DerivedComputation(BaseModel):
         default_factory=list,
         description="基础度量列表，如 ['利润', '销售额']"
     )
-    # LOD 特有字段
-    lod_dimensions: Optional[List[str]] = Field(
+    # 子查询特有字段（平台无关）
+    subquery_dimensions: Optional[List[str]] = Field(
         default=None,
-        description="LOD 维度列表（仅 LOD_* 类型需要）"
+        description="子查询聚合维度（仅 SUBQUERY 类型需要），如 ['客户ID']"
+    )
+    subquery_aggregation: Optional[str] = Field(
+        default=None,
+        description="子查询聚合函数（仅 SUBQUERY 类型需要）：MIN/MAX/SUM/AVG/COUNT"
     )
     # 表计算特有字段
     partition_by: Optional[List[str]] = Field(
@@ -223,7 +256,7 @@ class Where(BaseModel):
         default_factory=list,
         description="分组维度列表"
     )
-    filters: List[Filter] = Field(
+    filters: List[FilterUnion] = Field(
         default_factory=list,
         description="筛选条件列表"
     )
@@ -277,7 +310,7 @@ class SemanticOutput(BaseModel):
     )
     how_type: HowType = Field(
         default=HowType.SIMPLE,
-        description="计算复杂度：SIMPLE=简单聚合/比率, COMPLEX=需要 LOD 或表计算"
+        description="计算复杂度：SIMPLE=简单聚合/比率, COMPLEX=需要子查询或表计算"
     )
     computations: List[DerivedComputation] = Field(
         default_factory=list,

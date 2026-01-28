@@ -14,13 +14,13 @@ from typing import List, Dict, Any, Optional, Tuple, Set, Callable, Awaitable
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from analytics_assistant.src.core.schemas.data_model import Field
-from analytics_assistant.src.agents.dimension_hierarchy.schema import (
+from analytics_assistant.src.agents.dimension_hierarchy.schemas import (
     DimensionCategory,
     DimensionAttributes,
     DimensionHierarchyResult,
     LLMDimensionOutput,
 )
-from analytics_assistant.src.agents.dimension_hierarchy.prompt import (
+from analytics_assistant.src.agents.dimension_hierarchy.prompts import (
     SYSTEM_PROMPT,
     build_user_prompt,
 )

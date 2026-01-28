@@ -3,74 +3,36 @@
 Semantic Parser Intermediate Models
 
 中间数据模型定义：
-- FieldCandidate: 字段检索候选结果
+- TimeHint: 时间提示数据类
+- FieldCandidate: 从 core/schemas 导入的共享模型
 - FewShotExample: Few-shot 示例
 """
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# 从 core 导入共享的 FieldCandidate
+from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 
-class FieldCandidate(BaseModel):
-    """字段检索候选结果
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 时间提示
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class TimeHint:
+    """时间提示数据类
     
-    FieldRetriever 返回的 Top-K 字段候选，包含字段元数据和检索置信度。
-    
-    示例：
-    - field_name: "Sales"
-    - field_caption: "销售额"
-    - field_type: "measure"
-    - confidence: 0.95
+    用于 TimeHintGenerator 生成的时间范围提示。
     """
-    model_config = ConfigDict(extra="forbid")
-    
-    field_name: str = Field(
-        description="字段技术名称"
-    )
-    field_caption: str = Field(
-        description="字段显示名称"
-    )
-    field_type: str = Field(
-        description="字段类型：dimension / measure"
-    )
-    data_type: str = Field(
-        description="数据类型：string / number / date / datetime / boolean"
-    )
-    description: Optional[str] = Field(
-        default=None,
-        description="字段描述"
-    )
-    sample_values: Optional[List[str]] = Field(
-        default=None,
-        description="样例值列表（用于 Prompt）"
-    )
-    confidence: float = Field(
-        ge=0.0, le=1.0,
-        description="检索置信度：精确匹配 > 语义匹配"
-    )
-    match_type: str = Field(
-        default="semantic",
-        description="匹配类型：exact / semantic"
-    )
-    
-    # 维度层级信息（可选）
-    category: Optional[str] = Field(
-        default=None,
-        description="维度类别：time / geography / product / customer / organization / other"
-    )
-    level: Optional[int] = Field(
-        default=None,
-        description="层级级别：1=顶层, 2=高层, 3=中层, 4=低层, 5=明细"
-    )
-    granularity: Optional[str] = Field(
-        default=None,
-        description="粒度描述，如 '年' / '季度' / '月'"
-    )
-    drill_down_options: Optional[List[str]] = Field(
-        default=None,
-        description="下钻选项列表"
-    )
+    expression: str  # 原始时间表达式
+    start: str       # 开始日期 (ISO 格式)
+    end: str         # 结束日期 (ISO 格式)
+
+
+# FieldCandidate 已从 core/schemas 导入，不再在此定义
 
 
 class FewShotExample(BaseModel):
@@ -137,6 +99,7 @@ class FewShotExample(BaseModel):
 
 
 __all__ = [
+    "TimeHint",
     "FieldCandidate",
     "FewShotExample",
 ]

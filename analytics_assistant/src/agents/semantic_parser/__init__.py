@@ -11,7 +11,7 @@ Semantic Parser Agent
 4. 持续学习改进
 """
 
-from analytics_assistant.src.agents.semantic_parser.schemas import (
+from .schemas import (
     # Output - Enums
     CalcType,
     ClarificationSource,

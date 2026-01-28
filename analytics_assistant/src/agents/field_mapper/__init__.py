@@ -24,6 +24,8 @@ FieldMapper Agent
 """
 
 from .schemas import (
+    FieldMappingConfig,
+    FieldCandidate,
     SingleSelectionResult,
     AlternativeMapping,
     FieldMapping,
@@ -32,13 +34,15 @@ from .schemas import (
 
 from .node import (
     FieldMapperNode,
-    FieldMappingConfig,
-    MappingResult,
     field_mapper_node,
 )
 
 __all__ = [
+    # 配置
+    "FieldMappingConfig",
+    
     # 数据模型
+    "FieldCandidate",
     "SingleSelectionResult",
     "AlternativeMapping",
     "FieldMapping",
@@ -46,7 +50,5 @@ __all__ = [
     
     # 节点
     "FieldMapperNode",
-    "FieldMappingConfig",
-    "MappingResult",
     "field_mapper_node",
 ]

@@ -241,7 +241,7 @@ class TestDimensionHierarchyInference:
     def test_serialize_deserialize_attrs(self):
         """测试属性序列化和反序列化"""
         from src.agents.dimension_hierarchy.inference import DimensionHierarchyInference
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             DimensionAttributes, DimensionCategory
         )
         
@@ -279,7 +279,7 @@ class TestDimensionHierarchyInference:
     def test_default_attrs(self):
         """测试默认属性生成"""
         from src.agents.dimension_hierarchy.inference import DimensionHierarchyInference
-        from src.agents.dimension_hierarchy.schema import DimensionCategory
+        from src.agents.dimension_hierarchy.schemas import DimensionCategory
         
         with patch('src.agents.dimension_hierarchy.inference._get_config') as mock_config:
             mock_config.return_value = {}
@@ -673,7 +673,7 @@ class TestSelfLearning:
     def test_store_to_rag_disabled(self):
         """测试自学习禁用时的存储"""
         from src.agents.dimension_hierarchy.inference import DimensionHierarchyInference
-        from src.agents.dimension_hierarchy.schema import DimensionAttributes, DimensionCategory
+        from src.agents.dimension_hierarchy.schemas import DimensionAttributes, DimensionCategory
         from src.core.schemas.data_model import Field
         
         with patch('src.agents.dimension_hierarchy.inference._get_config') as mock_config:

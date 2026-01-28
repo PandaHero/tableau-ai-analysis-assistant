@@ -9,7 +9,7 @@
 
 推断策略：缓存 → 种子匹配 → RAG → LLM
 """
-from analytics_assistant.src.agents.dimension_hierarchy.schema import (
+from analytics_assistant.src.agents.dimension_hierarchy.schemas import (
     DimensionCategory,
     DimensionAttributes,
     DimensionHierarchyResult,
@@ -23,7 +23,7 @@ from analytics_assistant.src.agents.dimension_hierarchy.inference import (
     build_cache_key,
     infer_dimension_hierarchy,
 )
-from analytics_assistant.src.agents.dimension_hierarchy.prompt import (
+from analytics_assistant.src.agents.dimension_hierarchy.prompts import (
     SYSTEM_PROMPT,
     build_user_prompt,
     build_dimension_inference_prompt,

@@ -143,3 +143,65 @@ class TableauAdapter(BasePlatformAdapter):
             row_count=row_count,
             execution_time_ms=execution_time,
         )
+    
+    async def get_field_values(
+        self,
+        field_name: str,
+        datasource_id: str,
+        **kwargs: Any,
+    ) -> list[str]:
+        """获取字段的唯一值列表。
+        
+        通过 VizQL API 查询单个维度字段，返回该字段的唯一值。
+        VizQL 查询单个维度字段时会自动返回唯一值（类似 GROUP BY）。
+        
+        Args:
+            field_name: 字段名称（caption）
+            datasource_id: Tableau 数据源 LUID
+            **kwargs: 额外参数，包括：
+                - api_key: API 密钥
+                - site: 站点名称
+            
+        Returns:
+            字段唯一值列表
+            
+        Raises:
+            RuntimeError: VizQL 客户端未配置或查询失败
+        """
+        if self._vizql_client is None:
+            raise RuntimeError("VizQL 客户端未配置")
+        
+        # 构建查询单个字段的 VizQL 请求
+        vizql_request = {
+            "fields": [
+                {"fieldCaption": field_name}
+            ]
+        }
+        
+        try:
+            response = await self._vizql_client.query_datasource(
+                datasource_luid=datasource_id,
+                query=vizql_request,
+                api_key=kwargs.get("api_key"),
+                site=kwargs.get("site"),
+            )
+            
+            # 解析响应，提取唯一值
+            rows = response.get("data", [])
+            unique_values = []
+            seen = set()
+            
+            for row in rows:
+                if isinstance(row, dict):
+                    value = row.get(field_name)
+                    if value is not None:
+                        value_str = str(value).strip()
+                        if value_str and value_str not in seen:
+                            seen.add(value_str)
+                            unique_values.append(value_str)
+            
+            return unique_values
+            
+        except Exception as e:
+            logger.error(f"获取字段值失败: {field_name}, 错误: {e}")
+            raise RuntimeError(f"获取字段值失败: {e}") from e

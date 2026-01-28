@@ -17,120 +17,29 @@ Requirements: 0.12 - IntentRouter 意图识别
 
 import logging
 import re
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from analytics_assistant.src.infra.config import get_config
+
+from ..schemas.intent import IntentType, IntentRouterOutput
+from ..keywords_data import (
+    get_metadata_keywords,
+    get_data_analysis_keywords,
+    get_ambiguous_keywords,
+)
+from ..rules_data import get_irrelevant_patterns
 
 
 logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 数据模型
+# 模块级变量（用于外部访问）
 # ═══════════════════════════════════════════════════════════════════════════
 
-class IntentType(str, Enum):
-    """意图类型枚举（简化版）。
-    
-    - DATA_QUERY: 数据分析问题（进入语义解析流程）
-    - GENERAL: 元数据问答（直接返回字段/数据源信息）
-    - IRRELEVANT: 无关问题（礼貌拒绝）
-    """
-    DATA_QUERY = "DATA_QUERY"
-    GENERAL = "GENERAL"
-    IRRELEVANT = "IRRELEVANT"
-
-
-class IntentRouterOutput(BaseModel):
-    """IntentRouter 输出模型。
-    
-    Attributes:
-        intent_type: 识别的意图类型
-        confidence: 置信度（0-1）
-        reason: 识别原因说明
-        source: 识别来源（L0_RULES / L1_CLASSIFIER / L2_FALLBACK）
-    """
-    intent_type: IntentType
-    confidence: float = Field(ge=0.0, le=1.0)
-    reason: str
-    source: str = Field(description="识别来源：L0_RULES / L1_CLASSIFIER / L2_FALLBACK")
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# L0 规则模式 - 正向匹配
-# ═══════════════════════════════════════════════════════════════════════════
-
-# 元数据问答关键词（优先级最高）
-METADATA_KEYWORDS = [
-    # 字段相关
-    "有哪些字段", "有什么字段", "字段列表", "字段有哪些",
-    "有哪些维度", "有什么维度", "维度列表", "维度有哪些",
-    "有哪些度量", "有什么度量", "度量列表", "度量有哪些",
-    "有哪些指标", "有什么指标", "指标列表", "指标有哪些",
-    # 数据源相关
-    "数据源是什么", "数据源叫什么", "数据源名称",
-    "数据集是什么", "数据集叫什么", "数据集名称",
-    "表是什么", "表叫什么", "表名称", "表名",
-    # 元数据查询
-    "可以查询什么", "能查询什么", "支持查询什么",
-    "可以查哪些", "能查哪些", "支持查哪些",
-    "schema", "元数据", "数据结构",
-]
-
-# 数据分析关键词（正向匹配）
-DATA_ANALYSIS_KEYWORDS = [
-    # 度量/指标
-    "销售额", "销售量", "销售", "利润", "利润率", "成本", "收入", "金额",
-    "数量", "订单", "订单数", "客户数", "用户数", "访问量", "转化率",
-    "增长率", "占比", "比例", "平均", "总计", "合计", "累计",
-    # 分析动作
-    "统计", "查询", "分析", "对比", "比较", "排名", "排序",
-    "趋势", "变化", "增长", "下降", "波动",
-    "top", "前几", "最高", "最低", "最大", "最小",
-    # 时间维度
-    "上个月", "本月", "这个月", "上月",
-    "上季度", "本季度", "这个季度",
-    "去年", "今年", "本年", "上一年",
-    "昨天", "今天", "上周", "本周", "这周",
-    "同比", "环比", "年度", "季度", "月度", "周度", "日度",
-    # 空间/分类维度
-    "地区", "区域", "省份", "城市", "国家",
-    "部门", "团队", "员工",
-    "产品", "品类", "类别", "分类", "品牌",
-    "渠道", "来源", "客户", "用户",
-    # 聚合/分组
-    "按", "分", "各", "每", "group by", "分组",
-    # 筛选
-    "筛选", "过滤", "条件", "where", "只看", "仅看",
-]
-
-# 明确无关的模式（高置信度拒绝）
-IRRELEVANT_PATTERNS = [
-    # 纯打招呼
-    r"^(你好|您好|hi|hello|hey|嗨|哈喽)[\s,，.。!！?？]*$",
-    r"^(谢谢|感谢|thanks|thank you)[\s,，.。!！?？]*$",
-    r"^(再见|拜拜|bye|goodbye)[\s,，.。!！?？]*$",
-    r"^(好的|ok|okay|嗯|哦|明白|知道了|收到)[\s,，.。!！?？]*$",
-    # 明确无关话题
-    r"(天气|天气预报|气温)",
-    r"(讲个笑话|说个笑话|来个笑话)",
-    r"(你是谁|你叫什么|介绍.*你自己)",
-    r"(帮我写|写一篇|写一个).*(文章|故事|诗|小说)",
-    r"(翻译|translate)",
-    r"(新闻|热点|头条|八卦)",
-    r"(股票|基金|理财|投资建议|炒股)",
-    r"(菜谱|食谱|做菜|烹饪)",
-    r"(电影|音乐|游戏|小说)推荐",
-    r"推荐.*(电影|音乐|游戏|小说|书)",  # 推荐个电影
-]
-
-# 太短/太模糊的关键词，需要额外上下文才能判断为数据分析
-# 这些词单独出现时不应该匹配
-SHORT_AMBIGUOUS_KEYWORDS = [
-    "分析", "查询", "统计", "对比", "比较", "变化",
-    "按", "分", "各", "每",
-]
+METADATA_KEYWORDS = get_metadata_keywords()
+DATA_ANALYSIS_KEYWORDS = get_data_analysis_keywords()
+SHORT_AMBIGUOUS_KEYWORDS = get_ambiguous_keywords()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -150,6 +59,10 @@ class IntentRouter:
     - L1 小模型分类（可选）：LLM 判断
     - L2 兜底：返回 DATA_QUERY
     
+    配置来源：
+    - 优先从 app.yaml 的 intent_router 节读取
+    - 未配置时使用默认值
+    
     Attributes:
         l1_confidence_threshold: L1 置信度阈值（默认 0.8）
         enable_l1: 是否启用 L1 小模型分类（默认 False）
@@ -163,28 +76,86 @@ class IntentRouter:
         >>> print(result.intent_type)  # IntentType.GENERAL
     """
     
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 默认置信度常量（可被 YAML 配置覆盖）
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    _DEFAULT_BASE_CONFIDENCE: float = 0.7
+    _DEFAULT_CONFIDENCE_INCREMENT: float = 0.1
+    _DEFAULT_MAX_CONFIDENCE: float = 0.95
+    _DEFAULT_HIGH_CONFIDENCE: float = 0.95
+    _DEFAULT_FALLBACK_CONFIDENCE: float = 0.5
+    _DEFAULT_SHORT_QUESTION_THRESHOLD: int = 10
+    
     def __init__(
         self,
-        l1_confidence_threshold: float = 0.8,
-        enable_l1: bool = False,
+        l1_confidence_threshold: Optional[float] = None,
+        enable_l1: Optional[bool] = None,
     ):
         """初始化 IntentRouter。
         
         Args:
-            l1_confidence_threshold: L1 置信度阈值
-            enable_l1: 是否启用 L1 小模型分类
+            l1_confidence_threshold: L1 置信度阈值（None 则从配置读取）
+            enable_l1: 是否启用 L1 小模型分类（None 则从配置读取）
         """
-        self.l1_confidence_threshold = l1_confidence_threshold
-        self.enable_l1 = enable_l1
+        # 从 YAML 配置加载
+        self._load_config()
+        
+        # 参数覆盖配置
+        if l1_confidence_threshold is not None:
+            self.l1_confidence_threshold = l1_confidence_threshold
+        if enable_l1 is not None:
+            self.enable_l1 = enable_l1
+    
+    def _load_config(self) -> None:
+        """从 YAML 配置加载参数（仅加载阈值等运行时参数）。
+        
+        关键词从 keywords_data.py 导入，不从 YAML 读取。
+        """
+        try:
+            config = get_config()
+            intent_config = config.get("intent_router", {})
+            confidence_config = intent_config.get("confidence", {})
+            l1_config = intent_config.get("l1", {})
+            rules_config = intent_config.get("rules", {})
+            
+            # 置信度配置
+            self.BASE_CONFIDENCE = confidence_config.get("base", self._DEFAULT_BASE_CONFIDENCE)
+            self.CONFIDENCE_INCREMENT = confidence_config.get("increment", self._DEFAULT_CONFIDENCE_INCREMENT)
+            self.MAX_CONFIDENCE = confidence_config.get("max", self._DEFAULT_MAX_CONFIDENCE)
+            self.HIGH_CONFIDENCE = confidence_config.get("high", self._DEFAULT_HIGH_CONFIDENCE)
+            self.FALLBACK_CONFIDENCE = confidence_config.get("fallback", self._DEFAULT_FALLBACK_CONFIDENCE)
+            
+            # L1 配置
+            self.enable_l1 = l1_config.get("enabled", False)
+            self.l1_confidence_threshold = l1_config.get("threshold", 0.8)
+            
+            # 规则配置
+            self.SHORT_QUESTION_THRESHOLD = rules_config.get("short_question_threshold", self._DEFAULT_SHORT_QUESTION_THRESHOLD)
+            
+            logger.debug("IntentRouter 配置加载成功")
+            
+        except Exception as e:
+            logger.warning(f"加载 IntentRouter 配置失败，使用默认值: {e}")
+            # 使用默认值
+            self.BASE_CONFIDENCE = self._DEFAULT_BASE_CONFIDENCE
+            self.CONFIDENCE_INCREMENT = self._DEFAULT_CONFIDENCE_INCREMENT
+            self.MAX_CONFIDENCE = self._DEFAULT_MAX_CONFIDENCE
+            self.HIGH_CONFIDENCE = self._DEFAULT_HIGH_CONFIDENCE
+            self.FALLBACK_CONFIDENCE = self._DEFAULT_FALLBACK_CONFIDENCE
+            self.SHORT_QUESTION_THRESHOLD = self._DEFAULT_SHORT_QUESTION_THRESHOLD
+            self.enable_l1 = False
+            self.l1_confidence_threshold = 0.8
         
         # 编译无关问题正则（性能优化）
         self._irrelevant_patterns = [
-            re.compile(p, re.IGNORECASE) for p in IRRELEVANT_PATTERNS
+            re.compile(p, re.IGNORECASE) for p in get_irrelevant_patterns()
         ]
         
-        # 预处理关键词为小写（用于匹配）
-        self._metadata_keywords = [kw.lower() for kw in METADATA_KEYWORDS]
-        self._data_analysis_keywords = [kw.lower() for kw in DATA_ANALYSIS_KEYWORDS]
+        # 关键词从 keywords_data.py 导入（预处理为小写用于匹配）
+        self._metadata_keywords = [kw.lower() for kw in get_metadata_keywords()]
+        self._data_analysis_keywords = [kw.lower() for kw in get_data_analysis_keywords()]
+        self._ambiguous_keywords = [kw.lower() for kw in get_ambiguous_keywords()]
     
     async def route(
         self,
@@ -228,13 +199,13 @@ class IntentRouter:
         logger.info("IntentRouter L2 兜底: 返回 DATA_QUERY")
         return IntentRouterOutput(
             intent_type=IntentType.DATA_QUERY,
-            confidence=0.5,
+            confidence=self.FALLBACK_CONFIDENCE,
             reason="L0 规则未命中，默认进入数据分析流程",
             source="L2_FALLBACK",
         )
     
     def _try_l0_rules(self, question: str) -> Optional[IntentRouterOutput]:
-        """L0 规则层 - 关键词匹配。
+        """L0 规则层 - 关键词匹配（重构版）。
         
         匹配优先级：
         1. 明确无关问题 → IRRELEVANT（高置信度拒绝）
@@ -250,54 +221,114 @@ class IntentRouter:
         """
         question_lower = question.strip().lower()
         
-        # 1. 检查明确无关问题（正则匹配）
+        # 策略模式：按优先级检查
+        if result := self._check_irrelevant(question):
+            return result
+        
+        if result := self._check_metadata(question_lower):
+            return result
+        
+        if result := self._check_data_analysis(question_lower):
+            return result
+        
+        return None
+    
+    def _check_irrelevant(self, question: str) -> Optional[IntentRouterOutput]:
+        """检查明确无关问题（正则匹配）。
+        
+        Args:
+            question: 原始问题（保留大小写，用于正则匹配）
+        
+        Returns:
+            IntentRouterOutput 或 None
+        """
         for pattern in self._irrelevant_patterns:
             if pattern.search(question):
                 return IntentRouterOutput(
                     intent_type=IntentType.IRRELEVANT,
-                    confidence=0.95,
+                    confidence=self.HIGH_CONFIDENCE,
                     reason="检测到与数据分析无关的问题",
                     source="L0_RULES",
                 )
+        return None
+    
+    def _check_metadata(self, question_lower: str) -> Optional[IntentRouterOutput]:
+        """检查元数据关键词。
         
-        # 2. 检查元数据关键词（优先级高于数据分析）
+        Args:
+            question_lower: 小写化的问题
+        
+        Returns:
+            IntentRouterOutput 或 None
+        """
         for keyword in self._metadata_keywords:
             if keyword in question_lower:
                 return IntentRouterOutput(
                     intent_type=IntentType.GENERAL,
-                    confidence=0.95,
+                    confidence=self.HIGH_CONFIDENCE,
                     reason=f"检测到元数据问答关键词: {keyword}",
                     source="L0_RULES",
                 )
-        
-        # 3. 检查数据分析关键词
-        matched_keywords = []
-        for keyword in self._data_analysis_keywords:
-            if keyword in question_lower:
-                matched_keywords.append(keyword)
-        
-        if matched_keywords:
-            # 过滤掉太短/太模糊的关键词（单独出现时不算）
-            strong_keywords = [
-                kw for kw in matched_keywords 
-                if kw not in [k.lower() for k in SHORT_AMBIGUOUS_KEYWORDS]
-            ]
-            
-            # 如果只有模糊关键词，且问题很短，不匹配
-            if not strong_keywords and len(question_lower) < 10:
-                return None
-            
-            # 根据匹配数量调整置信度
-            confidence = min(0.7 + len(matched_keywords) * 0.1, 0.95)
-            return IntentRouterOutput(
-                intent_type=IntentType.DATA_QUERY,
-                confidence=confidence,
-                reason=f"检测到数据分析关键词: {', '.join(matched_keywords[:3])}",
-                source="L0_RULES",
-            )
-        
-        # 未命中任何规则
         return None
+    
+    def _check_data_analysis(self, question_lower: str) -> Optional[IntentRouterOutput]:
+        """检查数据分析关键词。
+        
+        Args:
+            question_lower: 小写化的问题
+        
+        Returns:
+            IntentRouterOutput 或 None
+        """
+        matched_keywords = [
+            kw for kw in self._data_analysis_keywords
+            if kw in question_lower
+        ]
+        
+        if not matched_keywords:
+            return None
+        
+        # 过滤弱关键词
+        strong_keywords = self._filter_weak_keywords(matched_keywords)
+        
+        # 短问题且只有模糊关键词，不匹配
+        if not strong_keywords and len(question_lower) < self.SHORT_QUESTION_THRESHOLD:
+            return None
+        
+        # 计算置信度
+        confidence = self._calculate_confidence(len(matched_keywords))
+        
+        return IntentRouterOutput(
+            intent_type=IntentType.DATA_QUERY,
+            confidence=confidence,
+            reason=f"检测到数据分析关键词: {', '.join(matched_keywords[:3])}",
+            source="L0_RULES",
+        )
+    
+    def _filter_weak_keywords(self, keywords: List[str]) -> List[str]:
+        """过滤弱关键词（太短/太模糊的词）。
+        
+        Args:
+            keywords: 匹配到的关键词列表
+        
+        Returns:
+            过滤后的强关键词列表
+        """
+        return [kw for kw in keywords if kw not in self._ambiguous_keywords]
+    
+    def _calculate_confidence(self, match_count: int) -> float:
+        """根据匹配数量计算置信度。
+        
+        Args:
+            match_count: 匹配的关键词数量
+        
+        Returns:
+            置信度（0-1）
+        """
+        return min(
+            self.BASE_CONFIDENCE + match_count * self.CONFIDENCE_INCREMENT,
+            self.MAX_CONFIDENCE
+        )
     
     async def _try_l1_classifier(
         self,
@@ -344,5 +375,4 @@ __all__ = [
     "IntentRouter",
     "METADATA_KEYWORDS",
     "DATA_ANALYSIS_KEYWORDS",
-    "IRRELEVANT_PATTERNS",
 ]

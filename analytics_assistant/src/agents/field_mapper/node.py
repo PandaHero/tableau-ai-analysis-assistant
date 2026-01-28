@@ -38,75 +38,15 @@ from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import CacheManager
 
 from .schemas import (
+    FieldMappingConfig,
     SingleSelectionResult,
     FieldMapping,
     MappedQuery,
+    FieldCandidate,
 )
-from .prompt import FIELD_MAPPER_PROMPT, format_candidates
+from .prompts import FIELD_MAPPER_PROMPT, format_candidates
 
 logger = logging.getLogger(__name__)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 配置类
-# ══════════════════════════════════════════════════════════════════════════════
-
-@dataclass
-class FieldMappingConfig:
-    """FieldMapper 配置"""
-    high_confidence_threshold: float = 0.9
-    low_confidence_threshold: float = 0.7
-    max_concurrency: int = 5
-    cache_ttl: int = 86400  # 24 小时
-    top_k_candidates: int = 10
-    max_alternatives: int = 3
-    enable_cache: bool = True
-    enable_llm_fallback: bool = True
-    
-    @classmethod
-    def from_yaml(cls) -> "FieldMappingConfig":
-        """从 YAML 配置创建"""
-        config = get_config()
-        yaml_config = config.get("field_mapper", {})
-        return cls(
-            high_confidence_threshold=yaml_config.get("high_confidence_threshold", 0.9),
-            low_confidence_threshold=yaml_config.get("low_confidence_threshold", 0.7),
-            max_concurrency=yaml_config.get("max_concurrency", 5),
-            cache_ttl=yaml_config.get("cache_ttl", 86400),
-            top_k_candidates=yaml_config.get("top_k_candidates", 10),
-            max_alternatives=yaml_config.get("max_alternatives", 3),
-            enable_cache=yaml_config.get("enable_cache", True),
-            enable_llm_fallback=yaml_config.get("enable_llm_fallback", True),
-        )
-
-
-@dataclass
-class FieldCandidate:
-    """RAG 检索的候选字段"""
-    field_name: str
-    field_caption: str
-    role: str  # dimension 或 measure
-    data_type: str
-    score: float
-    category: Optional[str] = None
-    level: Optional[int] = None
-    granularity: Optional[str] = None
-    sample_values: Optional[List[str]] = None
-
-
-@dataclass
-class MappingResult:
-    """单个业务术语的映射结果"""
-    business_term: str
-    technical_field: Optional[str]
-    confidence: float
-    mapping_source: str  # "rag_direct", "rag_llm_fallback", "cache_hit", "llm_only", "error"
-    reasoning: Optional[str] = None
-    alternatives: List[Dict[str, Any]] = field(default_factory=list)
-    category: Optional[str] = None
-    level: Optional[int] = None
-    granularity: Optional[str] = None
-    latency_ms: int = 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -305,7 +245,7 @@ class FieldMapperNode:
         role_filter: Optional[str] = None,
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Any] = None,
-    ) -> MappingResult:
+    ) -> FieldMapping:
         """
         映射单个业务术语到技术字段
         
@@ -318,13 +258,13 @@ class FieldMapperNode:
             config: 可选的 LangGraph 配置
         
         Returns:
-            MappingResult 包含映射的字段和元数据
+            FieldMapping 包含映射的字段和元数据
         """
         start_time = time.time()
         self._total_mappings += 1
         
         if not term or not term.strip():
-            return MappingResult(
+            return FieldMapping(
                 business_term=term,
                 technical_field=None,
                 confidence=0.0,
@@ -341,7 +281,7 @@ class FieldMapperNode:
                 self._cache_hits += 1
                 latency = int((time.time() - start_time) * 1000)
                 logger.debug(f"缓存命中: {term} -> {cached.get('technical_field')}")
-                return MappingResult(
+                return FieldMapping(
                     business_term=term,
                     technical_field=cached.get("technical_field"),
                     confidence=cached.get("confidence", 0.0),
@@ -411,7 +351,7 @@ class FieldMapperNode:
             
             logger.debug(f"快速路径: {term} -> {field_name} (confidence={top_score:.2f})")
             
-            return MappingResult(
+            return FieldMapping(
                 business_term=term,
                 technical_field=field_name,
                 confidence=top_score,
@@ -438,7 +378,7 @@ class FieldMapperNode:
         chunk = getattr(top_result, 'field_chunk', top_result)
         field_name = getattr(chunk, 'field_name', None) or getattr(chunk, 'name', '')
         
-        return MappingResult(
+        return FieldMapping(
             business_term=term,
             technical_field=field_name,
             confidence=top_score,
@@ -493,7 +433,7 @@ class FieldMapperNode:
         retrieval_results: List[Any],
         start_time: float,
         role_filter: Optional[str] = None,
-    ) -> MappingResult:
+    ) -> FieldMapping:
         """RAG 置信度低时使用 LLM 回退"""
         self._llm_fallback_count += 1
         
@@ -544,7 +484,7 @@ class FieldMapperNode:
             
             logger.debug(f"LLM 回退: {term} -> {selection.selected_field} (confidence={selection.confidence:.2f})")
             
-            return MappingResult(
+            return FieldMapping(
                 business_term=term,
                 technical_field=selection.selected_field,
                 confidence=selection.confidence,
@@ -565,7 +505,7 @@ class FieldMapperNode:
             field_name = getattr(chunk, 'field_name', None) or getattr(chunk, 'name', '')
             top_score = getattr(top_result, 'score', 0.0)
             
-            return MappingResult(
+            return FieldMapping(
                 business_term=term,
                 technical_field=field_name,
                 confidence=top_score,
@@ -581,14 +521,14 @@ class FieldMapperNode:
         context: Optional[str] = None,
         role_filter: Optional[str] = None,
         start_time: Optional[float] = None,
-    ) -> MappingResult:
+    ) -> FieldMapping:
         """当 RAG 不可用时使用 LLM 直接匹配"""
         if start_time is None:
             start_time = time.time()
         
         if not self._field_chunks:
             latency = int((time.time() - start_time) * 1000)
-            return MappingResult(
+            return FieldMapping(
                 business_term=term,
                 technical_field=None,
                 confidence=0.0,
@@ -666,7 +606,7 @@ class FieldMapperNode:
             
             logger.debug(f"LLM only: {term} -> {selection.selected_field} (confidence={selection.confidence:.2f})")
             
-            return MappingResult(
+            return FieldMapping(
                 business_term=term,
                 technical_field=selection.selected_field,
                 confidence=selection.confidence,
@@ -682,7 +622,7 @@ class FieldMapperNode:
         except Exception as e:
             logger.error(f"LLM 选择失败 '{term}': {e}")
             latency = int((time.time() - start_time) * 1000)
-            return MappingResult(
+            return FieldMapping(
                 business_term=term,
                 technical_field=None,
                 confidence=0.0,
@@ -768,7 +708,7 @@ class FieldMapperNode:
         role_filters: Optional[Dict[str, str]] = None,
         state: Optional[Dict[str, Any]] = None,
         config: Optional[Any] = None,
-    ) -> Dict[str, MappingResult]:
+    ) -> Dict[str, FieldMapping]:
         """
         并发映射多个业务术语
         
@@ -781,7 +721,7 @@ class FieldMapperNode:
             config: 可选的 LangGraph 配置
         
         Returns:
-            术语 -> MappingResult 的字典
+            术语 -> FieldMapping 的字典
         """
         if not terms:
             return {}
@@ -789,7 +729,7 @@ class FieldMapperNode:
         role_filters = role_filters or {}
         semaphore = asyncio.Semaphore(self.config.max_concurrency)
         
-        async def map_with_semaphore(term: str) -> Tuple[str, MappingResult]:
+        async def map_with_semaphore(term: str) -> Tuple[str, FieldMapping]:
             async with semaphore:
                 result = await self.map_field(
                     term=term,
@@ -1044,8 +984,7 @@ def _get_field_mapper(state: Dict[str, Any], config: Optional[Any] = None) -> Fi
 
 __all__ = [
     "FieldMapperNode",
-    "FieldMappingConfig",
     "FieldCandidate",
-    "MappingResult",
+    "FieldMapping",
     "field_mapper_node",
 ]

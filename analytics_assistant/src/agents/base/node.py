@@ -275,12 +275,43 @@ async def _stream_structured_internal(
     on_thinking: Optional[Callable[[str], Awaitable[None]]],
     return_thinking: bool,
 ) -> Union[T, tuple[T, str]]:
-    """内部：基础流式结构化输出"""
+    """内部：基础流式结构化输出
+    
+    使用 json_mode 时，LLM 只知道要输出 JSON，但不知道具体格式。
+    因此需要在 prompt 中注入 JSON Schema，告诉 LLM 期望的输出结构。
+    
+    这是 LangChain json_mode 的标准用法，参考：
+    https://python.langchain.com/docs/how_to/structured_output/
+    "Note that if using JSON mode then you must include instructions for 
+    formatting the output into the desired schema into the model call."
+    """
+    # 构建 schema 指令，追加到最后一条消息
+    schema = output_model.model_json_schema()
+    schema_instruction = f"""
+
+请严格按照以下 JSON Schema 格式输出，不要添加任何其他内容：
+```json
+{json.dumps(schema, ensure_ascii=False, indent=2)}
+```"""
+    
+    # 复制消息列表，在最后一条 HumanMessage 后追加 schema 指令
+    augmented_messages = list(messages)
+    if augmented_messages:
+        from langchain_core.messages import HumanMessage
+        # 找到最后一条 HumanMessage 并追加 schema
+        for i in range(len(augmented_messages) - 1, -1, -1):
+            if isinstance(augmented_messages[i], HumanMessage):
+                original = augmented_messages[i]
+                augmented_messages[i] = HumanMessage(
+                    content=str(original.content) + schema_instruction
+                )
+                break
+    
     collected_content: List[str] = []
     additional_kwargs: Dict[str, Any] = {}
     prev_partial: Optional[Dict[str, Any]] = None
     
-    async for chunk in llm.astream(messages, config=config):
+    async for chunk in llm.astream(augmented_messages, config=config):
         if hasattr(chunk, "content") and chunk.content:
             token = chunk.content
             collected_content.append(token)

@@ -7,9 +7,15 @@ Semantic Parser Schemas
 2. intermediate.py - 中间数据模型 (FieldCandidate, FewShotExample)
 3. cache.py - 缓存相关模型 (CachedQuery, CachedFieldValues)
 4. filters.py - 筛选器验证模型 (FilterValidationResult, FilterConfirmation)
+5. enums.py - 枚举类型 (PromptComplexity)
+6. config.py - 运行时上下文模型 (SemanticConfig) - 注意：不是配置文件！
+7. error_correction.py - 错误修正模型 (ErrorCorrectionHistory, CorrectionResult)
+8. intent.py - 意图识别模型 (IntentType, IntentRouterOutput)
+
+注意：配置参数统一放在 app.yaml 中，config.py 中的 SemanticConfig 是运行时上下文，不是配置。
 """
 
-from analytics_assistant.src.agents.semantic_parser.schemas.output import (
+from .output import (
     CalcType,
     ClarificationSource,
     DerivedComputation,
@@ -19,22 +25,18 @@ from analytics_assistant.src.agents.semantic_parser.schemas.output import (
     SemanticOutput,
 )
 
-from analytics_assistant.src.agents.semantic_parser.schemas.intermediate import (
-    FieldCandidate,
-    FewShotExample,
-)
-
-from analytics_assistant.src.agents.semantic_parser.schemas.cache import (
-    CachedQuery,
-    CachedFieldValues,
-)
-
-from analytics_assistant.src.agents.semantic_parser.schemas.filters import (
+from .intermediate import TimeHint, FieldCandidate, FewShotExample
+from .cache import CachedQuery, CachedFieldValues
+from .filters import (
     FilterValidationType,
     FilterValidationResult,
     FilterValidationSummary,
     FilterConfirmation,
 )
+from .error_correction import ErrorCorrectionHistory, CorrectionResult
+from .enums import PromptComplexity
+from .config import SemanticConfig
+from .intent import IntentType, IntentRouterOutput
 
 __all__ = [
     # Output - Enums
@@ -47,6 +49,7 @@ __all__ = [
     "Where",
     "SemanticOutput",
     # Intermediate
+    "TimeHint",
     "FieldCandidate",
     "FewShotExample",
     # Cache
@@ -57,4 +60,14 @@ __all__ = [
     "FilterValidationResult",
     "FilterValidationSummary",
     "FilterConfirmation",
+    # Error Correction
+    "ErrorCorrectionHistory",
+    "CorrectionResult",
+    # Enums
+    "PromptComplexity",
+    # Config (运行时上下文，不是配置文件)
+    "SemanticConfig",
+    # Intent
+    "IntentType",
+    "IntentRouterOutput",
 ]

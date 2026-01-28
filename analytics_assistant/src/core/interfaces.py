@@ -103,6 +103,30 @@ class BasePlatformAdapter(ABC):
             包含 is_valid、errors、warnings、auto_fixed 的 ValidationResult
         """
         pass
+    
+    @abstractmethod
+    async def get_field_values(
+        self,
+        field_name: str,
+        datasource_id: str,
+        **kwargs: Any,
+    ) -> list[str]:
+        """获取字段的唯一值列表。
+        
+        用于筛选值验证，查询指定字段的所有唯一值。
+        
+        Args:
+            field_name: 字段名称（caption）
+            datasource_id: 平台特定的数据源标识符
+            **kwargs: 额外的平台特定参数（如认证信息）
+            
+        Returns:
+            字段唯一值列表
+            
+        Raises:
+            RuntimeError: 查询失败
+        """
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════

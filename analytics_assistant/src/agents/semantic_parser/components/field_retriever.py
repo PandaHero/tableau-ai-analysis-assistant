@@ -23,7 +23,10 @@ Requirements: 3.1-3.3 - FieldRetriever 字段检索
 import logging
 from typing import Any, Dict, List, Optional, Set
 
-from pydantic import BaseModel, Field
+from analytics_assistant.src.infra.config import get_config
+from analytics_assistant.src.agents.dimension_hierarchy.seed_data import SEED_PATTERNS
+
+from ..schemas.intermediate import FieldCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +41,17 @@ def _get_config() -> Dict[str, Any]:
     从 app.yaml 读取配置，如果不存在则使用默认值。
     """
     try:
-        from analytics_assistant.src.infra.config import get_config
         config = get_config()
         return config.config.get("field_retriever", {})
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
+
+
+def _get_confidence_config() -> Dict[str, float]:
+    """获取置信度配置。"""
+    config = _get_config()
+    return config.get("confidence", {})
 
 
 def get_full_schema_threshold() -> int:
@@ -59,6 +67,26 @@ def get_min_rule_match_dimensions() -> int:
 def get_default_top_k() -> int:
     """获取默认 Top-K。"""
     return _get_config().get("top_k", 10)
+
+
+def get_full_schema_confidence() -> float:
+    """获取 L0 全量返回置信度。"""
+    return _get_confidence_config().get("full_schema", 0.8)
+
+
+def get_rule_match_confidence() -> float:
+    """获取 L1 规则匹配置信度。"""
+    return _get_confidence_config().get("rule_match", 0.9)
+
+
+def get_hierarchy_expand_confidence() -> float:
+    """获取层级扩展置信度。"""
+    return _get_confidence_config().get("hierarchy_expand", 0.85)
+
+
+def get_embedding_confidence_base() -> float:
+    """获取 L2 Embedding 检索基础置信度。"""
+    return _get_confidence_config().get("embedding_base", 0.7)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -84,7 +112,6 @@ def _build_category_keywords() -> Dict[str, Set[str]]:
     
     # 从 SEED_PATTERNS 提取 field_caption 作为关键词
     try:
-        from analytics_assistant.src.agents.dimension_hierarchy.seed_data import SEED_PATTERNS
         for pattern in SEED_PATTERNS:
             category = pattern.get("category", "").lower()
             caption = pattern.get("field_caption", "")
@@ -95,8 +122,8 @@ def _build_category_keywords() -> Dict[str, Set[str]]:
                 if "-" in detail:
                     sub_type = detail.split("-")[-1]
                     keywords[category].add(sub_type.lower())
-    except ImportError:
-        logger.warning("无法导入 SEED_PATTERNS，使用基础关键词")
+    except Exception as e:
+        logger.warning(f"从 SEED_PATTERNS 提取关键词失败: {e}")
     
     # 补充常用查询关键词（用户问题中常见的表达）
     _extend_query_keywords(keywords)
@@ -174,52 +201,6 @@ def get_category_keywords() -> Dict[str, Set[str]]:
     if _CATEGORY_KEYWORDS is None:
         _CATEGORY_KEYWORDS = _build_category_keywords()
     return _CATEGORY_KEYWORDS
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 数据模型
-# ═══════════════════════════════════════════════════════════════════════════
-
-class FieldCandidate(BaseModel):
-    """字段候选结果。
-    
-    Attributes:
-        field_name: 字段名称
-        field_caption: 字段显示名称
-        field_type: 字段类型（dimension / measure）
-        data_type: 数据类型
-        description: 字段描述（可选）
-        sample_values: 样本值（可选）
-        confidence: 置信度（0-1）
-        source: 检索来源（full_schema / rule_match / embedding / hierarchy_expand）
-        rank: 排名位置
-        
-        # 维度层级信息（来自 DimensionHierarchyResult）
-        hierarchy_level: 层级级别（1-5，1最粗，5最细）
-        hierarchy_category: 维度类别（geography/time/product/organization/other）
-        parent_dimension: 父维度字段名
-        child_dimension: 子维度字段名
-    """
-    field_name: str
-    field_caption: str
-    field_type: str  # dimension / measure
-    data_type: str
-    description: Optional[str] = None
-    sample_values: Optional[List[str]] = None
-    confidence: float = Field(ge=0.0, le=1.0)
-    source: str = "full_schema"
-    rank: int = 1
-    
-    # 额外元数据
-    category: Optional[str] = None
-    formula: Optional[str] = None
-    logical_table_caption: Optional[str] = None
-    
-    # 维度层级信息
-    hierarchy_level: Optional[int] = None
-    hierarchy_category: Optional[str] = None
-    parent_dimension: Optional[str] = None
-    child_dimension: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -325,12 +306,6 @@ class FieldRetriever:
         ...     print(f"{c.field_name}: {c.source}, category={c.hierarchy_category}")
     """
     
-    # 置信度常量
-    FULL_SCHEMA_CONFIDENCE = 0.8
-    RULE_MATCH_CONFIDENCE = 0.9
-    HIERARCHY_EXPAND_CONFIDENCE = 0.85
-    EMBEDDING_CONFIDENCE_BASE = 0.7
-    
     def __init__(
         self,
         cascade_retriever: Optional[Any] = None,
@@ -350,6 +325,12 @@ class FieldRetriever:
         self.default_top_k = default_top_k or get_default_top_k()
         self.full_schema_threshold = full_schema_threshold or get_full_schema_threshold()
         self.min_rule_match_dimensions = min_rule_match_dimensions or get_min_rule_match_dimensions()
+        
+        # 从配置加载置信度参数
+        self._full_schema_confidence = get_full_schema_confidence()
+        self._rule_match_confidence = get_rule_match_confidence()
+        self._hierarchy_expand_confidence = get_hierarchy_expand_confidence()
+        self._embedding_confidence_base = get_embedding_confidence_base()
     
     async def retrieve(
         self,
@@ -550,13 +531,13 @@ class FieldRetriever:
                 # 判断来源和置信度
                 if field_name in direct_matches:
                     source = "rule_match"
-                    confidence = self.RULE_MATCH_CONFIDENCE
+                    confidence = self._rule_match_confidence
                 elif field_name in expanded_field_names:
                     source = "hierarchy_expand"
-                    confidence = self.HIERARCHY_EXPAND_CONFIDENCE
+                    confidence = self._hierarchy_expand_confidence
                 else:
                     source = "rule_match"
-                    confidence = self.RULE_MATCH_CONFIDENCE
+                    confidence = self._rule_match_confidence
                 
                 candidate = self._field_to_candidate(field, source, confidence)
                 
@@ -608,7 +589,7 @@ class FieldRetriever:
             field_name = _get_field_attr(measure, 'name', 'field_name', default='')
             if field_name in matched_field_names:
                 source = "rule_match" if field_name in direct_matches else "rule_match"
-                confidence = self.RULE_MATCH_CONFIDENCE
+                confidence = self._rule_match_confidence
                 
                 candidate = self._field_to_candidate(measure, source, confidence)
                 candidates.append(candidate)
@@ -644,7 +625,7 @@ class FieldRetriever:
                 chunk = result.field_chunk
                 role = chunk.role.lower() if chunk.role else "dimension"
                 
-                confidence = min(result.score * self.EMBEDDING_CONFIDENCE_BASE + 0.3, 1.0)
+                confidence = min(result.score * self._embedding_confidence_base + 0.3, 1.0)
                 
                 candidate = FieldCandidate(
                     field_name=chunk.field_name,
@@ -689,7 +670,7 @@ class FieldRetriever:
                             category_str = category.value if hasattr(category, 'value') else str(category)
                             if category_str.lower() in matched_categories:
                                 candidate = self._field_to_candidate(
-                                    field, "hierarchy_expand", self.HIERARCHY_EXPAND_CONFIDENCE
+                                    field, "hierarchy_expand", self._hierarchy_expand_confidence
                                 )
                                 self._apply_hierarchy_attrs(candidate, attrs)
                                 candidates.append(candidate)
@@ -729,7 +710,7 @@ class FieldRetriever:
                 if chunk.role and chunk.role.lower() == 'measure':
                     continue
                 
-                confidence = min(result.score * self.EMBEDDING_CONFIDENCE_BASE + 0.3, 1.0)
+                confidence = min(result.score * self._embedding_confidence_base + 0.3, 1.0)
                 
                 candidate = FieldCandidate(
                     field_name=chunk.field_name,
@@ -770,7 +751,7 @@ class FieldRetriever:
                             category_str = category.value if hasattr(category, 'value') else str(category)
                             if category_str.lower() in matched_categories:
                                 candidate = self._field_to_candidate(
-                                    field, "hierarchy_expand", self.HIERARCHY_EXPAND_CONFIDENCE
+                                    field, "hierarchy_expand", self._hierarchy_expand_confidence
                                 )
                                 self._apply_hierarchy_attrs(candidate, attrs)
                                 candidates.append(candidate)
@@ -852,7 +833,7 @@ class FieldRetriever:
         candidates = []
         
         for i, field in enumerate(fields, 1):
-            candidate = self._field_to_candidate(field, source, self.FULL_SCHEMA_CONFIDENCE)
+            candidate = self._field_to_candidate(field, source, self._full_schema_confidence)
             candidate.rank = i
             
             # 增强层级信息

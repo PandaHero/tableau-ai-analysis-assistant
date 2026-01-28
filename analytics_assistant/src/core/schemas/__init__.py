@@ -92,6 +92,9 @@ from analytics_assistant.src.core.schemas.data_model import (
     DataModel,
 )
 
+# Field Candidate (跨模块共享)
+from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
+
 
 __all__ = [
     # Enums
@@ -151,4 +154,6 @@ __all__ = [
     "LogicalTable",
     "TableRelationship",
     "DataModel",
+    # Field Candidate
+    "FieldCandidate",
 ]

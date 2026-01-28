@@ -3,10 +3,13 @@
 FieldMapper Prompt - 字段映射 Agent 的 Prompt 定义
 
 使用 ChatPromptTemplate 构建结构化 Prompt。
+
+分为系统提示和用户提示：
+- SYSTEM_PROMPT: 定义任务、规则、输出格式
+- USER_TEMPLATE: 用户输入模板
+- FIELD_MAPPER_PROMPT: 完整的 ChatPromptTemplate
 """
 from langchain_core.prompts import ChatPromptTemplate
-
-from .schemas import SingleSelectionResult
 
 
 # 系统提示
@@ -107,7 +110,8 @@ def format_candidates(candidates: list) -> str:
 
 
 __all__ = [
+    "SYSTEM_PROMPT",
+    "USER_TEMPLATE",
     "FIELD_MAPPER_PROMPT",
-    "SingleSelectionResult",
     "format_candidates",
 ]

@@ -18,7 +18,7 @@ class TestDimensionCategory:
     
     def test_all_categories_exist(self):
         """测试所有类别枚举值存在"""
-        from src.agents.dimension_hierarchy.schema import DimensionCategory
+        from src.agents.dimension_hierarchy.schemas import DimensionCategory
         
         expected = ["time", "geography", "product", "customer", 
                     "organization", "financial", "channel", "other"]
@@ -28,7 +28,7 @@ class TestDimensionCategory:
     
     def test_category_from_string(self):
         """测试从字符串创建枚举"""
-        from src.agents.dimension_hierarchy.schema import DimensionCategory
+        from src.agents.dimension_hierarchy.schemas import DimensionCategory
         
         assert DimensionCategory("time") == DimensionCategory.TIME
         assert DimensionCategory("geography") == DimensionCategory.GEOGRAPHY
@@ -36,7 +36,7 @@ class TestDimensionCategory:
     
     def test_invalid_category_raises(self):
         """测试无效类别抛出异常"""
-        from src.agents.dimension_hierarchy.schema import DimensionCategory
+        from src.agents.dimension_hierarchy.schemas import DimensionCategory
         
         with pytest.raises(ValueError):
             DimensionCategory("invalid_category")
@@ -47,7 +47,7 @@ class TestDimensionAttributes:
     
     def test_valid_attributes(self):
         """测试有效属性创建"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             DimensionAttributes, DimensionCategory
         )
         
@@ -68,7 +68,7 @@ class TestDimensionAttributes:
     
     def test_level_granularity_auto_correction(self):
         """测试 level 和 granularity 自动校正"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             DimensionAttributes, DimensionCategory
         )
         
@@ -87,7 +87,7 @@ class TestDimensionAttributes:
     
     def test_level_range_validation(self):
         """测试 level 范围验证 (1-5)"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             DimensionAttributes, DimensionCategory
         )
         
@@ -115,7 +115,7 @@ class TestDimensionAttributes:
     
     def test_confidence_range_validation(self):
         """测试 confidence 范围验证 (0-1)"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             DimensionAttributes, DimensionCategory
         )
         
@@ -143,7 +143,7 @@ class TestDimensionAttributes:
     
     def test_optional_fields(self):
         """测试可选字段"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             DimensionAttributes, DimensionCategory
         )
         
@@ -171,14 +171,14 @@ class TestDimensionHierarchyResult:
     
     def test_empty_result(self):
         """测试空结果"""
-        from src.agents.dimension_hierarchy.schema import DimensionHierarchyResult
+        from src.agents.dimension_hierarchy.schemas import DimensionHierarchyResult
         
         result = DimensionHierarchyResult(dimension_hierarchy={})
         assert result.dimension_hierarchy == {}
     
     def test_result_with_multiple_fields(self):
         """测试包含多个字段的结果"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             DimensionHierarchyResult, DimensionAttributes, DimensionCategory
         )
         
@@ -218,7 +218,7 @@ class TestLLMDimensionOutput:
     
     def test_to_dimension_hierarchy_result(self):
         """测试转换为 DimensionHierarchyResult"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             LLMDimensionOutput, LLMDimensionItem, DimensionCategory
         )
         
@@ -251,7 +251,7 @@ class TestLLMDimensionOutput:
     
     def test_invalid_category_fallback_to_other(self):
         """测试无效类别回退到 OTHER"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             LLMDimensionOutput, LLMDimensionItem, DimensionCategory
         )
         
@@ -278,7 +278,7 @@ class TestModuleExports:
     
     def test_schema_exports(self):
         """测试 schema 模块导出"""
-        from src.agents.dimension_hierarchy.schema import (
+        from src.agents.dimension_hierarchy.schemas import (
             DimensionCategory,
             DimensionAttributes,
             DimensionHierarchyResult,
