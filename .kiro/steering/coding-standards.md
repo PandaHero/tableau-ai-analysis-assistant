@@ -1,5 +1,42 @@
 # Analytics Assistant 编码规范
 
+---
+
+## ⚠️⚠️⚠️ 重要警告 - 必读 ⚠️⚠️⚠️
+
+**本文档会在每次对话开始时自动注入到上下文中。**
+
+**所有规则必须无条件遵守，没有例外！**
+
+### 编码前必做检查清单
+
+在编写任何代码之前，**必须**检查以下高频违规项：
+
+| 检查项 | 规则编号 | 常见错误 |
+|--------|----------|----------|
+| ❌ 延迟导入 | 7.2 | 在函数内部写 `from xxx import yyy` |
+| ❌ 重复逻辑 | 4.4 | 在多个地方实现相同功能 |
+| ❌ 硬编码配置 | 2.1 | 在代码中写死阈值、超时等参数 |
+| ❌ Prompt 位置错误 | 3.3 | Prompt 不在 `prompts/` 目录下 |
+| ❌ Schema 位置错误 | 4.1 | 数据模型不在 `schemas/` 目录下 |
+| ❌ 简化实现 | 13.1 | 跳过设计要求，返回假的成功结果 |
+
+### 违规后果
+
+- 违反这些规则会导致代码被拒绝
+- 用户会要求重写代码
+- 浪费时间和资源
+
+### 正确的编码流程
+
+1. **先读本文档** - 确认要写的代码不会违反任何规则
+2. **分析依赖方向** - 确定导入是否会造成循环依赖
+3. **检查是否重复** - 确认功能是否已在其他地方实现
+4. **编写代码** - 遵循所有规范
+5. **自查** - 对照检查清单确认没有违规
+
+---
+
 本规范适用于 `analytics_assistant/src/` 目录下的所有代码。
 
 ## 1. 目录结构规范
@@ -52,9 +89,9 @@ analytics_assistant/src/
 └── seed_data.py         # 种子数据（可选）
 ```
 
-## 2. 配置管理规范
+## 2. 配置管理规范 ⚠️ 高频违规
 
-### 2.1 所有可配置参数必须放入 `app.yaml`
+### 2.1 所有可配置参数必须放入 `app.yaml` 🚨
 
 **禁止**在代码中硬编码以下类型的值：
 - 阈值（threshold）
@@ -111,7 +148,7 @@ class MyComponent:
             self.threshold = self._DEFAULT_THRESHOLD
 ```
 
-## 3. Prompt 模板规范
+## 3. Prompt 模板规范 ⚠️ 高频违规
 
 ### 3.1 Prompt 文件组织
 
@@ -154,7 +191,7 @@ def _build_prompt(self, ...):
 
 **正确做法**：从 prompts 模块导入使用。
 
-### 3.3 Prompt 文件位置规范
+### 3.3 Prompt 文件位置规范 🚨
 
 Prompt 文件必须放在 `prompts/` 目录下，**禁止**放在模块根目录：
 
@@ -174,9 +211,9 @@ field_mapper/
 └── schemas/
 ```
 
-## 4. Schema 规范
+## 4. Schema 规范 ⚠️ 高频违规
 
-### 4.1 数据模型放在 `schemas/` 目录
+### 4.1 数据模型放在 `schemas/` 目录 🚨
 
 所有 Pydantic 模型必须放在 `schemas/` 目录下，按功能分文件：
 - `output.py` - LLM 输出模型
@@ -223,7 +260,7 @@ class MyModel(BaseModel):  # ✅ 在 schemas 中定义
 from ..schemas.output import MyModel  # ✅ 导入使用
 ```
 
-### 4.4 禁止重复定义功能相同的数据模型
+### 4.4 禁止重复定义功能相同的数据模型 🚨
 
 **禁止**为同一概念创建多个数据模型（如 dataclass + Pydantic 两个版本）：
 
@@ -326,13 +363,19 @@ from analytics_assistant.src.agents.dimension_hierarchy.schema import DimensionA
 from analytics_assistant.src.agents.dimension_hierarchy.schemas import DimensionAttributes
 ```
 
-## 7. 导入规范
+## 7. 导入规范 ⚠️⚠️ 最高频违规 ⚠️⚠️
 
-### 7.1 禁止使用 TYPE_CHECKING 解决循环依赖
+### 7.1 禁止使用 TYPE_CHECKING 解决循环依赖 🚨
 
 如果出现循环依赖，应该重构代码结构，而不是使用 `TYPE_CHECKING`。
 
-### 7.2 延迟导入规范
+### 7.2 延迟导入规范 🚨🚨🚨 最高优先级 🚨🚨🚨
+
+⚠️ **重要提醒：这是高频违规项，编码前必须先分析依赖关系！**
+
+⚠️ **每次写代码前，必须检查是否有延迟导入！**
+
+⚠️ **"避免循环依赖"不是延迟导入的借口！先分析依赖方向！**
 
 **禁止**在函数或方法内部进行导入（延迟导入）：
 
@@ -341,6 +384,23 @@ from analytics_assistant.src.agents.dimension_hierarchy.schemas import Dimension
 def some_method(self):
     from analytics_assistant.src.infra.storage import get_kv_store
     store = get_kv_store()
+
+# ❌ 错误：以"避免循环依赖"为借口的延迟导入
+def _format_history(self, ...):
+    # 延迟导入避免循环依赖  ← 这种注释不能作为延迟导入的理由！
+    from ..components.history_manager import get_history_manager
+```
+
+**编码前必须先分析依赖方向**：
+
+```
+正常的依赖方向（不会循环）：
+- prompts/ → components/  ✅ 可以直接在顶部导入
+- prompts/ → schemas/     ✅ 可以直接在顶部导入
+- components/ → schemas/  ✅ 可以直接在顶部导入
+
+可能循环的依赖（需要重构）：
+- components/ → prompts/  ⚠️ 反向依赖，需要重构代码结构
 ```
 
 **例外情况**（必须添加注释说明原因）：
@@ -354,6 +414,18 @@ def __init__(self):
     # 延迟导入：获取全局单例，避免模块加载时初始化
     from analytics_assistant.src.infra.storage import get_kv_store
     self._store = get_kv_store()
+```
+
+**正确做法**：在文件顶部导入，与其他导入放在一起：
+
+```python
+# ✅ 正确：在文件顶部导入
+from ..components.history_manager import HistoryManager
+
+class DynamicPromptBuilder:
+    def _format_history(self, ...):
+        manager = HistoryManager()  # 直接使用，无需延迟导入
+        return manager.format_history_for_prompt(history)
 ```
 
 ### 7.3 导入位置和引用方式
@@ -502,3 +574,137 @@ class TableauAdapter(BasePlatformAdapter):
 ### 12.2 平台特定代码隔离
 
 平台特定的代码（如 Tableau VizQL）只能放在对应的 `platform/{platform}/` 目录下，不能污染 `agents/` 或 `core/`。
+
+
+## 13. 实现完整性规范 ⚠️ 高频违规
+
+### 13.1 禁止简化处理或跳过设计要求 🚨
+
+**禁止**在实现代码时使用"简化处理"、"跳过验证"、"占位实现"等方式绕过设计文档中的功能要求。
+
+**例外情况**：如果存在以下情况之一，可以暂时使用占位实现：
+
+1. **后续任务依赖**：`tasks.md` 中存在后续任务明确负责实现该功能
+2. **前置任务阻塞**：该功能依赖的前置任务尚未完成（如依赖 WorkflowContext 扩展）
+
+使用占位实现时，**必须**满足以下要求：
+
+| 要求 | 说明 |
+|------|------|
+| 代码注释 | 明确标注依赖的任务编号和阻塞原因 |
+| 任务标记 | 在 `tasks.md` 中将该任务标记为 `[-]`（进行中）而非 `[x]`（完成） |
+| 日志警告 | 运行时输出警告日志，说明当前是占位实现 |
+| 不假装完成 | 不能返回假的成功结果（如 `all_valid=True`），应明确标识为占位状态 |
+
+**错误示例**：
+```python
+# ❌ 错误：简化处理，没有说明原因，假装功能已完成
+async def filter_validator_node(state):
+    # 这里简化处理，跳过验证
+    return {"filter_validation_result": {"all_valid": True}}
+```
+
+**正确示例**：
+```python
+# ✅ 正确：明确标注依赖和阻塞原因
+async def filter_validator_node(state):
+    """
+    ⚠️ 当前状态：占位实现
+    
+    依赖阻塞：
+    - Task 19 (WorkflowContext 扩展) 未完成
+      - 需要 WorkflowContext.platform_adapter
+      - 需要 WorkflowContext.field_value_cache
+    
+    完整实现参考：filter_validator_node_full()
+    """
+    logger.warning(
+        "filter_validator_node: 占位实现 - 跳过验证。"
+        "依赖 Task 19 (WorkflowContext 扩展) 完成后实现完整功能。"
+    )
+    # 返回占位结果，但不假装验证通过
+    return {
+        "filter_validation_result": {
+            "results": [],
+            "all_valid": True,  # 占位：跳过验证视为通过
+            "has_unresolvable_filters": False,
+            "needs_confirmation": False,
+        }
+    }
+```
+
+### 13.2 设计文档是实现的唯一标准
+
+- 设计文档（`design.md`）中定义的所有组件、接口、流程都必须完整实现
+- 不允许以"性能优化"、"简化"、"临时方案"为由跳过设计要求
+- 如果发现设计不合理，应该先修改设计文档，再修改实现
+
+### 13.3 渐进式查询必须完整实现
+
+渐进式查询是核心功能，以下组件必须完整实现：
+
+| 组件 | 设计要求 | 禁止简化 |
+|------|----------|----------|
+| FilterValueValidator | 验证筛选值是否存在于字段中 | 不能跳过验证直接返回 `all_valid=True` |
+| FieldValueCache | 缓存字段值，支持 LRU 淘汰 | 不能省略缓存直接查询数据库 |
+| interrupt() 机制 | 筛选值确认时暂停执行等待用户选择 | 不能跳过用户确认直接继续 |
+| 多轮确认累积 | `confirmed_filters` 累积所有确认结果 | 不能丢失之前的确认结果 |
+
+### 13.4 依赖注入不是跳过实现的理由
+
+当组件需要依赖（如 `platform_adapter`、`field_value_cache`）时：
+- **禁止**因为"依赖未传入"而跳过功能实现
+- **正确做法**：通过依赖注入、闭包、或工厂函数提供依赖
+
+```python
+# ❌ 错误：因为依赖未传入而跳过
+async def filter_validator_node(state):
+    # 注意：实际使用时需要传入 platform_adapter
+    # 这里简化处理，跳过验证
+    return {"all_valid": True}
+
+# ✅ 正确：通过闭包注入依赖
+def create_filter_validator_node(
+    platform_adapter: BasePlatformAdapter,
+    field_value_cache: FieldValueCache,
+):
+    async def filter_validator_node(state):
+        validator = FilterValueValidator(
+            platform_adapter=platform_adapter,
+            field_value_cache=field_value_cache,
+        )
+        # 完整实现验证逻辑
+        ...
+    return filter_validator_node
+```
+
+
+---
+
+## 📋 编码完成后自查清单
+
+在提交代码前，**必须**逐项检查：
+
+### 导入检查
+- [ ] 所有导入都在文件顶部（没有延迟导入）
+- [ ] 包内使用相对导入，跨包使用绝对导入
+- [ ] 导入顺序正确（标准库 → 第三方 → 项目跨包 → 项目包内）
+
+### 文件位置检查
+- [ ] Prompt 文件在 `prompts/` 目录下
+- [ ] Schema 文件在 `schemas/` 目录下
+- [ ] 配置参数在 `app.yaml` 中
+
+### 代码质量检查
+- [ ] 没有重复定义相同功能的数据模型
+- [ ] 没有重复实现相同的逻辑
+- [ ] 没有硬编码的配置参数
+- [ ] 没有简化处理或跳过设计要求
+
+### 框架使用检查
+- [ ] 使用 LangChain/LangGraph 提供的功能
+- [ ] 复用 `infra/` 和 `agents/base/` 中的基础设施
+
+---
+
+**记住：遵守规范不是可选的，是必须的！**

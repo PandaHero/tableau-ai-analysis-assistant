@@ -93,7 +93,7 @@
 4. THE Semantic_Parser SHALL 支持同比（YoY）、环比（MoM）等时间相关的计算
 5. THE Semantic_Parser SHALL 在 Few-shot 示例中包含常见派生度量的分解示例
 6. WHEN 派生度量的基础字段不存在 THEN THE Semantic_Parser SHALL 提示用户或请求澄清
-7. THE Semantic_Parser SHALL 支持 LOD（Level of Detail）表达式的生成
+7. THE Semantic_Parser SHALL 支持子查询/聚合粒度控制（平台无关的 SUBQUERY 类型，由 QueryAdapter 转换为具体实现）
 
 ### Requirement 6: 渐进式查询 - 多轮对话支持
 
@@ -221,3 +221,105 @@
 3. THE Semantic_Parser SHALL 包含端到端的功能测试
 4. THE Semantic_Parser SHALL 包含性能基准测试
 5. THE Semantic_Parser SHALL 包含边界条件和异常情况的测试用例
+
+
+---
+
+## 新增需求：动态 Prompt 与 Schema 优化
+
+### Requirement 16: 多语言支持
+
+**User Story:** As a 跨国企业用户, I want 系统能够理解多种语言的查询, so that 不同语言背景的用户都能使用系统。
+
+#### Acceptance Criteria
+
+1. THE RulePrefilter SHALL 支持中文(zh)、英文(en)、日文(ja)的时间表达式识别
+2. THE RulePrefilter SHALL 支持多语言的计算类型关键词匹配
+3. THE RulePrefilter SHALL 自动检测用户问题的语言
+4. THE ModularPromptBuilder SHALL 根据检测到的语言调整 Prompt 内容
+
+### Requirement 17: 细粒度计算类型识别
+
+**User Story:** As a 数据分析师, I want 系统能够准确识别不同类型的计算需求, so that 生成的查询更加精准。
+
+#### Acceptance Criteria
+
+1. THE SemanticParser SHALL 支持 7 种计算类型：SIMPLE、RATIO、RANK、SHARE、TIME_COMPARE、CUMULATIVE、SUBQUERY
+2. THE RulePrefilter SHALL 通过关键词匹配快速识别计算类型
+3. THE FeatureExtractor SHALL 在规则无法识别时使用 LLM 进行深度理解
+4. THE ModularPromptBuilder SHALL 根据计算类型选择对应的 Prompt 模块
+5. THE SUBQUERY 类型 SHALL 是平台无关的，由 QueryAdapter 根据上下文决定具体实现（Tableau: FIXED/INCLUDE/EXCLUDE, SQL: 子查询）
+
+### Requirement 18: 智能 Schema 筛选
+
+**User Story:** As a 系统管理员, I want 系统能够智能筛选相关字段, so that 减少 Token 消耗，提升响应速度。
+
+#### Acceptance Criteria
+
+1. THE SmartSchemaFilter SHALL 根据 RAG 匹配结果筛选相关字段
+2. THE SmartSchemaFilter SHALL 根据计算类型添加必要的辅助字段
+3. THE SmartSchemaFilter SHALL 限制返回字段数量不超过 MAX_FIELDS (20)
+4. THE SmartSchemaFilter SHALL 优先保留高置信度匹配的字段
+
+### Requirement 19: 双 LLM 调用架构
+
+**User Story:** As a 开发者, I want 系统采用双 LLM 调用架构, so that 在保证准确性的同时实现动态 Schema 优化。
+
+#### Acceptance Criteria
+
+1. THE FeatureExtractor SHALL 始终执行（第一次 LLM 调用），提取查询特征
+2. THE SemanticUnderstanding SHALL 始终执行（第二次 LLM 调用），生成最终输出
+3. THE FeatureExtractor 输出 SHALL 用于动态选择 Schema 模块
+4. THE 系统 SHALL 接受两次 LLM 调用的延迟开销以换取更高的准确性
+
+### Requirement 20: 筛选值验证
+
+**User Story:** As a 数据分析师, I want 系统能够验证筛选值的有效性, so that 减少无效查询。
+
+#### Acceptance Criteria
+
+1. THE FilterValueValidator SHALL 在 SemanticUnderstanding 之后执行
+2. THE FilterValueValidator SHALL 验证 LLM 输出中的所有筛选条件
+3. THE FilterValueValidator SHALL 使用 FieldValueCache 缓存字段值
+4. WHEN 发现无效筛选值 THEN THE FilterValueValidator SHALL 提供相似值建议
+5. THE FilterValueValidator SHALL 跳过时间字段和高基数字段的验证
+
+### Requirement 21: 动态 Schema 模块选择
+
+**User Story:** As a 系统管理员, I want 系统能够根据查询特征动态选择 Schema 模块, so that 优化 Token 使用并提升准确性。
+
+#### Acceptance Criteria
+
+1. THE DynamicSchemaBuilder SHALL 支持 5 种 Schema 模块：base、time、computation、filter、clarification
+2. THE base 模块 SHALL 始终包含（核心字段和基础指令）
+3. THE time 模块 SHALL 在检测到时间表达式时包含
+4. THE computation 模块 SHALL 在检测到派生度量时包含
+5. THE filter 模块 SHALL 在检测到筛选条件时包含
+6. THE clarification 模块 SHALL 在需要澄清时包含
+7. THE DynamicSchemaBuilder SHALL 根据 FeatureExtractor 输出选择模块
+
+### Requirement 22: 特征缓存
+
+**User Story:** As a 系统管理员, I want 系统能够缓存特征提取结果, so that 相似问题可以复用特征。
+
+#### Acceptance Criteria
+
+1. THE FeatureCache SHALL 缓存 FeatureExtractor 的输出
+2. THE FeatureCache SHALL 使用问题文本的语义相似度作为缓存键
+3. WHEN 语义相似度 > 0.95 THEN THE FeatureCache SHALL 返回缓存的特征
+4. THE FeatureCache SHALL 支持配置缓存过期时间
+5. THE FeatureCache SHALL 与 QueryCache 独立管理
+
+### Requirement 23: 输出预验证与自动修正
+
+**User Story:** As a 开发者, I want 系统能够在执行前验证 LLM 输出, so that 减少不必要的执行错误和重试。
+
+#### Acceptance Criteria
+
+1. THE OutputValidator SHALL 在 SemanticUnderstanding 输出后立即执行
+2. THE OutputValidator SHALL 验证字段引用的有效性
+3. THE OutputValidator SHALL 验证计算表达式的语法正确性
+4. WHEN 发现可自动修正的错误 THEN THE OutputValidator SHALL 自动修正
+5. WHEN 发现不可修正的错误 THEN THE OutputValidator SHALL 标记并请求澄清
+6. THE OutputValidator SHALL 减少对 ErrorCorrector 的依赖
+

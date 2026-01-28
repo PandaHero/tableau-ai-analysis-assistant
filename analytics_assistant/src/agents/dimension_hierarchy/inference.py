@@ -3,10 +3,19 @@
 维度层级推断
 
 推断策略：缓存 → 增量检测 → 种子匹配 → RAG → LLM → 自学习
+
+特性：
+- 增量推断：只对新增/变更字段进行推断
+- 阈值分层：seed/verified 使用标准阈值，llm/unverified 使用更高阈值
+- 并发控制：按 cache_key 粒度加锁，避免同一数据源的并发推断
+- 批量检索：使用批量 Embedding 优化 RAG 检索性能
+- 自学习：高置信度结果存入 RAG
 """
+import asyncio
 import hashlib
 import json
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Dict, Any, Optional, Tuple, Set, Callable, Awaitable
@@ -38,6 +47,14 @@ class PatternSource(str, Enum):
     SEED = "seed"
     LLM = "llm"
     MANUAL = "manual"
+
+
+# ══════════════════════════════════════════════════════════════
+# 并发控制常量
+# ══════════════════════════════════════════════════════════════
+
+MAX_LOCKS = 100  # 最大锁数量
+LOCK_EXPIRE_SECONDS = 300  # 锁过期时间（秒）
 
 
 # ══════════════════════════════════════════════════════════════
@@ -141,6 +158,11 @@ class DimensionHierarchyInference:
     维度层级推断
     
     推断策略：缓存 → 增量检测 → 种子匹配 → RAG → LLM → 自学习
+    
+    特性：
+    - 并发控制：按 cache_key 粒度加锁
+    - 种子数据一致性检查：自动修复索引与元数据不一致
+    - 批量 RAG 检索：使用批量 Embedding 优化性能
     """
     
     def __init__(
@@ -170,9 +192,105 @@ class DimensionHierarchyInference:
         # RAG（延迟初始化）
         self._rag_retriever = None
         self._rag_initialized = False
+        self._seed_initialized = False
+        
+        # 并发控制
+        self._locks: Dict[str, asyncio.Lock] = {}
+        self._lock_times: Dict[str, float] = {}
+        self._global_lock = asyncio.Lock()
         
         # 结果
         self._last_result: Optional[DimensionHierarchyResult] = None
+    
+    # ─────────────────────────────────────────────────────────
+    # 并发控制
+    # ─────────────────────────────────────────────────────────
+    
+    async def _get_lock(self, cache_key: str) -> asyncio.Lock:
+        """
+        获取指定 cache_key 的锁
+        
+        按 cache_key 粒度加锁，避免同一数据源的并发推断。
+        """
+        async with self._global_lock:
+            self._cleanup_old_locks()
+            
+            if cache_key not in self._locks:
+                self._locks[cache_key] = asyncio.Lock()
+            
+            self._lock_times[cache_key] = time.time()
+            return self._locks[cache_key]
+    
+    def _cleanup_old_locks(self) -> None:
+        """清理过期的锁，防止锁字典无限增长"""
+        if len(self._locks) <= MAX_LOCKS:
+            return
+        
+        current_time = time.time()
+        expired_keys = [
+            key for key, lock_time in self._lock_times.items()
+            if current_time - lock_time > LOCK_EXPIRE_SECONDS
+        ]
+        
+        for key in expired_keys:
+            if key in self._locks and not self._locks[key].locked():
+                del self._locks[key]
+                del self._lock_times[key]
+        
+        if expired_keys:
+            logger.debug(f"清理过期锁: {len(expired_keys)} 个")
+    
+    # ─────────────────────────────────────────────────────────
+    # 种子数据一致性检查
+    # ─────────────────────────────────────────────────────────
+    
+    def _ensure_seed_data(self) -> None:
+        """
+        确保种子数据已初始化
+        
+        首次调用时自动初始化种子数据到 RAG，并检查一致性。
+        
+        修复场景：
+        1. index=0 & metadata=0: 初始化种子数据
+        2. index>0 & metadata 数量不一致: 一致性修复
+        """
+        if self._seed_initialized:
+            return
+        
+        patterns = self._load_patterns()
+        metadata_count = len(patterns)
+        
+        # 检查向量索引数量
+        index_count = self._get_index_count()
+        
+        logger.debug(f"一致性检查: index={index_count}, metadata={metadata_count}")
+        
+        if metadata_count == 0:
+            logger.info("metadata 为空，初始化种子数据")
+            self._init_seed_patterns()
+        elif index_count != metadata_count and index_count > 0:
+            logger.warning(
+                f"索引 ({index_count}) 和 metadata ({metadata_count}) 数量不一致，"
+                f"将在 RAG 初始化时重建索引"
+            )
+            # 标记需要重建索引
+            self._rag_initialized = False
+        
+        self._seed_initialized = True
+    
+    def _get_index_count(self) -> int:
+        """获取向量索引中的模式数量"""
+        if not self._rag_retriever:
+            return 0
+        
+        try:
+            embedding_retriever = getattr(self._rag_retriever, '_embedding', None)
+            if embedding_retriever and hasattr(embedding_retriever, '_chunks'):
+                return len(embedding_retriever._chunks)
+        except Exception:
+            pass
+        
+        return 0
 
     
     # ─────────────────────────────────────────────────────────
@@ -372,9 +490,16 @@ class DimensionHierarchyInference:
     # ─────────────────────────────────────────────────────────
     
     async def _rag_search(self, fields: List[Field]) -> Tuple[Dict[str, DimensionAttributes], List[Field]]:
-        """RAG 检索，返回 (命中结果, 未命中字段)"""
+        """
+        RAG 检索，返回 (命中结果, 未命中字段)
+        
+        优化：使用批量 Embedding 减少 API 调用次数
+        """
         if not self._rag_retriever:
             return {}, fields
+        
+        if not fields:
+            return {}, []
         
         results: Dict[str, DimensionAttributes] = {}
         misses: List[Field] = []
@@ -382,6 +507,172 @@ class DimensionHierarchyInference:
         # 从配置获取阈值
         rag_threshold_seed = _get_rag_threshold_seed()
         rag_threshold_unverified = _get_rag_threshold_unverified()
+        
+        # 获取 EmbeddingRetriever 的底层 vector_store
+        embedding_retriever = getattr(self._rag_retriever, '_embedding', None)
+        if not embedding_retriever or not hasattr(embedding_retriever, '_store'):
+            # 回退到逐个检索
+            return await self._rag_search_sequential(fields, rag_threshold_seed, rag_threshold_unverified)
+        
+        vector_store = embedding_retriever._store
+        if not vector_store or not hasattr(vector_store, 'similarity_search_by_vector'):
+            return await self._rag_search_sequential(fields, rag_threshold_seed, rag_threshold_unverified)
+        
+        # 1. 先尝试精确匹配（O(1)，无需 embedding）
+        exact_retriever = getattr(self._rag_retriever, '_exact', None)
+        exact_hits: Dict[str, Tuple[Field, Any]] = {}  # name -> (field, result)
+        fields_need_embedding: List[Tuple[int, Field]] = []  # (index, field)
+        
+        if exact_retriever:
+            for i, f in enumerate(fields):
+                name = f.caption or f.name
+                exact_results = exact_retriever.retrieve(query=name, top_k=1)
+                if exact_results:
+                    exact_hits[name] = (f, exact_results[0])
+                else:
+                    fields_need_embedding.append((i, f))
+        else:
+            fields_need_embedding = list(enumerate(fields))
+        
+        # 处理精确匹配结果
+        for name, (f, result) in exact_hits.items():
+            pattern = self._pattern_store.get(result.field_chunk.field_name) if self._pattern_store else None
+            if pattern:
+                results[name] = DimensionAttributes(
+                    category=DimensionCategory(pattern["category"]),
+                    category_detail=pattern["category_detail"],
+                    level=pattern["level"],
+                    granularity=pattern["granularity"],
+                    level_confidence=1.0,
+                    reasoning=f"RAG 精确匹配: {pattern['field_caption']}",
+                )
+            else:
+                misses.append(f)
+        
+        if not fields_need_embedding:
+            return results, misses
+        
+        # 2. 批量获取 embedding
+        try:
+            from analytics_assistant.src.infra.ai import get_model_manager
+            
+            manager = get_model_manager()
+            texts_to_embed = [f.caption or f.name for _, f in fields_need_embedding]
+            
+            logger.debug(f"批量 Embedding: {len(texts_to_embed)} 个查询")
+            query_vectors = await manager.embed_documents_batch_async(
+                texts=texts_to_embed,
+                use_cache=True,
+            )
+            
+            # 3. 使用向量进行批量检索
+            for (idx, f), query_vector in zip(fields_need_embedding, query_vectors):
+                name = f.caption or f.name
+                
+                if not query_vector or len(query_vector) == 0:
+                    logger.warning(f"Embedding 失败: {name}")
+                    misses.append(f)
+                    continue
+                
+                try:
+                    # 使用预计算的向量进行检索
+                    docs_and_scores = vector_store.similarity_search_by_vector(
+                        query_vector, k=3
+                    )
+                    
+                    if not docs_and_scores:
+                        misses.append(f)
+                        continue
+                    
+                    # 处理检索结果
+                    best_doc, best_score = docs_and_scores[0] if isinstance(docs_and_scores[0], tuple) else (docs_and_scores[0], 0.0)
+                    
+                    # FAISS 返回的是 L2 距离，需要转换为相似度
+                    if isinstance(best_score, (int, float)):
+                        similarity = 1.0 / (1.0 + best_score)
+                    else:
+                        similarity = 0.0
+                    
+                    field_name = best_doc.metadata.get("field_name") if hasattr(best_doc, 'metadata') else None
+                    if not field_name:
+                        misses.append(f)
+                        continue
+                    
+                    pattern = self._pattern_store.get(field_name) if self._pattern_store else None
+                    if not pattern:
+                        misses.append(f)
+                        continue
+                    
+                    # 阈值分层
+                    source = pattern.get("source", "llm")
+                    verified = pattern.get("verified", False)
+                    threshold = rag_threshold_seed if source == PatternSource.SEED.value or verified else rag_threshold_unverified
+                    
+                    if similarity < threshold:
+                        misses.append(f)
+                        continue
+                    
+                    results[name] = DimensionAttributes(
+                        category=DimensionCategory(pattern["category"]),
+                        category_detail=pattern["category_detail"],
+                        level=pattern["level"],
+                        granularity=pattern["granularity"],
+                        level_confidence=similarity,
+                        reasoning=f"RAG 匹配: {pattern['field_caption']} ({similarity:.2f})",
+                    )
+                    
+                except Exception as e:
+                    logger.warning(f"向量检索失败({name}): {e}")
+                    misses.append(f)
+            
+        except Exception as e:
+            logger.warning(f"批量 Embedding 失败，回退到逐个检索: {e}")
+            # 回退到逐个检索
+            for _, f in fields_need_embedding:
+                name = f.caption or f.name
+                try:
+                    search_results = await self._rag_retriever.aretrieve(query=name, top_k=3, score_threshold=rag_threshold_seed)
+                    if not search_results:
+                        misses.append(f)
+                        continue
+                    
+                    best = search_results[0]
+                    pattern = self._pattern_store.get(best.field_chunk.field_name) if self._pattern_store else None
+                    if not pattern:
+                        misses.append(f)
+                        continue
+                    
+                    source = pattern.get("source", "llm")
+                    verified = pattern.get("verified", False)
+                    threshold = rag_threshold_seed if source == PatternSource.SEED.value or verified else rag_threshold_unverified
+                    
+                    if best.score < threshold:
+                        misses.append(f)
+                        continue
+                    
+                    results[name] = DimensionAttributes(
+                        category=DimensionCategory(pattern["category"]),
+                        category_detail=pattern["category_detail"],
+                        level=pattern["level"],
+                        granularity=pattern["granularity"],
+                        level_confidence=best.score,
+                        reasoning=f"RAG 匹配: {pattern['field_caption']} ({best.score:.2f})",
+                    )
+                except Exception as e2:
+                    logger.warning(f"RAG 检索失败({name}): {e2}")
+                    misses.append(f)
+        
+        return results, misses
+    
+    async def _rag_search_sequential(
+        self,
+        fields: List[Field],
+        rag_threshold_seed: float,
+        rag_threshold_unverified: float,
+    ) -> Tuple[Dict[str, DimensionAttributes], List[Field]]:
+        """逐个字段进行 RAG 检索（回退方案）"""
+        results: Dict[str, DimensionAttributes] = {}
+        misses: List[Field] = []
         
         for f in fields:
             name = f.caption or f.name
@@ -577,6 +868,27 @@ class DimensionHierarchyInference:
             return self._last_result
         
         cache_key = build_cache_key(datasource_luid, table_id)
+        
+        # 确保种子数据已初始化
+        self._ensure_seed_data()
+        
+        # 获取锁，避免同一数据源的并发推断
+        lock = await self._get_lock(cache_key)
+        async with lock:
+            return await self._infer_with_lock(
+                datasource_luid, fields, table_id, cache_key, skip_cache, on_token
+            )
+    
+    async def _infer_with_lock(
+        self,
+        datasource_luid: str,
+        fields: List[Field],
+        table_id: Optional[str],
+        cache_key: str,
+        skip_cache: bool,
+        on_token: Optional[Callable[[str], Awaitable[None]]],
+    ) -> DimensionHierarchyResult:
+        """在锁保护下执行推断"""
         results: Dict[str, DimensionAttributes] = {}
         
         # 1. 缓存检查
@@ -612,7 +924,6 @@ class DimensionHierarchyInference:
             return self._last_result
         
         logger.info(f"增量推断: 新增={len(incremental.new_fields)}, 变更={len(incremental.changed_fields)}")
-
         
         # 3. 种子匹配
         fields_after_seed = []

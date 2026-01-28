@@ -5,6 +5,9 @@
 - BasePlatformAdapter: 平台适配器接口
 - BaseQueryBuilder: 查询构建器接口
 - BaseFieldMapper: 字段映射器接口
+
+注意：接口使用 Any 类型作为语义输入参数，具体实现使用 SemanticOutput。
+这避免了 core 模块对 agents 模块的依赖。
 """
 
 from abc import ABC, abstractmethod
@@ -12,7 +15,6 @@ from typing import Any
 
 from analytics_assistant.src.core.schemas import (
     ExecuteResult,
-    SemanticQuery,
     ValidationResult,
 )
 
@@ -24,7 +26,7 @@ from analytics_assistant.src.core.schemas import (
 class BasePlatformAdapter(ABC):
     """平台适配器抽象基类。
     
-    平台适配器将 SemanticQuery 转换为平台特定的查询并执行。
+    平台适配器将语义解析器输出（SemanticOutput）转换为平台特定的查询并执行。
     
     实现：
     - TableauAdapter: 转换为 VizQL API 调用
@@ -41,7 +43,7 @@ class BasePlatformAdapter(ABC):
     @abstractmethod
     async def execute_query(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: Any,  # SemanticOutput
         datasource_id: str,
         **kwargs: Any,
     ) -> ExecuteResult:
@@ -51,7 +53,7 @@ class BasePlatformAdapter(ABC):
         处理完整流程：验证 → 构建 → 执行。
         
         Args:
-            semantic_query: 平台无关的语义查询
+            semantic_output: 语义解析器的输出（SemanticOutput）
             datasource_id: 平台特定的数据源标识符
             **kwargs: 额外的平台特定参数
             
@@ -67,16 +69,16 @@ class BasePlatformAdapter(ABC):
     @abstractmethod
     def build_query(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: Any,  # SemanticOutput
         **kwargs: Any,
     ) -> Any:
-        """从 SemanticQuery 构建平台特定查询。
+        """从 SemanticOutput 构建平台特定查询。
         
-        将平台无关的 SemanticQuery 转换为平台的原生查询格式
+        将语义解析器输出转换为平台的原生查询格式
         （如 VizQL 请求、DAX 查询、SQL）。
         
         Args:
-            semantic_query: 平台无关的语义查询
+            semantic_output: 语义解析器的输出（SemanticOutput）
             **kwargs: 额外的平台特定参数
             
         Returns:
@@ -87,16 +89,16 @@ class BasePlatformAdapter(ABC):
     @abstractmethod
     def validate_query(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: Any,  # SemanticOutput
         **kwargs: Any,
     ) -> ValidationResult:
-        """验证此平台的语义查询。
+        """验证此平台的语义输出。
         
         检查查询是否可以在此平台上执行。
         可能自动修复小问题（如填充默认值）。
         
         Args:
-            semantic_query: 平台无关的语义查询
+            semantic_output: 语义解析器的输出（SemanticOutput）
             **kwargs: 额外的平台特定参数
             
         Returns:
@@ -136,29 +138,24 @@ class BasePlatformAdapter(ABC):
 class BaseQueryBuilder(ABC):
     """查询构建器抽象基类。
     
-    查询构建器将 SemanticQuery 转换为平台特定的查询格式。
+    查询构建器将语义解析器输出（SemanticOutput）转换为平台特定的查询格式。
     处理以下转换：
     - 维度 → 平台维度语法
     - 度量 → 平台度量语法
     - 计算 → 平台计算语法（如 TableCalc、DAX、窗口函数）
     - 筛选器 → 平台筛选器语法
-    
-    关键转换是 Computation.partition_by：
-    - Tableau: partition_by → 表计算中的分区/寻址
-    - Power BI: partition_by → DAX 中的 ALL/ALLEXCEPT
-    - SQL: partition_by → 窗口函数中的 PARTITION BY
     """
     
     @abstractmethod
     def build(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: Any,  # SemanticOutput
         **kwargs: Any,
     ) -> Any:
-        """从 SemanticQuery 构建平台特定查询。
+        """从 SemanticOutput 构建平台特定查询。
         
         Args:
-            semantic_query: 平台无关的语义查询
+            semantic_output: 语义解析器的输出（SemanticOutput）
             **kwargs: 额外的平台特定参数
             
         Returns:
@@ -169,16 +166,16 @@ class BaseQueryBuilder(ABC):
     @abstractmethod
     def validate(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: Any,  # SemanticOutput
         **kwargs: Any,
     ) -> ValidationResult:
-        """验证此平台的语义查询。
+        """验证此平台的语义输出。
         
         检查查询是否可以为此平台构建。
         可能自动修复小问题（如填充默认聚合）。
         
         Args:
-            semantic_query: 平台无关的语义查询
+            semantic_output: 语义解析器的输出（SemanticOutput）
             **kwargs: 额外的平台特定参数
             
         Returns:
@@ -205,27 +202,25 @@ class BaseFieldMapper(ABC):
     @abstractmethod
     async def map(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: Any,  # SemanticOutput
         datasource_id: str,
         **kwargs: Any,
-    ) -> SemanticQuery:
-        """将语义查询中的所有字段映射到技术字段名。
+    ) -> Any:  # SemanticOutput
+        """将语义输出中的所有字段映射到技术字段名。
         
         映射以下位置的字段：
-        - dimensions[].field_name
-        - measures[].field_name
-        - computations[].target
-        - computations[].partition_by[]
-        - filters[].field_name
-        - sorts[].field_name
+        - where.dimensions[].field_name
+        - what.measures[].field_name
+        - computations[].base_measures
+        - where.filters[].field_name
         
         Args:
-            semantic_query: 包含业务术语的查询
+            semantic_output: 语义解析器的输出（SemanticOutput）
             datasource_id: 平台特定的数据源标识符
             **kwargs: 额外参数
             
         Returns:
-            包含技术字段名的 SemanticQuery
+            包含技术字段名的 SemanticOutput
         """
         pass
     

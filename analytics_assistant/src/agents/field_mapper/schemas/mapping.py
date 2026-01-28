@@ -13,7 +13,7 @@ from typing import List, Dict, Optional, Any
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field as PydanticField, ConfigDict, model_validator
 
-from analytics_assistant.src.core.schemas import SemanticQuery
+from analytics_assistant.src.agents.semantic_parser.schemas.output import SemanticOutput
 # 从 core 导入共享的 FieldCandidate
 from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 
@@ -102,7 +102,7 @@ class MappedQuery(BaseModel):
     
     model_config = ConfigDict(extra="forbid")
     
-    semantic_query: SemanticQuery = PydanticField(description="原始语义查询")
+    semantic_output: SemanticOutput = PydanticField(description="原始语义输出")
     field_mappings: Dict[str, FieldMapping] = PydanticField(description="字段映射字典")
     overall_confidence: Optional[float] = PydanticField(default=None, ge=0.0, le=1.0, description="整体置信度")
     low_confidence_fields: List[str] = PydanticField(default_factory=list, description="低置信度字段列表")

@@ -2,7 +2,7 @@
 """
 FieldMapper Node - RAG + LLM 混合节点
 
-将业务术语从 SemanticQuery 映射到技术字段名。
+将业务术语从 SemanticOutput 映射到技术字段名。
 
 策略：
 1. 缓存查找：检查 CacheManager 缓存
@@ -17,7 +17,7 @@ FieldMapper Node - RAG + LLM 混合节点
 - 使用 CacheManager 进行缓存，不直接操作 LangGraph Store
 - 保持函数式风格，不强制继承
 
-输入: SemanticQuery (业务术语)
+输入: SemanticOutput (语义解析器输出)
 输出: MappedQuery (技术字段)
 """
 
@@ -56,7 +56,6 @@ logger = logging.getLogger(__name__)
 class FieldMapperNode:
     """
     FieldMapper 节点 - RAG + LLM 混合
-    
     使用以下策略将业务术语映射到技术字段名：
     1. 缓存查找（最快）- 使用 CacheManager
     2. 精确匹配快速路径
@@ -766,29 +765,29 @@ async def field_mapper_node(
     """
     FieldMapper 节点函数，用于 StateGraph
     
-    从 SemanticQuery 提取业务术语并映射到技术字段。
+    从 SemanticOutput 提取业务术语并映射到技术字段。
     
     Args:
-        state: 包含 semantic_query 的 VizQLState
+        state: 包含 semantic_output 的 VizQLState
         config: 运行时配置
     
     Returns:
         包含 mapped_query 的状态更新
     """
-    from analytics_assistant.src.core.schemas import SemanticQuery
+    from analytics_assistant.src.agents.semantic_parser.schemas.output import SemanticOutput
     
     start_time = time.time()
     
-    semantic_query = state.get("semantic_query")
-    if not semantic_query:
-        logger.warning("state 中没有 semantic_query，跳过字段映射")
+    semantic_output = state.get("semantic_output")
+    if not semantic_output:
+        logger.warning("state 中没有 semantic_output，跳过字段映射")
         return {
             "current_stage": "field_mapper",
             "field_mapper_complete": True,
             "mapped_query": None,
             "errors": [{
                 "stage": "field_mapper",
-                "error": "没有提供 semantic_query",
+                "error": "没有提供 semantic_output",
                 "timestamp": time.time()
             }]
         }
@@ -797,12 +796,12 @@ async def field_mapper_node(
     question = state.get("question", "")
     
     # 提取要映射的术语
-    terms_to_map = _extract_terms_from_semantic_query(semantic_query)
+    terms_to_map = _extract_terms_from_semantic_output(semantic_output)
     
     if not terms_to_map:
-        logger.info("语义查询中没有要映射的术语")
+        logger.info("语义输出中没有要映射的术语")
         mapped_query = MappedQuery(
-            semantic_query=semantic_query,
+            semantic_output=semantic_output,
             field_mappings={},
             overall_confidence=1.0,
         )
@@ -855,7 +854,7 @@ async def field_mapper_node(
     
     # 构建 MappedQuery
     mapped_query = MappedQuery(
-        semantic_query=semantic_query,
+        semantic_output=semantic_output,
         field_mappings=field_mappings,
     )
     
@@ -873,9 +872,9 @@ async def field_mapper_node(
     }
 
 
-def _extract_terms_from_semantic_query(semantic_query: Any) -> Dict[str, Optional[str]]:
+def _extract_terms_from_semantic_output(semantic_output: Any) -> Dict[str, Optional[str]]:
     """
-    从 SemanticQuery 提取业务术语
+    从 SemanticOutput 提取业务术语
     
     注意：不再基于 Step1 的语义分类（measure/dimension）来限制字段搜索范围。
     因为：
@@ -884,41 +883,48 @@ def _extract_terms_from_semantic_query(semantic_query: Any) -> Dict[str, Optiona
     3. VizQL 和 SQL 都支持对维度字段进行聚合计算
     
     Args:
-        semantic_query: SemanticQuery 对象
+        semantic_output: SemanticOutput 对象
         
     Returns:
         业务术语 -> None（不限制角色）的字典
     """
     terms = {}
     
-    # 提取 measures - 不限制角色
-    for measure in getattr(semantic_query, 'measures', []) or []:
-        field_name = getattr(measure, 'field_name', None)
-        if field_name:
-            terms[field_name] = None
+    # 提取 what.measures - 不限制角色
+    what = getattr(semantic_output, 'what', None)
+    if what:
+        for measure in getattr(what, 'measures', []) or []:
+            field_name = getattr(measure, 'field_name', None)
+            if field_name:
+                terms[field_name] = None
     
-    # 提取 dimensions - 不限制角色
-    for dimension in getattr(semantic_query, 'dimensions', []) or []:
-        field_name = getattr(dimension, 'field_name', None)
-        if field_name:
-            terms[field_name] = None
-    
-    # 提取 filters - 不限制角色
-    for filter_spec in getattr(semantic_query, 'filters', []) or []:
-        field_name = getattr(filter_spec, 'field_name', None)
-        if field_name and field_name not in terms:
-            terms[field_name] = None
-    
-    # 提取 computations 中的字段 - 不限制角色
-    for computation in getattr(semantic_query, 'computations', []) or []:
-        target = getattr(computation, 'target', None)
-        if target and target not in terms:
-            terms[target] = None
-        # partition_by 可能是 DimensionField 列表
-        for partition_dim in getattr(computation, 'partition_by', []) or []:
-            field_name = getattr(partition_dim, 'field_name', partition_dim)
+    # 提取 where.dimensions 和 where.filters - 不限制角色
+    where = getattr(semantic_output, 'where', None)
+    if where:
+        for dimension in getattr(where, 'dimensions', []) or []:
+            field_name = getattr(dimension, 'field_name', None)
+            if field_name:
+                terms[field_name] = None
+        
+        for filter_spec in getattr(where, 'filters', []) or []:
+            field_name = getattr(filter_spec, 'field_name', None)
             if field_name and field_name not in terms:
                 terms[field_name] = None
+    
+    # 提取 computations 中的字段 - 不限制角色
+    for computation in getattr(semantic_output, 'computations', []) or []:
+        # DerivedComputation 使用 base_measures 而不是 target
+        for base_measure in getattr(computation, 'base_measures', []) or []:
+            if base_measure and base_measure not in terms:
+                terms[base_measure] = None
+        # partition_by 是字符串列表
+        for partition_dim in getattr(computation, 'partition_by', []) or []:
+            if partition_dim and partition_dim not in terms:
+                terms[partition_dim] = None
+        # subquery_dimensions 也是字符串列表
+        for subquery_dim in getattr(computation, 'subquery_dimensions', []) or []:
+            if subquery_dim and subquery_dim not in terms:
+                terms[subquery_dim] = None
     
     return terms
 

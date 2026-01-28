@@ -30,6 +30,7 @@ from ..keywords_data import (
     get_subquery_keywords,
     get_table_calc_keywords,
 )
+from ..components.history_manager import HistoryManager
 
 
 logger = logging.getLogger(__name__)
@@ -311,6 +312,11 @@ class DynamicPromptBuilder:
         
         将字段候选列表格式化为 Prompt 中的字段描述。
         按置信度排序，优先保留高置信度字段。
+        包含维度层级信息（如有）。
+        
+        Property 28: Hierarchy Enrichment
+        *For any* dimension field with hierarchy information,
+        the prompt SHALL include drill-down options.
         
         Args:
             field_candidates: 字段候选列表
@@ -342,6 +348,11 @@ class DynamicPromptBuilder:
             if field.description:
                 line += f": {field.description}"
             
+            # 添加维度层级信息（Property 28: Hierarchy Enrichment）
+            hierarchy_info = self._format_hierarchy_info(field)
+            if hierarchy_info:
+                line += f" {hierarchy_info}"
+            
             if field.sample_values:
                 samples = ", ".join(field.sample_values[:3])
                 line += f" 示例值: {samples}"
@@ -357,6 +368,62 @@ class DynamicPromptBuilder:
             estimated_tokens += line_tokens
         
         return "\n".join(lines)
+    
+    def _format_hierarchy_info(self, field: FieldCandidate) -> str:
+        """格式化维度层级信息
+        
+        为维度字段生成层级描述，包括：
+        - 维度类别（时间/地理/产品等）
+        - 层级级别（1-5）
+        - 下钻选项
+        
+        Property 28: Hierarchy Enrichment
+        *For any* dimension field with hierarchy information,
+        the prompt SHALL include drill-down options.
+        
+        Args:
+            field: 字段候选
+        
+        Returns:
+            层级信息字符串，如 "[时间维度 L2, 下钻: 月→日]"
+        """
+        parts = []
+        
+        # 维度类别
+        category = field.hierarchy_category or field.category
+        if category:
+            category_names = {
+                "time": "时间维度",
+                "geography": "地理维度",
+                "product": "产品维度",
+                "customer": "客户维度",
+                "organization": "组织维度",
+                "financial": "财务维度",
+                "other": "其他维度",
+            }
+            category_name = category_names.get(category.lower(), category)
+            parts.append(category_name)
+        
+        # 层级级别
+        level = field.hierarchy_level or field.level
+        if level is not None:
+            parts.append(f"L{level}")
+        
+        # 粒度
+        if field.granularity:
+            parts.append(f"粒度:{field.granularity}")
+        
+        # 下钻选项（Property 28 核心要求）
+        if field.drill_down_options:
+            drill_str = "→".join(field.drill_down_options[:3])
+            parts.append(f"下钻:{drill_str}")
+        elif field.child_dimension:
+            parts.append(f"下钻:{field.child_dimension}")
+        
+        if not parts:
+            return ""
+        
+        return f"[{', '.join(parts)}]"
     
     def _format_few_shot_examples(
         self,
@@ -395,11 +462,20 @@ class DynamicPromptBuilder:
     def _format_history(
         self,
         history: Optional[List[Dict[str, str]]],
+        max_tokens: Optional[int] = None,
     ) -> str:
-        """格式化对话历史
+        """格式化对话历史（带 token 截断）
+        
+        使用 HistoryManager 进行截断，确保不超过 MAX_HISTORY_TOKENS。
+        截断时保留最近的消息。
+        
+        Property 17: History Truncation
+        *For any* conversation history exceeding MAX_HISTORY_TOKENS, 
+        the truncated history SHALL preserve the most recent messages.
         
         Args:
             history: 对话历史列表，每项包含 role 和 content
+            max_tokens: 最大 token 数（None 使用配置值）
         
         Returns:
             格式化的历史字符串，或空字符串
@@ -407,14 +483,8 @@ class DynamicPromptBuilder:
         if not history:
             return ""
         
-        lines = ["<conversation_history>"]
-        for msg in history:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            lines.append(f"[{role}]: {content}")
-        lines.append("</conversation_history>")
-        
-        return "\n".join(lines)
+        manager = HistoryManager()
+        return manager.format_history_for_prompt(history, max_tokens)
     
     def get_complexity(self, question: str) -> PromptComplexity:
         """获取问题的复杂度（公开方法，用于测试）

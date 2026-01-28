@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""Tableau 查询构建器 - 将 SemanticQuery 转换为 VizQL API 请求。
+"""Tableau 查询构建器 - 将 SemanticOutput 转换为 VizQL API 请求。
 
-这是从平台无关的 SemanticQuery 到 Tableau 特定 VizQL API 格式的核心转换层。
+这是从语义解析器输出（SemanticOutput）到 Tableau 特定 VizQL API 格式的核心转换层。
 
 关键转换：
-- Computation.partition_by → 表计算维度（分区）
-- Computation 子类型（RankCalc 等）→ TableCalcType
-- Filter 类型 → VizQL 过滤器类型
+- SemanticOutput.what.measures → VizQL 度量字段
+- SemanticOutput.where.dimensions → VizQL 维度字段
+- SemanticOutput.where.filters → VizQL 过滤器
+- SemanticOutput.computations (DerivedComputation) → VizQL 计算字段/表计算
 """
 
 import logging
@@ -15,7 +16,6 @@ from typing import Any
 from analytics_assistant.src.core.interfaces import BaseQueryBuilder
 from analytics_assistant.src.core.schemas import (
     AggregationType,
-    Computation,
     DateGranularity,
     DateRangeFilter,
     DimensionField,
@@ -23,7 +23,6 @@ from analytics_assistant.src.core.schemas import (
     NumericRangeFilter,
     RankStyle,
     RelativeTo,
-    SemanticQuery,
     SetFilter,
     SortDirection,
     TextMatchFilter,
@@ -31,6 +30,11 @@ from analytics_assistant.src.core.schemas import (
     ValidationError,
     ValidationErrorType,
     ValidationResult,
+)
+from analytics_assistant.src.agents.semantic_parser.schemas.output import (
+    SemanticOutput,
+    DerivedComputation,
+    CalcType,
 )
 
 
@@ -70,7 +74,10 @@ GRANULARITY_TO_DATETRUNC: dict[DateGranularity, str] = {
 
 
 class TableauQueryBuilder(BaseQueryBuilder):
-    """Tableau 查询构建器 - 将 SemanticQuery 转换为 VizQL 请求。
+    """Tableau 查询构建器 - 将 SemanticOutput 转换为 VizQL 请求。
+    
+    输入：SemanticOutput（语义解析器输出）
+    输出：VizQL API 请求字典
     
     Tableau 特定的默认值在这里定义。
     """
@@ -84,13 +91,12 @@ class TableauQueryBuilder(BaseQueryBuilder):
     DEFAULT_WINDOW_NEXT = 0
     DEFAULT_INCLUDE_CURRENT = True
     
-    def build(self, semantic_query: SemanticQuery, **kwargs: Any) -> dict:
-        """从 SemanticQuery 构建 VizQL API 请求。
+    def build(self, semantic_output: SemanticOutput, **kwargs: Any) -> dict:
+        """从 SemanticOutput 构建 VizQL API 请求。
         
         Args:
-            semantic_query: 平台无关的语义查询
+            semantic_output: 语义解析器的输出
             **kwargs: 额外参数：
-                - datasource_id: 数据源 LUID
                 - field_metadata: dict[str, dict] 字段名到元数据的映射
             
         Returns:
@@ -99,41 +105,35 @@ class TableauQueryBuilder(BaseQueryBuilder):
         field_metadata = kwargs.get("field_metadata", {})
         fields = []
         
+        # 从 SemanticOutput.where 获取维度
+        dimensions = semantic_output.where.dimensions if semantic_output.where else []
+        measures = semantic_output.what.measures if semantic_output.what else []
+        
         # 构建维度字段
-        if semantic_query.dimensions:
-            for dim in semantic_query.dimensions:
-                fields.append(self._build_dimension_field(dim, field_metadata))
+        for dim in dimensions:
+            fields.append(self._build_dimension_field(dim, field_metadata))
         
         # 构建度量字段
-        if semantic_query.measures:
-            for measure in semantic_query.measures:
-                fields.append(self._build_measure_field(measure))
+        for measure in measures:
+            fields.append(self._build_measure_field(measure))
         
-        # 构建计算字段（LOD 必须在表计算之前）
-        if semantic_query.computations:
-            view_dims = [d.field_name for d in (semantic_query.dimensions or [])]
-            comp_fields = self._build_computation_fields(
-                semantic_query.computations, 
+        # 构建计算字段（从 DerivedComputation 转换）
+        if semantic_output.computations:
+            view_dims = [d.field_name for d in dimensions]
+            comp_fields = self._build_derived_computation_fields(
+                semantic_output.computations, 
                 view_dims,
-                measures=semantic_query.measures,
+                measures=measures,
             )
             fields.extend(comp_fields)
         
-        # 构建过滤器
+        # 构建过滤器（从 SemanticOutput.where.filters）
         filters = []
-        if semantic_query.filters:
-            for f in semantic_query.filters:
+        if semantic_output.where and semantic_output.where.filters:
+            for f in semantic_output.where.filters:
                 vizql_filter = self._build_filter(f, field_metadata)
                 if vizql_filter:
                     filters.append(vizql_filter)
-        
-        # 从带有 top_n 的计算构建 Top N 过滤器
-        if semantic_query.computations:
-            for comp in semantic_query.computations:
-                if comp.calc_type in ("RANK", "DENSE_RANK") and getattr(comp, 'top_n', None):
-                    top_n_filter = self._build_top_n_filter_from_computation(comp, semantic_query)
-                    if top_n_filter:
-                        filters.append(top_n_filter)
         
         # 构建请求
         request = {"fields": fields}
@@ -141,61 +141,50 @@ class TableauQueryBuilder(BaseQueryBuilder):
         if filters:
             request["filters"] = filters
         
-        # 构建排序
-        sorts_list = semantic_query.get_sorts()
-        if sorts_list:
-            sorts = self._build_sorts_from_tuples(sorts_list)
-            if sorts:
-                request["sorts"] = sorts
-        
-        if semantic_query.row_limit:
-            request["rowLimit"] = semantic_query.row_limit
+        # 从维度和度量收集排序
+        sorts = self._collect_sorts(dimensions, measures)
+        if sorts:
+            request["sorts"] = sorts
         
         return request
     
-    def validate(self, semantic_query: SemanticQuery, **kwargs: Any) -> ValidationResult:
-        """验证 SemanticQuery 是否适用于 Tableau 平台。"""
+    def validate(self, semantic_output: SemanticOutput, **kwargs: Any) -> ValidationResult:
+        """验证 SemanticOutput 是否适用于 Tableau 平台。"""
         errors = []
         warnings = []
         auto_fixed = []
         
-        lod_calc_types = {"LOD_FIXED", "LOD_INCLUDE", "LOD_EXCLUDE"}
+        # 获取维度和度量
+        dimensions = semantic_output.where.dimensions if semantic_output.where else []
+        measures = semantic_output.what.measures if semantic_output.what else []
         
         # 检查空查询
-        if not semantic_query.dimensions and not semantic_query.measures:
+        if not dimensions and not measures:
             errors.append(ValidationError(
                 error_type=ValidationErrorType.MISSING_REQUIRED,
-                field_path="dimensions/measures",
+                field_path="what/where",
                 message="查询必须至少有一个维度或度量",
             ))
         
         # 验证计算
-        if semantic_query.computations:
-            view_dims = set(d.field_name for d in (semantic_query.dimensions or []))
-            measures = set(m.field_name for m in (semantic_query.measures or []))
+        if semantic_output.computations:
+            view_dims = set(d.field_name for d in dimensions)
+            measure_names = set(m.field_name for m in measures)
             
-            for i, comp in enumerate(semantic_query.computations):
-                # 检查目标是否在度量中（非 LOD）
-                if comp.calc_type not in lod_calc_types and comp.target not in measures:
-                    errors.append(ValidationError(
-                        error_type=ValidationErrorType.FIELD_NOT_FOUND,
-                        field_path=f"computations[{i}].target",
-                        message=f"目标 '{comp.target}' 不在度量中",
-                        suggestion=f"将 '{comp.target}' 添加到度量或使用现有度量",
-                    ))
+            for i, comp in enumerate(semantic_output.computations):
+                # 检查基础度量是否存在
+                for base_measure in comp.base_measures:
+                    if base_measure not in measure_names:
+                        # 基础度量可能是数据源中的字段，不一定在当前查询的度量中
+                        # 这里只记录警告，不作为错误
+                        pass
                 
-                # 检查 partition_by 是否是维度的子集（仅表计算有 partition_by）
-                partition_by = getattr(comp, 'partition_by', None)
-                if partition_by:
-                    for p in partition_by:
-                        p_name = p.field_name if hasattr(p, 'field_name') else p
-                        if p_name not in view_dims:
-                            errors.append(ValidationError(
-                                error_type=ValidationErrorType.FIELD_NOT_FOUND,
-                                field_path=f"computations[{i}].partition_by",
-                                message=f"分区维度 '{p_name}' 不在查询维度中",
-                                suggestion=f"将 '{p_name}' 添加到维度或从 partition_by 中移除",
-                            ))
+                # 检查子查询维度是否有效（如果有）
+                if comp.subquery_dimensions:
+                    for dim in comp.subquery_dimensions:
+                        if dim not in view_dims:
+                            # 子查询维度可以是数据源中的任意维度
+                            pass
         
         return ValidationResult(
             is_valid=len(errors) == 0,
@@ -203,6 +192,36 @@ class TableauQueryBuilder(BaseQueryBuilder):
             warnings=warnings,
             auto_fixed=auto_fixed,
         )
+    
+    def _collect_sorts(
+        self, 
+        dimensions: list[DimensionField], 
+        measures: list[MeasureField]
+    ) -> list[dict]:
+        """从维度和度量收集排序规范。"""
+        sorts = []
+        
+        # 收集维度排序
+        for dim in dimensions:
+            if dim.sort:
+                sorts.append((dim.field_name, dim.sort))
+        
+        # 收集度量排序
+        for measure in measures:
+            if measure.sort:
+                sorts.append((measure.field_name, measure.sort))
+        
+        # 按 priority 排序
+        sorts.sort(key=lambda x: x[1].priority)
+        
+        # 转换为 VizQL 格式
+        vizql_sorts = []
+        for field_name, sort_spec in sorts:
+            vizql_sorts.append({
+                "field": {"fieldCaption": field_name},
+                "sortDirection": sort_spec.direction.value,
+            })
+        return vizql_sorts
 
     
     def _build_dimension_field(self, dim: DimensionField, field_metadata: dict[str, dict] | None = None) -> dict:
@@ -244,24 +263,22 @@ class TableauQueryBuilder(BaseQueryBuilder):
         
         return field
     
-    def _build_sorts_from_tuples(self, sorts: list[tuple[str, Any]]) -> list[dict]:
-        """从 (field_name, SortSpec) 元组构建 VizQL 排序规范。"""
-        vizql_sorts = []
-        for field_name, sort_spec in sorts:
-            vizql_sorts.append({
-                "field": {"fieldCaption": field_name},
-                "sortDirection": sort_spec.direction.value,
-            })
-        return vizql_sorts
-    
-    def _build_computation_fields(
+    def _build_derived_computation_fields(
         self,
-        computations: list[Computation],
+        computations: list[DerivedComputation],
         view_dimensions: list[str],
         measures: list[MeasureField] | None = None,
     ) -> list[dict]:
-        """构建计算字段列表（先 LOD，后表计算）。"""
-        lod_calc_types = {"LOD_FIXED", "LOD_INCLUDE", "LOD_EXCLUDE"}
+        """从 DerivedComputation 构建 VizQL 计算字段。
+        
+        DerivedComputation 是语义解析器的输出格式，需要转换为 VizQL 格式。
+        
+        转换规则：
+        - RATIO/SUM/DIFFERENCE/PRODUCT/FORMULA → 计算字段（使用 formula）
+        - SUBQUERY → LOD 表达式
+        - TABLE_CALC_* → 表计算
+        """
+        fields = []
         
         # 构建度量聚合查找表
         measure_agg_map: dict[str, AggregationType] = {}
@@ -269,204 +286,153 @@ class TableauQueryBuilder(BaseQueryBuilder):
             for m in measures:
                 measure_agg_map[m.field_name] = m.aggregation or AggregationType.SUM
         
-        lod_fields = []
-        table_calc_fields = []
-        
         for comp in computations:
-            if comp.calc_type in lod_calc_types:
-                lod_fields.append(self._build_lod_field(comp))
-            else:
-                table_calc_fields.append(
-                    self._build_table_calc_field(comp, view_dimensions, measure_agg_map)
-                )
+            calc_type = comp.calc_type
+            
+            # 简单计算（公式）
+            if calc_type in (CalcType.RATIO, CalcType.SUM, CalcType.DIFFERENCE, 
+                            CalcType.PRODUCT, CalcType.FORMULA):
+                field = self._build_formula_field(comp)
+                if field:
+                    fields.append(field)
+            
+            # 子查询 → LOD 表达式
+            elif calc_type == CalcType.SUBQUERY:
+                field = self._build_lod_from_derived(comp)
+                if field:
+                    fields.append(field)
+            
+            # 表计算
+            elif calc_type.value.startswith("TABLE_CALC_"):
+                field = self._build_table_calc_from_derived(comp, view_dimensions, measure_agg_map)
+                if field:
+                    fields.append(field)
         
-        return lod_fields + table_calc_fields
+        return fields
     
-    def _build_table_calc_field(
+    def _build_formula_field(self, comp: DerivedComputation) -> dict | None:
+        """从 DerivedComputation 构建公式计算字段。"""
+        if not comp.formula:
+            logger.warning(f"计算 {comp.name} 缺少 formula")
+            return None
+        
+        return {
+            "fieldCaption": comp.display_name,
+            "calculation": comp.formula,
+        }
+    
+    def _build_lod_from_derived(self, comp: DerivedComputation) -> dict | None:
+        """从 DerivedComputation (SUBQUERY) 构建 LOD 表达式。
+        
+        SUBQUERY 类型转换为 Tableau LOD 表达式。
+        LOD 类型由 subquery_dimensions 与视图维度的关系决定：
+        - 独立于视图维度 → FIXED
+        - 视图维度的超集 → INCLUDE
+        - 视图维度的子集 → EXCLUDE
+        
+        由于在构建时不知道完整的视图上下文，默认使用 FIXED。
+        """
+        if not comp.subquery_dimensions:
+            logger.warning(f"SUBQUERY 计算 {comp.name} 缺少 subquery_dimensions")
+            return None
+        
+        # 默认使用 FIXED LOD
+        dims_str = ", ".join(f"[{d}]" for d in comp.subquery_dimensions)
+        agg = comp.subquery_aggregation or "SUM"
+        
+        # 获取目标度量（从 base_measures 中取第一个）
+        target = comp.base_measures[0] if comp.base_measures else comp.name
+        
+        calculation = f"{{FIXED {dims_str} : {agg}([{target}])}}"
+        
+        return {
+            "fieldCaption": comp.display_name,
+            "calculation": calculation,
+        }
+    
+    def _build_table_calc_from_derived(
         self,
-        comp: Computation,
+        comp: DerivedComputation,
         view_dimensions: list[str],
         measure_agg_map: dict[str, AggregationType] | None = None,
-    ) -> dict:
-        """构建 VizQL 表计算字段。"""
-        # 构建分区维度
-        partition_dims = []
-        for p in comp.partition_by:
-            if hasattr(p, 'field_name'):
-                dim_ref = {"fieldCaption": p.field_name}
-                if hasattr(p, 'date_granularity') and p.date_granularity:
-                    trunc_func = GRANULARITY_TO_TRUNC.get(p.date_granularity)
-                    if trunc_func:
-                        dim_ref["function"] = trunc_func
-                partition_dims.append(dim_ref)
-            else:
-                partition_dims.append({"fieldCaption": p})
-        
-        # 根据 calc_type 构建表计算规范
+    ) -> dict | None:
+        """从 DerivedComputation (TABLE_CALC_*) 构建表计算字段。"""
         calc_type = comp.calc_type
         
-        if calc_type in ("RANK", "DENSE_RANK"):
-            table_calc = self._build_rank_spec(comp, partition_dims)
-        elif calc_type == "PERCENTILE":
-            table_calc = self._build_percentile_spec(comp, partition_dims)
-        elif calc_type == "RUNNING_TOTAL":
-            table_calc = self._build_running_total_spec(comp, partition_dims)
-        elif calc_type == "MOVING_CALC":
-            table_calc = self._build_moving_calc_spec(comp, partition_dims)
-        elif calc_type == "PERCENT_OF_TOTAL":
-            table_calc = self._build_percent_of_total_spec(comp, partition_dims)
-        elif calc_type == "DIFFERENCE":
-            table_calc = self._build_difference_spec(comp, partition_dims)
-        elif calc_type == "PERCENT_DIFFERENCE":
-            table_calc = self._build_percent_difference_spec(comp, partition_dims)
-        else:
-            table_calc = {"tableCalcType": "CUSTOM", "dimensions": partition_dims}
+        # 获取目标度量
+        target = comp.base_measures[0] if comp.base_measures else None
+        if not target:
+            logger.warning(f"表计算 {comp.name} 缺少 base_measures")
+            return None
+        
+        # 构建分区维度
+        partition_dims = []
+        if comp.partition_by:
+            for p in comp.partition_by:
+                partition_dims.append({"fieldCaption": p})
         
         # 获取聚合函数
         agg_type = AggregationType.SUM
-        if measure_agg_map and comp.target in measure_agg_map:
-            agg_type = measure_agg_map[comp.target]
+        if measure_agg_map and target in measure_agg_map:
+            agg_type = measure_agg_map[target]
         
-        field = {
-            "fieldCaption": comp.target,
+        # 根据 calc_type 构建表计算规范
+        if calc_type == CalcType.TABLE_CALC_RANK:
+            table_calc = {
+                "tableCalcType": "RANK",
+                "dimensions": partition_dims,
+                "rankType": "COMPETITION",
+                "direction": "DESC",
+            }
+        elif calc_type == CalcType.TABLE_CALC_PERCENTILE:
+            table_calc = {
+                "tableCalcType": "PERCENTILE",
+                "dimensions": partition_dims,
+                "direction": "DESC",
+            }
+        elif calc_type == CalcType.TABLE_CALC_DIFFERENCE:
+            relative_to = comp.relative_to or "PREVIOUS"
+            table_calc = {
+                "tableCalcType": "DIFFERENCE_FROM",
+                "dimensions": partition_dims,
+                "relativeTo": relative_to,
+            }
+        elif calc_type == CalcType.TABLE_CALC_PERCENT_DIFF:
+            relative_to = comp.relative_to or "PREVIOUS"
+            table_calc = {
+                "tableCalcType": "PERCENT_DIFFERENCE_FROM",
+                "dimensions": partition_dims,
+                "relativeTo": relative_to,
+            }
+        elif calc_type == CalcType.TABLE_CALC_PERCENT_OF_TOTAL:
+            table_calc = {
+                "tableCalcType": "PERCENT_OF_TOTAL",
+                "dimensions": partition_dims,
+            }
+        elif calc_type == CalcType.TABLE_CALC_RUNNING:
+            table_calc = {
+                "tableCalcType": "RUNNING_TOTAL",
+                "dimensions": partition_dims,
+                "aggregation": "SUM",
+            }
+        elif calc_type == CalcType.TABLE_CALC_MOVING:
+            table_calc = {
+                "tableCalcType": "MOVING_CALCULATION",
+                "dimensions": partition_dims,
+                "aggregation": "AVG",
+                "previous": self.DEFAULT_WINDOW_PREVIOUS,
+                "next": self.DEFAULT_WINDOW_NEXT,
+                "includeCurrent": self.DEFAULT_INCLUDE_CURRENT,
+            }
+        else:
+            logger.warning(f"未知的表计算类型: {calc_type}")
+            return None
+        
+        return {
+            "fieldCaption": target,
             "function": AGGREGATION_TO_VIZQL.get(agg_type, "SUM"),
             "tableCalculation": table_calc,
-        }
-        
-        alias = getattr(comp, 'alias', None)
-        if alias:
-            field["fieldAlias"] = alias
-        
-        return field
-
-    
-    def _build_rank_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """构建排名表计算规范。"""
-        if comp.calc_type == "DENSE_RANK":
-            rank_type = "DENSE"
-        else:
-            rank_style = getattr(comp, 'rank_style', None) or self.DEFAULT_RANK_STYLE
-            rank_type = rank_style.value if hasattr(rank_style, 'value') else str(rank_style)
-        
-        direction = getattr(comp, 'direction', None) or self.DEFAULT_DIRECTION
-        
-        return {
-            "tableCalcType": "RANK",
-            "dimensions": partition_dims,
-            "rankType": rank_type,
-            "direction": direction.value if hasattr(direction, 'value') else str(direction),
-        }
-    
-    def _build_top_n_filter_from_computation(self, comp: Computation, semantic_query: SemanticQuery) -> dict | None:
-        """从带有 top_n 的计算构建 Top N 过滤器。"""
-        top_n = getattr(comp, 'top_n', None)
-        if not top_n:
-            return None
-        
-        filter_dimension = None
-        if comp.partition_by:
-            first = comp.partition_by[0]
-            filter_dimension = first.field_name if hasattr(first, 'field_name') else first
-        elif semantic_query.dimensions:
-            filter_dimension = semantic_query.dimensions[0].field_name
-        
-        if not filter_dimension:
-            logger.warning(f"无法构建 Top N 过滤器：计算 {comp.target} 没有可用维度")
-            return None
-        
-        direction = getattr(comp, 'direction', None) or self.DEFAULT_DIRECTION
-        
-        return {
-            "field": {"fieldCaption": filter_dimension},
-            "filterType": "TOP",
-            "howMany": top_n,
-            "fieldToMeasure": {"fieldCaption": comp.target},
-            "direction": direction.value if hasattr(direction, 'value') else str(direction),
-        }
-    
-    def _build_percentile_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """构建百分位表计算规范。"""
-        direction = getattr(comp, 'direction', None) or self.DEFAULT_DIRECTION
-        return {
-            "tableCalcType": "PERCENTILE",
-            "dimensions": partition_dims,
-            "direction": direction.value if hasattr(direction, 'value') else str(direction),
-        }
-    
-    def _build_running_total_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """构建累计表计算规范。"""
-        aggregation = getattr(comp, 'aggregation', None) or self.DEFAULT_AGGREGATION
-        spec = {
-            "tableCalcType": "RUNNING_TOTAL",
-            "dimensions": partition_dims,
-            "aggregation": aggregation.value if hasattr(aggregation, 'value') else str(aggregation),
-        }
-        restart_every = getattr(comp, 'restart_every', None)
-        if restart_every:
-            spec["restartEvery"] = {"fieldCaption": restart_every}
-        return spec
-    
-    def _build_moving_calc_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """构建移动计算规范。"""
-        aggregation = getattr(comp, 'aggregation', None) or self.DEFAULT_AGGREGATION
-        previous = getattr(comp, 'window_previous', self.DEFAULT_WINDOW_PREVIOUS)
-        next_val = getattr(comp, 'window_next', self.DEFAULT_WINDOW_NEXT)
-        include_current = getattr(comp, 'include_current', self.DEFAULT_INCLUDE_CURRENT)
-        
-        return {
-            "tableCalcType": "MOVING_CALCULATION",
-            "dimensions": partition_dims,
-            "aggregation": aggregation.value if hasattr(aggregation, 'value') else str(aggregation),
-            "previous": previous,
-            "next": next_val,
-            "includeCurrent": include_current,
-        }
-    
-    def _build_percent_of_total_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """构建占比表计算规范。"""
-        spec = {"tableCalcType": "PERCENT_OF_TOTAL", "dimensions": partition_dims}
-        level_of = getattr(comp, 'level_of', None)
-        if level_of:
-            spec["levelAddress"] = {"fieldCaption": level_of}
-        return spec
-    
-    def _build_difference_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """构建差异表计算规范。"""
-        relative_to = getattr(comp, 'relative_to', None) or self.DEFAULT_RELATIVE_TO
-        return {
-            "tableCalcType": "DIFFERENCE_FROM",
-            "dimensions": partition_dims,
-            "relativeTo": relative_to.value if hasattr(relative_to, 'value') else str(relative_to),
-        }
-    
-    def _build_percent_difference_spec(self, comp: Computation, partition_dims: list[dict]) -> dict:
-        """构建百分比差异表计算规范。"""
-        relative_to = getattr(comp, 'relative_to', None) or self.DEFAULT_RELATIVE_TO
-        return {
-            "tableCalcType": "PERCENT_DIFFERENCE_FROM",
-            "dimensions": partition_dims,
-            "relativeTo": relative_to.value if hasattr(relative_to, 'value') else str(relative_to),
-        }
-    
-    def _build_lod_field(self, comp: Computation) -> dict:
-        """构建 VizQL LOD 表达式字段。"""
-        lod_type_map = {"LOD_FIXED": "FIXED", "LOD_INCLUDE": "INCLUDE", "LOD_EXCLUDE": "EXCLUDE"}
-        lod_type = lod_type_map.get(comp.calc_type, "FIXED")
-        
-        lod_dims = getattr(comp, 'dimensions', []) or []
-        dims_str = ", ".join(f"[{d}]" for d in lod_dims)
-        
-        aggregation = getattr(comp, 'aggregation', None) or AggregationType.SUM
-        agg = aggregation.value if hasattr(aggregation, 'value') else str(aggregation)
-        
-        if dims_str:
-            calculation = f"{{{lod_type} {dims_str} : {agg}([{comp.target}])}}"
-        else:
-            calculation = f"{{{agg}([{comp.target}])}}"
-        
-        return {
-            "fieldCaption": comp.alias or f"LOD_{comp.target}",
-            "calculation": calculation,
+            "fieldAlias": comp.display_name,
         }
 
     

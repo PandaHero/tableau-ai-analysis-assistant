@@ -4,6 +4,8 @@
 测试任务 2.2.5：
 - 测试 VizQL 查询构建
 - 测试查询验证
+
+注意：测试使用 SemanticOutput 作为输入，这是语义解析器的输出格式。
 """
 
 import pytest
@@ -13,27 +15,23 @@ from analytics_assistant.src.core.schemas import (
     DateGranularity,
     DimensionField,
     MeasureField,
-    SemanticQuery,
     SortDirection,
     SortSpec,
-    RankCalc,
-    DenseRankCalc,
-    RunningTotalCalc,
-    MovingCalc,
-    PercentOfTotalCalc,
-    DifferenceCalc,
-    PercentDifferenceCalc,
-    LODFixed,
-    LODInclude,
-    LODExclude,
     SetFilter,
     DateRangeFilter,
     NumericRangeFilter,
     TextMatchFilter,
     TopNFilter,
-    RelativeTo,
     TextMatchType,
     ValidationErrorType,
+)
+from analytics_assistant.src.agents.semantic_parser.schemas.output import (
+    SemanticOutput,
+    What,
+    Where,
+    SelfCheck,
+    DerivedComputation,
+    CalcType,
 )
 from analytics_assistant.src.platform.tableau.query_builder import TableauQueryBuilder
 
@@ -42,6 +40,30 @@ from analytics_assistant.src.platform.tableau.query_builder import TableauQueryB
 def builder():
     """创建 QueryBuilder 实例。"""
     return TableauQueryBuilder()
+
+
+def make_semantic_output(
+    dimensions: list[DimensionField] | None = None,
+    measures: list[MeasureField] | None = None,
+    filters: list | None = None,
+    computations: list[DerivedComputation] | None = None,
+) -> SemanticOutput:
+    """创建 SemanticOutput 测试对象的辅助函数。"""
+    return SemanticOutput(
+        restated_question="测试查询",
+        what=What(measures=measures or []),
+        where=Where(
+            dimensions=dimensions or [],
+            filters=filters or [],
+        ),
+        computations=computations or [],
+        self_check=SelfCheck(
+            field_mapping_confidence=1.0,
+            time_range_confidence=1.0,
+            computation_confidence=1.0,
+            overall_confidence=1.0,
+        ),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -53,7 +75,7 @@ class TestBasicBuild:
     
     def test_simple_dimension_measure(self, builder):
         """测试简单维度+度量查询。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -73,7 +95,7 @@ class TestBasicBuild:
     
     def test_dimension_with_date_granularity(self, builder):
         """测试带日期粒度的维度。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[
                 DimensionField(
                     field_name="订单日期",
@@ -89,7 +111,7 @@ class TestBasicBuild:
     
     def test_dimension_with_string_date(self, builder):
         """测试字符串类型日期维度。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[
                 DimensionField(
                     field_name="订单日期",
@@ -110,7 +132,7 @@ class TestBasicBuild:
     
     def test_measure_with_different_aggregations(self, builder):
         """测试不同聚合函数的度量。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             measures=[
                 MeasureField(field_name="销售额", aggregation=AggregationType.SUM),
                 MeasureField(field_name="订单数", aggregation=AggregationType.COUNT),
@@ -127,7 +149,7 @@ class TestBasicBuild:
     
     def test_pre_aggregated_measure(self, builder):
         """测试预聚合度量（无聚合函数）。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             measures=[
                 MeasureField(field_name="利润率", aggregation=None),
             ],
@@ -139,7 +161,7 @@ class TestBasicBuild:
     
     def test_with_alias(self, builder):
         """测试带别名的字段。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[
                 DimensionField(field_name="省份", alias="省份名称"),
             ],
@@ -151,16 +173,6 @@ class TestBasicBuild:
         
         assert result["fields"][0]["fieldAlias"] == "省份名称"
         assert result["fields"][1]["fieldAlias"] == "总销售额"
-    
-    def test_with_row_limit(self, builder):
-        """测试行数限制。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            row_limit=100,
-        )
-        result = builder.build(query)
-        
-        assert result["rowLimit"] == 100
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -172,7 +184,7 @@ class TestSortBuild:
     
     def test_dimension_sort(self, builder):
         """测试维度排序。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[
                 DimensionField(
                     field_name="省份",
@@ -189,7 +201,7 @@ class TestSortBuild:
     
     def test_measure_sort(self, builder):
         """测试度量排序。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[
                 MeasureField(
@@ -206,7 +218,7 @@ class TestSortBuild:
     
     def test_multiple_sorts_priority(self, builder):
         """测试多字段排序优先级。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[
                 DimensionField(
                     field_name="省份",
@@ -229,19 +241,83 @@ class TestSortBuild:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 表计算测试
+# 派生计算测试（DerivedComputation）
 # ═══════════════════════════════════════════════════════════════════════════
 
-class TestTableCalcBuild:
-    """表计算构建测试。"""
+class TestDerivedComputationBuild:
+    """派生计算构建测试。"""
     
-    def test_rank_calc(self, builder):
-        """测试排名计算。"""
-        query = SemanticQuery(
+    def test_ratio_computation(self, builder):
+        """测试比率计算。"""
+        query = make_semantic_output(
+            dimensions=[DimensionField(field_name="省份")],
+            measures=[
+                MeasureField(field_name="利润"),
+                MeasureField(field_name="销售额"),
+            ],
+            computations=[
+                DerivedComputation(
+                    name="profit_rate",
+                    display_name="利润率",
+                    formula="[利润]/[销售额]",
+                    calc_type=CalcType.RATIO,
+                    base_measures=["利润", "销售额"],
+                ),
+            ],
+        )
+        result = builder.build(query)
+        
+        # 找到计算字段
+        calc_field = None
+        for f in result["fields"]:
+            if "calculation" in f and "[利润]/[销售额]" in f.get("calculation", ""):
+                calc_field = f
+                break
+        
+        assert calc_field is not None
+        assert calc_field["fieldCaption"] == "利润率"
+    
+    def test_subquery_computation_to_lod(self, builder):
+        """测试子查询计算转换为 LOD。"""
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
             computations=[
-                RankCalc(target="销售额"),
+                DerivedComputation(
+                    name="customer_first_purchase",
+                    display_name="客户首购日期",
+                    calc_type=CalcType.SUBQUERY,
+                    base_measures=["订单日期"],
+                    subquery_dimensions=["客户ID"],
+                    subquery_aggregation="MIN",
+                ),
+            ],
+        )
+        result = builder.build(query)
+        
+        # 找到 LOD 字段
+        lod_field = None
+        for f in result["fields"]:
+            if "calculation" in f and "FIXED" in f.get("calculation", ""):
+                lod_field = f
+                break
+        
+        assert lod_field is not None
+        assert "[客户ID]" in lod_field["calculation"]
+        assert "MIN" in lod_field["calculation"]
+    
+    def test_table_calc_rank(self, builder):
+        """测试排名表计算。"""
+        query = make_semantic_output(
+            dimensions=[DimensionField(field_name="省份")],
+            measures=[MeasureField(field_name="销售额")],
+            computations=[
+                DerivedComputation(
+                    name="sales_rank",
+                    display_name="销售排名",
+                    calc_type=CalcType.TABLE_CALC_RANK,
+                    base_measures=["销售额"],
+                ),
             ],
         )
         result = builder.build(query)
@@ -256,131 +332,18 @@ class TestTableCalcBuild:
         assert calc_field is not None
         assert calc_field["tableCalculation"]["tableCalcType"] == "RANK"
     
-    def test_rank_with_partition(self, builder):
-        """测试带分区的排名。"""
-        query = SemanticQuery(
-            dimensions=[
-                DimensionField(field_name="类别"),
-                DimensionField(field_name="省份"),
-            ],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                RankCalc(
-                    target="销售额",
-                    partition_by=[DimensionField(field_name="类别")],
-                ),
-            ],
-        )
-        result = builder.build(query)
-        
-        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
-        assert len(calc_field["tableCalculation"]["dimensions"]) == 1
-        assert calc_field["tableCalculation"]["dimensions"][0]["fieldCaption"] == "类别"
-    
-    def test_dense_rank_calc(self, builder):
-        """测试密集排名。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                DenseRankCalc(target="销售额"),
-            ],
-        )
-        result = builder.build(query)
-        
-        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
-        assert calc_field["tableCalculation"]["rankType"] == "DENSE"
-    
-    def test_running_total_calc(self, builder):
-        """测试累计计算。"""
-        query = SemanticQuery(
+    def test_table_calc_percent_diff(self, builder):
+        """测试百分比差异表计算（增长率）。"""
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="月份")],
             measures=[MeasureField(field_name="销售额")],
             computations=[
-                RunningTotalCalc(target="销售额"),
-            ],
-        )
-        result = builder.build(query)
-        
-        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
-        assert calc_field["tableCalculation"]["tableCalcType"] == "RUNNING_TOTAL"
-    
-    def test_running_total_with_restart(self, builder):
-        """测试带重启的累计（YTD）。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="月份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                RunningTotalCalc(
-                    target="销售额",
-                    restart_every="Year",
-                ),
-            ],
-        )
-        result = builder.build(query)
-        
-        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
-        assert "restartEvery" in calc_field["tableCalculation"]
-    
-    def test_moving_calc(self, builder):
-        """测试移动计算。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="月份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                MovingCalc(
-                    target="销售额",
-                    window_previous=6,
-                    aggregation=AggregationType.AVG,
-                ),
-            ],
-        )
-        result = builder.build(query)
-        
-        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
-        assert calc_field["tableCalculation"]["tableCalcType"] == "MOVING_CALCULATION"
-        assert calc_field["tableCalculation"]["previous"] == 6
-    
-    def test_percent_of_total_calc(self, builder):
-        """测试占比计算。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                PercentOfTotalCalc(target="销售额"),
-            ],
-        )
-        result = builder.build(query)
-        
-        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
-        assert calc_field["tableCalculation"]["tableCalcType"] == "PERCENT_OF_TOTAL"
-    
-    def test_difference_calc(self, builder):
-        """测试差异计算。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="月份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                DifferenceCalc(
-                    target="销售额",
-                    relative_to=RelativeTo.PREVIOUS,
-                ),
-            ],
-        )
-        result = builder.build(query)
-        
-        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
-        assert calc_field["tableCalculation"]["tableCalcType"] == "DIFFERENCE_FROM"
-    
-    def test_percent_difference_calc(self, builder):
-        """测试百分比差异计算。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="月份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                PercentDifferenceCalc(
-                    target="销售额",
-                    relative_to=RelativeTo.PREVIOUS,
+                DerivedComputation(
+                    name="sales_growth",
+                    display_name="销售增长率",
+                    calc_type=CalcType.TABLE_CALC_PERCENT_DIFF,
+                    base_measures=["销售额"],
+                    relative_to="PREVIOUS",
                 ),
             ],
         )
@@ -388,118 +351,63 @@ class TestTableCalcBuild:
         
         calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
         assert calc_field["tableCalculation"]["tableCalcType"] == "PERCENT_DIFFERENCE_FROM"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# LOD 表达式测试
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestLODBuild:
-    """LOD 表达式构建测试。"""
     
-    def test_lod_fixed(self, builder):
-        """测试 FIXED LOD。"""
-        query = SemanticQuery(
+    def test_table_calc_percent_of_total(self, builder):
+        """测试占比表计算。"""
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
             computations=[
-                LODFixed(
-                    target="销售额",
-                    dimensions=["客户ID"],
-                    aggregation=AggregationType.SUM,
-                    alias="客户销售额",
+                DerivedComputation(
+                    name="market_share",
+                    display_name="市场份额",
+                    calc_type=CalcType.TABLE_CALC_PERCENT_OF_TOTAL,
+                    base_measures=["销售额"],
                 ),
             ],
         )
         result = builder.build(query)
         
-        # LOD 字段应该在普通字段之后
-        lod_field = None
-        for f in result["fields"]:
-            if "calculation" in f and "FIXED" in f.get("calculation", ""):
-                lod_field = f
-                break
-        
-        assert lod_field is not None
-        assert "FIXED" in lod_field["calculation"]
-        assert "[客户ID]" in lod_field["calculation"]
+        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
+        assert calc_field["tableCalculation"]["tableCalcType"] == "PERCENT_OF_TOTAL"
     
-    def test_lod_include(self, builder):
-        """测试 INCLUDE LOD。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="区域")],
-            measures=[MeasureField(field_name="订单金额")],
-            computations=[
-                LODInclude(
-                    target="订单金额",
-                    dimensions=["订单ID"],
-                    aggregation=AggregationType.AVG,
-                ),
-            ],
-        )
-        result = builder.build(query)
-        
-        lod_field = None
-        for f in result["fields"]:
-            if "calculation" in f and "INCLUDE" in f.get("calculation", ""):
-                lod_field = f
-                break
-        
-        assert lod_field is not None
-        assert "INCLUDE" in lod_field["calculation"]
-    
-    def test_lod_exclude(self, builder):
-        """测试 EXCLUDE LOD。"""
-        query = SemanticQuery(
-            dimensions=[
-                DimensionField(field_name="类别"),
-                DimensionField(field_name="子类别"),
-            ],
+    def test_table_calc_running(self, builder):
+        """测试累计表计算。"""
+        query = make_semantic_output(
+            dimensions=[DimensionField(field_name="月份")],
             measures=[MeasureField(field_name="销售额")],
             computations=[
-                LODExclude(
-                    target="销售额",
-                    dimensions=["子类别"],
-                    aggregation=AggregationType.SUM,
+                DerivedComputation(
+                    name="ytd_sales",
+                    display_name="年累计销售额",
+                    calc_type=CalcType.TABLE_CALC_RUNNING,
+                    base_measures=["销售额"],
                 ),
             ],
         )
         result = builder.build(query)
         
-        lod_field = None
-        for f in result["fields"]:
-            if "calculation" in f and "EXCLUDE" in f.get("calculation", ""):
-                lod_field = f
-                break
-        
-        assert lod_field is not None
-        assert "EXCLUDE" in lod_field["calculation"]
+        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
+        assert calc_field["tableCalculation"]["tableCalcType"] == "RUNNING_TOTAL"
     
-    def test_lod_global(self, builder):
-        """测试全局 LOD（空维度）。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
+    def test_table_calc_moving(self, builder):
+        """测试移动计算。"""
+        query = make_semantic_output(
+            dimensions=[DimensionField(field_name="月份")],
             measures=[MeasureField(field_name="销售额")],
             computations=[
-                LODFixed(
-                    target="销售额",
-                    dimensions=[],
-                    aggregation=AggregationType.SUM,
-                    alias="总销售额",
+                DerivedComputation(
+                    name="moving_avg",
+                    display_name="移动平均",
+                    calc_type=CalcType.TABLE_CALC_MOVING,
+                    base_measures=["销售额"],
                 ),
             ],
         )
         result = builder.build(query)
         
-        lod_field = None
-        for f in result["fields"]:
-            if "calculation" in f:
-                lod_field = f
-                break
-        
-        assert lod_field is not None
-        # 全局 LOD 不包含维度
-        assert "{SUM([销售额])}" in lod_field["calculation"]
+        calc_field = [f for f in result["fields"] if "tableCalculation" in f][0]
+        assert calc_field["tableCalculation"]["tableCalcType"] == "MOVING_CALCULATION"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -511,7 +419,7 @@ class TestFilterBuild:
     
     def test_set_filter(self, builder):
         """测试集合过滤器。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             filters=[
                 SetFilter(field_name="省份", values=["北京", "上海"]),
@@ -526,7 +434,7 @@ class TestFilterBuild:
     
     def test_set_filter_exclude(self, builder):
         """测试排除集合过滤器。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             filters=[
                 SetFilter(field_name="省份", values=["西藏"], exclude=True),
@@ -539,7 +447,7 @@ class TestFilterBuild:
     def test_date_range_filter(self, builder):
         """测试日期范围过滤器。"""
         from datetime import date
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="订单日期")],
             filters=[
                 DateRangeFilter(
@@ -558,7 +466,7 @@ class TestFilterBuild:
     def test_date_range_filter_string_type(self, builder):
         """测试字符串类型日期过滤器。"""
         from datetime import date
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="订单日期")],
             filters=[
                 DateRangeFilter(
@@ -578,7 +486,7 @@ class TestFilterBuild:
     
     def test_numeric_range_filter(self, builder):
         """测试数值范围过滤器。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
             filters=[
@@ -597,7 +505,7 @@ class TestFilterBuild:
     
     def test_text_match_filter_contains(self, builder):
         """测试文本包含过滤器。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="产品名称")],
             filters=[
                 TextMatchFilter(
@@ -614,7 +522,7 @@ class TestFilterBuild:
     
     def test_text_match_filter_starts_with(self, builder):
         """测试文本开头过滤器。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="产品名称")],
             filters=[
                 TextMatchFilter(
@@ -630,7 +538,7 @@ class TestFilterBuild:
     
     def test_top_n_filter(self, builder):
         """测试 Top N 过滤器。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
             filters=[
@@ -647,23 +555,6 @@ class TestFilterBuild:
         assert result["filters"][0]["filterType"] == "TOP"
         assert result["filters"][0]["howMany"] == 10
         assert result["filters"][0]["fieldToMeasure"]["fieldCaption"] == "销售额"
-    
-    def test_rank_with_top_n_generates_filter(self, builder):
-        """测试排名计算的 top_n 生成过滤器。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                RankCalc(target="销售额", top_n=5),
-            ],
-        )
-        result = builder.build(query)
-        
-        # 应该生成 Top N 过滤器
-        assert "filters" in result
-        top_filter = [f for f in result["filters"] if f.get("filterType") == "TOP"]
-        assert len(top_filter) == 1
-        assert top_filter[0]["howMany"] == 5
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -675,7 +566,7 @@ class TestValidation:
     
     def test_valid_query(self, builder):
         """测试有效查询。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -686,62 +577,9 @@ class TestValidation:
     
     def test_empty_query_invalid(self, builder):
         """测试空查询无效。"""
-        query = SemanticQuery()
+        query = make_semantic_output()
         result = builder.validate(query)
         
         assert result.is_valid is False
         assert len(result.errors) == 1
         assert result.errors[0].error_type == ValidationErrorType.MISSING_REQUIRED
-    
-    def test_computation_target_not_in_measures(self, builder):
-        """测试计算目标不在度量中。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                RankCalc(target="利润"),  # 利润不在度量中
-            ],
-        )
-        result = builder.validate(query)
-        
-        assert result.is_valid is False
-        assert any(e.error_type == ValidationErrorType.FIELD_NOT_FOUND for e in result.errors)
-    
-    def test_partition_by_not_in_dimensions(self, builder):
-        """测试分区维度不在查询维度中。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                RankCalc(
-                    target="销售额",
-                    partition_by=[DimensionField(field_name="类别")],  # 类别不在维度中
-                ),
-            ],
-        )
-        result = builder.validate(query)
-        
-        assert result.is_valid is False
-        assert any("分区维度" in e.message for e in result.errors)
-    
-    def test_lod_target_validation_skipped(self, builder):
-        """测试 LOD 计算跳过目标验证。"""
-        # LOD 计算的 target 不需要在 measures 中
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                LODFixed(
-                    target="订单金额",  # 不在 measures 中，但 LOD 允许
-                    dimensions=["客户ID"],
-                    aggregation=AggregationType.SUM,
-                ),
-            ],
-        )
-        result = builder.validate(query)
-        
-        # LOD 的 target 不需要在 measures 中，所以应该有效
-        # 注意：当前实现可能需要调整
-        assert result.is_valid is True or any(
-            "LOD" in str(e) for e in result.errors
-        )

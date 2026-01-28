@@ -66,8 +66,8 @@ from analytics_assistant.src.core.schemas.filters import (
     TopNFilter,
 )
 
-# Query
-from analytics_assistant.src.core.schemas.query import SemanticQuery
+# Query - 已移除 SemanticQuery，使用 SemanticOutput 代替
+# from analytics_assistant.src.core.schemas.query import SemanticQuery
 
 # Validation
 from analytics_assistant.src.core.schemas.validation import (
@@ -138,8 +138,8 @@ __all__ = [
     "SetFilter",
     "TextMatchFilter",
     "TopNFilter",
-    # Query
-    "SemanticQuery",
+    # Query - 已移除 SemanticQuery
+    # "SemanticQuery",
     # Validation
     "ValidationError",
     "ValidationErrorType",

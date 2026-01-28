@@ -40,12 +40,25 @@ from .semantic_understanding import (
     get_max_schema_tokens,
     get_max_few_shot_examples,
 )
-from .field_value_cache import FieldValueCache, CachedFieldValues
+from .field_value_cache import FieldValueCache
 from .filter_validator import FilterValueValidator, get_time_data_types
 from .error_corrector import ErrorCorrector
+from .feedback_learner import FeedbackLearner
+from .history_manager import (
+    HistoryManager,
+    get_history_manager,
+    truncate_history,
+    check_history_tokens,
+    estimate_tokens,
+    estimate_message_tokens,
+    estimate_history_tokens,
+    get_max_history_tokens,
+    get_use_summarization,
+)
 
-from ..schemas.cache import CachedQuery
+from ..schemas.cache import CachedQuery, CachedFieldValues
 from ..schemas.error_correction import ErrorCorrectionHistory, CorrectionResult
+from ..schemas.feedback import FeedbackType, FeedbackRecord, SynonymMapping
 
 __all__ = [
     # IntentRouter
@@ -89,4 +102,19 @@ __all__ = [
     "ErrorCorrectionHistory",
     "CorrectionResult",
     "ErrorCorrector",
+    # FeedbackLearner
+    "FeedbackType",
+    "FeedbackRecord",
+    "SynonymMapping",
+    "FeedbackLearner",
+    # HistoryManager
+    "HistoryManager",
+    "get_history_manager",
+    "truncate_history",
+    "check_history_tokens",
+    "estimate_tokens",
+    "estimate_message_tokens",
+    "estimate_history_tokens",
+    "get_max_history_tokens",
+    "get_use_summarization",
 ]

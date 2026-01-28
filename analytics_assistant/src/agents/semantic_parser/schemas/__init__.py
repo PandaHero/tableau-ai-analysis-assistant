@@ -37,6 +37,7 @@ from .error_correction import ErrorCorrectionHistory, CorrectionResult
 from .enums import PromptComplexity
 from .config import SemanticConfig
 from .intent import IntentType, IntentRouterOutput
+from .feedback import FeedbackType, FeedbackRecord, SynonymMapping
 
 __all__ = [
     # Output - Enums
@@ -70,4 +71,8 @@ __all__ = [
     # Intent
     "IntentType",
     "IntentRouterOutput",
+    # Feedback
+    "FeedbackType",
+    "FeedbackRecord",
+    "SynonymMapping",
 ]

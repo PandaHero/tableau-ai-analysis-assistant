@@ -93,6 +93,41 @@ class DataModel(BaseModel):
     # 原始响应
     raw_metadata: Optional[Dict[str, Any]] = PydanticField(default=None, description="原始 API 响应")
     
+    # 缓存的 schema_hash（延迟计算）
+    _cached_schema_hash: Optional[str] = None
+    
+    @property
+    def schema_hash(self) -> str:
+        """计算数据模型的 schema hash。
+        
+        只包含影响查询生成的字段属性：
+        - field.name: 字段名
+        - field.data_type: 数据类型
+        - field.role: 字段角色 (DIMENSION/MEASURE)
+        
+        不包含：
+        - field.description: 描述变更不影响查询
+        - field.caption: 显示名变更不影响查询
+        
+        结果会被缓存，避免重复计算。
+        """
+        if self._cached_schema_hash is None:
+            import hashlib
+            
+            if not self.fields:
+                self._cached_schema_hash = hashlib.md5(b"empty").hexdigest()
+            else:
+                field_signatures = []
+                for field in self.fields:
+                    field_signatures.append(
+                        f"{field.name}:{field.data_type}:{field.role}"
+                    )
+                field_signatures.sort()
+                content = "|".join(field_signatures)
+                self._cached_schema_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
+        
+        return self._cached_schema_hash
+    
     @property
     def field_count(self) -> int:
         """字段数量。"""

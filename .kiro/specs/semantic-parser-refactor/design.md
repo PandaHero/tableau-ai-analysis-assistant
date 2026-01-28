@@ -16,6 +16,38 @@
 - **Vanna.ai**：RAG + LLM 架构，用户感知，可训练
 - **NeurIPS 2024 "The Death of Schema Linking"**：强推理模型不需要复杂的 Schema Linking
 
+### 术语与命名约定
+
+| 术语 | 说明 |
+|------|------|
+| 阶段 (Phase) | 管道中的处理步骤，按执行顺序编号 |
+| 组件 (Component) | 实现特定功能的类，如 IntentRouter, QueryCache |
+| Property | 正确性属性，用于 Property-Based Testing |
+| SUBQUERY | 平台无关的子查询类型，适配器负责转换为 Tableau LOD 或 SQL 子查询 |
+
+**主流程阶段** (1-8)：
+1. IntentRouter - 意图路由
+2. QueryCache - 查询缓存
+3. FieldRetriever - 字段检索
+4. FewShotManager - 示例检索
+5. SemanticUnderstanding - LLM 语义理解
+6. FilterValueValidator - 筛选值验证
+7. QueryAdapter + 执行 - 查询构建与执行
+8. FeedbackLearner - 反馈学习
+
+**优化架构阶段** (1-11)：
+1. IntentRouter - 意图路由
+2. QueryCache - 查询缓存
+3. RulePrefilter - 规则预处理
+4. FeatureExtractor - LLM 特征提取
+5. FieldRetriever - 字段检索
+6. DynamicSchemaBuilder - 动态 Schema 构建
+7. DynamicPromptBuilder - 动态 Prompt 构建
+8. SemanticUnderstanding - LLM 语义理解
+9. OutputValidator - 输出预验证 + 自修正
+10. FilterValueValidator - 筛选值验证
+11. QueryAdapter + 执行 + 缓存
+
 ## Architecture
 
 ### 整体架构
@@ -99,7 +131,7 @@
     │
     ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ 阶段 5.5: FilterValueValidator (筛选值验证) ⭐ 新增阶段        │
+│ 阶段 6: FilterValueValidator (筛选值验证)                       │
 │ ─────────────────────────────────────────────────────────────│
 │ 输入: SemanticOutput 中的 filters                             │
 │ 输出: 验证结果 (通过/需要澄清)                                 │
@@ -124,7 +156,7 @@
     │
     ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ 阶段 6: 查询构建与执行                                        │
+│ 阶段 7: 查询构建与执行                                        │
 │ ─────────────────────────────────────────────────────────────│
 │                                                              │
 │ 6.1 中间层输出 (SemanticOutput)                               │
@@ -148,7 +180,7 @@
 │                                                              │
 │     复杂查询 (how_type=COMPLEX):                              │
 │     - 派生度量：利润率 = 利润/销售额                           │
-│     - LOD 表达式：FIXED [地区] : SUM(销售额)                   │
+│     - 子查询/聚合粒度：每个客户的首次购买日期                   │
 │     - 表计算：排名、同比、环比                                 │
 │     - Prompt: 使用完整模板，包含计算示例                       │
 │                                                              │
@@ -168,14 +200,14 @@
     ├─── 执行失败 ───┐
     │                ▼
     │   ┌──────────────────────────────────────────────────────┐
-    │   │ 阶段 6.1: ErrorCorrector (错误修正)                   │
+    │   │ 阶段 7.1: ErrorCorrector (错误修正)                   │
     │   │ ──────────────────────────────────────────────────── │
     │   │ 输入: 原始问题, 之前的输出, 错误信息                   │
     │   │ 输出: 修正后的 SemanticOutput                         │
     │   │ LLM调用: 1 次                                         │
     │   │                                                      │
     │   │ 最多重试 3 次                                         │
-    │   │ 如果重试成功 → 返回阶段 6 重新执行                     │
+    │   │ 如果重试成功 → 返回阶段 7 重新执行                     │
     │   │ 如果重试失败 → 返回错误信息给用户                      │
     │   └──────────────────────────────────────────────────────┘
     │                │
@@ -184,7 +216,7 @@
     │
     ▼ 执行成功
 ┌──────────────────────────────────────────────────────────────┐
-│ 阶段 7: FeedbackLearner (反馈学习)                            │
+│ 阶段 8: FeedbackLearner (反馈学习)                            │
 │ ─────────────────────────────────────────────────────────────│
 │ 输入: 查询结果, 用户反馈                                       │
 │ 输出: 更新缓存, 记录反馈                                       │
@@ -1053,7 +1085,7 @@ class VizQLAdapter(QueryAdapter):
         4. 处理 computations → VizQL 计算字段
            - RATIO → 除法表达式
            - GROWTH → (当前-上期)/上期
-           - LOD → FIXED/INCLUDE/EXCLUDE 表达式
+           - SUBQUERY → 根据上下文决定 FIXED/INCLUDE/EXCLUDE
            - TABLE_CALC → 表计算函数
         """
         pass
@@ -1114,7 +1146,7 @@ class DynamicPromptBuilder:
         
         1. 判断查询复杂度:
            - 如果问题包含派生度量关键词 (利润率、增长率、占比) → COMPLEX
-           - 如果问题包含 LOD 关键词 (每个、各自、独立) → COMPLEX
+           - 如果问题包含子查询关键词 (每个、各自、独立) → COMPLEX
            - 如果问题包含表计算关键词 (排名、同比、环比) → COMPLEX
            - 否则 → SIMPLE
         
@@ -1139,7 +1171,7 @@ class DynamicPromptBuilder:
             "率", "比", "占比", "百分比", "比例",
             # 时间计算
             "同比", "环比", "增长", "下降", "变化",
-            # LOD
+            # 子查询/聚合粒度
             "每个", "各自", "独立", "不考虑",
             # 表计算
             "排名", "排序", "累计", "移动平均",
@@ -1386,41 +1418,59 @@ class FilterConfirmation(BaseModel):
     confirmed_at: datetime
 
 class SemanticParserState(TypedDict, total=False):
+    """语义解析器状态定义
+    
+    LangGraph StateGraph 的状态类型，包含所有节点间传递的数据。
+    
+    命名规范：
+    - 类名：PascalCase（如 SemanticParserState）
+    - 字段名：snake_case（如 intent_router_output）
+    - 节点函数名：snake_case + _node 后缀（如 intent_router_node）
+    """
     # ========== 输入字段 ==========
-    question: str
-    chat_history: Optional[List[Dict[str, Any]]]
-    datasource_luid: Optional[str]
-    current_time: Optional[str]
+    question: str                                        # 用户问题
+    chat_history: Optional[List[Dict[str, Any]]]         # 对话历史
+    summarized_history: Optional[str]                    # 压缩后的历史摘要
+    datasource_luid: Optional[str]                       # 数据源标识
+    current_time: Optional[str]                          # 当前时间（ISO格式）
     
     # ========== 组件输出 ==========
-    intent_router_output: Optional[Dict[str, Any]]
-    cache_hit: Optional[bool]
-    field_candidates: Optional[List[Dict[str, Any]]]
-    few_shot_examples: Optional[List[Dict[str, Any]]]
-    semantic_output: Optional[Dict[str, Any]]
+    intent_router_output: Optional[Dict[str, Any]]       # IntentRouter 输出
+    cache_hit: Optional[bool]                            # 缓存是否命中
+    cached_query: Optional[Dict[str, Any]]               # 缓存的查询结果
+    field_candidates: Optional[List[Dict[str, Any]]]     # FieldRetriever 输出
+    few_shot_examples: Optional[List[Dict[str, Any]]]    # FewShotManager 输出
+    semantic_output: Optional[Dict[str, Any]]            # SemanticUnderstanding 输出
+    filter_validation_result: Optional[Dict[str, Any]]   # FilterValueValidator 输出
     
     # ========== 筛选值确认（多轮累积）==========
     # 用于累积多轮 interrupt() 确认的结果
     # 例如：第一次确认 "北京" → "北京市"，第二次确认 "上海" → "上海市"
     # 两次确认都会保留在此列表中，不会丢失
-    confirmed_filters: Optional[List[Dict[str, Any]]]  # List[FilterConfirmation]
+    confirmed_filters: Optional[List[Dict[str, Any]]]    # List[FilterConfirmation]
     
     # ========== 流程控制 ==========
-    needs_clarification: Optional[bool]
-    clarification_question: Optional[str]
-    clarification_options: Optional[List[str]]
+    needs_clarification: Optional[bool]                  # 是否需要澄清
+    clarification_question: Optional[str]                # 澄清问题
+    clarification_options: Optional[List[str]]           # 澄清选项
     
     # ========== 错误处理 ==========
-    retry_count: Optional[int]
-    error_feedback: Optional[str]
-    pipeline_error: Optional[Dict[str, Any]]
+    retry_count: Optional[int]                           # 重试次数
+    error_feedback: Optional[str]                        # 错误反馈信息
+    error_type: Optional[str]                            # 错误类型分类
+    error_history: Optional[List[Dict[str, Any]]]        # 错误修正历史
+    correction_abort_reason: Optional[str]               # 终止修正的原因
+    pipeline_error: Optional[Dict[str, Any]]             # 管道错误信息
     
     # ========== 最终输出 ==========
-    semantic_query: Optional[Dict[str, Any]]
-    parse_result: Optional[Dict[str, Any]]
+    generated_query: Optional[str]                       # 生成的查询语句
+    query_type: Optional[str]                            # 查询类型：vizql / sql
+    execution_result: Optional[Dict[str, Any]]           # 执行结果
+    semantic_query: Optional[Dict[str, Any]]             # 语义查询结构
+    parse_result: Optional[Dict[str, Any]]               # 解析结果
     
     # ========== 思考过程 ==========
-    thinking: Optional[str]
+    thinking: Optional[str]                              # LLM 思考过程
 ```
 
 ### SemanticOutput Schema
@@ -1445,12 +1495,19 @@ class Where(BaseModel):
     )
 
 class Computation(BaseModel):
-    """派生度量计算"""
+    """派生度量计算
+    
+    注意：calc_type 使用平台无关的 SUBQUERY 类型，
+    具体的实现（如 Tableau 的 FIXED/INCLUDE/EXCLUDE）由 QueryAdapter 决定。
+    """
     name: str = Field(description="计算名称，如 profit_rate")
     display_name: str = Field(description="显示名称，如 利润率")
-    formula: str = Field(description="计算公式，如 [利润]/[销售额]")
-    calc_type: CalcType = Field(description="计算类型：RATIO/GROWTH/SHARE/LOD/TABLE_CALC")
+    formula: Optional[str] = Field(description="计算公式（简单计算类型），如 [利润]/[销售额]")
+    calc_type: CalcType = Field(description="计算类型：RATIO/SUM/DIFFERENCE/PRODUCT/FORMULA/SUBQUERY/TABLE_CALC_*")
     base_measures: List[str] = Field(description="基础度量列表")
+    # 子查询特有字段
+    subquery_dimensions: Optional[List[str]] = Field(description="子查询聚合维度（仅 SUBQUERY 类型）")
+    subquery_aggregation: Optional[str] = Field(description="子查询聚合函数：MIN/MAX/SUM/AVG/COUNT")
 
 class SemanticOutput(BaseModel):
     """LLM 语义理解输出
@@ -2283,38 +2340,6 @@ async def update_history_node(
     
     return {"chat_history": history}
 ```
-    
-    # ========== 组件输出 ==========
-    intent_router_output: Optional[Dict[str, Any]]
-    cache_hit: Optional[bool]
-    cached_query: Optional[Dict[str, Any]]
-    field_candidates: Optional[List[Dict[str, Any]]]
-    few_shot_examples: Optional[List[Dict[str, Any]]]
-    semantic_output: Optional[Dict[str, Any]]
-    filter_validation_result: Optional[Dict[str, Any]]  # 包含 has_unresolvable_filters 字段
-    
-    # ========== 流程控制 ==========
-    needs_clarification: Optional[bool]
-    clarification_question: Optional[str]
-    clarification_options: Optional[List[str]]
-    
-    # ========== 错误处理 ==========
-    retry_count: Optional[int]
-    error_feedback: Optional[str]
-    error_type: Optional[str]  # 错误类型分类
-    error_history: Optional[List[Dict[str, Any]]]  # 错误修正历史
-    correction_abort_reason: Optional[str]  # 终止修正的原因
-    pipeline_error: Optional[Dict[str, Any]]
-    
-    # ========== 最终输出 ==========
-    generated_query: Optional[str]
-    query_type: Optional[str]  # vizql / sql
-    execution_result: Optional[Dict[str, Any]]
-    parse_result: Optional[Dict[str, Any]]
-    
-    # ========== 思考过程 ==========
-    thinking: Optional[str]
-```
 
 
 ## Prompt 模板
@@ -2379,9 +2404,11 @@ async def update_history_node(
     {
       "name": "计算名称",
       "display_name": "显示名称",
-      "formula": "计算公式",
-      "calc_type": "RATIO/GROWTH/SHARE/LOD/TABLE_CALC",
-      "base_measures": ["基础度量1", "基础度量2"]
+      "formula": "计算公式（简单计算类型）",
+      "calc_type": "RATIO/SUM/DIFFERENCE/SUBQUERY/TABLE_CALC_*",
+      "base_measures": ["基础度量1", "基础度量2"],
+      "subquery_dimensions": ["维度1"],  // 仅 SUBQUERY 类型
+      "subquery_aggregation": "MIN/MAX/SUM/AVG/COUNT"  // 仅 SUBQUERY 类型
     }
   ],
   "needs_clarification": false,
@@ -2805,32 +2832,71 @@ analytics_assistant/src/agents/semantic_parser/
 │
 ├── components/                    # 组件实现
 │   ├── __init__.py
-│   ├── intent_router.py          # 意图路由
-│   ├── query_cache.py            # 查询缓存
-│   ├── field_retriever.py        # 字段检索（复用 CascadeRetriever）
-│   ├── few_shot_manager.py       # Few-shot 管理
-│   ├── semantic_understanding.py # 语义理解核心
-│   ├── filter_validator.py       # 筛选值验证
-│   ├── error_corrector.py        # 错误修正
-│   └── feedback_learner.py       # 反馈学习
+│   │
+│   │  # ═══════════════════════════════════════════════════════════
+│   │  # 主流程组件 (Phase 1-13)
+│   │  # ═══════════════════════════════════════════════════════════
+│   ├── intent_router.py          # 意图路由 (Task 3)
+│   ├── query_cache.py            # 查询缓存 (Task 4)
+│   ├── field_retriever.py        # 字段检索 (Task 5)
+│   ├── few_shot_manager.py       # Few-shot 管理 (Task 6)
+│   ├── semantic_understanding.py # 语义理解核心 (Task 9)
+│   ├── field_value_cache.py      # 字段值缓存 (Task 10)
+│   ├── validate_filter_tool.py   # 筛选值验证工具 (Task 11)
+│   ├── filter_validator.py       # 筛选值验证器 (Task 12)
+│   ├── query_adapter.py          # 查询适配器 (Task 13)
+│   ├── error_corrector.py        # 错误修正 (Task 14)
+│   └── feedback_learner.py       # 反馈学习 (Task 15)
+│   │
+│   │  # ═══════════════════════════════════════════════════════════
+│   │  # 优化架构组件 (Phase 14)
+│   │  # ═══════════════════════════════════════════════════════════
+│   ├── rule_prefilter.py         # 规则预处理器 (Task 29)
+│   ├── field_rag.py              # 字段 RAG 检索 (Task 30) - 扩展 field_retriever
+│   ├── feature_cache.py          # 特征缓存 (Task 31)
+│   ├── feature_extractor.py      # LLM 特征提取器 (Task 32)
+│   ├── dynamic_schema_builder.py # 动态 Schema 构建器 (Task 33)
+│   ├── output_validator.py       # 输出预验证器 (Task 34)
+│   └── smart_schema_filter.py    # 智能字段筛选器 (Task 35)
 │
-├── prompts/                       # Prompt 模板（已存在）
+├── prompts/                       # Prompt 模板
 │   ├── __init__.py
+│   │
+│   │  # ═══════════════════════════════════════════════════════════
+│   │  # 主流程 Prompt (Phase 4)
+│   │  # ═══════════════════════════════════════════════════════════
+│   ├── time_hint_generator.py    # 时间提示生成器 (Task 7)
+│   ├── prompt_builder.py         # 动态 Prompt 构建器 (Task 8)
 │   ├── semantic_understanding.py # 语义理解 Prompt 构建逻辑
 │   ├── error_correction.py       # 错误修正 Prompt 构建逻辑
-│   ├── prompt_builder.py         # 动态 Prompt 构建器
+│   │
+│   │  # ═══════════════════════════════════════════════════════════
+│   │  # 优化架构 Prompt (Phase 14)
+│   │  # ═══════════════════════════════════════════════════════════
+│   ├── modular_prompt_builder.py # 模块化 Prompt 构建器 (Task 36)
+│   │
 │   └── templates/                # XML 模板文件
 │       ├── semantic_full.xml     # 完整版语义理解模板（复杂查询）
 │       ├── semantic_simple.xml   # 简化版语义理解模板（简单查询）
 │       ├── error_correction.xml  # 错误修正模板
-│       └── few_shot_examples.xml # Few-shot 示例模板
+│       ├── few_shot_examples.xml # Few-shot 示例模板
+│       │
+│       │  # 优化架构模板 (Phase 14)
+│       ├── feature_extraction.xml    # 特征提取模板
+│       └── computation_modules/      # 计算类型专用模块
+│           ├── ratio.xml             # RATIO 计算模块
+│           ├── rank.xml              # RANK 计算模块
+│           ├── share.xml             # SHARE 计算模块
+│           ├── time_compare.xml      # TIME_COMPARE 计算模块
+│           ├── cumulative.xml        # CUMULATIVE 计算模块
+│           └── subquery.xml          # SUBQUERY 计算模块
 │
-└── schemas/                       # Pydantic 模型（已存在，需扩展）
+└── schemas/                       # Pydantic 模型
     ├── __init__.py
     ├── input.py                  # 输入模型（IntentRouterInput 等）
-    ├── output.py                 # 输出模型（SemanticOutput, SelfCheck 等）
+    ├── output.py                 # 输出模型（SemanticOutput, SelfCheck, ComputationType 等）
     ├── intermediate.py           # 中间模型（FieldCandidate, FewShotExample 等）
-    ├── cache.py                  # 缓存模型（CachedQuery, FeedbackRecord 等）
+    ├── cache.py                  # 缓存模型（CachedQuery, CachedFeature 等）
     └── filters.py                # 筛选器模型（FilterValidationResult 等）
 ```
 
@@ -2875,26 +2941,64 @@ analytics_assistant/tests/agents/semantic_parser/
 │
 ├── unit/                          # 单元测试
 │   ├── __init__.py
+│   │
+│   │  # 主流程组件测试
 │   ├── test_intent_router.py
 │   ├── test_query_cache.py
 │   ├── test_field_retriever.py
 │   ├── test_few_shot_manager.py
 │   ├── test_semantic_understanding.py
+│   ├── test_field_value_cache.py
+│   ├── test_validate_filter_tool.py
 │   ├── test_filter_validator.py
+│   ├── test_query_adapter.py
 │   ├── test_error_corrector.py
-│   └── test_feedback_learner.py
+│   ├── test_feedback_learner.py
+│   │
+│   │  # 优化架构组件测试 (Phase 14)
+│   ├── test_rule_prefilter.py
+│   ├── test_field_rag.py
+│   ├── test_feature_cache.py
+│   ├── test_feature_extractor.py
+│   ├── test_dynamic_schema_builder.py
+│   ├── test_output_validator.py
+│   ├── test_smart_schema_filter.py
+│   └── test_modular_prompt_builder.py
 │
-├── property/                      # 属性测试
+├── property/                      # 属性测试 (PBT)
 │   ├── __init__.py
-│   ├── test_cache_properties.py
-│   ├── test_retrieval_properties.py
-│   ├── test_understanding_properties.py
-│   └── test_feedback_properties.py
+│   │
+│   │  # 主流程属性测试 (Property 1-41)
+│   ├── test_intent_properties.py         # Property 1
+│   ├── test_cache_properties.py          # Property 2, 3, 32
+│   ├── test_retrieval_properties.py      # Property 4, 5, 10, 11
+│   ├── test_understanding_properties.py  # Property 6-9, 12, 13, 18-20
+│   ├── test_filter_properties.py         # Property 23, 29, 36, 36.1, 37-40
+│   ├── test_error_properties.py          # Property 14, 30, 30.1, 31
+│   ├── test_feedback_properties.py       # Property 15, 16
+│   ├── test_context_properties.py        # Property 21, 22, 24
+│   ├── test_prompt_properties.py         # Property 25, 26, 33
+│   ├── test_schema_properties.py         # Property 27, 28
+│   ├── test_graph_properties.py          # Property 34, 35
+│   ├── test_adapter_properties.py        # Property 41
+│   │
+│   │  # 优化架构属性测试 (Property 42-49)
+│   ├── test_prefilter_properties.py      # Property 42, 43
+│   ├── test_feature_properties.py        # Property 44, 45
+│   ├── test_schema_builder_properties.py # Property 46
+│   ├── test_validator_properties.py      # Property 47
+│   ├── test_filter_schema_properties.py  # Property 48
+│   └── test_modular_prompt_properties.py # Property 49
 │
-└── integration/                   # 集成测试
+├── integration/                   # 集成测试
+│   ├── __init__.py
+│   ├── test_graph_flow.py                # 主流程端到端测试 (Task 25)
+│   ├── test_multi_turn.py                # 多轮对话测试 (Task 26)
+│   └── test_optimized_architecture.py    # 优化架构集成测试 (Task 38)
+│
+└── performance/                   # 性能测试
     ├── __init__.py
-    ├── test_graph_flow.py
-    └── test_multi_turn.py
+    └── test_benchmarks.py                # 性能基准测试 (Task 27)
 ```
 
 
@@ -3311,7 +3415,7 @@ class TimeExpressionConfig(BaseModel):
                 │
                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ 阶段 5.5: FilterValueValidator                                   │
+│ 阶段 6: FilterValueValidator                                   │
 │ ─────────────────────────────────────────────────────────────── │
 │                                                                  │
 │ 1. 检查 "省份" 字段:                                             │
@@ -3359,7 +3463,7 @@ class TimeExpressionConfig(BaseModel):
 └─────────────────────────────────────────────────────────────────┘
                 │
                 ▼
-        继续阶段 6: 查询构建与执行
+        继续阶段 7: 查询构建与执行
 ```
 
 ### ValidateFilterValueTool 工具定义
@@ -3891,3 +3995,543 @@ class FilterValueValidator:
 *For any* multi-round filter confirmation scenario (e.g., first confirming "北京" → "北京市", then "上海" → "上海市"), the filter_validator_node SHALL accumulate all confirmations in the `confirmed_filters` state field. Previous confirmations SHALL NOT be lost when new confirmations are added.
 
 **Validates: 多轮筛选值确认 - 上下文累积**
+
+
+---
+
+## 动态 Prompt 与 Schema 优化（优化版架构）
+
+### 设计背景
+
+当前的 `DynamicPromptBuilder` 使用简单的关键词匹配来判断查询复杂度（SIMPLE/COMPLEX），存在以下问题：
+
+1. **二元分类过于粗糙**：无法区分不同类型的复杂查询（比率、排名、同比等）
+2. **仅支持中文**：关键词匹配只覆盖中文，不支持多语言场景
+3. **Schema 未优化**：无论查询类型，都返回相同的字段列表和 Schema 定义，浪费 Token
+4. **缺乏深度理解**：纯规则无法理解复杂的语义关系
+5. **筛选值验证时机不当**：在 LLM 输出后才验证，无法提前发现问题
+
+### 设计目标
+
+1. **细粒度计算类型识别**：从二元分类扩展到 7 种计算类型
+2. **多语言支持**：支持中文、英文、日文等多语言时间和计算表达式
+3. **动态 Schema 构建**：根据特征动态选择 Schema 模块（字段 + Filter + Computation + Intermediate）
+4. **动态 Prompt 构建**：根据特征动态组装 Prompt 模块
+5. **两阶段筛选值验证**：预检测 + 后验证，提前发现问题
+6. **多级缓存**：查询缓存 + 特征缓存 + 字段缓存，提升性能
+7. **输出预验证与自修正**：减少不必要的 LLM 重试
+
+
+### 整体架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      优化版语义理解工作流程                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  用户问题: "上个月北京的利润率是多少？"                                      │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 1: IntentRouter (意图路由)                                            │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  输出: DATA_QUERY → 继续                                                    │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 2: QueryCache (查询缓存)                                              │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  输出: cache_miss → 继续                                                    │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 3: RulePrefilter (规则预处理) - 辅助性质                              │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 快速提取明确特征，作为 LLM 的辅助输入:                               │   │
+│  │ - 语言检测: zh                                                       │   │
+│  │ - 时间表达式: ["上个月"]                                             │   │
+│  │ - 计算类型提示: [RATIO] (检测到 "率")                                │   │
+│  │ - 可能的筛选值: ["北京"]                                             │   │
+│  │                                                                     │   │
+│  │ 注意: 这只是辅助信息，最终由 LLM 决定                                │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 4: FeatureExtractor (LLM 特征提取) ⭐ 核心步骤                        │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 输入:                                                                │   │
+│  │ - 用户问题                                                           │   │
+│  │ - 规则预处理结果 (辅助信息)                                          │   │
+│  │                                                                     │   │
+│  │ LLM 输出 (结构化):                                                   │   │
+│  │ {                                                                   │   │
+│  │   "computation_type": "RATIO",                                      │   │
+│  │   "semantic_intent": {                                              │   │
+│  │     "target_metrics": ["利润率"],                                   │   │
+│  │     "base_metrics_hint": ["利润", "销售额"],                        │   │
+│  │     "dimensions_hint": ["地区/城市"],                               │   │
+│  │     "time_context": "上个月",                                       │   │
+│  │     "filter_context": {"地理": "北京"}                              │   │
+│  │   },                                                                │   │
+│  │   "query_complexity": "COMPLEX",                                    │   │
+│  │   "required_schema_modules": ["filter", "computation", "time"]      │   │
+│  │ }                                                                   │   │
+│  │                                                                     │   │
+│  │ 这个输出用于指导:                                                    │   │
+│  │ 1. 字段检索的查询构建                                                │   │
+│  │ 2. Schema 模块的动态选择                                             │   │
+│  │ 3. Prompt 模块的动态组装                                             │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 5: FieldRetriever (字段检索) - 基于特征提取结果                       │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 基于 FeatureExtractor 的输出构建检索查询:                            │   │
+│  │                                                                     │   │
+│  │ 检索策略:                                                            │   │
+│  │ - target_metrics: "利润率" → 检索相关度量                           │   │
+│  │ - base_metrics_hint: ["利润", "销售额"] → 精确匹配优先               │   │
+│  │ - dimensions_hint: "地区/城市" → 检索地理维度                        │   │
+│  │ - time_context → 检索时间字段                                        │   │
+│  │                                                                     │   │
+│  │ 输出: 分类后的字段列表                                               │   │
+│  │ {                                                                   │   │
+│  │   "measures": [利润, 销售额, 成本],                                 │   │
+│  │   "dimensions": [地区, 城市, 省份],                                 │   │
+│  │   "time_fields": [订单日期]                                         │   │
+│  │ }                                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 6: DynamicSchemaBuilder (动态 Schema 构建) ⭐ 核心                    │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 根据 FeatureExtractor 的 required_schema_modules 动态选择:          │   │
+│  │                                                                     │   │
+│  │ Schema 模块池:                                                       │   │
+│  │ ┌─────────────────────────────────────────────────────────────────┐ │   │
+│  │ │ 基础模块 (必选)                                                 │ │   │
+│  │ │ - SemanticOutputBase: restated_question, what, where, self_check│ │   │
+│  │ └─────────────────────────────────────────────────────────────────┘ │   │
+│  │ ┌─────────────────────────────────────────────────────────────────┐ │   │
+│  │ │ 时间模块 (检测到时间表达式时)                                   │ │   │
+│  │ │ - TimeFilter: 时间筛选定义                                      │ │   │
+│  │ │ - TimeContext: 时间上下文 (当前日期、财年等)                    │ │   │
+│  │ │ - TimeComputation: 同比/环比计算 (如果需要)                     │ │   │
+│  │ └─────────────────────────────────────────────────────────────────┘ │   │
+│  │ ┌─────────────────────────────────────────────────────────────────┐ │   │
+│  │ │ 计算模块 (检测到派生度量时)                                     │ │   │
+│  │ │ - Computation: 计算定义                                         │ │   │
+│  │ │ - 按 calc_type 包含对应的示例和约束                             │ │   │
+│  │ └─────────────────────────────────────────────────────────────────┘ │   │
+│  │ ┌─────────────────────────────────────────────────────────────────┐ │   │
+│  │ │ 筛选模块 (检测到筛选条件时)                                     │ │   │
+│  │ │ - Filter: 筛选定义                                              │ │   │
+│  │ │ - 包含已验证的筛选值提示                                        │ │   │
+│  │ └─────────────────────────────────────────────────────────────────┘ │   │
+│  │ ┌─────────────────────────────────────────────────────────────────┐ │   │
+│  │ │ 澄清模块 (信息不完整时)                                         │ │   │
+│  │ │ - ClarificationOutput: 澄清问题和选项                           │ │   │
+│  │ └─────────────────────────────────────────────────────────────────┘ │   │
+│  │                                                                     │   │
+│  │ 本例选择:                                                           │   │
+│  │ - 基础模块 ✓                                                        │   │
+│  │ - 时间模块 ✓ (有时间表达式)                                         │   │
+│  │ - 计算模块 (RATIO) ✓ (计算类型是 RATIO)                             │   │
+│  │ - 筛选模块 ✓ (有地理筛选)                                           │   │
+│  │                                                                     │   │
+│  │ 输出: 组装后的动态 Schema 定义                                       │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 7: DynamicPromptBuilder (动态 Prompt 构建)                            │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 根据前面所有阶段的输出动态组装 Prompt:                               │   │
+│  │                                                                     │   │
+│  │ Prompt 模块:                                                        │   │
+│  │ 1. [system] 系统指令 (必选)                                         │   │
+│  │ 2. [context] 时间/时区/财年配置                                     │   │
+│  │ 3. [schema] 动态 Schema 定义 (来自阶段 6)                           │   │
+│  │ 4. [fields] 精简字段列表 (来自阶段 5)                               │   │
+│  │ 5. [computation_ratio] RATIO 计算专用指令 (按需)                    │   │
+│  │ 6. [time_hints] 时间表达式提示 (按需)                               │   │
+│  │ 7. [few_shot] 相关示例 (按计算类型筛选)                             │   │
+│  │ 8. [question] 用户问题                                              │   │
+│  │ 10. [output_format] 输出格式 (动态 Schema)                          │   │
+│  │                                                                     │   │
+│  │ 输出: 定制化 Prompt                                                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 8: SemanticUnderstanding (LLM 语义理解) ⭐ 核心                       │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 输入: 动态构建的 Prompt + 动态 Schema                                │   │
+│  │ 输出: SemanticOutput (符合动态 Schema 的结构化输出)                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 9: OutputValidator (输出预验证 + 自修正)                              │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 验证 LLM 输出的正确性:                                               │   │
+│  │ - 字段存在性检查: 输出的字段是否在候选列表中                         │   │
+│  │ - 计算公式验证: 公式中的字段是否存在                                 │   │
+│  │ - 类型匹配检查: 计算类型是否与公式匹配                               │   │
+│  │                                                                     │   │
+│  │ 自修正机制 (不触发 LLM 重试):                                        │   │
+│  │ - 字段名拼写错误 → 自动映射到最相似的候选字段                        │   │
+│  │ - 筛选值格式问题 → 自动标准化                                        │   │
+│  │ - 时间格式问题 → 自动转换                                            │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 10: FilterValueValidator (筛选值验证)                               │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 验证 LLM 输出的具体筛选值:                                           │   │
+│  │ - 输入: filters: [{field: "城市", values: ["北京"]}]                │   │
+│  │ - 验证: "城市" 字段中是否存在 "北京"                                 │   │
+│  │                                                                     │   │
+│  │ 结果处理:                                                            │   │
+│  │ - 精确匹配 → 通过，继续执行                                          │   │
+│  │ - 模糊匹配 → 触发 interrupt()，返回候选值供确认                      │   │
+│  │ - 无匹配 → 返回澄清问题，提供相似值                                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  阶段 11: QueryAdapter + 执行 + 缓存                                        │
+│  ════════════════════════════════════════════════════════════════════════  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 1. QueryAdapter: SemanticOutput → VizQL/SQL                         │   │
+│  │ 2. 执行查询                                                          │   │
+│  │ 3. 缓存成功的查询 (QueryCache + FeatureCache)                        │   │
+│  │ 4. 返回结果                                                          │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### LLM 调用次数分析
+
+| 阶段 | LLM 调用 | 说明 |
+|------|----------|------|
+| IntentRouter | 0-1 次 | L0 规则命中时 0 次 |
+| FeatureExtractor | 1 次 | 轻量级调用，输入输出都少 |
+| SemanticUnderstanding | 1 次 | 核心调用 |
+| **总计** | **2-3 次** | 典型场景 2 次 |
+
+
+### 计算类型定义
+
+从原来的二元分类（SIMPLE/COMPLEX）扩展为 7 种细粒度计算类型：
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           计算类型 (ComputationType)                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────┐  简单聚合查询，无派生计算                                   │
+│  │   SIMPLE    │  示例: "各地区销售额", "Show sales by region"              │
+│  └─────────────┘  Prompt: 精简模板，无计算指令                               │
+│                                                                             │
+│  ┌─────────────┐  比率计算 (A/B)                                            │
+│  │    RATIO    │  示例: "利润率", "profit margin", "転換率"                 │
+│  └─────────────┘  Prompt: 包含比率计算示例和公式模板                         │
+│                                                                             │
+│  ┌─────────────┐  排名计算                                                  │
+│  │    RANK     │  示例: "销售额排名", "top 10 products", "ランキング"       │
+│  └─────────────┘  Prompt: 包含 RANK() 函数示例                              │
+│                                                                             │
+│  ┌─────────────┐  占比计算 (A/SUM(A))                                       │
+│  │    SHARE    │  示例: "市场份额", "percentage of total", "構成比"         │
+│  └─────────────┘  Prompt: 包含占比计算示例                                   │
+│                                                                             │
+│  ┌─────────────┐  时间对比 (同比/环比)                                       │
+│  │TIME_COMPARE │  示例: "同比增长", "YoY growth", "前年比"                  │
+│  └─────────────┘  Prompt: 包含时间偏移计算示例                               │
+│                                                                             │
+│  ┌─────────────┐  累计计算                                                  │
+│  │ CUMULATIVE  │  示例: "累计销售额", "running total", "累計"               │
+│  └─────────────┘  Prompt: 包含 RUNNING_SUM 示例                             │
+│                                                                             │
+│  ┌─────────────┐  子查询/聚合粒度 (平台无关)                                 │
+│  │  SUBQUERY   │  示例: "每个客户的首次购买", "独立于筛选器"                 │
+│  └─────────────┘  适配器转换: Tableau→LOD, SQL→子查询                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+### 组件详细设计
+
+以下是优化版架构中各组件的详细设计。
+
+#### 1. RulePrefilter (规则预处理器)
+
+**职责**：快速提取明确特征，作为 LLM 的辅助输入（不做最终决策）
+
+**关键设计**：
+- 多语言支持（中文、英文、日文）
+- 提取时间表达式、计算类型提示、可能的筛选值
+- 输出仅作为辅助信息，最终由 LLM 决定
+
+```python
+@dataclass
+class PrefilterResult:
+    """预筛选结果"""
+    time_expressions: List[str]           # 检测到的时间表达式
+    computation_hints: List[ComputationType]  # 计算类型提示（仅供参考）
+    possible_filter_values: List[str]     # 可能的筛选值
+    detected_language: str                # 检测到的语言
+```
+
+#### 2. FeatureExtractor (LLM 特征提取器)
+
+**职责**：核心步骤，使用 LLM 深度理解用户意图，输出用于指导后续处理的特征
+
+**关键设计**：
+- 始终调用 LLM（输入轻量，输出轻量，延迟低）
+- 输出包含：计算类型、语义意图、查询复杂度、需要的 Schema 模块
+- 语义意图用于指导字段检索
+
+```python
+class SemanticIntent(BaseModel):
+    """语义意图"""
+    target_metrics: List[str]           # 目标度量
+    base_metrics_hint: List[str]        # 基础度量提示（用于计算）
+    dimensions_hint: List[str]          # 维度提示
+    time_context: Optional[str]         # 时间上下文
+    filter_context: Dict[str, str]      # 筛选上下文
+
+class FeatureExtractionOutput(BaseModel):
+    """LLM 特征提取输出"""
+    computation_type: ComputationType
+    semantic_intent: SemanticIntent
+    query_complexity: str  # SIMPLE / COMPLEX
+    required_schema_modules: List[str]  # ["filter", "computation", "time", "clarification"]
+    confidence: float
+```
+
+#### 4. FieldRetriever (字段检索器)
+
+**职责**：基于 FeatureExtractor 的语义意图进行精准字段检索
+
+**关键设计**：
+- 使用语义意图构建检索查询
+- 分类检索：度量、维度、时间字段
+- 精确匹配优先
+
+#### 5. DynamicSchemaBuilder (动态 Schema 构建器)
+
+**职责**：根据特征动态选择 Schema 模块，不只是字段筛选
+
+**关键设计**：
+- Schema 模块池：基础模块、时间模块、计算模块、筛选模块、澄清模块
+- 根据 `required_schema_modules` 动态选择
+- 输出包含字段列表和 Schema 定义
+
+```python
+SCHEMA_MODULES = {
+    "base": "基础输出结构 (restated_question, what, where, self_check)",
+    "time": "时间相关 (time_filter, granularity)",
+    "computation": "计算相关 (computations, formula, calc_type)",
+    "filter": "筛选相关 (filters, operator, values)",
+    "clarification": "澄清相关 (needs_clarification, clarification_question)",
+}
+```
+
+#### 6. DynamicPromptBuilder (动态 Prompt 构建器)
+
+**职责**：根据特征和动态 Schema 组装 Prompt
+
+**关键设计**：
+- Prompt 模块：system、context、schema、fields、computation_xxx、time_hints、filter_hints、few_shot、question
+- 根据计算类型选择对应的计算模块
+- 包含已验证的筛选值提示
+
+#### 7. OutputValidator (输出预验证器)
+
+**职责**：验证 LLM 输出的正确性，自动修正可修正的错误
+
+**关键设计**：
+- 字段存在性检查：输出的字段是否在候选列表中
+- 计算公式验证：公式中的字段是否存在
+- 自修正机制：字段名拼写错误自动映射、筛选值格式自动标准化
+
+```python
+@dataclass
+class ValidationResult:
+    """验证结果"""
+    is_valid: bool
+    corrections_made: List[str]  # 自动修正的内容
+    errors: List[str]            # 无法自动修正的错误
+```
+
+#### 8. FilterValueValidator (筛选值后验证器)
+
+**职责**：验证 LLM 输出的具体筛选值
+
+**关键设计**：
+- 在 LLM 输出后运行
+- 验证具体的字段+值组合是否有效
+- 处理逻辑：精确匹配→通过，模糊匹配→interrupt()，无匹配→澄清
+
+
+### 多级缓存策略
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           多级缓存策略                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Level 1: QueryCache (完整查询缓存)                                         │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  Key: hash(question + datasource)                                          │
+│  Value: 完整的 SemanticOutput + Query                                      │
+│  命中条件: 完全相同的问题                                                   │
+│  TTL: 24 小时                                                               │
+│                                                                             │
+│  Level 2: FeatureCache (特征缓存) ⭐ 新增                                   │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  Key: hash(normalized_question_pattern)                                    │
+│  Value: FeatureExtractor 的输出                                            │
+│  命中条件: 相似模式的问题                                                   │
+│  TTL: 1 小时                                                                │
+│                                                                             │
+│  Level 3: FieldValueCache (字段值缓存)                                      │
+│  ─────────────────────────────────────────────────────────────────────────  │
+│  Key: (datasource_luid, field_name)                                        │
+│  Value: 字段的所有可能值                                                    │
+│  命中条件: 相同数据源和字段                                                 │
+│  TTL: 1 小时                                                                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+### 与原有组件的关系
+
+| 新组件 | 原有组件 | 关系 |
+|--------|----------|------|
+| RulePrefilter | TimeHintGenerator | 扩展，增加多语言支持和筛选值提取 |
+| FeatureExtractor | DynamicPromptBuilder._detect_complexity() | 替代，使用 LLM 深度理解 |
+| FieldRetriever | FieldRetriever | 增强，基于语义意图检索 |
+| DynamicSchemaBuilder | SmartSchemaFilter | 扩展，不只是字段筛选 |
+| DynamicPromptBuilder | DynamicPromptBuilder | 重构，支持动态 Schema |
+| OutputValidator | 无 | 新增 |
+| FilterValueValidator | FilterValueValidator | 保留，在 SemanticUnderstanding 后验证 |
+
+
+---
+
+## 附录：旧版实现参考
+
+> **注意**：以下旧版实现代码已被上述优化版架构替代。
+> 新架构的核心变化：
+> - FeatureExtractor 始终调用（不再是条件触发）
+> - 两阶段 FilterValueValidator（预检测 + 后验证）
+> - DynamicSchemaBuilder 动态选择 Schema 模块（不只是字段筛选）
+> - 新增 OutputValidator 进行输出预验证和自修正
+
+旧版实现代码已移除，详见 Git 历史记录。
+
+---
+
+
+### 性能与效果对比
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         性能与效果对比                                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 原方案 (DynamicPromptBuilder)                                        │   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │ 复杂度判断: 关键词匹配 (仅中文)                                       │   │
+│  │ 分类粒度: 2 种 (SIMPLE/COMPLEX)                                      │   │
+│  │ Schema 优化: 无 (返回 Top-K 全部字段)                                 │   │
+│  │ 多语言支持: 否                                                       │   │
+│  │ LLM 调用: 1 次 (语义理解)                                            │   │
+│  │ 平均 Token: ~2000                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 新方案 (优化版架构)                                                   │   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │ 复杂度判断: 规则 + LLM (FeatureExtractor 始终调用)                    │   │
+│  │ 分类粒度: 7 种 (SIMPLE/RATIO/RANK/SHARE/TIME_COMPARE/CUMULATIVE/    │   │
+│  │                 SUBQUERY)                                            │   │
+│  │ Schema 优化: 动态 Schema 模块选择 (不只是字段筛选)                    │   │
+│  │ 多语言支持: 是 (zh/en/ja)                                            │   │
+│  │ LLM 调用: 2 次 (FeatureExtractor + SemanticUnderstanding)            │   │
+│  │ 平均 Token: ~1200 (减少 40%)                                         │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │ 延迟分析                                                             │   │
+│  │ ─────────────────────────────────────────────────────────────────── │   │
+│  │                                                                     │   │
+│  │  RulePrefilter:              < 10ms   (纯规则，无 IO)               │   │
+│  │  FeatureExtractor:           < 500ms  (轻量级 LLM)                  │   │
+│  │  FieldRetriever:             < 100ms  (向量检索)                    │   │
+│  │  DynamicSchemaBuilder:       < 5ms    (内存计算)                    │   │
+│  │  DynamicPromptBuilder:       < 5ms    (字符串拼接)                  │   │
+│  │  SemanticUnderstanding:      < 2000ms (核心 LLM)                    │   │
+│  │  OutputValidator:            < 10ms   (规则验证)                    │   │
+│  │  FilterValueValidator:       < 50ms   (缓存查询)                    │   │
+│  │  ─────────────────────────────────────────────────────────────────  │   │
+│  │  典型查询总延迟:             < 3s                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+
+### 新增 Correctness Properties
+
+基于优化版架构，补充以下正确性属性：
+
+#### Property 42: Multi-Language Time Expression Detection
+
+*For any* user question containing time expressions in supported languages (zh/en/ja), the RulePrefilter SHALL detect and extract the time expressions with correct language identification.
+
+**Validates: Requirements 11.4, 16.1**
+
+#### Property 43: Computation Type Classification Accuracy
+
+*For any* user question containing computation keywords (ratio, rank, share, time_compare, cumulative, subquery), the RulePrefilter SHALL classify the computation type correctly based on the detected keywords.
+
+**Validates: Requirements 5.2, 17.2**
+
+#### Property 44: FeatureExtractor Always Invoked
+
+*For any* DATA_QUERY intent, the FeatureExtractor SHALL always be invoked (not conditional).
+
+**Validates: 优化版架构设计 - FeatureExtractor 始终调用**
+
+#### Property 45: DynamicSchemaBuilder Module Selection
+
+*For any* schema building operation, the DynamicSchemaBuilder SHALL select appropriate schema modules based on FeatureExtractor output (base, time, computation, filter, clarification).
+
+**Validates: 优化版架构设计 - 动态 Schema 模块选择**
+
+#### Property 46: OutputValidator Auto-Correction
+
+*For any* LLM output with correctable errors (field name typos, format issues), the OutputValidator SHALL auto-correct without triggering LLM retry.
+
+**Validates: 优化版架构设计 - 输出预验证和自修正**
+
+#### Property 47: Filter Validation After SemanticUnderstanding
+
+*For any* filter value in SemanticOutput, the FilterValueValidator SHALL run after SemanticUnderstanding to verify filter values exist in the data source.
+
+**Validates: 优化版架构设计 - 筛选值验证**
+
+#### Property 48: FeatureCache Hit
+
+*For any* similar question pattern, the FeatureCache SHALL return cached FeatureExtractor output if available.
+
+**Validates: 优化版架构设计 - 多级缓存策略**

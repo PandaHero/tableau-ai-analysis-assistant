@@ -4,6 +4,8 @@
 测试任务 2.2.5：
 - 测试适配器接口实现
 - 测试查询执行流程
+
+注意：测试使用 SemanticOutput 作为输入，这是语义解析器的输出格式。
 """
 
 import pytest
@@ -12,8 +14,13 @@ from unittest.mock import AsyncMock, MagicMock
 from analytics_assistant.src.core.schemas import (
     DimensionField,
     MeasureField,
-    SemanticQuery,
     ValidationErrorType,
+)
+from analytics_assistant.src.agents.semantic_parser.schemas.output import (
+    SemanticOutput,
+    What,
+    Where,
+    SelfCheck,
 )
 from analytics_assistant.src.platform.tableau.adapter import TableauAdapter
 
@@ -49,6 +56,28 @@ def adapter_no_client():
     return TableauAdapter()
 
 
+def make_semantic_output(
+    dimensions: list[DimensionField] | None = None,
+    measures: list[MeasureField] | None = None,
+    filters: list | None = None,
+) -> SemanticOutput:
+    """创建 SemanticOutput 测试对象的辅助函数。"""
+    return SemanticOutput(
+        restated_question="测试查询",
+        what=What(measures=measures or []),
+        where=Where(
+            dimensions=dimensions or [],
+            filters=filters or [],
+        ),
+        self_check=SelfCheck(
+            field_mapping_confidence=1.0,
+            time_range_confidence=1.0,
+            computation_confidence=1.0,
+            overall_confidence=1.0,
+        ),
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 基本属性测试
 # ═══════════════════════════════════════════════════════════════════════════
@@ -70,7 +99,7 @@ class TestBuildQuery:
     
     def test_build_simple_query(self, adapter):
         """测试构建简单查询。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -81,7 +110,7 @@ class TestBuildQuery:
     
     def test_build_query_with_kwargs(self, adapter):
         """测试带额外参数的构建。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
         )
         result = adapter.build_query(
@@ -102,7 +131,7 @@ class TestValidateQuery:
     
     def test_validate_valid_query(self, adapter):
         """测试验证有效查询。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -112,7 +141,7 @@ class TestValidateQuery:
     
     def test_validate_empty_query(self, adapter):
         """测试验证空查询。"""
-        query = SemanticQuery()
+        query = make_semantic_output()
         result = adapter.validate_query(query)
         
         assert result.is_valid is False
@@ -129,7 +158,7 @@ class TestExecuteQuery:
     @pytest.mark.asyncio
     async def test_execute_simple_query(self, adapter, mock_vizql_client):
         """测试执行简单查询。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -150,7 +179,7 @@ class TestExecuteQuery:
     @pytest.mark.asyncio
     async def test_execute_query_no_client(self, adapter_no_client):
         """测试无客户端时执行查询抛出异常。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -164,7 +193,7 @@ class TestExecuteQuery:
     @pytest.mark.asyncio
     async def test_execute_invalid_query(self, adapter):
         """测试执行无效查询抛出异常。"""
-        query = SemanticQuery()  # 空查询
+        query = make_semantic_output()  # 空查询
         
         with pytest.raises(ValueError, match="查询验证失败"):
             await adapter.execute_query(
@@ -177,7 +206,7 @@ class TestExecuteQuery:
         """测试客户端错误传播。"""
         mock_vizql_client.query_datasource.side_effect = Exception("API Error")
         
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -199,7 +228,7 @@ class TestResponseConversion:
     @pytest.mark.asyncio
     async def test_convert_columns(self, adapter, mock_vizql_client):
         """测试列信息转换。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -232,7 +261,7 @@ class TestResponseConversion:
             "rowCount": 0,
         }
         
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )
@@ -247,7 +276,7 @@ class TestResponseConversion:
     @pytest.mark.asyncio
     async def test_convert_data_rows(self, adapter, mock_vizql_client):
         """测试数据行转换。"""
-        query = SemanticQuery(
+        query = make_semantic_output(
             dimensions=[DimensionField(field_name="省份")],
             measures=[MeasureField(field_name="销售额")],
         )

@@ -2,7 +2,10 @@
 """Tableau 平台适配器 - 实现 BasePlatformAdapter。
 
 此适配器处理完整流程：
-SemanticQuery → 验证 → 构建 VizQL → 执行 → ExecuteResult
+SemanticOutput → 验证 → 构建 VizQL → 执行 → ExecuteResult
+
+SemanticOutput 是语义解析器的输出，直接作为适配器的输入，
+无需中间的 SemanticQuery 模型。
 """
 
 import logging
@@ -12,9 +15,9 @@ from analytics_assistant.src.core.interfaces import BasePlatformAdapter
 from analytics_assistant.src.core.schemas import (
     ColumnInfo,
     ExecuteResult,
-    SemanticQuery,
     ValidationResult,
 )
+from analytics_assistant.src.agents.semantic_parser.schemas.output import SemanticOutput
 from analytics_assistant.src.platform.tableau.query_builder import TableauQueryBuilder
 
 
@@ -24,7 +27,7 @@ logger = logging.getLogger(__name__)
 class TableauAdapter(BasePlatformAdapter):
     """Tableau 平台适配器。
     
-    将 SemanticQuery 转换为 VizQL API 请求并执行。
+    将 SemanticOutput（语义解析器输出）转换为 VizQL API 请求并执行。
     """
     
     def __init__(self, vizql_client: Any = None):
@@ -43,14 +46,14 @@ class TableauAdapter(BasePlatformAdapter):
     
     async def execute_query(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: SemanticOutput,
         datasource_id: str,
         **kwargs: Any,
     ) -> ExecuteResult:
         """对 Tableau 执行语义查询。
         
         Args:
-            semantic_query: 平台无关的语义查询
+            semantic_output: 语义解析器的输出
             datasource_id: Tableau 数据源 ID
             **kwargs: 额外参数
             
@@ -65,14 +68,14 @@ class TableauAdapter(BasePlatformAdapter):
             raise RuntimeError("VizQL 客户端未配置")
         
         # 验证查询
-        validation = self.validate_query(semantic_query, **kwargs)
+        validation = self.validate_query(semantic_output, **kwargs)
         if not validation.is_valid:
             error_msgs = [e.message for e in (validation.errors or [])]
             raise ValueError(f"查询验证失败: {'; '.join(error_msgs)}")
         
         # 构建 VizQL 请求
         vizql_request = self.build_query(
-            semantic_query,
+            semantic_output,
             datasource_id=datasource_id,
             **kwargs,
         )
@@ -91,35 +94,35 @@ class TableauAdapter(BasePlatformAdapter):
     
     def build_query(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: SemanticOutput,
         **kwargs: Any,
     ) -> dict:
-        """从 SemanticQuery 构建 VizQL 请求。
+        """从 SemanticOutput 构建 VizQL 请求。
         
         Args:
-            semantic_query: 平台无关的语义查询
+            semantic_output: 语义解析器的输出
             **kwargs: 额外参数
             
         Returns:
             VizQL API 请求字典
         """
-        return self._query_builder.build(semantic_query, **kwargs)
+        return self._query_builder.build(semantic_output, **kwargs)
     
     def validate_query(
         self,
-        semantic_query: SemanticQuery,
+        semantic_output: SemanticOutput,
         **kwargs: Any,
     ) -> ValidationResult:
-        """验证 Tableau 的语义查询。
+        """验证 SemanticOutput 是否适用于 Tableau 平台。
         
         Args:
-            semantic_query: 要验证的查询
+            semantic_output: 要验证的语义输出
             **kwargs: 额外参数
             
         Returns:
             ValidationResult
         """
-        return self._query_builder.validate(semantic_query, **kwargs)
+        return self._query_builder.validate(semantic_output, **kwargs)
     
     def _convert_response(self, response: dict) -> ExecuteResult:
         """将 VizQL 响应转换为 ExecuteResult。"""

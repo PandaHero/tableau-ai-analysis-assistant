@@ -3,9 +3,11 @@
 Core 层 - 平台无关的领域模型和接口
 
 本模块包含：
-1. 领域模型 (models/) - SemanticQuery, Field, Filter, Computation 等
+1. 领域模型 (schemas/) - Field, Filter, Computation 等
 2. 接口定义 (interfaces.py) - BasePlatformAdapter, BaseQueryBuilder 等
 3. 异常定义 (exceptions.py)
+
+注意：SemanticOutput（语义解析器输出）定义在 agents/semantic_parser/schemas/output.py
 """
 
 from analytics_assistant.src.core.exceptions import ValidationError
