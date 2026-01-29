@@ -1288,13 +1288,11 @@ class TestProperty25PromptComplexityAdaptation:
     ])
     def test_derived_metric_keywords_trigger_complex(self, builder, keyword):
         """派生度量关键词触发 COMPLEX 模板"""
-        from analytics_assistant.src.agents.semantic_parser.prompts.prompt_builder import (
-            PromptComplexity,
-        )
+        from analytics_assistant.src.core.schemas.enums import HowType
         
         question = f"各地区的{keyword}"
         complexity = builder.get_complexity(question)
-        assert complexity == PromptComplexity.COMPLEX
+        assert complexity == HowType.COMPLEX
     
     # ─────────────────────────────────────────────────────────────────────────
     # 时间计算关键词测试
@@ -1306,13 +1304,11 @@ class TestProperty25PromptComplexityAdaptation:
     ])
     def test_time_calc_keywords_trigger_complex(self, builder, keyword):
         """时间计算关键词触发 COMPLEX 模板"""
-        from analytics_assistant.src.agents.semantic_parser.prompts.prompt_builder import (
-            PromptComplexity,
-        )
+        from analytics_assistant.src.core.schemas.enums import HowType
         
         question = f"销售额{keyword}"
         complexity = builder.get_complexity(question)
-        assert complexity == PromptComplexity.COMPLEX
+        assert complexity == HowType.COMPLEX
     
     # ─────────────────────────────────────────────────────────────────────────
     # LOD 关键词测试
@@ -1324,13 +1320,11 @@ class TestProperty25PromptComplexityAdaptation:
     ])
     def test_lod_keywords_trigger_complex(self, builder, keyword):
         """LOD 关键词触发 COMPLEX 模板"""
-        from analytics_assistant.src.agents.semantic_parser.prompts.prompt_builder import (
-            PromptComplexity,
-        )
+        from analytics_assistant.src.core.schemas.enums import HowType
         
         question = f"{keyword}客户的首购日期"
         complexity = builder.get_complexity(question)
-        assert complexity == PromptComplexity.COMPLEX
+        assert complexity == HowType.COMPLEX
     
     # ─────────────────────────────────────────────────────────────────────────
     # 表计算关键词测试
@@ -1342,13 +1336,11 @@ class TestProperty25PromptComplexityAdaptation:
     ])
     def test_table_calc_keywords_trigger_complex(self, builder, keyword):
         """表计算关键词触发 COMPLEX 模板"""
-        from analytics_assistant.src.agents.semantic_parser.prompts.prompt_builder import (
-            PromptComplexity,
-        )
+        from analytics_assistant.src.core.schemas.enums import HowType
         
         question = f"销售额{keyword}"
         complexity = builder.get_complexity(question)
-        assert complexity == PromptComplexity.COMPLEX
+        assert complexity == HowType.COMPLEX
     
     # ─────────────────────────────────────────────────────────────────────────
     # 简单查询测试
@@ -1363,12 +1355,10 @@ class TestProperty25PromptComplexityAdaptation:
     ])
     def test_simple_queries_use_simple_template(self, builder, question):
         """简单查询使用 SIMPLE 模板"""
-        from analytics_assistant.src.agents.semantic_parser.prompts.prompt_builder import (
-            PromptComplexity,
-        )
+        from analytics_assistant.src.core.schemas.enums import HowType
         
         complexity = builder.get_complexity(question)
-        assert complexity == PromptComplexity.SIMPLE
+        assert complexity == HowType.SIMPLE
     
     # ─────────────────────────────────────────────────────────────────────────
     # PBT 测试
@@ -1385,13 +1375,13 @@ class TestProperty25PromptComplexityAdaptation:
         """任意复杂度关键词都触发 COMPLEX 模板"""
         from analytics_assistant.src.agents.semantic_parser.prompts.prompt_builder import (
             DynamicPromptBuilder,
-            PromptComplexity,
         )
+        from analytics_assistant.src.core.schemas.enums import HowType
         
         builder = DynamicPromptBuilder()
         question = f"各地区的销售额{keyword}"
         complexity = builder.get_complexity(question)
-        assert complexity == PromptComplexity.COMPLEX
+        assert complexity == HowType.COMPLEX
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -172,6 +172,28 @@ class SemanticParserState(TypedDict, total=False):
     ]
     """
     
+    filter_validation_result: Optional[Dict[str, Any]]
+    """FilterValueValidator 验证结果
+    
+    结构：
+    {
+        "results": [
+            {
+                "field_name": str,
+                "requested_value": str,
+                "is_valid": bool,
+                "similar_values": List[str],
+                "needs_confirmation": bool,
+                "is_unresolvable": bool,
+                "message": Optional[str]
+            }
+        ],
+        "all_valid": bool,
+        "has_unresolvable_filters": bool,
+        "needs_confirmation": bool
+    }
+    """
+    
     # ═══════════════════════════════════════════════════════════════════════
     # 流程控制
     # ═══════════════════════════════════════════════════════════════════════

@@ -3,26 +3,15 @@
 维度层级 Schema 定义
 
 包含：
-- DimensionCategory: 维度类别枚举
+- DimensionCategory: 维度类别枚举（从 core 导入）
 - DimensionAttributes: 单个维度的层级属性
 - DimensionHierarchyResult: 推断结果
 - LLMDimensionOutput: LLM 输出 schema（用于 stream_llm_structured）
 """
-from enum import Enum
 from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, model_validator
 
-
-class DimensionCategory(str, Enum):
-    """维度类别枚举"""
-    TIME = "time"              # 时间维度
-    GEOGRAPHY = "geography"    # 地理维度
-    PRODUCT = "product"        # 产品维度
-    CUSTOMER = "customer"      # 客户维度
-    ORGANIZATION = "organization"  # 组织维度
-    FINANCIAL = "financial"    # 财务维度
-    CHANNEL = "channel"        # 渠道维度
-    OTHER = "other"            # 其他
+from analytics_assistant.src.core.schemas.enums import DimensionCategory
 
 
 class DimensionAttributes(BaseModel):

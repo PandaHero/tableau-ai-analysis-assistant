@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -23,8 +24,8 @@ from typing import List, Dict, Any, Optional, Tuple, Set, Callable, Awaitable
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from analytics_assistant.src.core.schemas.data_model import Field
+from analytics_assistant.src.core.schemas.enums import DimensionCategory
 from analytics_assistant.src.agents.dimension_hierarchy.schemas import (
-    DimensionCategory,
     DimensionAttributes,
     DimensionHierarchyResult,
     LLMDimensionOutput,
@@ -37,9 +38,18 @@ from analytics_assistant.src.agents.dimension_hierarchy.seed_data import SEED_PA
 from analytics_assistant.src.agents.base import get_llm, stream_llm_structured
 from analytics_assistant.src.infra.storage import CacheManager
 from analytics_assistant.src.infra.config import get_config
+from analytics_assistant.src.infra.rag import (
+    get_rag_service,
+    IndexConfig,
+    IndexDocument,
+    IndexBackend,
+)
 
 
 logger = logging.getLogger(__name__)
+
+# 维度模式索引名称
+DIMENSION_PATTERNS_INDEX = "dimension_patterns"
 
 
 class PatternSource(str, Enum):
@@ -189,8 +199,7 @@ class DimensionHierarchyInference:
         self._cache = CacheManager(cache_ns) if enable_cache else None
         self._pattern_store = CacheManager(pattern_ns) if enable_self_learning else None
         
-        # RAG（延迟初始化）
-        self._rag_retriever = None
+        # RAG 初始化标志
         self._rag_initialized = False
         self._seed_initialized = False
         
@@ -280,13 +289,11 @@ class DimensionHierarchyInference:
     
     def _get_index_count(self) -> int:
         """获取向量索引中的模式数量"""
-        if not self._rag_retriever:
-            return 0
-        
         try:
-            embedding_retriever = getattr(self._rag_retriever, '_embedding', None)
-            if embedding_retriever and hasattr(embedding_retriever, '_chunks'):
-                return len(embedding_retriever._chunks)
+            rag_service = get_rag_service()
+            index_info = rag_service.index.get_index_info(DIMENSION_PATTERNS_INDEX)
+            if index_info:
+                return index_info.document_count
         except Exception:
             pass
         
@@ -346,24 +353,19 @@ class DimensionHierarchyInference:
         """
         初始化 RAG 检索器
         
-        策略：
-        1. 先尝试加载已有向量索引（快速）
-        2. 索引不存在时才创建新的（慢，需要 embedding）
-        3. chunks 从 pattern_store 加载，与向量索引分离
+        使用 RAGService 统一管理索引：
+        1. 检查索引是否已存在
+        2. 不存在则创建新索引（从 pattern_store 加载数据）
         """
-        if self._rag_initialized or not self._enable_rag:
+        if self._rag_initialized:
+            return
+        
+        if not self._enable_rag:
+            self._rag_initialized = True
             return
         
         try:
-            from analytics_assistant.src.infra.rag import (
-                RetrievalConfig, FieldChunk, ExactRetriever, EmbeddingRetriever, CascadeRetriever,
-            )
-            from analytics_assistant.src.infra.storage import get_vector_store
-            from analytics_assistant.src.infra.ai import get_embeddings
-            
-            app_config = get_config()
-            vector_cfg = app_config.config.get("vector_storage", {})
-            index_dir = vector_cfg.get("index_dir", "analytics_assistant/data/indexes")
+            rag_service = get_rag_service()
             
             # 1. 加载 patterns（从 KV 存储）
             patterns = self._load_patterns()
@@ -374,73 +376,51 @@ class DimensionHierarchyInference:
                 self._rag_initialized = True
                 return
             
-            # 2. 构建 chunks（内存中，用于精确匹配和结果映射）
-            chunks: Dict[str, FieldChunk] = {}
-            for p in patterns:
-                index_text = f"{p['field_caption']} | {p.get('category', '')} | {p.get('category_detail', '')}"
-                chunk = FieldChunk(
-                    field_name=p["pattern_id"],
-                    field_caption=p["field_caption"],
-                    role="dimension",
-                    data_type=p["data_type"],
-                    index_text=index_text,
-                    category=p.get("category"),
-                    metadata={"source": p.get("source"), "verified": p.get("verified", False)},
-                )
-                chunks[chunk.field_name] = chunk
-            
-            # 3. 检查索引是否存在，存在则加载，否则创建
-            from pathlib import Path
-            index_path = Path(index_dir) / "dimension_patterns"
-            embeddings = get_embeddings()
-            
-            if index_path.exists():
-                # 加载已有索引
-                logger.info(f"加载已有向量索引: {index_path}")
-                vector_store = get_vector_store(
-                    backend=vector_cfg.get("backend", "faiss"),
-                    embeddings=embeddings,
-                    collection_name="dimension_patterns",
-                    persist_directory=index_dir,
-                )
-            else:
-                # 创建新索引
-                logger.info(f"创建新向量索引: {len(patterns)} 个模式")
-                texts, metadatas = [], []
-                for p in patterns:
-                    index_text = f"{p['field_caption']} | {p.get('category', '')} | {p.get('category_detail', '')}"
-                    texts.append(index_text)
-                    metadatas.append({"field_name": p["pattern_id"], "field_caption": p["field_caption"]})
-                
-                vector_store = get_vector_store(
-                    backend=vector_cfg.get("backend", "faiss"),
-                    embeddings=embeddings,
-                    collection_name="dimension_patterns",
-                    persist_directory=index_dir,
-                    texts=texts,
-                    metadatas=metadatas,
-                )
-                
-                # 持久化索引
-                if vector_store and hasattr(vector_store, 'save_local'):
-                    index_path.parent.mkdir(parents=True, exist_ok=True)
-                    vector_store.save_local(str(index_path))
-                    logger.info(f"向量索引已保存: {index_path}")
-            
-            if vector_store is None:
-                logger.warning("无法创建向量存储")
+            # 2. 检查索引是否已存在
+            existing_index = rag_service.index.get_index(DIMENSION_PATTERNS_INDEX)
+            if existing_index is not None:
+                logger.info(f"RAG 索引已存在: {DIMENSION_PATTERNS_INDEX}")
                 self._rag_initialized = True
                 return
             
-            # 5. 创建检索器
-            rag_threshold = _get_rag_threshold_seed()
-            config = RetrievalConfig(top_k=5, score_threshold=rag_threshold)
-            self._rag_retriever = CascadeRetriever(
-                ExactRetriever(chunks, config),
-                EmbeddingRetriever(vector_store, chunks, config),
-                config,
+            # 3. 创建新索引
+            app_config = get_config()
+            vector_cfg = app_config.config.get("vector_storage", {})
+            index_dir = vector_cfg.get("index_dir", "data/indexes")
+            
+            # 构建 IndexDocument 列表
+            documents = []
+            for p in patterns:
+                index_text = f"{p['field_caption']} | {p.get('category', '')} | {p.get('category_detail', '')}"
+                doc = IndexDocument(
+                    id=p["pattern_id"],
+                    content=index_text,
+                    metadata={
+                        "field_caption": p["field_caption"],
+                        "data_type": p["data_type"],
+                        "category": p.get("category", ""),
+                        "category_detail": p.get("category_detail", ""),
+                        "source": p.get("source", ""),
+                        "verified": p.get("verified", False),
+                    },
+                )
+                documents.append(doc)
+            
+            # 创建索引配置
+            config = IndexConfig(
+                backend=IndexBackend.FAISS,
+                persist_directory=index_dir,
+                default_top_k=5,
+                score_threshold=_get_rag_threshold_seed(),
             )
-            logger.info(f"RAG 初始化完成: {len(patterns)} 个模式，索引已加载")
+            
+            # 创建索引
+            rag_service.index.create_index(
+                name=DIMENSION_PATTERNS_INDEX,
+                config=config,
+                documents=documents,
+            )
+            logger.info(f"RAG 索引创建完成: {len(patterns)} 个模式")
             
         except Exception as e:
             logger.warning(f"RAG 初始化失败: {e}")
@@ -493,11 +473,8 @@ class DimensionHierarchyInference:
         """
         RAG 检索，返回 (命中结果, 未命中字段)
         
-        优化：使用批量 Embedding 减少 API 调用次数
+        使用 RAGService 进行统一检索。
         """
-        if not self._rag_retriever:
-            return {}, fields
-        
         if not fields:
             return {}, []
         
@@ -508,140 +485,40 @@ class DimensionHierarchyInference:
         rag_threshold_seed = _get_rag_threshold_seed()
         rag_threshold_unverified = _get_rag_threshold_unverified()
         
-        # 获取 EmbeddingRetriever 的底层 vector_store
-        embedding_retriever = getattr(self._rag_retriever, '_embedding', None)
-        if not embedding_retriever or not hasattr(embedding_retriever, '_store'):
-            # 回退到逐个检索
-            return await self._rag_search_sequential(fields, rag_threshold_seed, rag_threshold_unverified)
-        
-        vector_store = embedding_retriever._store
-        if not vector_store or not hasattr(vector_store, 'similarity_search_by_vector'):
-            return await self._rag_search_sequential(fields, rag_threshold_seed, rag_threshold_unverified)
-        
-        # 1. 先尝试精确匹配（O(1)，无需 embedding）
-        exact_retriever = getattr(self._rag_retriever, '_exact', None)
-        exact_hits: Dict[str, Tuple[Field, Any]] = {}  # name -> (field, result)
-        fields_need_embedding: List[Tuple[int, Field]] = []  # (index, field)
-        
-        if exact_retriever:
-            for i, f in enumerate(fields):
-                name = f.caption or f.name
-                exact_results = exact_retriever.retrieve(query=name, top_k=1)
-                if exact_results:
-                    exact_hits[name] = (f, exact_results[0])
-                else:
-                    fields_need_embedding.append((i, f))
-        else:
-            fields_need_embedding = list(enumerate(fields))
-        
-        # 处理精确匹配结果
-        for name, (f, result) in exact_hits.items():
-            pattern = self._pattern_store.get(result.field_chunk.field_name) if self._pattern_store else None
-            if pattern:
-                results[name] = DimensionAttributes(
-                    category=DimensionCategory(pattern["category"]),
-                    category_detail=pattern["category_detail"],
-                    level=pattern["level"],
-                    granularity=pattern["granularity"],
-                    level_confidence=1.0,
-                    reasoning=f"RAG 精确匹配: {pattern['field_caption']}",
-                )
-            else:
-                misses.append(f)
-        
-        if not fields_need_embedding:
-            return results, misses
-        
-        # 2. 批量获取 embedding
         try:
-            from analytics_assistant.src.infra.ai import get_model_manager
+            rag_service = get_rag_service()
             
-            manager = get_model_manager()
-            texts_to_embed = [f.caption or f.name for _, f in fields_need_embedding]
+            # 检查索引是否存在
+            if rag_service.index.get_index(DIMENSION_PATTERNS_INDEX) is None:
+                logger.warning(f"RAG 索引不存在: {DIMENSION_PATTERNS_INDEX}")
+                return {}, fields
             
-            logger.debug(f"批量 Embedding: {len(texts_to_embed)} 个查询")
-            query_vectors = await manager.embed_documents_batch_async(
-                texts=texts_to_embed,
-                use_cache=True,
-            )
-            
-            # 3. 使用向量进行批量检索
-            for (idx, f), query_vector in zip(fields_need_embedding, query_vectors):
+            # 逐个字段检索
+            for f in fields:
                 name = f.caption or f.name
                 
-                if not query_vector or len(query_vector) == 0:
-                    logger.warning(f"Embedding 失败: {name}")
-                    misses.append(f)
-                    continue
-                
                 try:
-                    # 使用预计算的向量进行检索
-                    docs_and_scores = vector_store.similarity_search_by_vector(
-                        query_vector, k=3
+                    # 使用 RAGService 检索
+                    search_results = rag_service.retrieval.search(
+                        index_name=DIMENSION_PATTERNS_INDEX,
+                        query=name,
+                        top_k=3,
+                        score_threshold=rag_threshold_seed,
                     )
                     
-                    if not docs_and_scores:
-                        misses.append(f)
-                        continue
-                    
-                    # 处理检索结果
-                    best_doc, best_score = docs_and_scores[0] if isinstance(docs_and_scores[0], tuple) else (docs_and_scores[0], 0.0)
-                    
-                    # FAISS 返回的是 L2 距离，需要转换为相似度
-                    if isinstance(best_score, (int, float)):
-                        similarity = 1.0 / (1.0 + best_score)
-                    else:
-                        similarity = 0.0
-                    
-                    field_name = best_doc.metadata.get("field_name") if hasattr(best_doc, 'metadata') else None
-                    if not field_name:
-                        misses.append(f)
-                        continue
-                    
-                    pattern = self._pattern_store.get(field_name) if self._pattern_store else None
-                    if not pattern:
-                        misses.append(f)
-                        continue
-                    
-                    # 阈值分层
-                    source = pattern.get("source", "llm")
-                    verified = pattern.get("verified", False)
-                    threshold = rag_threshold_seed if source == PatternSource.SEED.value or verified else rag_threshold_unverified
-                    
-                    if similarity < threshold:
-                        misses.append(f)
-                        continue
-                    
-                    results[name] = DimensionAttributes(
-                        category=DimensionCategory(pattern["category"]),
-                        category_detail=pattern["category_detail"],
-                        level=pattern["level"],
-                        granularity=pattern["granularity"],
-                        level_confidence=similarity,
-                        reasoning=f"RAG 匹配: {pattern['field_caption']} ({similarity:.2f})",
-                    )
-                    
-                except Exception as e:
-                    logger.warning(f"向量检索失败({name}): {e}")
-                    misses.append(f)
-            
-        except Exception as e:
-            logger.warning(f"批量 Embedding 失败，回退到逐个检索: {e}")
-            # 回退到逐个检索
-            for _, f in fields_need_embedding:
-                name = f.caption or f.name
-                try:
-                    search_results = await self._rag_retriever.aretrieve(query=name, top_k=3, score_threshold=rag_threshold_seed)
                     if not search_results:
                         misses.append(f)
                         continue
                     
                     best = search_results[0]
-                    pattern = self._pattern_store.get(best.field_chunk.field_name) if self._pattern_store else None
+                    
+                    # 从 pattern_store 获取完整模式信息
+                    pattern = self._pattern_store.get(best.doc_id) if self._pattern_store else None
                     if not pattern:
                         misses.append(f)
                         continue
                     
+                    # 阈值分层
                     source = pattern.get("source", "llm")
                     verified = pattern.get("verified", False)
                     threshold = rag_threshold_seed if source == PatternSource.SEED.value or verified else rag_threshold_unverified
@@ -658,56 +535,14 @@ class DimensionHierarchyInference:
                         level_confidence=best.score,
                         reasoning=f"RAG 匹配: {pattern['field_caption']} ({best.score:.2f})",
                     )
-                except Exception as e2:
-                    logger.warning(f"RAG 检索失败({name}): {e2}")
+                    
+                except Exception as e:
+                    logger.warning(f"RAG 检索失败({name}): {e}")
                     misses.append(f)
-        
-        return results, misses
-    
-    async def _rag_search_sequential(
-        self,
-        fields: List[Field],
-        rag_threshold_seed: float,
-        rag_threshold_unverified: float,
-    ) -> Tuple[Dict[str, DimensionAttributes], List[Field]]:
-        """逐个字段进行 RAG 检索（回退方案）"""
-        results: Dict[str, DimensionAttributes] = {}
-        misses: List[Field] = []
-        
-        for f in fields:
-            name = f.caption or f.name
-            try:
-                search_results = await self._rag_retriever.aretrieve(query=name, top_k=3, score_threshold=rag_threshold_seed)
-                if not search_results:
-                    misses.append(f)
-                    continue
-                
-                best = search_results[0]
-                pattern = self._pattern_store.get(best.field_chunk.field_name) if self._pattern_store else None
-                if not pattern:
-                    misses.append(f)
-                    continue
-                
-                # 阈值分层
-                source = pattern.get("source", "llm")
-                verified = pattern.get("verified", False)
-                threshold = rag_threshold_seed if source == PatternSource.SEED.value or verified else rag_threshold_unverified
-                
-                if best.score < threshold:
-                    misses.append(f)
-                    continue
-                
-                results[name] = DimensionAttributes(
-                    category=DimensionCategory(pattern["category"]),
-                    category_detail=pattern["category_detail"],
-                    level=pattern["level"],
-                    granularity=pattern["granularity"],
-                    level_confidence=best.score,
-                    reasoning=f"RAG 匹配: {pattern['field_caption']} ({best.score:.2f})",
-                )
-            except Exception as e:
-                logger.warning(f"RAG 检索失败({name}): {e}")
-                misses.append(f)
+            
+        except Exception as e:
+            logger.warning(f"RAG 检索失败: {e}")
+            return {}, fields
         
         return results, misses
 
@@ -722,7 +557,7 @@ class DimensionHierarchyInference:
         
         同时更新：
         1. KV 存储（pattern 元数据）
-        2. 向量索引（增量添加）
+        2. RAGService 索引（增量添加）
         """
         if not self._pattern_store or not self._enable_self_learning:
             return 0
@@ -767,75 +602,54 @@ class DimensionHierarchyInference:
         if new_patterns:
             self._pattern_store.set("_pattern_index", pattern_ids)
             
-            # 增量更新向量索引
-            self._add_patterns_to_vector_index(new_patterns)
+            # 使用 RAGService 增量更新索引
+            self._add_patterns_to_index(new_patterns)
             
             logger.info(f"自学习: 存储 {len(new_patterns)} 个新模式")
         
         return len(new_patterns)
     
-    def _add_patterns_to_vector_index(self, patterns: List[Dict[str, Any]]) -> None:
-        """增量添加 patterns 到向量索引"""
-        if not patterns or not self._rag_retriever:
+    def _add_patterns_to_index(self, patterns: List[Dict[str, Any]]) -> None:
+        """使用 RAGService 增量添加 patterns 到索引"""
+        if not patterns:
             return
         
         try:
-            # CascadeRetriever 使用 _exact 和 _embedding 属性
-            embedding_retriever = getattr(self._rag_retriever, '_embedding', None)
-            exact_retriever = getattr(self._rag_retriever, '_exact', None)
+            rag_service = get_rag_service()
             
-            if not embedding_retriever or not hasattr(embedding_retriever, '_store'):
+            # 检查索引是否存在
+            if rag_service.index.get_index(DIMENSION_PATTERNS_INDEX) is None:
+                logger.warning(f"RAG 索引不存在，跳过增量更新: {DIMENSION_PATTERNS_INDEX}")
                 return
             
-            vector_store = embedding_retriever._store
-            if not vector_store or not hasattr(vector_store, 'add_texts'):
-                return
-            
-            # 构建新文档
-            texts, metadatas = [], []
+            # 构建 IndexDocument 列表
+            documents = []
             for p in patterns:
                 index_text = f"{p['field_caption']} | {p.get('category', '')} | {p.get('category_detail', '')}"
-                texts.append(index_text)
-                metadatas.append({"field_name": p["pattern_id"], "field_caption": p["field_caption"]})
+                doc = IndexDocument(
+                    id=p["pattern_id"],
+                    content=index_text,
+                    metadata={
+                        "field_caption": p["field_caption"],
+                        "data_type": p["data_type"],
+                        "category": p.get("category", ""),
+                        "category_detail": p.get("category_detail", ""),
+                        "source": p.get("source", ""),
+                        "verified": p.get("verified", False),
+                    },
+                )
+                documents.append(doc)
             
             # 增量添加
-            vector_store.add_texts(texts, metadatas=metadatas)
+            added_count = rag_service.index.add_documents(
+                index_name=DIMENSION_PATTERNS_INDEX,
+                documents=documents,
+            )
             
-            # 同时更新 chunks（用于精确匹配和结果映射）
-            from analytics_assistant.src.infra.rag import FieldChunk
-            for p in patterns:
-                index_text = f"{p['field_caption']} | {p.get('category', '')} | {p.get('category_detail', '')}"
-                chunk = FieldChunk(
-                    field_name=p["pattern_id"],
-                    field_caption=p["field_caption"],
-                    role="dimension",
-                    data_type=p["data_type"],
-                    index_text=index_text,
-                    category=p.get("category"),
-                    metadata={"source": p.get("source"), "verified": p.get("verified", False)},
-                )
-                # 更新 ExactRetriever 的 chunks
-                if exact_retriever and hasattr(exact_retriever, '_chunks'):
-                    exact_retriever._chunks[chunk.field_name] = chunk
-                    # 重建索引
-                    exact_retriever._build_index()
-                # 更新 EmbeddingRetriever 的 chunks
-                if hasattr(embedding_retriever, '_chunks'):
-                    embedding_retriever._chunks[chunk.field_name] = chunk
-            
-            # 持久化索引
-            if hasattr(vector_store, 'save_local'):
-                app_config = get_config()
-                vector_cfg = app_config.config.get("vector_storage", {})
-                index_dir = vector_cfg.get("index_dir", "analytics_assistant/data/indexes")
-                from pathlib import Path
-                save_path = Path(index_dir) / "dimension_patterns"
-                vector_store.save_local(str(save_path))
-            
-            logger.debug(f"向量索引已更新: +{len(patterns)} 条")
+            logger.debug(f"RAG 索引增量更新: +{added_count} 条")
             
         except Exception as e:
-            logger.warning(f"更新向量索引失败: {e}")
+            logger.warning(f"更新 RAG 索引失败: {e}")
 
     
     # ─────────────────────────────────────────────────────────
@@ -946,9 +760,8 @@ class DimensionHierarchyInference:
         fields_after_rag = fields_after_seed
         if self._enable_rag and fields_after_seed:
             self._init_rag()
-            if self._rag_retriever:
-                rag_results, fields_after_rag = await self._rag_search(fields_after_seed)
-                results.update(rag_results)
+            rag_results, fields_after_rag = await self._rag_search(fields_after_seed)
+            results.update(rag_results)
         
         # 5. LLM 推断
         if fields_after_rag:
@@ -1109,8 +922,6 @@ class DimensionHierarchyInference:
         
         返回 0-1 之间的分数
         """
-        import re
-        
         # 提取中文部分
         parent_cn = ''.join(re.findall(r'[\u4e00-\u9fff]+', parent_name))
         child_cn = ''.join(re.findall(r'[\u4e00-\u9fff]+', child_name))

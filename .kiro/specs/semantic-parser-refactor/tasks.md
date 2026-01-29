@@ -352,32 +352,32 @@
 ## Phase 12: 集成测试
 
 ### Task 25: 端到端流程测试
-- [ ] 25.1 创建 `tests/integration/test_graph_flow.py`
-  - [ ] 25.1.1 测试简单查询完整流程
-  - [ ] 25.1.2 测试缓存命中流程
-  - [ ] 25.1.3 测试需要澄清的流程
-  - [ ] 25.1.4 测试筛选值确认流程（interrupt/resume）
-  - [ ] 25.1.5 测试错误修正流程
-  - [ ] 25.1.6 测试边界条件：空字段列表
-  - [ ] 25.1.7 测试边界条件：空 Few-shot 示例库
-  - [ ] 25.1.8 测试边界条件：网络超时降级
+- [x] 25.1 创建 `tests/integration/test_graph_flow.py`
+  - [x] 25.1.1 测试简单查询完整流程
+  - [x] 25.1.2 测试缓存命中流程
+  - [x] 25.1.3 测试需要澄清的流程
+  - [x] 25.1.4 测试筛选值确认流程（interrupt/resume）
+  - [x] 25.1.5 测试错误修正流程
+  - [x] 25.1.6 测试边界条件：空字段列表
+  - [x] 25.1.7 测试边界条件：空 Few-shot 示例库
+  - [x] 25.1.8 测试边界条件：网络超时降级
 
 ### Task 26: 多轮对话测试
-- [ ] 26.1 创建 `tests/integration/test_multi_turn.py`
-  - [ ] 26.1.1 测试渐进式查询构建
-  - [ ] 26.1.2 测试多轮筛选值确认
-  - [ ] 26.1.3 测试对话历史管理
+- [x] 26.1 创建 `tests/integration/test_multi_turn.py`
+  - [x] 26.1.1 测试渐进式查询构建
+  - [x] 26.1.2 测试多轮筛选值确认
+  - [x] 26.1.3 测试对话历史管理
 
 ---
 
 ## Phase 13: 性能测试
 
 ### Task 27: 性能基准测试
-- [ ] 27.1 创建 `tests/performance/test_benchmarks.py`
-  - [ ] 27.1.1 测试 IntentRouter 延迟 (< 50ms)
-  - [ ] 27.1.2 测试 FieldRetriever 延迟 (< 100ms)
-  - [ ] 27.1.3 测试完整流程延迟 (< 3s)
-  - [ ] 27.1.4 测试 FieldValueCache 并发性能
+- [x] 27.1 创建 `tests/performance/test_benchmarks.py`
+  - [x] 27.1.1 测试 IntentRouter 延迟 (< 50ms)
+  - [x] 27.1.2 测试 FieldRetriever 延迟 (< 100ms)
+  - [x] 27.1.3 测试完整流程延迟 (< 3s)
+  - [x] 27.1.4 测试 FieldValueCache 并发性能
 
 ---
 

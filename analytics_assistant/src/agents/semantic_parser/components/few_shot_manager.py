@@ -10,6 +10,11 @@ FewShotManager 组件 - Few-shot 示例管理
 
 存储后端：LangGraph SqliteStore（复用现有基础设施）
 
+RAG 服务集成：
+- 使用 RAGService.embedding 进行向量化
+- 使用 RAGService.index 管理示例索引
+- 使用 RAGService.retrieval 进行示例检索
+
 配置来源：analytics_assistant/config/app.yaml -> semantic_parser.few_shot_manager
 
 Requirements: 4.1-4.5 - FewShotManager 示例管理
@@ -22,7 +27,9 @@ from typing import Any, Dict, List, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import get_kv_store
-from analytics_assistant.src.infra.ai import get_embeddings
+from analytics_assistant.src.infra.rag import get_rag_service
+from analytics_assistant.src.infra.rag.schemas import IndexConfig, IndexDocument
+from analytics_assistant.src.infra.rag.exceptions import IndexNotFoundError
 
 from ..schemas.intermediate import FewShotExample
 
@@ -55,6 +62,11 @@ class FewShotManager:
     - 添加示例：将成功的查询添加为示例
     - 用户接受优先：接受过的示例排名更高
     - 持久化存储：使用 SqliteStore 存储示例
+    
+    RAG 服务集成：
+    - 使用 RAGService.embedding 进行向量化
+    - 使用 RAGService.index 管理示例索引
+    - 使用 RAGService.retrieval 进行示例检索
     
     存储结构：
     - namespace: ("semantic_parser", "few_shot", datasource_luid)
@@ -91,6 +103,9 @@ class FewShotManager:
     # 缓存命名空间前缀（固定值，不需要配置）
     NAMESPACE_PREFIX = ("semantic_parser", "few_shot")
     
+    # 索引名称前缀
+    INDEX_PREFIX = "few_shot_"
+    
     # 默认配置（作为 fallback）
     _DEFAULT_MAX_EXAMPLES = 3
     _DEFAULT_SIMILARITY_THRESHOLD = 0.8
@@ -100,7 +115,6 @@ class FewShotManager:
     def __init__(
         self,
         store: Optional[Any] = None,
-        embedding_model: Optional[Any] = None,
         default_top_k: Optional[int] = None,
         max_examples_per_datasource: Optional[int] = None,
         similarity_threshold: Optional[float] = None,
@@ -109,7 +123,6 @@ class FewShotManager:
         
         Args:
             store: LangGraph SqliteStore 实例，None 则使用全局实例
-            embedding_model: Embedding 模型，用于语义相似检索，None 则使用全局实例
             default_top_k: 默认返回示例数（None 从配置读取）
             max_examples_per_datasource: 每个数据源最多存储的示例数（None 从配置读取）
             similarity_threshold: 相似度阈值（None 从配置读取）
@@ -119,13 +132,8 @@ class FewShotManager:
             store = get_kv_store()
         self._store = store
         
-        if embedding_model is None:
-            try:
-                embedding_model = get_embeddings()
-            except Exception as e:
-                logger.warning(f"无法初始化 embedding 模型: {e}")
-                embedding_model = None
-        self._embedding = embedding_model
+        # 使用 RAGService
+        self._rag_service = get_rag_service()
         
         # 从配置加载参数
         self._load_config(default_top_k, max_examples_per_datasource, similarity_threshold)
@@ -166,6 +174,17 @@ class FewShotManager:
         """
         return (*self.NAMESPACE_PREFIX, datasource_luid)
     
+    def _get_index_name(self, datasource_luid: str) -> str:
+        """获取索引名称。
+        
+        Args:
+            datasource_luid: 数据源 ID
+            
+        Returns:
+            索引名称
+        """
+        return f"{self.INDEX_PREFIX}{datasource_luid}"
+    
     async def retrieve(
         self,
         question: str,
@@ -175,11 +194,10 @@ class FewShotManager:
         """检索相关示例。
         
         检索策略：
-        1. 计算问题的 embedding
-        2. 在该数据源的示例中进行向量相似度搜索
-        3. 过滤相似度 < threshold 的结果
-        4. 按 (accepted_count DESC, similarity DESC) 排序
-        5. 返回 top_k 个示例
+        1. 使用 RAGService 进行向量相似度搜索
+        2. 过滤相似度 < threshold 的结果
+        3. 按 (accepted_count DESC, similarity DESC) 排序
+        4. 返回 top_k 个示例
         
         Args:
             question: 用户问题
@@ -195,9 +213,49 @@ class FewShotManager:
         
         top_k = min(top_k or self.default_top_k, 3)  # 最多 3 个
         namespace = self._make_namespace(datasource_luid)
+        index_name = self._get_index_name(datasource_luid)
         
         try:
-            # 获取该数据源的所有示例
+            # 尝试使用 RAGService 进行向量检索
+            try:
+                search_results = await self._rag_service.retrieval.search_async(
+                    index_name=index_name,
+                    query=question,
+                    top_k=top_k * 2,  # 检索更多以便过滤
+                    score_threshold=self.similarity_threshold,
+                )
+                
+                if search_results:
+                    # 从搜索结果中获取示例 ID，然后从存储中获取完整示例
+                    scored_examples: List[tuple] = []
+                    for result in search_results:
+                        example_id = result.doc_id
+                        example = await self.get(example_id, datasource_luid)
+                        if example:
+                            scored_examples.append((example, result.score))
+                    
+                    if scored_examples:
+                        # 排序：首先按 accepted_count 降序，然后按相似度降序
+                        scored_examples.sort(
+                            key=lambda x: (x[0].accepted_count, x[1]),
+                            reverse=True
+                        )
+                        
+                        result = [ex for ex, _ in scored_examples[:top_k]]
+                        
+                        logger.info(
+                            f"FewShotManager 检索到 {len(result)} 个示例 (RAG): "
+                            f"question='{question[:20]}...', datasource={datasource_luid}"
+                        )
+                        
+                        return result
+                        
+            except IndexNotFoundError:
+                logger.debug(f"FewShotManager 索引不存在: {index_name}，回退到全量搜索")
+            except Exception as e:
+                logger.warning(f"FewShotManager RAG 检索失败: {e}，回退到全量搜索")
+            
+            # 回退：获取该数据源的所有示例并手动计算相似度
             items = self._store.search(namespace, limit=self.max_examples_per_datasource)
             
             if not items:
@@ -219,15 +277,9 @@ class FewShotManager:
             if not examples:
                 return []
             
-            # 如果没有 embedding 模型，按 accepted_count 排序返回
-            if self._embedding is None:
-                logger.debug("FewShotManager embedding 不可用，按 accepted_count 排序")
-                examples.sort(key=lambda x: x.accepted_count, reverse=True)
-                return examples[:top_k]
-            
-            # 计算问题的 embedding
+            # 使用 RAGService.embedding 计算问题的 embedding
             try:
-                question_embedding = self._embedding.embed_query(question)
+                question_embedding = self._rag_service.embedding.embed_query(question)
             except Exception as e:
                 logger.warning(f"计算 question embedding 失败: {e}")
                 # 回退到按 accepted_count 排序
@@ -279,6 +331,8 @@ class FewShotManager:
         如果示例数超过 max_examples_per_datasource，
         删除 accepted_count 最低且最旧的示例。
         
+        同时更新 RAG 索引以支持向量检索。
+        
         Args:
             example: FewShotExample 实例
         
@@ -296,10 +350,10 @@ class FewShotManager:
             if not example.id:
                 example.id = f"ex_{uuid.uuid4().hex[:12]}"
             
-            # 如果没有 embedding，计算一个
-            if example.question_embedding is None and self._embedding is not None:
+            # 如果没有 embedding，使用 RAGService 计算一个
+            if example.question_embedding is None:
                 try:
-                    example.question_embedding = self._embedding.embed_query(example.question)
+                    example.question_embedding = self._rag_service.embedding.embed_query(example.question)
                 except Exception as e:
                     logger.warning(f"计算示例 embedding 失败: {e}")
             
@@ -312,6 +366,9 @@ class FewShotManager:
             # 存储示例
             self._store.put(namespace, example.id, example.model_dump())
             
+            # 更新 RAG 索引
+            await self._update_rag_index(example)
+            
             logger.info(
                 f"FewShotManager 已添加示例: id={example.id}, "
                 f"question='{example.question[:20]}...'"
@@ -321,6 +378,54 @@ class FewShotManager:
         except Exception as e:
             logger.error(f"FewShotManager add 失败: {e}")
             return False
+    
+    async def _update_rag_index(self, example: FewShotExample) -> None:
+        """更新 RAG 索引。
+        
+        Args:
+            example: FewShotExample 实例
+        """
+        index_name = self._get_index_name(example.datasource_luid)
+        
+        try:
+            # 创建索引文档
+            doc = IndexDocument(
+                id=example.id,
+                content=example.question,
+                metadata={
+                    "datasource_luid": example.datasource_luid,
+                    "accepted_count": example.accepted_count,
+                },
+            )
+            
+            # 检查索引是否存在
+            existing_index = self._rag_service.index.get_index(index_name)
+            
+            if existing_index is None:
+                # 创建新索引
+                config = self._get_index_config()
+                self._rag_service.index.create_index(
+                    name=index_name,
+                    config=config,
+                    documents=[doc],
+                )
+                logger.debug(f"FewShotManager 创建索引: {index_name}")
+            else:
+                # 添加文档到现有索引
+                self._rag_service.index.add_documents(index_name, [doc])
+                logger.debug(f"FewShotManager 更新索引: {index_name}")
+                
+        except Exception as e:
+            logger.warning(f"FewShotManager 更新 RAG 索引失败: {e}")
+    
+    def _get_index_config(self) -> IndexConfig:
+        """获取索引配置。"""
+        rag_config = self._rag_service.get_config()
+        index_config = rag_config.get("index", {})
+        return IndexConfig(
+            persist_directory=index_config.get("persist_directory"),
+            default_top_k=self.default_top_k,
+        )
     
     async def update_accepted_count(self, example_id: str, datasource_luid: str) -> bool:
         """更新示例的接受次数。

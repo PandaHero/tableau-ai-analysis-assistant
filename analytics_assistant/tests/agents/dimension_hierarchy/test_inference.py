@@ -241,9 +241,8 @@ class TestDimensionHierarchyInference:
     def test_serialize_deserialize_attrs(self):
         """测试属性序列化和反序列化"""
         from src.agents.dimension_hierarchy.inference import DimensionHierarchyInference
-        from src.agents.dimension_hierarchy.schemas import (
-            DimensionAttributes, DimensionCategory
-        )
+        from src.agents.dimension_hierarchy.schemas import DimensionAttributes
+        from src.core.schemas.enums import DimensionCategory
         
         with patch('src.agents.dimension_hierarchy.inference._get_config') as mock_config:
             mock_config.return_value = {}
@@ -279,7 +278,7 @@ class TestDimensionHierarchyInference:
     def test_default_attrs(self):
         """测试默认属性生成"""
         from src.agents.dimension_hierarchy.inference import DimensionHierarchyInference
-        from src.agents.dimension_hierarchy.schemas import DimensionCategory
+        from src.core.schemas.enums import DimensionCategory
         
         with patch('src.agents.dimension_hierarchy.inference._get_config') as mock_config:
             mock_config.return_value = {}
@@ -646,7 +645,6 @@ class TestRAGOperations:
             )
             
             assert inference._rag_initialized is False
-            assert inference._rag_retriever is None
     
     def test_rag_disabled(self):
         """测试 RAG 禁用"""
@@ -664,7 +662,8 @@ class TestRAGOperations:
             # 调用 _init_rag 不应该做任何事
             inference._init_rag()
             
-            assert inference._rag_retriever is None
+            # RAG 应该标记为已初始化（但实际上没有创建索引）
+            assert inference._rag_initialized is True
 
 
 class TestSelfLearning:
@@ -673,7 +672,8 @@ class TestSelfLearning:
     def test_store_to_rag_disabled(self):
         """测试自学习禁用时的存储"""
         from src.agents.dimension_hierarchy.inference import DimensionHierarchyInference
-        from src.agents.dimension_hierarchy.schemas import DimensionAttributes, DimensionCategory
+        from src.agents.dimension_hierarchy.schemas import DimensionAttributes
+        from src.core.schemas.enums import DimensionCategory
         from src.core.schemas.data_model import Field
         
         with patch('src.agents.dimension_hierarchy.inference._get_config') as mock_config:
@@ -701,8 +701,8 @@ class TestSelfLearning:
             
             assert count == 0
     
-    def test_add_patterns_to_vector_index_no_retriever(self):
-        """测试无检索器时的向量索引更新"""
+    def test_add_patterns_to_index_no_store(self):
+        """测试无存储时的索引更新"""
         from src.agents.dimension_hierarchy.inference import DimensionHierarchyInference
         
         with patch('src.agents.dimension_hierarchy.inference._get_config') as mock_config:
@@ -715,8 +715,8 @@ class TestSelfLearning:
             )
             
             # 不应该抛出异常
-            inference._add_patterns_to_vector_index([])
-            inference._add_patterns_to_vector_index([{"pattern_id": "test"}])
+            inference._add_patterns_to_index([])
+            inference._add_patterns_to_index([{"pattern_id": "test"}])
 
 
 class TestPatternManagement:

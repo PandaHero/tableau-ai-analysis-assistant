@@ -9,8 +9,8 @@
 
 推断策略：缓存 → 种子匹配 → RAG → LLM
 """
+from analytics_assistant.src.core.schemas.enums import DimensionCategory
 from analytics_assistant.src.agents.dimension_hierarchy.schemas import (
-    DimensionCategory,
     DimensionAttributes,
     DimensionHierarchyResult,
 )

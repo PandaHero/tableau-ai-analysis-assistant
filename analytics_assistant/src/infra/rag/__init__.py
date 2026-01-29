@@ -3,6 +3,12 @@ RAG (Retrieval-Augmented Generation) Infrastructure
 
 检索策略：精确匹配 → Embedding 检索 → LLM 重排序
 不使用 BM25，避免分词依赖。
+
+服务层架构：
+- RAGService: 统一入口（单例）
+- EmbeddingService: Embedding 服务
+- IndexManager: 索引管理器
+- RetrievalService: 检索服务
 """
 
 from .models import (
@@ -32,6 +38,35 @@ from .reranker import (
     LLMReranker,
 )
 
+# 服务层
+from .service import RAGService, get_rag_service
+from .embedding_service import EmbeddingService, EmbeddingStats
+from .index_manager import IndexManager
+from .retrieval_service import RetrievalService
+
+# Schemas
+from .schemas import (
+    IndexConfig,
+    IndexDocument,
+    IndexInfo,
+    IndexStatus,
+    IndexBackend,
+    UpdateResult,
+    SearchResult,
+)
+
+# Exceptions
+from .exceptions import (
+    RAGError,
+    EmbeddingError,
+    IndexError,
+    IndexExistsError,
+    IndexNotFoundError,
+    IndexCreationError,
+    StorageError,
+    RetrievalError,
+)
+
 __all__ = [
     # Models
     "RetrievalSource",
@@ -54,4 +89,28 @@ __all__ = [
     "DefaultReranker",
     "RRFReranker",
     "LLMReranker",
+    # Service Layer
+    "RAGService",
+    "get_rag_service",
+    "EmbeddingService",
+    "EmbeddingStats",
+    "IndexManager",
+    "RetrievalService",
+    # Schemas
+    "IndexConfig",
+    "IndexDocument",
+    "IndexInfo",
+    "IndexStatus",
+    "IndexBackend",
+    "UpdateResult",
+    "SearchResult",
+    # Exceptions
+    "RAGError",
+    "EmbeddingError",
+    "IndexError",
+    "IndexExistsError",
+    "IndexNotFoundError",
+    "IndexCreationError",
+    "StorageError",
+    "RetrievalError",
 ]

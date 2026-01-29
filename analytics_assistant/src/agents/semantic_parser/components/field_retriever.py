@@ -17,6 +17,10 @@ FieldRetriever 组件 - 智能字段检索
 - 常量配置：analytics_assistant/config/app.yaml -> field_retriever
 - 类别关键词：从 SEED_PATTERNS 动态提取，支持自学习扩展
 
+RAG 服务集成：
+- 使用 RAGService 进行索引管理和检索
+- 索引名称格式：fields_{datasource_luid}
+
 Requirements: 3.1-3.3 - FieldRetriever 字段检索
 """
 
@@ -24,6 +28,9 @@ import logging
 from typing import Any, Dict, List, Optional, Set
 
 from analytics_assistant.src.infra.config import get_config
+from analytics_assistant.src.infra.rag import get_rag_service
+from analytics_assistant.src.infra.rag.schemas import IndexConfig, IndexDocument
+from analytics_assistant.src.infra.rag.exceptions import IndexNotFoundError
 from analytics_assistant.src.agents.dimension_hierarchy.seed_data import SEED_PATTERNS
 
 from ..schemas.intermediate import FieldCandidate
@@ -292,23 +299,30 @@ class FieldRetriever:
     - 维度字段根据问题相关性筛选
     - 利用维度层级信息扩展相关字段（父/子维度）
     
+    RAG 服务集成：
+    - 使用 RAGService 进行索引管理和检索
+    - 索引名称格式：fields_{datasource_luid}
+    
     配置来源：
     - app.yaml -> field_retriever 配置节
     
     Examples:
-        >>> retriever = FieldRetriever(cascade_retriever)
+        >>> retriever = FieldRetriever()
         >>> candidates = await retriever.retrieve(
         ...     question="上个月各地区的销售额",
         ...     data_model=data_model,
         ...     dimension_hierarchy=hierarchy_result,
+        ...     datasource_luid="ds_123",
         ... )
         >>> for c in candidates:
         ...     print(f"{c.field_name}: {c.source}, category={c.hierarchy_category}")
     """
     
+    # 索引名称前缀
+    INDEX_PREFIX = "fields_"
+    
     def __init__(
         self,
-        cascade_retriever: Optional[Any] = None,
         default_top_k: Optional[int] = None,
         full_schema_threshold: Optional[int] = None,
         min_rule_match_dimensions: Optional[int] = None,
@@ -316,12 +330,11 @@ class FieldRetriever:
         """初始化 FieldRetriever。
         
         Args:
-            cascade_retriever: CascadeRetriever 实例，用于 Embedding 检索
             default_top_k: 默认返回数量（None 从配置读取）
             full_schema_threshold: L0 全量返回阈值（None 从配置读取）
             min_rule_match_dimensions: L2 触发阈值（None 从配置读取）
         """
-        self._retriever = cascade_retriever
+        self._rag_service = get_rag_service()
         self.default_top_k = default_top_k or get_default_top_k()
         self.full_schema_threshold = full_schema_threshold or get_full_schema_threshold()
         self.min_rule_match_dimensions = min_rule_match_dimensions or get_min_rule_match_dimensions()
@@ -339,6 +352,7 @@ class FieldRetriever:
         dimension_hierarchy: Optional[Dict[str, Any]] = None,
         top_k: Optional[int] = None,
         force_vector_search: bool = False,
+        datasource_luid: Optional[str] = None,
     ) -> List[FieldCandidate]:
         """检索相关字段。
         
@@ -353,6 +367,7 @@ class FieldRetriever:
             dimension_hierarchy: 维度层级推断结果
             top_k: 返回数量限制（仅用于 Embedding 检索）
             force_vector_search: 强制使用向量检索（跳过 L0/L1）
+            datasource_luid: 数据源 ID（用于索引命名）
         
         Returns:
             FieldCandidate 列表
@@ -377,10 +392,15 @@ class FieldRetriever:
             f"fields={field_count}, dimensions={len(dimensions)}, measures={len(measures)}"
         )
         
+        # 确保索引存在（如果有 datasource_luid）
+        index_name = None
+        if datasource_luid:
+            index_name = self._ensure_index(datasource_luid, fields)
+        
         # 强制向量检索
-        if force_vector_search:
+        if force_vector_search and index_name:
             return await self._retrieve_with_embedding(
-                question, data_model, dimension_hierarchy, k
+                question, data_model, dimension_hierarchy, k, index_name
             )
         
         # L0: 全量模式
@@ -403,7 +423,7 @@ class FieldRetriever:
         need_embedding_for_dims = len(dimension_candidates) < self.min_rule_match_dimensions
         need_embedding_for_measures = len(measure_candidates) < self.min_rule_match_dimensions
         
-        if need_embedding_for_dims or need_embedding_for_measures:
+        if (need_embedding_for_dims or need_embedding_for_measures) and index_name:
             logger.info(
                 f"FieldRetriever: L2 Embedding 兜底 "
                 f"(dims_matched={len(dimension_candidates)}, measures_matched={len(measure_candidates)}, "
@@ -412,7 +432,7 @@ class FieldRetriever:
             
             # 批量 embedding 检索（一次调用，同时检索维度和度量）
             embedding_results = await self._retrieve_with_embedding_batch(
-                question, fields, dimension_hierarchy, k
+                question, fields, dimension_hierarchy, k, index_name
             )
             
             # 分离 embedding 结果
@@ -439,6 +459,82 @@ class FieldRetriever:
         )
         
         return all_candidates
+    
+    def _get_index_name(self, datasource_luid: str) -> str:
+        """获取索引名称"""
+        return f"{self.INDEX_PREFIX}{datasource_luid}"
+    
+    def _ensure_index(self, datasource_luid: str, fields: List[Any]) -> str:
+        """确保索引存在，如果不存在则创建
+        
+        Args:
+            datasource_luid: 数据源 ID
+            fields: 字段列表
+            
+        Returns:
+            索引名称
+        """
+        index_name = self._get_index_name(datasource_luid)
+        
+        # 检查索引是否已存在
+        existing_index = self._rag_service.index.get_index(index_name)
+        if existing_index is not None:
+            return index_name
+        
+        # 创建索引
+        try:
+            documents = self._fields_to_documents(fields)
+            config = self._get_index_config()
+            self._rag_service.index.create_index(
+                name=index_name,
+                config=config,
+                documents=documents,
+            )
+            logger.info(f"FieldRetriever: 创建索引 {index_name}，文档数: {len(documents)}")
+        except Exception as e:
+            logger.warning(f"FieldRetriever: 创建索引失败: {e}")
+        
+        return index_name
+    
+    def _get_index_config(self) -> IndexConfig:
+        """获取索引配置"""
+        rag_config = self._rag_service.get_config()
+        index_config = rag_config.get("index", {})
+        return IndexConfig(
+            persist_directory=index_config.get("persist_directory"),
+            default_top_k=self.default_top_k,
+        )
+    
+    def _fields_to_documents(self, fields: List[Any]) -> List[IndexDocument]:
+        """将字段列表转换为 IndexDocument 列表"""
+        documents = []
+        for field in fields:
+            field_name = _get_field_attr(field, 'name', 'field_name', default='')
+            field_caption = _get_field_attr(field, 'fieldCaption', 'field_caption', 'caption', default=field_name)
+            role = _get_field_attr(field, 'role', default='dimension')
+            data_type = _get_field_attr(field, 'dataType', 'data_type', default='string')
+            category = _get_field_attr(field, 'category', default=None)
+            description = _get_field_attr(field, 'description', default=None)
+            
+            # 构建索引文本
+            index_text_parts = [field_name, field_caption]
+            if description:
+                index_text_parts.append(description)
+            index_text = " ".join(filter(None, index_text_parts))
+            
+            doc = IndexDocument(
+                id=field_name,
+                content=index_text,
+                metadata={
+                    "field_caption": field_caption,
+                    "role": role if isinstance(role, str) else str(role),
+                    "data_type": data_type if isinstance(data_type, str) else str(data_type),
+                    "category": category if category else "",
+                },
+            )
+            documents.append(doc)
+        
+        return documents
 
     
     def _get_fields(self, data_model: Optional[Any]) -> List[Any]:
@@ -602,49 +698,58 @@ class FieldRetriever:
         fields: List[Any],
         dimension_hierarchy: Optional[Dict[str, Any]],
         top_k: int,
+        index_name: str,
     ) -> List[FieldCandidate]:
         """批量使用 Embedding 检索所有字段（维度+度量）。
         
-        只调用一次 embedding，同时检索维度和度量。
-        """
-        if not self._retriever:
-            logger.warning("FieldRetriever: 无 Embedding 检索器，跳过批量检索")
-            return []
+        使用 RAGService 进行检索，只调用一次 embedding。
         
+        Args:
+            question: 用户问题
+            fields: 字段列表
+            dimension_hierarchy: 维度层级信息
+            top_k: 返回数量
+            index_name: 索引名称
+            
+        Returns:
+            FieldCandidate 列表
+        """
         try:
-            # 一次调用检索所有字段类型
-            if hasattr(self._retriever, 'aretrieve'):
-                results = await self._retriever.aretrieve(query=question, top_k=top_k * 2)
-            else:
-                results = self._retriever.retrieve(query=question, top_k=top_k * 2)
+            # 使用 RAGService 检索
+            results = await self._rag_service.retrieval.search_async(
+                index_name=index_name,
+                query=question,
+                top_k=top_k * 2,  # 检索更多以便分离维度和度量
+            )
             
             candidates = []
             matched_categories: Set[str] = set()
             
             for result in results:
-                chunk = result.field_chunk
-                role = chunk.role.lower() if chunk.role else "dimension"
+                role = result.metadata.get("role", "dimension")
+                if isinstance(role, str):
+                    role = role.lower()
                 
                 confidence = min(result.score * self._embedding_confidence_base + 0.3, 1.0)
                 
                 candidate = FieldCandidate(
-                    field_name=chunk.field_name,
-                    field_caption=chunk.field_caption,
+                    field_name=result.doc_id,
+                    field_caption=result.metadata.get("field_caption", result.doc_id),
                     field_type=role,
-                    data_type=chunk.data_type or "string",
-                    description=chunk.metadata.get("description") if chunk.metadata else None,
-                    sample_values=chunk.sample_values,
+                    data_type=result.metadata.get("data_type", "string"),
+                    description=result.metadata.get("description"),
+                    sample_values=None,
                     confidence=confidence,
                     source="embedding",
                     rank=result.rank,
-                    category=chunk.category,
-                    formula=chunk.formula,
-                    logical_table_caption=chunk.logical_table_caption,
+                    category=result.metadata.get("category"),
+                    formula=result.metadata.get("formula"),
+                    logical_table_caption=result.metadata.get("logical_table_caption"),
                 )
                 
                 # 增强层级信息（仅维度）
-                if role == "dimension" and dimension_hierarchy and chunk.field_name in dimension_hierarchy:
-                    attrs = dimension_hierarchy[chunk.field_name]
+                if role == "dimension" and dimension_hierarchy and result.doc_id in dimension_hierarchy:
+                    attrs = dimension_hierarchy[result.doc_id]
                     self._apply_hierarchy_attrs(candidate, attrs)
                     if candidate.hierarchy_category:
                         matched_categories.add(candidate.hierarchy_category)
@@ -677,6 +782,9 @@ class FieldRetriever:
             
             return candidates
             
+        except IndexNotFoundError:
+            logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，跳过 Embedding 检索")
+            return []
         except Exception as e:
             logger.error(f"FieldRetriever: 批量 Embedding 检索失败: {e}")
             return []
@@ -688,48 +796,53 @@ class FieldRetriever:
         dimensions: List[Any],
         dimension_hierarchy: Optional[Dict[str, Any]],
         top_k: int,
+        index_name: str,
     ) -> List[FieldCandidate]:
-        """使用 Embedding 检索维度（L2 兜底）。"""
-        if not self._retriever:
-            logger.warning("FieldRetriever: 无 Embedding 检索器，跳过 L2")
-            return []
+        """使用 Embedding 检索维度（L2 兜底）。
         
+        Args:
+            question: 用户问题
+            dimensions: 维度字段列表
+            dimension_hierarchy: 维度层级信息
+            top_k: 返回数量
+            index_name: 索引名称
+            
+        Returns:
+            FieldCandidate 列表
+        """
         try:
-            # 使用 CascadeRetriever 检索
-            if hasattr(self._retriever, 'aretrieve'):
-                results = await self._retriever.aretrieve(query=question, top_k=top_k)
-            else:
-                results = self._retriever.retrieve(query=question, top_k=top_k)
+            # 使用 RAGService 检索，过滤只返回维度
+            results = await self._rag_service.retrieval.search_async(
+                index_name=index_name,
+                query=question,
+                top_k=top_k,
+                filters={"role": "dimension"},
+            )
             
             candidates = []
             matched_categories: Set[str] = set()
             
             for result in results:
-                chunk = result.field_chunk
-                # 只处理维度
-                if chunk.role and chunk.role.lower() == 'measure':
-                    continue
-                
                 confidence = min(result.score * self._embedding_confidence_base + 0.3, 1.0)
                 
                 candidate = FieldCandidate(
-                    field_name=chunk.field_name,
-                    field_caption=chunk.field_caption,
+                    field_name=result.doc_id,
+                    field_caption=result.metadata.get("field_caption", result.doc_id),
                     field_type="dimension",
-                    data_type=chunk.data_type or "string",
-                    description=chunk.metadata.get("description") if chunk.metadata else None,
-                    sample_values=chunk.sample_values,
+                    data_type=result.metadata.get("data_type", "string"),
+                    description=result.metadata.get("description"),
+                    sample_values=None,
                     confidence=confidence,
                     source="embedding",
                     rank=result.rank,
-                    category=chunk.category,
-                    formula=chunk.formula,
-                    logical_table_caption=chunk.logical_table_caption,
+                    category=result.metadata.get("category"),
+                    formula=result.metadata.get("formula"),
+                    logical_table_caption=result.metadata.get("logical_table_caption"),
                 )
                 
                 # 增强层级信息
-                if dimension_hierarchy and chunk.field_name in dimension_hierarchy:
-                    attrs = dimension_hierarchy[chunk.field_name]
+                if dimension_hierarchy and result.doc_id in dimension_hierarchy:
+                    attrs = dimension_hierarchy[result.doc_id]
                     self._apply_hierarchy_attrs(candidate, attrs)
                     # 记录类别用于扩展
                     if candidate.hierarchy_category:
@@ -758,6 +871,9 @@ class FieldRetriever:
             
             return candidates
             
+        except IndexNotFoundError:
+            logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，跳过 Embedding 检索")
+            return []
         except Exception as e:
             logger.error(f"FieldRetriever: Embedding 检索失败: {e}")
             return []
@@ -768,48 +884,54 @@ class FieldRetriever:
         data_model: Optional[Any],
         dimension_hierarchy: Optional[Dict[str, Any]],
         top_k: int,
+        index_name: str,
     ) -> List[FieldCandidate]:
-        """强制使用 Embedding 检索所有字段。"""
-        if not self._retriever:
-            logger.warning("FieldRetriever: 无 Embedding 检索器，回退到全量模式")
-            fields = self._get_fields(data_model)
-            return self._convert_all_fields(fields, dimension_hierarchy, "full_schema")[:top_k]
+        """强制使用 Embedding 检索所有字段。
         
+        Args:
+            question: 用户问题
+            data_model: 数据模型
+            dimension_hierarchy: 维度层级信息
+            top_k: 返回数量
+            index_name: 索引名称
+            
+        Returns:
+            FieldCandidate 列表
+        """
         try:
-            if hasattr(self._retriever, 'aretrieve'):
-                results = await self._retriever.aretrieve(query=question, top_k=top_k)
-            else:
-                results = self._retriever.retrieve(query=question, top_k=top_k)
+            results = await self._rag_service.retrieval.search_async(
+                index_name=index_name,
+                query=question,
+                top_k=top_k,
+            )
             
             candidates = []
             for result in results:
-                chunk = result.field_chunk
+                role = result.metadata.get("role", "dimension")
+                if isinstance(role, str):
+                    role = role.lower()
                 
-                # 精确匹配置信度更高
-                source = result.source.value if hasattr(result.source, 'value') else str(result.source)
-                if source == "exact":
-                    confidence = 1.0
-                else:
-                    confidence = min(result.score, 1.0)
+                # 分数已归一化
+                confidence = min(result.score, 1.0)
                 
                 candidate = FieldCandidate(
-                    field_name=chunk.field_name,
-                    field_caption=chunk.field_caption,
-                    field_type=chunk.role.lower() if chunk.role else "dimension",
-                    data_type=chunk.data_type or "string",
-                    description=chunk.metadata.get("description") if chunk.metadata else None,
-                    sample_values=chunk.sample_values,
+                    field_name=result.doc_id,
+                    field_caption=result.metadata.get("field_caption", result.doc_id),
+                    field_type=role,
+                    data_type=result.metadata.get("data_type", "string"),
+                    description=result.metadata.get("description"),
+                    sample_values=None,
                     confidence=confidence,
-                    source=source,
+                    source="embedding",
                     rank=result.rank,
-                    category=chunk.category,
-                    formula=chunk.formula,
-                    logical_table_caption=chunk.logical_table_caption,
+                    category=result.metadata.get("category"),
+                    formula=result.metadata.get("formula"),
+                    logical_table_caption=result.metadata.get("logical_table_caption"),
                 )
                 
                 # 增强层级信息
-                if dimension_hierarchy and chunk.field_name in dimension_hierarchy:
-                    self._apply_hierarchy_attrs(candidate, dimension_hierarchy[chunk.field_name])
+                if dimension_hierarchy and result.doc_id in dimension_hierarchy:
+                    self._apply_hierarchy_attrs(candidate, dimension_hierarchy[result.doc_id])
                 
                 candidates.append(candidate)
             
@@ -818,6 +940,10 @@ class FieldRetriever:
             
             return candidates
             
+        except IndexNotFoundError:
+            logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，回退到全量模式")
+            fields = self._get_fields(data_model)
+            return self._convert_all_fields(fields, dimension_hierarchy, "full_schema")[:top_k]
         except Exception as e:
             logger.error(f"FieldRetriever: Embedding 检索失败: {e}")
             return []
@@ -912,10 +1038,6 @@ class FieldRetriever:
                 seen.add(c.field_name)
         
         return merged
-    
-    def set_retriever(self, retriever: Any) -> None:
-        """设置检索器实例。"""
-        self._retriever = retriever
 
 
 __all__ = [

@@ -26,7 +26,7 @@ from ..keywords_data import (
 )
 
 # 从 schemas 导入（保持向后兼容的导入路径）
-from ..schemas.enums import PromptComplexity
+from analytics_assistant.src.core.schemas.enums import HowType
 from ..schemas.intermediate import FieldCandidate, FewShotExample
 from ..schemas.config import SemanticConfig
 
@@ -41,7 +41,7 @@ __all__ = [
     "get_subquery_keywords",
     "get_table_calc_keywords",
     # Schemas (re-exported for convenience)
-    "PromptComplexity",
+    "HowType",
     "FieldCandidate",
     "FewShotExample",
     "SemanticConfig",

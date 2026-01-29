@@ -226,6 +226,30 @@ class AppConfig:
         return self.config.get('rag', {})
     
     # ============================================
+    # RAG 服务层配置
+    # ============================================
+    
+    def get_rag_service_config(self) -> Dict[str, Any]:
+        """获取 RAG 服务层配置"""
+        return self.config.get('rag_service', {})
+    
+    def get_rag_service_index_config(self) -> Dict[str, Any]:
+        """获取 RAG 服务索引管理配置"""
+        return self.get_rag_service_config().get('index', {})
+    
+    def get_rag_service_embedding_config(self) -> Dict[str, Any]:
+        """获取 RAG 服务 Embedding 配置"""
+        return self.get_rag_service_config().get('embedding', {})
+    
+    def get_rag_service_retrieval_config(self) -> Dict[str, Any]:
+        """获取 RAG 服务检索配置"""
+        return self.get_rag_service_config().get('retrieval', {})
+    
+    def get_rag_service_indexes_config(self) -> Dict[str, Any]:
+        """获取 RAG 服务预定义索引配置"""
+        return self.get_rag_service_config().get('indexes', {})
+    
+    # ============================================
     # Tableau 配置
     # ============================================
     

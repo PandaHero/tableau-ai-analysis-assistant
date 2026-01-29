@@ -29,6 +29,7 @@ ModelManager - 统一的模型管理器
 """
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -39,6 +40,18 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Embedding 结果数据类
+# ═══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class EmbeddingResult:
+    """Embedding 结果（包含缓存信息）"""
+    vectors: List[List[float]]
+    cache_hits: int
+    cache_misses: int
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1156,6 +1169,240 @@ class ModelManager:
         
         logger.info(f"批量 Embedding 完成: {total} 条文本")
         return results
+    
+    def embed_documents_batch_with_stats(
+        self,
+        texts: List[str],
+        model_id: Optional[str] = None,
+        batch_size: int = None,
+        max_concurrency: int = None,
+        use_cache: bool = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> EmbeddingResult:
+        """
+        批量生成文档 Embedding，返回缓存命中信息（同步版本）
+        
+        与 embed_documents_batch() 类似，但返回 EmbeddingResult 包含：
+        - vectors: 向量列表
+        - cache_hits: 缓存命中次数
+        - cache_misses: 缓存未命中次数
+        
+        Args:
+            texts: 文本列表
+            model_id: 模型 ID（可选）
+            batch_size: 每批文本数量（默认从配置读取）
+            max_concurrency: 最大并发批次数（默认从配置读取）
+            use_cache: 是否使用缓存（默认从配置读取）
+            progress_callback: 进度回调函数 (completed, total)
+        
+        Returns:
+            EmbeddingResult 包含向量和缓存统计信息
+        """
+        import asyncio
+        
+        # 从配置获取默认值
+        defaults = self._get_batch_embedding_defaults()
+        actual_batch_size = batch_size if batch_size is not None else defaults['batch_size']
+        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults['max_concurrency']
+        actual_use_cache = use_cache if use_cache is not None else defaults['use_cache']
+        
+        # 在新的事件循环中运行异步版本
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        asyncio.run,
+                        self.embed_documents_batch_with_stats_async(
+                            texts, model_id, actual_batch_size, actual_max_concurrency, 
+                            actual_use_cache, progress_callback
+                        )
+                    )
+                    return future.result()
+            else:
+                return loop.run_until_complete(
+                    self.embed_documents_batch_with_stats_async(
+                        texts, model_id, actual_batch_size, actual_max_concurrency,
+                        actual_use_cache, progress_callback
+                    )
+                )
+        except RuntimeError:
+            return asyncio.run(
+                self.embed_documents_batch_with_stats_async(
+                    texts, model_id, actual_batch_size, actual_max_concurrency,
+                    actual_use_cache, progress_callback
+                )
+            )
+    
+    async def embed_documents_batch_with_stats_async(
+        self,
+        texts: List[str],
+        model_id: Optional[str] = None,
+        batch_size: int = None,
+        max_concurrency: int = None,
+        use_cache: bool = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> EmbeddingResult:
+        """
+        批量生成文档 Embedding，返回缓存命中信息（异步版本）
+        
+        Args:
+            texts: 文本列表
+            model_id: 模型 ID（可选）
+            batch_size: 每批文本数量（默认从配置读取）
+            max_concurrency: 最大并发批次数（默认从配置读取）
+            use_cache: 是否使用缓存（默认从配置读取）
+            progress_callback: 进度回调函数
+        
+        Returns:
+            EmbeddingResult 包含向量和缓存统计信息
+        """
+        import asyncio
+        import hashlib
+        import aiohttp
+        
+        if not texts:
+            return EmbeddingResult(vectors=[], cache_hits=0, cache_misses=0)
+        
+        # 从配置获取默认值
+        defaults = self._get_batch_embedding_defaults()
+        actual_batch_size = batch_size if batch_size is not None else defaults['batch_size']
+        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults['max_concurrency']
+        actual_use_cache = use_cache if use_cache is not None else defaults['use_cache']
+        
+        total = len(texts)
+        results: List[Optional[List[float]]] = [None] * total
+        
+        # 缓存统计
+        cache_hits = 0
+        cache_misses = 0
+        
+        # 初始化缓存
+        cache = None
+        if actual_use_cache:
+            try:
+                from ..storage import CacheManager
+                cache = CacheManager(namespace="embedding", default_ttl=86400)
+            except Exception as e:
+                logger.warning(f"无法初始化 embedding 缓存: {e}")
+        
+        # 获取 embedding 模型配置
+        config = None
+        if model_id:
+            config = self.get(model_id)
+        else:
+            config = self.get_default(ModelType.EMBEDDING)
+        
+        if not config:
+            raise ValueError("No Embedding model available")
+        
+        # 计算缓存 key
+        def make_cache_key(text: str) -> str:
+            return hashlib.md5(text.encode('utf-8')).hexdigest()
+        
+        # 检查缓存，分离已缓存和未缓存的文本
+        uncached_indices: List[int] = []
+        uncached_texts: List[str] = []
+        
+        for i, text in enumerate(texts):
+            if cache:
+                cache_key = make_cache_key(text)
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    results[i] = cached
+                    cache_hits += 1
+                    continue
+            uncached_indices.append(i)
+            uncached_texts.append(text)
+        
+        cache_misses = len(uncached_texts)
+        
+        if cache_hits > 0:
+            logger.info(f"Embedding 缓存命中: {cache_hits}/{total}")
+        
+        if progress_callback:
+            progress_callback(cache_hits, total)
+        
+        # 如果全部命中缓存，直接返回
+        if not uncached_texts:
+            return EmbeddingResult(vectors=results, cache_hits=cache_hits, cache_misses=cache_misses)
+        
+        # 分批处理未缓存的文本
+        batches = [
+            uncached_texts[i:i + actual_batch_size]
+            for i in range(0, len(uncached_texts), actual_batch_size)
+        ]
+        batch_indices = [
+            uncached_indices[i:i + actual_batch_size]
+            for i in range(0, len(uncached_indices), actual_batch_size)
+        ]
+        
+        logger.info(f"开始批量 Embedding: {len(uncached_texts)} 条文本, {len(batches)} 批次, 并发={actual_max_concurrency}")
+        
+        # 并发控制
+        semaphore = asyncio.Semaphore(actual_max_concurrency)
+        completed = cache_hits
+        completed_lock = asyncio.Lock()
+        
+        async def call_embedding_api(batch_texts: List[str]) -> List[List[float]]:
+            """异步调用 embedding API"""
+            api_base = config.api_base.rstrip('/')
+            url = f"{api_base}/embeddings"
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {config.api_key}",
+            }
+            
+            payload = {
+                "model": config.model_name,
+                "input": batch_texts,
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        raise Exception(f"Embedding API 错误 {resp.status}: {error_text}")
+                    
+                    data = await resp.json()
+                    embeddings_data = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
+                    return [item["embedding"] for item in embeddings_data]
+        
+        async def process_batch(batch_texts: List[str], indices: List[int]) -> None:
+            nonlocal completed
+            
+            async with semaphore:
+                try:
+                    batch_vectors = await call_embedding_api(batch_texts)
+                    
+                    for idx, text, vector in zip(indices, batch_texts, batch_vectors):
+                        results[idx] = vector
+                        if cache:
+                            cache_key = make_cache_key(text)
+                            cache.set(cache_key, vector)
+                    
+                    async with completed_lock:
+                        completed += len(batch_texts)
+                        if progress_callback:
+                            progress_callback(completed, total)
+                    
+                except Exception as e:
+                    logger.error(f"批量 Embedding 失败: {e}")
+                    for idx in indices:
+                        if results[idx] is None:
+                            results[idx] = []
+        
+        # 并发执行所有批次
+        tasks = [
+            process_batch(batch_texts, indices)
+            for batch_texts, indices in zip(batches, batch_indices)
+        ]
+        await asyncio.gather(*tasks)
+        
+        logger.info(f"批量 Embedding 完成: {total} 条文本 (缓存命中: {cache_hits}, 未命中: {cache_misses})")
+        return EmbeddingResult(vectors=results, cache_hits=cache_hits, cache_misses=cache_misses)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1255,6 +1502,7 @@ __all__ = [
     "get_model_manager",
     "get_embeddings",
     "embed_documents_batch",
+    "EmbeddingResult",
     "ModelType",
     "ModelStatus",
     "TaskType",

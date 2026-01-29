@@ -32,7 +32,6 @@ from analytics_assistant.src.agents.base.node import (
 
 from ..schemas.output import SemanticOutput, ClarificationSource
 from ..schemas.intermediate import FieldCandidate, FewShotExample
-from ..schemas.enums import PromptComplexity
 from ..schemas.config import SemanticConfig
 from ..prompts.prompt_builder import DynamicPromptBuilder
 

@@ -45,7 +45,7 @@ import asyncio
 import inspect
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import (
     Any,
     Awaitable,
@@ -124,7 +124,6 @@ class ModelRequest:
     
     def override(self, **kwargs) -> 'ModelRequest':
         """创建修改后的副本"""
-        from dataclasses import replace
         return replace(self, **kwargs)
 
 
@@ -145,7 +144,6 @@ class ToolCallRequest:
     
     def override(self, **kwargs) -> 'ToolCallRequest':
         """创建修改后的副本"""
-        from dataclasses import replace
         return replace(self, **kwargs)
 
 

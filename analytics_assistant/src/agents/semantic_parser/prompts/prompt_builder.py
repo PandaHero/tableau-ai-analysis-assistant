@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from .time_hint_generator import TimeHintGenerator
 from ..schemas.intermediate import FieldCandidate, FewShotExample
-from ..schemas.enums import PromptComplexity
+from analytics_assistant.src.core.schemas.enums import HowType
 from ..schemas.config import SemanticConfig
 from ..keywords_data import (
     get_derived_metric_keywords,
@@ -180,7 +180,7 @@ class DynamicPromptBuilder:
         config: SemanticConfig,
         history: Optional[List[Dict[str, str]]] = None,
         few_shot_examples: Optional[List[FewShotExample]] = None,
-        complexity_hint: Optional[PromptComplexity] = None,
+        complexity_hint: Optional[HowType] = None,
     ) -> str:
         """构建 Prompt
         
@@ -210,7 +210,7 @@ class DynamicPromptBuilder:
         # 2. 选择模板
         template = (
             self._complex_template 
-            if complexity == PromptComplexity.COMPLEX 
+            if complexity == HowType.COMPLEX 
             else self._simple_template
         )
         
@@ -246,7 +246,7 @@ class DynamicPromptBuilder:
         
         return prompt
     
-    def _detect_complexity(self, question: str) -> PromptComplexity:
+    def _detect_complexity(self, question: str) -> HowType:
         """检测查询复杂度
         
         检测问题中是否包含复杂计算关键词：
@@ -261,7 +261,7 @@ class DynamicPromptBuilder:
             question: 用户问题
         
         Returns:
-            PromptComplexity.SIMPLE 或 PromptComplexity.COMPLEX
+            HowType.SIMPLE 或 HowType.COMPLEX
         """
         question_lower = question.lower()
         
@@ -276,9 +276,9 @@ class DynamicPromptBuilder:
         for keyword in all_complex_keywords:
             if keyword.lower() in question_lower:
                 logger.debug(f"检测到复杂度关键词: {keyword}")
-                return PromptComplexity.COMPLEX
+                return HowType.COMPLEX
         
-        return PromptComplexity.SIMPLE
+        return HowType.SIMPLE
     
     def _generate_time_hints(
         self, 
@@ -486,14 +486,14 @@ class DynamicPromptBuilder:
         manager = HistoryManager()
         return manager.format_history_for_prompt(history, max_tokens)
     
-    def get_complexity(self, question: str) -> PromptComplexity:
+    def get_complexity(self, question: str) -> HowType:
         """获取问题的复杂度（公开方法，用于测试）
         
         Args:
             question: 用户问题
         
         Returns:
-            PromptComplexity
+            HowType.SIMPLE 或 HowType.COMPLEX
         """
         return self._detect_complexity(question)
 

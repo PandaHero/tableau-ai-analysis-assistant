@@ -2,24 +2,13 @@
 """
 IntentRouter 数据模型
 
-意图识别相关的枚举和输出模型。
+意图识别相关的输出模型。
+IntentType 枚举从 core/schemas/enums.py 导入。
 """
-
-from enum import Enum
 
 from pydantic import BaseModel, Field
 
-
-class IntentType(str, Enum):
-    """意图类型枚举（简化版）。
-    
-    - DATA_QUERY: 数据分析问题（进入语义解析流程）
-    - GENERAL: 元数据问答（直接返回字段/数据源信息）
-    - IRRELEVANT: 无关问题（礼貌拒绝）
-    """
-    DATA_QUERY = "DATA_QUERY"
-    GENERAL = "GENERAL"
-    IRRELEVANT = "IRRELEVANT"
+from analytics_assistant.src.core.schemas.enums import IntentType
 
 
 class IntentRouterOutput(BaseModel):

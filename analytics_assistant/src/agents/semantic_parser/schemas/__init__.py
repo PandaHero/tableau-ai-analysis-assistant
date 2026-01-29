@@ -7,12 +7,13 @@ Semantic Parser Schemas
 2. intermediate.py - 中间数据模型 (FieldCandidate, FewShotExample)
 3. cache.py - 缓存相关模型 (CachedQuery, CachedFieldValues)
 4. filters.py - 筛选器验证模型 (FilterValidationResult, FilterConfirmation)
-5. enums.py - 枚举类型 (PromptComplexity)
-6. config.py - 运行时上下文模型 (SemanticConfig) - 注意：不是配置文件！
-7. error_correction.py - 错误修正模型 (ErrorCorrectionHistory, CorrectionResult)
-8. intent.py - 意图识别模型 (IntentType, IntentRouterOutput)
+5. config.py - 运行时上下文模型 (SemanticConfig) - 注意：不是配置文件！
+6. error_correction.py - 错误修正模型 (ErrorCorrectionHistory, CorrectionResult)
+7. intent.py - 意图识别模型 (IntentType, IntentRouterOutput)
 
-注意：配置参数统一放在 app.yaml 中，config.py 中的 SemanticConfig 是运行时上下文，不是配置。
+注意：
+- 配置参数统一放在 app.yaml 中，config.py 中的 SemanticConfig 是运行时上下文，不是配置。
+- HowType 枚举已移至 core/schemas/enums.py（用于标识查询复杂度）
 """
 
 from .output import (
@@ -34,7 +35,6 @@ from .filters import (
     FilterConfirmation,
 )
 from .error_correction import ErrorCorrectionHistory, CorrectionResult
-from .enums import PromptComplexity
 from .config import SemanticConfig
 from .intent import IntentType, IntentRouterOutput
 from .feedback import FeedbackType, FeedbackRecord, SynonymMapping
@@ -64,8 +64,6 @@ __all__ = [
     # Error Correction
     "ErrorCorrectionHistory",
     "CorrectionResult",
-    # Enums
-    "PromptComplexity",
     # Config (运行时上下文，不是配置文件)
     "SemanticConfig",
     # Intent

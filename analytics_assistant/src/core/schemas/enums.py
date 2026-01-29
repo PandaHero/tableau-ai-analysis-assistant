@@ -106,17 +106,22 @@ class RelativeTo(str, Enum):
 # ═══════════════════════════════════════════════════════════════════════════
 
 class HowType(str, Enum):
-    """计算复杂度分类：SIMPLE=简单聚合 | COMPLEX=需要表计算/LOD"""
+    """计算复杂度分类：SIMPLE=简单聚合 | COMPLEX=需要表计算/LOD
+    
+    用于：
+    - SemanticOutput.how_type: 标识查询的计算复杂度
+    - DynamicPromptBuilder: 根据复杂度选择 Prompt 模板
+    """
     SIMPLE = "SIMPLE"
     COMPLEX = "COMPLEX"
 
 
 class IntentType(str, Enum):
     """意图分类：数据查询 | 澄清 | 通用问题 | 无关"""
-    DATA_QUERY = "DATA_QUERY"
-    CLARIFICATION = "CLARIFICATION"
-    GENERAL = "GENERAL"
-    IRRELEVANT = "IRRELEVANT"
+    DATA_QUERY = "data_query"
+    CLARIFICATION = "clarification"
+    GENERAL = "general"
+    IRRELEVANT = "irrelevant"
 
 
 class ObserverDecision(str, Enum):
@@ -142,13 +147,14 @@ class MappingSource(str, Enum):
 
 
 class DimensionCategory(str, Enum):
-    """维度类别：时间 | 地理 | 产品 | 客户 | 组织 | 财务 | 其他"""
+    """维度类别：时间 | 地理 | 产品 | 客户 | 组织 | 财务 | 渠道 | 其他"""
     TIME = "time"
     GEOGRAPHY = "geography"
     PRODUCT = "product"
     CUSTOMER = "customer"
     ORGANIZATION = "organization"
     FINANCIAL = "financial"
+    CHANNEL = "channel"
     OTHER = "other"
 
 

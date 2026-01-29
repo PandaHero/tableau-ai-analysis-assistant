@@ -92,7 +92,7 @@ async def intent_router_node(state: SemanticParserState) -> Dict[str, Any]:
 
 async def query_cache_node(
     state: SemanticParserState,
-    config: Optional[Dict[str, Any]] = None,
+    config: Optional[RunnableConfig] = None,
 ) -> Dict[str, Any]:
     """查询缓存节点
     
@@ -152,6 +152,7 @@ async def field_retriever_node(
     """字段检索节点
     
     检索与问题相关的字段，并使用维度层级信息丰富结果。
+    使用 RAGService 进行索引管理和检索。
     
     Task 24.1.2: 在 Prompt 中包含层级信息
     Property 28: Hierarchy Enrichment
@@ -173,8 +174,9 @@ async def field_retriever_node(
     ctx = get_context(config) if config else None
     data_model = ctx.data_model if ctx else None
     dimension_hierarchy = ctx.dimension_hierarchy if ctx else None
+    datasource_luid = ctx.datasource_luid if ctx else None
     
-    # 创建 FieldRetriever（实际使用时需要传入 CascadeRetriever）
+    # 创建 FieldRetriever（使用 RAGService）
     retriever = FieldRetriever()
     
     # 检索字段
@@ -182,6 +184,7 @@ async def field_retriever_node(
         question=question,
         data_model=data_model,
         dimension_hierarchy=dimension_hierarchy,
+        datasource_luid=datasource_luid,
     )
     
     # 使用维度层级信息丰富字段候选（Property 28: Hierarchy Enrichment）
@@ -317,7 +320,7 @@ async def semantic_understanding_node(state: SemanticParserState) -> Dict[str, A
 
 async def filter_validator_node(
     state: SemanticParserState,
-    config: Optional[Dict[str, Any]] = None,
+    config: Optional[RunnableConfig] = None,
 ) -> Dict[str, Any]:
     """筛选值验证节点
     
@@ -407,12 +410,22 @@ async def filter_validator_node(
                 conf["confirmed_value"],
             )
     
+    # 准备平台特定参数（如认证信息）
+    platform_kwargs = {}
+    if ctx.auth is not None:
+        # 如果有认证上下文，提取 api_key 和 site
+        if hasattr(ctx.auth, 'api_key'):
+            platform_kwargs['api_key'] = ctx.auth.api_key
+        if hasattr(ctx.auth, 'site'):
+            platform_kwargs['site'] = ctx.auth.site
+    
     # 执行验证
     try:
         summary = await validator.validate(
             semantic_output=semantic_output,
             data_model=data_model,
             datasource_id=datasource_id,
+            **platform_kwargs,
         )
     except Exception as e:
         logger.error(f"filter_validator_node: 验证失败: {e}")
@@ -473,9 +486,16 @@ async def filter_validator_node(
             # 累积所有确认（包括之前的和新的）
             all_confirmations = existing_confirmations + new_confirmations
             
+            # 构建 {original_value: confirmed_value} 映射用于 apply_confirmations
+            # 注意：user_response["confirmations"] 是 {field_name: confirmed_value}
+            # 但 apply_confirmations 期望 {original_value: confirmed_value}
+            value_confirmations = {}
+            for conf in new_confirmations:
+                value_confirmations[conf["original_value"]] = conf["confirmed_value"]
+            
             updated_output = validator.apply_confirmations(
                 semantic_output,
-                user_response["confirmations"],
+                value_confirmations,
             )
             return {
                 "semantic_output": updated_output.model_dump(),
@@ -513,7 +533,7 @@ async def filter_validator_node(
 
 async def query_adapter_node(
     state: SemanticParserState,
-    config: Optional[Dict[str, Any]] = None,
+    config: Optional[RunnableConfig] = None,
 ) -> Dict[str, Any]:
     """查询适配节点
     
