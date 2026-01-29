@@ -18,7 +18,7 @@ import pytest
 
 from analytics_assistant.src.agents.field_mapper.node import (
     FieldMapperNode,
-    _extract_terms_from_semantic_query,
+    _extract_terms_from_semantic_output,
 )
 from analytics_assistant.src.agents.field_mapper.schemas import (
     FieldMappingConfig,
@@ -268,8 +268,8 @@ class TestFieldMapperNode:
 # 辅助函数测试
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestExtractTermsFromSemanticQuery:
-    """_extract_terms_from_semantic_query 测试"""
+class TestExtractTermsFromSemanticOutput:
+    """_extract_terms_from_semantic_output 测试"""
     
     def test_extract_measures(self):
         """测试提取度量"""
@@ -278,18 +278,21 @@ class TestExtractTermsFromSemanticQuery:
             field_name: str
         
         @dataclass
-        class MockQuery:
+        class MockWhat:
             measures: List[MockMeasure]
-            dimensions: List = None
-            filters: List = None
+        
+        @dataclass
+        class MockOutput:
+            what: MockWhat
+            where: Any = None
             computations: List = None
         
-        query = MockQuery(measures=[
+        output = MockOutput(what=MockWhat(measures=[
             MockMeasure(field_name="销售额"),
             MockMeasure(field_name="利润"),
-        ])
+        ]))
         
-        terms = _extract_terms_from_semantic_query(query)
+        terms = _extract_terms_from_semantic_output(output)
         assert "销售额" in terms
         assert "利润" in terms
         # 不限制角色
@@ -303,18 +306,22 @@ class TestExtractTermsFromSemanticQuery:
             field_name: str
         
         @dataclass
-        class MockQuery:
-            measures: List = None
-            dimensions: List[MockDimension] = None
+        class MockWhere:
+            dimensions: List[MockDimension]
             filters: List = None
+        
+        @dataclass
+        class MockOutput:
+            what: Any = None
+            where: MockWhere = None
             computations: List = None
         
-        query = MockQuery(dimensions=[
+        output = MockOutput(where=MockWhere(dimensions=[
             MockDimension(field_name="地区"),
             MockDimension(field_name="产品类别"),
-        ])
+        ]))
         
-        terms = _extract_terms_from_semantic_query(query)
+        terms = _extract_terms_from_semantic_output(output)
         assert "地区" in terms
         assert "产品类别" in terms
     
@@ -325,28 +332,31 @@ class TestExtractTermsFromSemanticQuery:
             field_name: str
         
         @dataclass
-        class MockQuery:
-            measures: List = None
+        class MockWhere:
             dimensions: List = None
             filters: List[MockFilter] = None
+        
+        @dataclass
+        class MockOutput:
+            what: Any = None
+            where: MockWhere = None
             computations: List = None
         
-        query = MockQuery(filters=[
+        output = MockOutput(where=MockWhere(filters=[
             MockFilter(field_name="订单日期"),
-        ])
+        ]))
         
-        terms = _extract_terms_from_semantic_query(query)
+        terms = _extract_terms_from_semantic_output(output)
         assert "订单日期" in terms
     
-    def test_empty_query(self):
-        """测试空查询"""
+    def test_empty_output(self):
+        """测试空输出"""
         @dataclass
-        class MockQuery:
-            measures: List = None
-            dimensions: List = None
-            filters: List = None
+        class MockOutput:
+            what: Any = None
+            where: Any = None
             computations: List = None
         
-        query = MockQuery()
-        terms = _extract_terms_from_semantic_query(query)
+        output = MockOutput()
+        terms = _extract_terms_from_semantic_output(output)
         assert len(terms) == 0

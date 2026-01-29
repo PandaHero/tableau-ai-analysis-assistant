@@ -36,6 +36,12 @@ from analytics_assistant.src.agents.base import (
 )
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import CacheManager
+from analytics_assistant.src.infra.rag import (
+    create_retriever,
+    RetrievalConfig,
+    MetadataFilter,
+)
+from analytics_assistant.src.agents.semantic_parser.schemas.output import SemanticOutput
 
 from .schemas import (
     FieldMappingConfig,
@@ -185,11 +191,6 @@ class FieldMapperNode:
         
         # 使用 infra/rag 创建级联检索器
         try:
-            from analytics_assistant.src.infra.rag import (
-                create_retriever,
-                RetrievalConfig,
-            )
-            
             # 从 YAML 配置读取检索参数
             config = get_config()
             rag_config = config.get("rag", {}).get("retrieval", {})
@@ -401,7 +402,6 @@ class FieldMapperNode:
             return []
         
         # 构建元数据过滤器
-        from analytics_assistant.src.infra.rag import MetadataFilter
         filters = MetadataFilter(role=role_filter) if role_filter else None
         
         # 检索
@@ -774,8 +774,6 @@ async def field_mapper_node(
     Returns:
         包含 mapped_query 的状态更新
     """
-    from analytics_assistant.src.agents.semantic_parser.schemas.output import SemanticOutput
-    
     start_time = time.time()
     
     semantic_output = state.get("semantic_output")

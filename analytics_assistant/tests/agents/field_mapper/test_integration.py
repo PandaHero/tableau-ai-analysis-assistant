@@ -444,26 +444,42 @@ class TestFieldMapperNode:
     async def test_node_function_basic(self, data_model, datasource_luid):
         """测试节点函数基本功能"""
         from analytics_assistant.src.agents.field_mapper import field_mapper_node
+        from analytics_assistant.src.agents.semantic_parser.schemas.output import (
+            SemanticOutput,
+            What,
+            Where,
+            SelfCheck,
+        )
         from analytics_assistant.src.core.schemas import (
-            SemanticQuery,
             MeasureField,
             DimensionField,
             AggregationType,
         )
         
-        # 构建 SemanticQuery
-        semantic_query = SemanticQuery(
-            measures=[
-                MeasureField(field_name="销售额", aggregation=AggregationType.SUM),
-            ],
-            dimensions=[
-                DimensionField(field_name="省份"),
-            ],
+        # 构建 SemanticOutput
+        semantic_output = SemanticOutput(
+            restated_question="按省份统计销售额",
+            what=What(
+                measures=[
+                    MeasureField(field_name="销售额", aggregation=AggregationType.SUM),
+                ],
+            ),
+            where=Where(
+                dimensions=[
+                    DimensionField(field_name="省份"),
+                ],
+            ),
+            self_check=SelfCheck(
+                field_mapping_confidence=0.9,
+                time_range_confidence=0.9,
+                computation_confidence=0.9,
+                overall_confidence=0.9,
+            ),
         )
         
         # 构建 state
         state = {
-            "semantic_query": semantic_query,
+            "semantic_output": semantic_output,
             "datasource": datasource_luid,
             "question": "按省份统计销售额",
             "data_model": data_model,
@@ -491,8 +507,8 @@ class TestFieldMapperNode:
             )
     
     @pytest.mark.asyncio
-    async def test_node_function_no_semantic_query(self):
-        """测试节点函数 - 无 semantic_query"""
+    async def test_node_function_no_semantic_output(self):
+        """测试节点函数 - 无 semantic_output"""
         from analytics_assistant.src.agents.field_mapper import field_mapper_node
         
         state = {
@@ -507,22 +523,34 @@ class TestFieldMapperNode:
         assert result.get("mapped_query") is None
         assert "errors" in result
         
-        logger.info("无 semantic_query 测试通过")
+        logger.info("无 semantic_output 测试通过")
     
     @pytest.mark.asyncio
     async def test_node_function_empty_terms(self, data_model, datasource_luid):
         """测试节点函数 - 空术语"""
         from analytics_assistant.src.agents.field_mapper import field_mapper_node
-        from analytics_assistant.src.core.schemas import SemanticQuery
+        from analytics_assistant.src.agents.semantic_parser.schemas.output import (
+            SemanticOutput,
+            What,
+            Where,
+            SelfCheck,
+        )
         
-        # 构建空的 SemanticQuery
-        semantic_query = SemanticQuery(
-            measures=[],
-            dimensions=[],
+        # 构建空的 SemanticOutput
+        semantic_output = SemanticOutput(
+            restated_question="空查询",
+            what=What(measures=[]),
+            where=Where(dimensions=[]),
+            self_check=SelfCheck(
+                field_mapping_confidence=0.9,
+                time_range_confidence=0.9,
+                computation_confidence=0.9,
+                overall_confidence=0.9,
+            ),
         )
         
         state = {
-            "semantic_query": semantic_query,
+            "semantic_output": semantic_output,
             "datasource": datasource_luid,
             "data_model": data_model,
         }
@@ -544,32 +572,48 @@ class TestFieldMapperNode:
 class TestHelperFunctions:
     """辅助函数测试"""
     
-    def test_extract_terms_from_semantic_query(self):
-        """测试从 SemanticQuery 提取术语"""
-        from analytics_assistant.src.agents.field_mapper.node import _extract_terms_from_semantic_query
+    def test_extract_terms_from_semantic_output(self):
+        """测试从 SemanticOutput 提取术语"""
+        from analytics_assistant.src.agents.field_mapper.node import _extract_terms_from_semantic_output
+        from analytics_assistant.src.agents.semantic_parser.schemas.output import (
+            SemanticOutput,
+            What,
+            Where,
+            SelfCheck,
+        )
         from analytics_assistant.src.core.schemas import (
-            SemanticQuery,
             MeasureField,
             DimensionField,
-            DateRangeFilter,
             AggregationType,
+            SetFilter,
         )
         
-        semantic_query = SemanticQuery(
-            measures=[
-                MeasureField(field_name="销售额", aggregation=AggregationType.SUM),
-                MeasureField(field_name="数量", aggregation=AggregationType.COUNT),
-            ],
-            dimensions=[
-                DimensionField(field_name="省份"),
-                DimensionField(field_name="日期"),
-            ],
-            filters=[
-                DateRangeFilter(field_name="日期", start_date="2024-01-01", end_date="2024-12-31"),
-            ],
+        semantic_output = SemanticOutput(
+            restated_question="测试查询",
+            what=What(
+                measures=[
+                    MeasureField(field_name="销售额", aggregation=AggregationType.SUM),
+                    MeasureField(field_name="数量", aggregation=AggregationType.COUNT),
+                ],
+            ),
+            where=Where(
+                dimensions=[
+                    DimensionField(field_name="省份"),
+                    DimensionField(field_name="日期"),
+                ],
+                filters=[
+                    SetFilter(field_name="日期", values=["2024-01-01", "2024-12-31"]),
+                ],
+            ),
+            self_check=SelfCheck(
+                field_mapping_confidence=0.9,
+                time_range_confidence=0.9,
+                computation_confidence=0.9,
+                overall_confidence=0.9,
+            ),
         )
         
-        terms = _extract_terms_from_semantic_query(semantic_query)
+        terms = _extract_terms_from_semantic_output(semantic_output)
         
         assert "销售额" in terms
         assert "数量" in terms
@@ -584,8 +628,8 @@ class TestHelperFunctions:
     
     def test_format_candidates(self):
         """测试格式化候选字段"""
-        from analytics_assistant.src.agents.field_mapper.prompt import format_candidates
-        from analytics_assistant.src.agents.field_mapper.node import FieldCandidate
+        from analytics_assistant.src.agents.field_mapper.prompts import format_candidates
+        from analytics_assistant.src.agents.field_mapper.schemas import FieldCandidate
         
         candidates = [
             FieldCandidate(

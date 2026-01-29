@@ -7,6 +7,7 @@
 使用示例:
     # 创建上下文
     ctx = WorkflowContext(
+        auth=auth,  # Tableau 认证上下文
         datasource_luid="ds_12345",
         data_model=data_model,
     )
@@ -15,18 +16,26 @@
     # 在节点中获取上下文
     async def my_node(state, config):
         ctx = get_context_or_raise(config)
-        # 使用 ctx.data_model, ctx.current_time 等
+        # 使用 ctx.auth, ctx.data_model, ctx.current_time 等
 """
 
+import hashlib
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List
 
 from pydantic import BaseModel, Field, ConfigDict
 
-if TYPE_CHECKING:
-    from langgraph.types import RunnableConfig
-    from analytics_assistant.src.core.interfaces import BasePlatformAdapter
+from analytics_assistant.src.platform.tableau.auth import (
+    get_tableau_auth_async,
+    TableauAuthContext,
+)
+from analytics_assistant.src.core.interfaces import BasePlatformAdapter
+from analytics_assistant.src.agents.semantic_parser.components.query_cache import (
+    compute_schema_hash,
+    QueryCache,
+)
+from analytics_assistant.src.agents.dimension_hierarchy import DimensionHierarchyInference
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +47,7 @@ class WorkflowContext(BaseModel):
     通过 RunnableConfig["configurable"]["workflow_context"] 传递给所有节点和工具。
     
     Attributes:
+        auth: 平台认证上下文（如 TableauAuthContext）
         datasource_luid: 数据源 LUID
         data_model: 完整的数据模型
         
@@ -54,6 +64,12 @@ class WorkflowContext(BaseModel):
         previous_schema_hash: 上一次的 schema hash（用于检测变更）
     """
     model_config = ConfigDict(arbitrary_types_allowed=True)
+    
+    # 认证上下文（可选，用于需要认证的平台）
+    auth: Optional[Any] = Field(
+        default=None,
+        description="平台认证上下文（如 TableauAuthContext）"
+    )
     
     # 数据源配置（必需）
     datasource_luid: str = Field(description="数据源 LUID")
@@ -149,9 +165,6 @@ class WorkflowContext(BaseModel):
             return result
         
         # 否则使用 compute_schema_hash 函数
-        from analytics_assistant.src.agents.semantic_parser.components.query_cache import (
-            compute_schema_hash,
-        )
         result = compute_schema_hash(self.data_model)
         object.__setattr__(self, '_cached_schema_hash', result)
         return result
@@ -180,9 +193,6 @@ class WorkflowContext(BaseModel):
             return 0
         
         try:
-            from analytics_assistant.src.agents.semantic_parser.components.query_cache import (
-                QueryCache,
-            )
             cache = QueryCache()
             count = cache.invalidate_by_schema_change(
                 datasource_luid=self.datasource_luid,
@@ -198,6 +208,59 @@ class WorkflowContext(BaseModel):
         except Exception as e:
             logger.error(f"Schema 变更缓存失效失败: {e}")
             return 0
+
+    def is_auth_valid(self, buffer_seconds: int = 60) -> bool:
+        """检查认证是否有效
+        
+        Args:
+            buffer_seconds: 缓冲时间（秒），在过期前多少秒视为无效
+            
+        Returns:
+            True 如果认证有效，False 否则
+        """
+        if self.auth is None:
+            return False
+        
+        # 检查 auth 是否有 is_expired 方法（如 TableauAuthContext）
+        if hasattr(self.auth, 'is_expired'):
+            return not self.auth.is_expired(buffer_seconds)
+        
+        return True
+    
+    async def refresh_auth_if_needed(self) -> "WorkflowContext":
+        """如果认证过期，刷新并返回新的上下文
+        
+        Returns:
+            更新了认证的 WorkflowContext（如果需要刷新）
+        """
+        if self.auth is None:
+            return self
+        
+        if self.is_auth_valid():
+            return self
+        
+        logger.info("Token 即将过期，正在刷新...")
+        
+        new_auth = await get_tableau_auth_async(force_refresh=True)
+        
+        logger.info("Token 刷新成功")
+        
+        # 返回更新了 auth 的新上下文
+        return WorkflowContext(
+            auth=new_auth,
+            datasource_luid=self.datasource_luid,
+            data_model=self.data_model,
+            dimension_hierarchy=self.dimension_hierarchy,
+            previous_schema_hash=self.previous_schema_hash,
+            current_time=self.current_time,
+            timezone=self.timezone,
+            fiscal_year_start_month=self.fiscal_year_start_month,
+            business_calendar=self.business_calendar,
+            field_values_cache=self.field_values_cache,
+            field_samples=self.field_samples,
+            platform_adapter=self.platform_adapter,
+            user_id=self.user_id,
+        )
 
     def get_field_values(self, field_name: str) -> Optional[List[str]]:
         """获取字段的缓存值
@@ -226,6 +289,7 @@ class WorkflowContext(BaseModel):
         同时保留 schema_hash 以便检测变更。
         """
         return WorkflowContext(
+            auth=self.auth,
             datasource_luid=self.datasource_luid,
             data_model=self.data_model,
             dimension_hierarchy=self.dimension_hierarchy,
@@ -265,10 +329,6 @@ class WorkflowContext(BaseModel):
             return self
         
         try:
-            from analytics_assistant.src.agents.dimension_hierarchy import (
-                DimensionHierarchyInference,
-            )
-            
             # 获取字段列表
             fields = []
             if hasattr(self.data_model, 'fields'):
@@ -301,6 +361,7 @@ class WorkflowContext(BaseModel):
             
             # 返回更新后的上下文
             return WorkflowContext(
+                auth=self.auth,
                 datasource_luid=self.datasource_luid,
                 data_model=self.data_model,
                 dimension_hierarchy=hierarchy_dict,

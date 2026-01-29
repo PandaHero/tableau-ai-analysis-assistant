@@ -25,6 +25,7 @@ import logging
 from typing import Dict, Any, List, Optional
 
 from analytics_assistant.src.core.schemas import DataModel, Field, LogicalTable, TableRelationship
+from analytics_assistant.src.core.exceptions import VizQLServerError, VizQLError
 from analytics_assistant.src.platform.tableau.auth import get_tableau_auth_async, TableauAuthContext
 from analytics_assistant.src.platform.tableau.client import VizQLClient
 
@@ -412,8 +413,6 @@ class TableauDataLoader:
         Returns:
             数据源模型字典，如果 API 不可用则返回 None
         """
-        from analytics_assistant.src.core.exceptions import VizQLServerError, VizQLError
-        
         if auth is None:
             auth = await get_tableau_auth_async()
         
@@ -463,8 +462,6 @@ class TableauDataLoader:
         Returns:
             TableRelationship 列表，如果 API 不可用则返回空列表
         """
-        from analytics_assistant.src.core.exceptions import VizQLServerError, VizQLError
-        
         client = await self._get_client()
         
         # 调用 VizQL 获取数据源模型

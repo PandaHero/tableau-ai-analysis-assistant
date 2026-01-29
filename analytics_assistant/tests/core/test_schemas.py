@@ -4,6 +4,9 @@
 测试任务 2.1.6：
 - 测试模型验证（Pydantic field_validator）
 - 测试序列化（Pydantic model_dump）
+
+注意：SemanticQuery 已被移除，使用 SemanticOutput 代替。
+SemanticOutput 位于 agents/semantic_parser/schemas/output.py
 """
 
 import pytest
@@ -41,8 +44,6 @@ from analytics_assistant.src.core.schemas import (
     NumericRangeFilter,
     TextMatchFilter,
     TopNFilter,
-    # Query
-    SemanticQuery,
     # Validation
     ValidationResult,
     ValidationError as VError,
@@ -457,127 +458,6 @@ class TestTopNFilter:
         )
         assert f.n == 10
         assert f.by_field == "销售额"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# SemanticQuery 测试
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestSemanticQuery:
-    """SemanticQuery 模型测试。"""
-    
-    def test_basic_creation(self):
-        """测试基本创建。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-        )
-        assert len(query.dimensions) == 1
-        assert len(query.measures) == 1
-    
-    def test_empty_query(self):
-        """测试空查询。"""
-        query = SemanticQuery()
-        assert query.dimensions is None
-        assert query.measures is None
-    
-    def test_with_computations(self):
-        """测试带计算的查询。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            computations=[
-                RankCalc(target="销售额"),
-            ],
-        )
-        assert len(query.computations) == 1
-    
-    def test_with_filters(self):
-        """测试带过滤器的查询。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            filters=[
-                SetFilter(field_name="省份", values=["北京"]),
-            ],
-        )
-        assert len(query.filters) == 1
-    
-    def test_get_sorts_empty(self):
-        """测试 get_sorts 空结果。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-        )
-        sorts = query.get_sorts()
-        assert sorts == []
-    
-    def test_get_sorts_with_dimension_sort(self):
-        """测试 get_sorts 带维度排序。"""
-        query = SemanticQuery(
-            dimensions=[
-                DimensionField(
-                    field_name="省份",
-                    sort=SortSpec(direction=SortDirection.ASC, priority=0),
-                ),
-            ],
-        )
-        sorts = query.get_sorts()
-        assert len(sorts) == 1
-        assert sorts[0][0] == "省份"
-        assert sorts[0][1].direction == SortDirection.ASC
-    
-    def test_get_sorts_with_measure_sort(self):
-        """测试 get_sorts 带度量排序。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[
-                MeasureField(
-                    field_name="销售额",
-                    sort=SortSpec(direction=SortDirection.DESC, priority=0),
-                ),
-            ],
-        )
-        sorts = query.get_sorts()
-        assert len(sorts) == 1
-        assert sorts[0][0] == "销售额"
-    
-    def test_get_sorts_priority_order(self):
-        """测试 get_sorts 按优先级排序。"""
-        query = SemanticQuery(
-            dimensions=[
-                DimensionField(
-                    field_name="省份",
-                    sort=SortSpec(direction=SortDirection.ASC, priority=1),
-                ),
-            ],
-            measures=[
-                MeasureField(
-                    field_name="销售额",
-                    sort=SortSpec(direction=SortDirection.DESC, priority=0),
-                ),
-            ],
-        )
-        sorts = query.get_sorts()
-        assert len(sorts) == 2
-        # 按优先级排序：销售额(0) 在前，省份(1) 在后
-        assert sorts[0][0] == "销售额"
-        assert sorts[1][0] == "省份"
-    
-    def test_serialization(self):
-        """测试序列化。"""
-        query = SemanticQuery(
-            dimensions=[DimensionField(field_name="省份")],
-            measures=[MeasureField(field_name="销售额")],
-            row_limit=100,
-        )
-        data = query.model_dump()
-        assert data["row_limit"] == 100
-        assert len(data["dimensions"]) == 1
-    
-    def test_extra_fields_forbidden(self):
-        """测试禁止额外字段。"""
-        with pytest.raises(ValidationError):
-            SemanticQuery(unknown_field="value")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

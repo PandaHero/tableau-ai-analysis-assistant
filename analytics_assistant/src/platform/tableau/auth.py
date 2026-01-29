@@ -36,6 +36,22 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# 默认配置
+# ══════════════════════════════════════════════════════════════════════════════
+
+_DEFAULT_AUTH_TIMEOUT = 30  # 默认认证请求超时（秒）
+
+
+def _get_auth_timeout() -> int:
+    """从配置获取认证请求超时时间"""
+    try:
+        config = get_config()
+        return config.get("tableau", {}).get("auth_timeout", _DEFAULT_AUTH_TIMEOUT)
+    except Exception:
+        return _DEFAULT_AUTH_TIMEOUT
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Token 缓存
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -182,7 +198,7 @@ def _jwt_authenticate(
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             json=payload,
             verify=_get_ssl_verify(),
-            timeout=30,
+            timeout=_get_auth_timeout(),
         )
         
         if response.status_code == 200:
@@ -236,7 +252,7 @@ async def _jwt_authenticate_async(
     }
     
     try:
-        async with httpx.AsyncClient(verify=_get_ssl_verify(), timeout=30) as client:
+        async with httpx.AsyncClient(verify=_get_ssl_verify(), timeout=_get_auth_timeout()) as client:
             response = await client.post(
                 endpoint,
                 headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -296,7 +312,7 @@ def _pat_authenticate(
             headers={"Content-Type": "application/json", "Accept": "application/json"},
             json=payload,
             verify=_get_ssl_verify(),
-            timeout=30,
+            timeout=_get_auth_timeout(),
         )
         
         if response.status_code == 200:
@@ -343,7 +359,7 @@ async def _pat_authenticate_async(
     }
     
     try:
-        async with httpx.AsyncClient(verify=_get_ssl_verify(), timeout=30) as client:
+        async with httpx.AsyncClient(verify=_get_ssl_verify(), timeout=_get_auth_timeout()) as client:
             response = await client.post(
                 endpoint,
                 headers={"Content-Type": "application/json", "Accept": "application/json"},
