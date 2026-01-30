@@ -1,32 +1,35 @@
 # -*- coding: utf-8 -*-
 """
-FieldRetriever 迁移测试
+FieldRetriever 测试
 
-验证 FieldRetriever 迁移到 RAGService 后功能正常。
+验证 FieldRetriever 基于 FeatureExtractionOutput 的检索功能。
 
 测试内容：
-1. FieldRetriever 使用 RAGService 进行索引管理
-2. 三层检索策略（L0/L1/L2）正常工作
-3. 索引创建和检索功能正常
+1. FieldRetriever 使用 RetrieverFactory 进行检索
+2. 基于 required_measures 和 required_dimensions 检索
+3. 返回 FieldRAGResult（measures、dimensions、time_fields）
+4. 降级模式（terms 为空时返回全部字段）
 
-Requirements: 6.1 - FieldRetriever 迁移
+Requirements: 5.1-5.6 - FieldRetriever 字段检索
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from typing import Any, Dict, List
 
 from analytics_assistant.src.agents.semantic_parser.components.field_retriever import (
     FieldRetriever,
-    extract_categories_by_rules,
-    match_field_name_or_caption,
 )
-from analytics_assistant.src.agents.semantic_parser.schemas.intermediate import FieldCandidate
+from analytics_assistant.src.agents.semantic_parser.schemas.prefilter import (
+    FeatureExtractionOutput,
+    FieldRAGResult,
+)
+from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# =============================================================================
 # 测试数据
-# ═══════════════════════════════════════════════════════════════════════════
+# =============================================================================
 
 def create_mock_field(
     name: str,
@@ -55,208 +58,266 @@ def create_mock_data_model(fields: List[Dict[str, Any]]) -> MagicMock:
     return model
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 单元测试
-# ═══════════════════════════════════════════════════════════════════════════
+def create_feature_output(
+    required_measures: List[str] = None,
+    required_dimensions: List[str] = None,
+) -> FeatureExtractionOutput:
+    """创建 FeatureExtractionOutput"""
+    return FeatureExtractionOutput(
+        required_measures=required_measures or [],
+        required_dimensions=required_dimensions or [],
+    )
 
-class TestFieldRetrieverMigration:
-    """FieldRetriever 迁移测试"""
+
+# =============================================================================
+# 单元测试
+# =============================================================================
+
+class TestFieldRetrieverInit:
+    """FieldRetriever 初始化测试"""
     
-    def test_field_retriever_init_uses_rag_service(self):
-        """测试 FieldRetriever 初始化时使用 RAGService"""
+    def test_field_retriever_init_with_defaults(self):
+        """测试 FieldRetriever 使用默认配置初始化"""
         retriever = FieldRetriever()
         
-        # 验证使用了 RAGService
-        assert hasattr(retriever, '_rag_service')
-        assert retriever._rag_service is not None
-    
-    def test_field_retriever_no_cascade_retriever_param(self):
-        """测试 FieldRetriever 不再接受 cascade_retriever 参数"""
-        # 新的 FieldRetriever 不应该有 cascade_retriever 参数
-        import inspect
-        sig = inspect.signature(FieldRetriever.__init__)
-        params = list(sig.parameters.keys())
-        
-        assert 'cascade_retriever' not in params
-        assert 'self' in params
-        assert 'default_top_k' in params
-        assert 'full_schema_threshold' in params
-        assert 'min_rule_match_dimensions' in params
+        assert hasattr(retriever, 'top_k')
+        assert hasattr(retriever, 'fallback_multiplier')
+        assert retriever.top_k > 0
+        assert retriever.fallback_multiplier >= 1.0
     
     def test_field_retriever_has_index_prefix(self):
         """测试 FieldRetriever 有索引前缀常量"""
         assert hasattr(FieldRetriever, 'INDEX_PREFIX')
         assert FieldRetriever.INDEX_PREFIX == "fields_"
     
-    def test_get_index_name(self):
-        """测试索引名称生成"""
-        retriever = FieldRetriever()
+    def test_field_retriever_config_params(self):
+        """测试 FieldRetriever 配置参数"""
+        retriever = FieldRetriever(top_k=10, fallback_multiplier=3.0)
         
-        index_name = retriever._get_index_name("ds_123")
-        assert index_name == "fields_ds_123"
-        
-        index_name = retriever._get_index_name("test_datasource")
-        assert index_name == "fields_test_datasource"
+        assert retriever.top_k == 10
+        assert retriever.fallback_multiplier == 3.0
+
+
+class TestFieldRetrieverDocuments:
+    """FieldRetriever 字段转换测试"""
     
-    def test_fields_to_documents(self):
-        """测试字段转换为 IndexDocument"""
+    def test_field_to_candidate(self):
+        """测试字段转换为 FieldCandidate"""
         retriever = FieldRetriever()
         
-        fields = [
-            create_mock_field("region", "地区", "dimension", "string", "geography"),
-            create_mock_field("sales", "销售额", "measure", "real"),
-        ]
+        field = create_mock_field("region", "地区", "dimension", "string", "geography")
         
-        documents = retriever._fields_to_documents(fields)
+        candidate = retriever._field_to_candidate(field, confidence=0.9, source="test")
         
-        assert len(documents) == 2
-        
-        # 验证第一个文档
-        doc1 = documents[0]
-        assert doc1.id == "region"
-        assert "region" in doc1.content
-        assert "地区" in doc1.content
-        assert doc1.metadata["role"] == "dimension"
-        assert doc1.metadata["field_caption"] == "地区"
-        
-        # 验证第二个文档
-        doc2 = documents[1]
-        assert doc2.id == "sales"
-        assert doc2.metadata["role"] == "measure"
+        assert candidate.field_name == "region"
+        assert candidate.field_caption == "地区"
+        assert candidate.field_type == "dimension"
+        assert candidate.confidence == 0.9
+        assert candidate.source == "test"
 
 
-class TestFieldRetrieverL0Strategy:
-    """L0 全量返回策略测试"""
+class TestFieldRetrieverRetrieve:
+    """FieldRetriever retrieve 方法测试"""
     
     @pytest.mark.asyncio
-    async def test_l0_full_schema_mode(self):
-        """测试 L0 全量模式（字段数 <= 阈值）"""
-        retriever = FieldRetriever(full_schema_threshold=10)
+    async def test_retrieve_returns_field_rag_result(self):
+        """测试 retrieve 返回 FieldRAGResult"""
+        retriever = FieldRetriever()
         
-        # 创建少量字段（小于阈值）
         fields = [
             create_mock_field("region", "地区"),
-            create_mock_field("product", "产品"),
             create_mock_field("sales", "销售额", "measure"),
         ]
         data_model = create_mock_data_model(fields)
+        feature_output = create_feature_output(
+            required_measures=["销售额"],
+            required_dimensions=["地区"],
+        )
         
-        candidates = await retriever.retrieve(
-            question="各地区的销售额",
+        result = await retriever.retrieve(
+            feature_output=feature_output,
             data_model=data_model,
         )
         
-        # L0 模式应该返回所有字段
-        assert len(candidates) == 3
-        
-        # 验证来源是 full_schema
-        for c in candidates:
-            assert c.source == "full_schema"
-
-
-class TestFieldRetrieverL1Strategy:
-    """L1 规则匹配策略测试"""
-    
-    def test_extract_categories_by_rules(self):
-        """测试类别关键词提取"""
-        # 时间相关
-        categories = extract_categories_by_rules("上个月的销售额")
-        assert "time" in categories
-        
-        # 地理相关
-        categories = extract_categories_by_rules("各地区的销售情况")
-        assert "geography" in categories
-        
-        # 产品相关
-        categories = extract_categories_by_rules("各产品的销量")
-        assert "product" in categories
-        
-        # 多类别
-        categories = extract_categories_by_rules("上个月各地区各产品的销售额")
-        assert "time" in categories
-        assert "geography" in categories
-        assert "product" in categories
-    
-    def test_match_field_name_or_caption(self):
-        """测试字段名/标题匹配"""
-        fields = [
-            create_mock_field("region", "地区"),
-            create_mock_field("product_name", "产品名称"),
-            create_mock_field("sales_amount", "销售额"),
-        ]
-        
-        # 匹配标题
-        matched = match_field_name_or_caption("各地区的销售额", fields)
-        assert "region" in matched
-        assert "sales_amount" in matched
-        
-        # 匹配字段名
-        matched = match_field_name_or_caption("product_name 的统计", fields)
-        assert "product_name" in matched
-
-
-class TestFieldRetrieverRetrieveMethod:
-    """retrieve 方法测试"""
-    
-    @pytest.mark.asyncio
-    async def test_retrieve_with_empty_question(self):
-        """测试空问题返回空列表"""
-        retriever = FieldRetriever()
-        
-        candidates = await retriever.retrieve(question="")
-        assert candidates == []
-        
-        candidates = await retriever.retrieve(question="   ")
-        assert candidates == []
+        assert isinstance(result, FieldRAGResult)
+        assert hasattr(result, 'measures')
+        assert hasattr(result, 'dimensions')
+        assert hasattr(result, 'time_fields')
     
     @pytest.mark.asyncio
     async def test_retrieve_with_no_data_model(self):
-        """测试无数据模型返回空列表"""
+        """测试无数据模型返回空结果"""
         retriever = FieldRetriever()
+        feature_output = create_feature_output(required_measures=["销售额"])
         
-        candidates = await retriever.retrieve(
-            question="各地区的销售额",
+        result = await retriever.retrieve(
+            feature_output=feature_output,
             data_model=None,
         )
-        assert candidates == []
+        
+        assert isinstance(result, FieldRAGResult)
+        assert len(result.measures) == 0
+        assert len(result.dimensions) == 0
     
     @pytest.mark.asyncio
     async def test_retrieve_with_empty_fields(self):
-        """测试空字段列表返回空列表"""
+        """测试空字段列表返回空结果"""
         retriever = FieldRetriever()
         data_model = create_mock_data_model([])
+        feature_output = create_feature_output(required_measures=["销售额"])
         
-        candidates = await retriever.retrieve(
-            question="各地区的销售额",
+        result = await retriever.retrieve(
+            feature_output=feature_output,
             data_model=data_model,
         )
-        assert candidates == []
+        
+        assert len(result.measures) == 0
+        assert len(result.dimensions) == 0
+
+
+class TestFieldRetrieverFallback:
+    """FieldRetriever 降级模式测试"""
     
     @pytest.mark.asyncio
-    async def test_retrieve_accepts_datasource_luid(self):
-        """测试 retrieve 方法接受 datasource_luid 参数"""
-        retriever = FieldRetriever(full_schema_threshold=100)
+    async def test_fallback_mode_when_terms_empty(self):
+        """测试 terms 为空时的降级模式"""
+        retriever = FieldRetriever()
         
         fields = [
             create_mock_field("region", "地区"),
+            create_mock_field("city", "城市"),
+            create_mock_field("sales", "销售额", "measure"),
+            create_mock_field("profit", "利润", "measure"),
+        ]
+        data_model = create_mock_data_model(fields)
+        
+        # required_measures 和 required_dimensions 都为空
+        feature_output = create_feature_output()
+        
+        result = await retriever.retrieve(
+            feature_output=feature_output,
+            data_model=data_model,
+        )
+        
+        # 降级模式应该返回所有字段
+        assert len(result.measures) == 2  # sales, profit
+        assert len(result.dimensions) == 2  # region, city
+        
+        # 验证来源是 fallback
+        for c in result.measures:
+            assert c.source == "fallback"
+        for c in result.dimensions:
+            assert c.source == "fallback"
+
+
+class TestFieldRetrieverExactMatch:
+    """FieldRetriever 精确匹配测试"""
+    
+    @pytest.mark.asyncio
+    async def test_exact_match_by_caption(self):
+        """测试通过标题精确匹配"""
+        retriever = FieldRetriever()
+        
+        fields = [
+            create_mock_field("region", "地区"),
+            create_mock_field("city", "城市"),
+            create_mock_field("sales_amount", "销售额", "measure"),
+            create_mock_field("profit", "利润", "measure"),
+        ]
+        data_model = create_mock_data_model(fields)
+        
+        feature_output = create_feature_output(
+            required_measures=["销售额"],
+            required_dimensions=["地区"],
+        )
+        
+        result = await retriever.retrieve(
+            feature_output=feature_output,
+            data_model=data_model,
+        )
+        
+        # 应该精确匹配到对应字段
+        measure_names = {c.field_name for c in result.measures}
+        dimension_names = {c.field_name for c in result.dimensions}
+        
+        assert "sales_amount" in measure_names
+        assert "region" in dimension_names
+    
+    @pytest.mark.asyncio
+    async def test_exact_match_confidence(self):
+        """测试精确匹配的置信度"""
+        retriever = FieldRetriever()
+        
+        fields = [
             create_mock_field("sales", "销售额", "measure"),
         ]
         data_model = create_mock_data_model(fields)
         
-        # 应该能够接受 datasource_luid 参数
-        candidates = await retriever.retrieve(
-            question="各地区的销售额",
+        feature_output = create_feature_output(required_measures=["销售额"])
+        
+        result = await retriever.retrieve(
+            feature_output=feature_output,
             data_model=data_model,
-            datasource_luid="test_ds_123",
         )
         
-        # L0 模式应该返回所有字段
-        assert len(candidates) == 2
+        # 精确匹配应该有高置信度
+        assert len(result.measures) > 0
+        assert result.measures[0].confidence >= 0.9
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+class TestFieldRetrieverTimeFields:
+    """FieldRetriever 时间字段检索测试"""
+    
+    @pytest.mark.asyncio
+    async def test_retrieve_time_fields_by_data_type(self):
+        """测试通过数据类型检索时间字段"""
+        retriever = FieldRetriever()
+        
+        fields = [
+            create_mock_field("order_date", "订单日期", "dimension", "date"),
+            create_mock_field("created_at", "创建时间", "dimension", "datetime"),
+            create_mock_field("region", "地区", "dimension", "string"),
+        ]
+        data_model = create_mock_data_model(fields)
+        
+        feature_output = create_feature_output()
+        
+        result = await retriever.retrieve(
+            feature_output=feature_output,
+            data_model=data_model,
+        )
+        
+        # 应该检索到时间字段
+        time_field_names = {c.field_name for c in result.time_fields}
+        assert "order_date" in time_field_names
+        assert "created_at" in time_field_names
+        assert "region" not in time_field_names
+
+
+class TestFieldRetrieverConfig:
+    """FieldRetriever 配置测试"""
+    
+    def test_config_loaded_from_yaml(self):
+        """测试配置从 YAML 加载"""
+        retriever = FieldRetriever()
+        
+        # 配置应该从 app.yaml 加载
+        assert isinstance(retriever.top_k, int)
+        assert isinstance(retriever.fallback_multiplier, float)
+        assert retriever.top_k > 0
+        assert retriever.fallback_multiplier >= 1.0
+    
+    def test_config_override(self):
+        """测试配置覆盖"""
+        retriever = FieldRetriever(top_k=20, fallback_multiplier=5.0)
+        
+        assert retriever.top_k == 20
+        assert retriever.fallback_multiplier == 5.0
+
+
+# =============================================================================
 # 集成测试
-# ═══════════════════════════════════════════════════════════════════════════
+# =============================================================================
 
 class TestFieldRetrieverIntegration:
     """FieldRetriever 集成测试"""
@@ -264,36 +325,69 @@ class TestFieldRetrieverIntegration:
     @pytest.mark.asyncio
     async def test_full_retrieval_flow(self):
         """测试完整的检索流程"""
-        retriever = FieldRetriever(
-            full_schema_threshold=5,  # 设置较小的阈值以触发 L1
-            min_rule_match_dimensions=1,
-        )
+        retriever = FieldRetriever(top_k=5)
         
-        # 创建较多字段（超过阈值）
         fields = [
-            create_mock_field("region", "地区", "dimension", "string", "geography"),
-            create_mock_field("city", "城市", "dimension", "string", "geography"),
-            create_mock_field("product", "产品", "dimension", "string", "product"),
-            create_mock_field("category", "品类", "dimension", "string", "product"),
-            create_mock_field("date", "日期", "dimension", "date", "time"),
-            create_mock_field("month", "月份", "dimension", "string", "time"),
+            create_mock_field("region", "地区", "dimension", "string"),
+            create_mock_field("city", "城市", "dimension", "string"),
+            create_mock_field("product", "产品", "dimension", "string"),
+            create_mock_field("order_date", "订单日期", "dimension", "date"),
             create_mock_field("sales", "销售额", "measure", "real"),
+            create_mock_field("profit", "利润", "measure", "real"),
             create_mock_field("quantity", "数量", "measure", "integer"),
         ]
         data_model = create_mock_data_model(fields)
         
-        # 执行检索
-        candidates = await retriever.retrieve(
-            question="各地区的销售额",
+        feature_output = create_feature_output(
+            required_measures=["销售额", "利润"],
+            required_dimensions=["地区", "产品"],
+        )
+        
+        result = await retriever.retrieve(
+            feature_output=feature_output,
             data_model=data_model,
         )
         
-        # 应该返回相关字段
-        assert len(candidates) > 0
+        # 验证返回结构
+        assert isinstance(result, FieldRAGResult)
         
-        # 验证返回的字段包含地区相关和销售相关
-        field_names = {c.field_name for c in candidates}
-        # 地区相关字段应该被匹配
-        assert "region" in field_names or "city" in field_names
-        # 销售相关字段应该被匹配
-        assert "sales" in field_names
+        # 验证度量字段
+        measure_names = {c.field_name for c in result.measures}
+        assert "sales" in measure_names
+        assert "profit" in measure_names
+        
+        # 验证维度字段
+        dimension_names = {c.field_name for c in result.dimensions}
+        assert "region" in dimension_names
+        assert "product" in dimension_names
+        
+        # 验证时间字段
+        time_field_names = {c.field_name for c in result.time_fields}
+        assert "order_date" in time_field_names
+    
+    @pytest.mark.asyncio
+    async def test_top_k_limit(self):
+        """测试 Top-K 限制"""
+        retriever = FieldRetriever(top_k=2)
+        
+        # 创建多个度量字段
+        fields = [
+            create_mock_field(f"measure_{i}", f"度量{i}", "measure")
+            for i in range(10)
+        ]
+        data_model = create_mock_data_model(fields)
+        
+        # 降级模式会返回所有字段，但应该被 Top-K 限制
+        feature_output = create_feature_output(
+            required_measures=[],  # 空列表触发降级模式
+            required_dimensions=[],
+        )
+        
+        result = await retriever.retrieve(
+            feature_output=feature_output,
+            data_model=data_model,
+        )
+        
+        # 降级模式下，返回数量应该是 top_k * fallback_multiplier
+        # top_k=2, fallback_multiplier=2.0, 所以最多返回 4 个
+        assert len(result.measures) <= 4

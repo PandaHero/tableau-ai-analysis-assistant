@@ -348,21 +348,33 @@ class RetrievalPipeline:
 
 
 def _build_chunks_and_metadata(fields: List[Any]) -> tuple:
-    """从字段列表构建 chunks 和 metadata"""
+    """从字段列表构建 chunks 和 metadata
+    
+    注意：role 和 data_type 统一转为小写，确保检索时 filters 匹配。
+    """
     chunks: Dict[str, FieldChunk] = {}
     texts = []
     metadatas = []
     
     for field_data in fields:
         chunk = FieldChunk.from_field_metadata(field_data)
+        
+        # 统一转为小写，确保检索时 filters 匹配
+        role_lower = chunk.role.lower() if chunk.role else 'dimension'
+        data_type_lower = chunk.data_type.lower() if chunk.data_type else 'string'
+        
+        # 更新 chunk 的 role 和 data_type 为小写
+        chunk.role = role_lower
+        chunk.data_type = data_type_lower
+        
         chunks[chunk.field_name] = chunk
         texts.append(chunk.index_text)
         metadatas.append({
             "field_name": chunk.field_name,
             "field_caption": chunk.field_caption,
-            "role": chunk.role,
-            "data_type": chunk.data_type,
-            "category": chunk.category or "",
+            "role": role_lower,
+            "data_type": data_type_lower,
+            "category": (chunk.category or "").lower() if chunk.category else "",
             "column_class": chunk.column_class or "",
             "formula": chunk.formula or "",
             "logical_table_id": chunk.logical_table_id or "",

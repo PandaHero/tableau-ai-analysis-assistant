@@ -1,39 +1,38 @@
 # -*- coding: utf-8 -*-
 """
-FieldRetriever 组件 - 智能字段检索
+FieldRetriever 组件 - 基于特征的字段检索
 
 功能：
-- 三层检索策略：L0 全量 → L1 规则匹配 → L2 Embedding 兜底
-- 利用维度层级推断结果（DimensionHierarchyResult）优化字段筛选
-- 度量字段始终全量返回
-- 支持层级扩展（父/子维度）
+- 基于 FeatureExtractionOutput 进行批量 Top-K 检索
+- 返回 FieldRAGResult（measures、dimensions、time_fields）
+- 支持降级模式（terms 为空时返回全量字段）
 
-设计原则（参考 NeurIPS 2024 "The Death of Schema Linking"）：
-- 强推理模型（如 DeepSeek）不需要复杂的 Schema Linking
-- 当字段数量较少时，直接传递全部字段给 LLM
-- 当字段数量较多时，使用规则+Embedding筛选相关字段
+检索策略：
+1. 数据类型优先：先按 role（measure/dimension）过滤
+2. 批量检索：使用批量检索而非逐个检索，提高效率
+3. 级联检索：精确匹配 → 向量检索
 
 配置来源：
-- 常量配置：analytics_assistant/config/app.yaml -> field_retriever
-- 类别关键词：从 SEED_PATTERNS 动态提取，支持自学习扩展
+- analytics_assistant/config/app.yaml -> semantic_parser.optimization.field_retriever
+- analytics_assistant/config/app.yaml -> rag.retrieval（检索策略）
 
 RAG 服务集成：
-- 使用 RAGService 进行索引管理和检索
-- 索引名称格式：fields_{datasource_luid}
+- 使用 RAGService.retrieval.search_async() 进行检索
+- 索引由 IndexManager 管理，需要预先创建
+- 检索策略由 app.yaml 配置决定，不硬编码
 
-Requirements: 3.1-3.3 - FieldRetriever 字段检索
+Requirements: 5.1-5.6 - FieldRetriever 字段检索
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.rag import get_rag_service
-from analytics_assistant.src.infra.rag.schemas import IndexConfig, IndexDocument
 from analytics_assistant.src.infra.rag.exceptions import IndexNotFoundError
-from analytics_assistant.src.agents.dimension_hierarchy.seed_data import SEED_PATTERNS
+from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 
-from ..schemas.intermediate import FieldCandidate
+from ..schemas.prefilter import FeatureExtractionOutput, FieldRAGResult
 
 logger = logging.getLogger(__name__)
 
@@ -42,172 +41,14 @@ logger = logging.getLogger(__name__)
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_config() -> Dict[str, Any]:
-    """获取 field_retriever 配置。
-    
-    从 app.yaml 读取配置，如果不存在则使用默认值。
-    """
+def _get_field_retriever_config() -> Dict[str, Any]:
+    """获取 FieldRetriever 配置。"""
     try:
         config = get_config()
-        return config.config.get("field_retriever", {})
+        return config.get_field_retriever_config()
     except Exception as e:
-        logger.warning(f"无法加载配置，使用默认值: {e}")
+        logger.warning(f"无法加载 field_retriever 配置，使用默认值: {e}")
         return {}
-
-
-def _get_confidence_config() -> Dict[str, float]:
-    """获取置信度配置。"""
-    config = _get_config()
-    return config.get("confidence", {})
-
-
-def get_full_schema_threshold() -> int:
-    """获取 L0 全量返回阈值。"""
-    return _get_config().get("full_schema_threshold", 20)
-
-
-def get_min_rule_match_dimensions() -> int:
-    """获取 L2 触发阈值。"""
-    return _get_config().get("min_rule_match_dimensions", 3)
-
-
-def get_default_top_k() -> int:
-    """获取默认 Top-K。"""
-    return _get_config().get("top_k", 10)
-
-
-def get_full_schema_confidence() -> float:
-    """获取 L0 全量返回置信度。"""
-    return _get_confidence_config().get("full_schema", 0.8)
-
-
-def get_rule_match_confidence() -> float:
-    """获取 L1 规则匹配置信度。"""
-    return _get_confidence_config().get("rule_match", 0.9)
-
-
-def get_hierarchy_expand_confidence() -> float:
-    """获取层级扩展置信度。"""
-    return _get_confidence_config().get("hierarchy_expand", 0.85)
-
-
-def get_embedding_confidence_base() -> float:
-    """获取 L2 Embedding 检索基础置信度。"""
-    return _get_confidence_config().get("embedding_base", 0.7)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 类别关键词（从 SEED_PATTERNS 动态提取 + 扩展关键词）
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _build_category_keywords() -> Dict[str, Set[str]]:
-    """从 SEED_PATTERNS 动态构建类别关键词映射。
-    
-    优先从 seed_data 提取，然后补充常用的查询关键词。
-    这样当 seed_data 自学习扩展时，关键词也会自动扩展。
-    """
-    keywords: Dict[str, Set[str]] = {
-        "time": set(),
-        "geography": set(),
-        "product": set(),
-        "customer": set(),
-        "organization": set(),
-        "financial": set(),
-        "channel": set(),
-        "measure": set(),  # 度量类别
-    }
-    
-    # 从 SEED_PATTERNS 提取 field_caption 作为关键词
-    try:
-        for pattern in SEED_PATTERNS:
-            category = pattern.get("category", "").lower()
-            caption = pattern.get("field_caption", "")
-            if category in keywords and caption:
-                keywords[category].add(caption.lower())
-                # 也添加 category_detail 中的子类型
-                detail = pattern.get("category_detail", "")
-                if "-" in detail:
-                    sub_type = detail.split("-")[-1]
-                    keywords[category].add(sub_type.lower())
-    except Exception as e:
-        logger.warning(f"从 SEED_PATTERNS 提取关键词失败: {e}")
-    
-    # 补充常用查询关键词（用户问题中常见的表达）
-    _extend_query_keywords(keywords)
-    
-    return keywords
-
-
-def _extend_query_keywords(keywords: Dict[str, Set[str]]) -> None:
-    """补充用户查询中常见的关键词表达。"""
-    
-    # 时间相关
-    keywords["time"].update([
-        "时间", "日期", "年", "月", "季度", "周", "天", "日",
-        "今天", "昨天", "本周", "上周", "本月", "上个月", "今年", "去年",
-        "最近", "过去", "同期", "环比", "同比", "财年", "fy", "q1", "q2", "q3", "q4",
-    ])
-    
-    # 地理相关
-    keywords["geography"].update([
-        "地区", "区域", "省", "省份", "市", "城市", "县", "区",
-        "门店", "店铺", "网点", "分公司", "大区", "片区",
-        "华东", "华南", "华北", "华中", "西南", "西北", "东北",
-    ])
-    
-    # 产品相关
-    keywords["product"].update([
-        "产品", "商品", "品类", "品牌", "sku", "型号", "规格",
-        "系列", "产品线", "子品类", "大类", "中类", "小类",
-    ])
-    
-    # 客户相关
-    keywords["customer"].update([
-        "客户", "顾客", "会员", "用户", "消费者", "买家",
-        "vip", "新客", "老客", "回头客",
-    ])
-    
-    # 组织相关
-    keywords["organization"].update([
-        "部门", "组织", "团队", "员工", "经理", "主管",
-        "销售员", "业务员", "店长",
-    ])
-    
-    # 财务相关
-    keywords["financial"].update([
-        "科目", "成本中心", "费用", "预算", "账户",
-    ])
-    
-    # 渠道相关
-    keywords["channel"].update([
-        "渠道", "线上", "线下", "电商", "实体店",
-        "天猫", "京东", "拼多多", "抖音",
-    ])
-    
-    # 度量相关（用于识别问题中涉及的度量类型）
-    keywords["measure"].update([
-        "销售额", "销售", "营收", "收入", "金额", "总额",
-        "利润", "毛利", "净利", "利润率", "毛利率",
-        "成本", "费用", "支出", "开销",
-        "数量", "件数", "订单数", "单量", "笔数",
-        "均价", "单价", "平均", "客单价",
-        "占比", "比例", "份额", "比重",
-        "增长", "增长率", "同比", "环比", "yoy", "mom",
-        "预算", "实际", "达成率", "完成率",
-        "库存", "周转", "周转率",
-    ])
-
-
-# 延迟初始化的类别关键词
-_CATEGORY_KEYWORDS: Optional[Dict[str, Set[str]]] = None
-
-
-def get_category_keywords() -> Dict[str, Set[str]]:
-    """获取类别关键词映射（延迟初始化）。"""
-    global _CATEGORY_KEYWORDS
-    if _CATEGORY_KEYWORDS is None:
-        _CATEGORY_KEYWORDS = _build_category_keywords()
-    return _CATEGORY_KEYWORDS
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -226,316 +67,342 @@ def _get_field_attr(obj: Any, *names, default=None) -> Any:
     return default
 
 
-def extract_categories_by_rules(question: str) -> Set[str]:
-    """从问题中提取匹配的类别。
-    
-    使用关键词匹配识别问题涉及的维度类别。
-    关键词来自 SEED_PATTERNS + 扩展查询词。
-    
-    Args:
-        question: 用户问题
-    
-    Returns:
-        匹配的类别集合（如 {"geography", "time"}）
-    """
-    matched_categories: Set[str] = set()
-    question_lower = question.lower()
-    
-    category_keywords = get_category_keywords()
-    
-    for category, keywords in category_keywords.items():
-        for keyword in keywords:
-            if keyword in question_lower:
-                matched_categories.add(category)
-                break  # 一个类别只需匹配一个关键词
-    
-    return matched_categories
-
-
-def match_field_name_or_caption(
-    question: str,
-    fields: List[Any],
-) -> Set[str]:
-    """匹配问题中直接提到的字段名或标题。
-    
-    Args:
-        question: 用户问题
-        fields: 字段列表
-    
-    Returns:
-        匹配的字段名集合
-    """
-    matched_fields: Set[str] = set()
-    question_lower = question.lower()
-    
-    for field in fields:
-        field_name = _get_field_attr(field, 'name', 'field_name', default='')
-        field_caption = _get_field_attr(field, 'fieldCaption', 'field_caption', 'caption', default='')
-        
-        # 检查字段名或标题是否出现在问题中
-        if field_name and field_name.lower() in question_lower:
-            matched_fields.add(field_name)
-        elif field_caption and len(field_caption) >= 2 and field_caption.lower() in question_lower:
-            # caption 至少 2 个字符才匹配，避免单字误匹配
-            matched_fields.add(field_name)
-    
-    return matched_fields
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # FieldRetriever 组件
 # ═══════════════════════════════════════════════════════════════════════════
 
 class FieldRetriever:
-    """字段检索器 - 三层智能策略。
+    """字段检索器 - 基于特征的批量 Top-K 检索。
     
-    检索策略：
-    - L0: 字段数 <= full_schema_threshold → 全量返回（信任 LLM 推理能力）
-    - L1: 规则匹配 → 根据类别关键词筛选维度 + 全量度量
-    - L2: Embedding 兜底 → 当规则匹配维度 < min_rule_match_dimensions 时触发
-    
-    核心原则：
-    - 度量字段始终全量返回（不筛选）
-    - 维度字段根据问题相关性筛选
-    - 利用维度层级信息扩展相关字段（父/子维度）
-    
-    RAG 服务集成：
-    - 使用 RAGService 进行索引管理和检索
-    - 索引名称格式：fields_{datasource_luid}
+    使用 RAGService 进行检索，索引需要预先创建。
     
     配置来源：
-    - app.yaml -> field_retriever 配置节
+    - field_retriever.top_k: 每类字段返回的候选数
+    - field_retriever.fallback_multiplier: 降级时的倍数
+    - rag.retrieval.retriever_type: 检索策略（由 RAGService 读取）
     
     Examples:
         >>> retriever = FieldRetriever()
-        >>> candidates = await retriever.retrieve(
-        ...     question="上个月各地区的销售额",
+        >>> result = await retriever.retrieve(
+        ...     feature_output=feature_output,
         ...     data_model=data_model,
-        ...     dimension_hierarchy=hierarchy_result,
-        ...     datasource_luid="ds_123",
         ... )
-        >>> for c in candidates:
-        ...     print(f"{c.field_name}: {c.source}, category={c.hierarchy_category}")
+        >>> print(f"度量: {len(result.measures)}, 维度: {len(result.dimensions)}")
     """
     
-    # 索引名称前缀
     INDEX_PREFIX = "fields_"
+    
+    # 默认配置
+    _DEFAULT_TOP_K = 5
+    _DEFAULT_FALLBACK_MULTIPLIER = 2.0
     
     def __init__(
         self,
-        default_top_k: Optional[int] = None,
-        full_schema_threshold: Optional[int] = None,
-        min_rule_match_dimensions: Optional[int] = None,
+        top_k: Optional[int] = None,
+        fallback_multiplier: Optional[float] = None,
     ):
         """初始化 FieldRetriever。
         
         Args:
-            default_top_k: 默认返回数量（None 从配置读取）
-            full_schema_threshold: L0 全量返回阈值（None 从配置读取）
-            min_rule_match_dimensions: L2 触发阈值（None 从配置读取）
+            top_k: 每类字段返回的候选数（None 从配置读取）
+            fallback_multiplier: 降级时的倍数（None 从配置读取）
         """
-        self._rag_service = get_rag_service()
-        self.default_top_k = default_top_k or get_default_top_k()
-        self.full_schema_threshold = full_schema_threshold or get_full_schema_threshold()
-        self.min_rule_match_dimensions = min_rule_match_dimensions or get_min_rule_match_dimensions()
+        self._load_config()
         
-        # 从配置加载置信度参数
-        self._full_schema_confidence = get_full_schema_confidence()
-        self._rule_match_confidence = get_rule_match_confidence()
-        self._hierarchy_expand_confidence = get_hierarchy_expand_confidence()
-        self._embedding_confidence_base = get_embedding_confidence_base()
+        # 允许构造时覆盖配置
+        if top_k is not None:
+            self.top_k = top_k
+        if fallback_multiplier is not None:
+            self.fallback_multiplier = fallback_multiplier
+        
+        # 延迟初始化：获取 RAGService 单例
+        # 注意：在 __init__ 中获取全局单例，避免模块加载时初始化
+        self._rag_service = get_rag_service()
     
+    def _load_config(self) -> None:
+        """从配置文件加载参数。"""
+        fr_config = _get_field_retriever_config()
+        self.top_k = fr_config.get("top_k", self._DEFAULT_TOP_K)
+        self.fallback_multiplier = float(
+            fr_config.get("fallback_multiplier", self._DEFAULT_FALLBACK_MULTIPLIER)
+        )
+        
+        logger.debug(
+            f"FieldRetriever 配置: top_k={self.top_k}, "
+            f"fallback_multiplier={self.fallback_multiplier}"
+        )
+
+
     async def retrieve(
         self,
-        question: str,
+        feature_output: FeatureExtractionOutput,
         data_model: Optional[Any] = None,
-        dimension_hierarchy: Optional[Dict[str, Any]] = None,
-        top_k: Optional[int] = None,
-        force_vector_search: bool = False,
         datasource_luid: Optional[str] = None,
-    ) -> List[FieldCandidate]:
-        """检索相关字段。
-        
-        三层策略：
-        - L0: 字段数 <= threshold → 全量返回
-        - L1: 规则匹配 → 类别筛选 + 层级扩展
-        - L2: Embedding 兜底 → 规则匹配维度 < 3 时触发
+    ) -> FieldRAGResult:
+        """基于特征提取输出检索字段。
         
         Args:
-            question: 用户问题
+            feature_output: FeatureExtractor 输出
             data_model: 数据模型（包含字段列表）
-            dimension_hierarchy: 维度层级推断结果
-            top_k: 返回数量限制（仅用于 Embedding 检索）
-            force_vector_search: 强制使用向量检索（跳过 L0/L1）
             datasource_luid: 数据源 ID（用于索引命名）
         
         Returns:
-            FieldCandidate 列表
+            FieldRAGResult 包含 measures、dimensions、time_fields
         """
-        if not question or not question.strip():
-            return []
-        
         # 获取字段列表
         fields = self._get_fields(data_model)
         if not fields:
             logger.warning("FieldRetriever: 无可用字段")
-            return []
-        
-        field_count = len(fields)
-        k = top_k or self.default_top_k
+            return FieldRAGResult()
         
         # 分离维度和度量
         dimensions, measures = self._split_fields(fields)
         
         logger.info(
-            f"FieldRetriever: 开始检索, question='{question[:30]}...', "
-            f"fields={field_count}, dimensions={len(dimensions)}, measures={len(measures)}"
+            f"FieldRetriever: 开始检索, "
+            f"required_measures={feature_output.required_measures}, "
+            f"required_dimensions={feature_output.required_dimensions}"
         )
         
-        # 确保索引存在（如果有 datasource_luid）
-        index_name = None
-        if datasource_luid:
-            index_name = self._ensure_index(datasource_luid, fields)
+        # 获取索引名称
+        index_name = self._get_index_name(datasource_luid)
         
-        # 强制向量检索
-        if force_vector_search and index_name:
-            return await self._retrieve_with_embedding(
-                question, data_model, dimension_hierarchy, k, index_name
-            )
+        # 检查索引是否存在
+        index_exists = self._check_index_exists(index_name)
         
-        # L0: 全量模式
-        if field_count <= self.full_schema_threshold:
-            logger.info(f"FieldRetriever: L0 全量模式 (fields={field_count} <= {self.full_schema_threshold})")
-            return self._convert_all_fields(fields, dimension_hierarchy, "full_schema")
-        
-        # L1: 规则匹配模式
-        logger.info(f"FieldRetriever: L1 规则匹配模式 (fields={field_count} > {self.full_schema_threshold})")
-        
-        # 维度使用规则匹配
-        dimension_candidates = self._retrieve_dimensions_by_rules(
-            question, dimensions, dimension_hierarchy
+        # 1. 检索度量字段
+        measure_candidates = await self._retrieve_by_terms(
+            terms=feature_output.required_measures,
+            fields=measures,
+            role="measure",
+            index_name=index_name if index_exists else None,
         )
         
-        # 度量也使用规则匹配
-        measure_candidates = self._retrieve_measures_by_rules(question, measures)
+        # 2. 检索维度字段
+        dimension_candidates = await self._retrieve_by_terms(
+            terms=feature_output.required_dimensions,
+            fields=dimensions,
+            role="dimension",
+            index_name=index_name if index_exists else None,
+        )
         
-        # L2: 如果规则匹配结果太少，触发 Embedding 兜底
-        need_embedding_for_dims = len(dimension_candidates) < self.min_rule_match_dimensions
-        need_embedding_for_measures = len(measure_candidates) < self.min_rule_match_dimensions
-        
-        if (need_embedding_for_dims or need_embedding_for_measures) and index_name:
-            logger.info(
-                f"FieldRetriever: L2 Embedding 兜底 "
-                f"(dims_matched={len(dimension_candidates)}, measures_matched={len(measure_candidates)}, "
-                f"threshold={self.min_rule_match_dimensions})"
-            )
-            
-            # 批量 embedding 检索（一次调用，同时检索维度和度量）
-            embedding_results = await self._retrieve_with_embedding_batch(
-                question, fields, dimension_hierarchy, k, index_name
-            )
-            
-            # 分离 embedding 结果
-            embedding_dims = [r for r in embedding_results if r.field_type == "dimension"]
-            embedding_measures = [r for r in embedding_results if r.field_type == "measure"]
-            
-            # 合并去重
-            if need_embedding_for_dims:
-                dimension_candidates = self._merge_candidates(dimension_candidates, embedding_dims)
-            if need_embedding_for_measures:
-                measure_candidates = self._merge_candidates(measure_candidates, embedding_measures)
-        
-        # 合并维度和度量
-        all_candidates = dimension_candidates + measure_candidates
-        
-        # 更新排名
-        for i, c in enumerate(all_candidates, 1):
-            c.rank = i
+        # 3. 检索时间字段
+        time_candidates = self._retrieve_time_fields(dimensions)
         
         logger.info(
             f"FieldRetriever: 检索完成, "
-            f"dimensions={len(dimension_candidates)}, measures={len(measure_candidates)}, "
-            f"total={len(all_candidates)}"
+            f"measures={len(measure_candidates)}, "
+            f"dimensions={len(dimension_candidates)}, "
+            f"time_fields={len(time_candidates)}"
         )
         
-        return all_candidates
+        return FieldRAGResult(
+            measures=measure_candidates,
+            dimensions=dimension_candidates,
+            time_fields=time_candidates,
+        )
     
-    def _get_index_name(self, datasource_luid: str) -> str:
-        """获取索引名称"""
+    def _get_index_name(self, datasource_luid: Optional[str]) -> Optional[str]:
+        """获取索引名称。"""
+        if not datasource_luid:
+            return None
         return f"{self.INDEX_PREFIX}{datasource_luid}"
     
-    def _ensure_index(self, datasource_luid: str, fields: List[Any]) -> str:
-        """确保索引存在，如果不存在则创建
+    def _check_index_exists(self, index_name: Optional[str]) -> bool:
+        """检查索引是否存在。"""
+        if not index_name:
+            return False
+        try:
+            retriever = self._rag_service.index.get_index(index_name)
+            return retriever is not None
+        except Exception:
+            return False
+
+    async def _retrieve_by_terms(
+        self,
+        terms: List[str],
+        fields: List[Any],
+        role: str,
+        index_name: Optional[str] = None,
+    ) -> List[FieldCandidate]:
+        """根据术语检索字段。
+        
+        检索策略：
+        1. 如果 terms 为空 → 降级模式，返回全量字段
+        2. 如果索引存在 → 使用 RAGService 进行检索
+        3. 如果索引不存在 → 使用精确匹配回退
         
         Args:
-            datasource_luid: 数据源 ID
-            fields: 字段列表
-            
+            terms: 检索术语列表（如 ["利润", "销售额"]）
+            fields: 候选字段列表
+            role: 字段角色（measure/dimension）
+            index_name: 索引名称
+        
         Returns:
-            索引名称
+            FieldCandidate 列表，按置信度降序
         """
-        index_name = self._get_index_name(datasource_luid)
-        
-        # 检查索引是否已存在
-        existing_index = self._rag_service.index.get_index(index_name)
-        if existing_index is not None:
-            return index_name
-        
-        # 创建索引
-        try:
-            documents = self._fields_to_documents(fields)
-            config = self._get_index_config()
-            self._rag_service.index.create_index(
-                name=index_name,
-                config=config,
-                documents=documents,
+        # 降级模式：terms 为空时返回全量字段
+        if not terms:
+            fallback_count = int(self.top_k * self.fallback_multiplier)
+            logger.info(f"FieldRetriever: 降级模式, 返回 {fallback_count} 个 {role} 字段")
+            return self._convert_fields_to_candidates(
+                fields[:fallback_count],
+                confidence=0.5,
+                source="fallback",
             )
-            logger.info(f"FieldRetriever: 创建索引 {index_name}，文档数: {len(documents)}")
-        except Exception as e:
-            logger.warning(f"FieldRetriever: 创建索引失败: {e}")
         
-        return index_name
-    
-    def _get_index_config(self) -> IndexConfig:
-        """获取索引配置"""
-        rag_config = self._rag_service.get_config()
-        index_config = rag_config.get("index", {})
-        return IndexConfig(
-            persist_directory=index_config.get("persist_directory"),
-            default_top_k=self.default_top_k,
-        )
-    
-    def _fields_to_documents(self, fields: List[Any]) -> List[IndexDocument]:
-        """将字段列表转换为 IndexDocument 列表"""
-        documents = []
+        # 如果没有索引，使用精确匹配
+        if not index_name:
+            logger.info(f"FieldRetriever: 无索引，使用精确匹配")
+            return self._exact_match_fallback(terms, fields, role)
+        
+        # 使用 RAGService 进行检索
+        try:
+            query = " ".join(terms)
+            
+            # 使用 RAGService.retrieval.search_async()
+            # 检索策略由 app.yaml 配置决定
+            results = await self._rag_service.retrieval.search_async(
+                index_name=index_name,
+                query=query,
+                top_k=self.top_k,
+                filters={"role": role},
+            )
+            
+            if results:
+                candidates = []
+                for result in results:
+                    # 从 metadata 获取字段信息
+                    metadata = result.metadata or {}
+                    
+                    # 将检索分数转换为置信度
+                    confidence = min(result.score * 0.8 + 0.15, 0.95)
+                    
+                    candidates.append(FieldCandidate(
+                        field_name=result.doc_id,
+                        field_caption=metadata.get("field_caption", result.doc_id),
+                        field_type=role,
+                        data_type=metadata.get("data_type", "string"),
+                        confidence=confidence,
+                        source="rag",
+                        rank=result.rank,
+                        category=metadata.get("category"),
+                        level=metadata.get("level"),
+                        granularity=metadata.get("granularity"),
+                        formula=metadata.get("formula"),
+                        logical_table_caption=metadata.get("logical_table_caption"),
+                        sample_values=metadata.get("sample_values"),
+                    ))
+                
+                logger.info(f"FieldRetriever: RAG 检索返回 {len(candidates)} 个 {role} 字段")
+                return candidates
+            
+            # RAG 检索无结果，回退到精确匹配
+            logger.info(f"FieldRetriever: RAG 检索无结果，回退到精确匹配")
+            return self._exact_match_fallback(terms, fields, role)
+            
+        except IndexNotFoundError:
+            logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，回退到精确匹配")
+            return self._exact_match_fallback(terms, fields, role)
+        except Exception as e:
+            logger.warning(f"FieldRetriever: RAG 检索失败: {e}，回退到精确匹配")
+            return self._exact_match_fallback(terms, fields, role)
+
+
+    def _exact_match_fallback(
+        self,
+        terms: List[str],
+        fields: List[Any],
+        role: str,
+    ) -> List[FieldCandidate]:
+        """精确匹配回退方案。"""
+        candidates = []
+        matched_names = set()
+        
+        for term in terms:
+            exact_matches = self._exact_match_by_term(term, fields)
+            for field in exact_matches:
+                field_name = _get_field_attr(field, 'name', 'field_name', default='')
+                if field_name not in matched_names:
+                    matched_names.add(field_name)
+                    candidates.append(self._field_to_candidate(
+                        field, confidence=0.9, source="exact_match"
+                    ))
+        
+        # 如果精确匹配不足，补充更多字段
+        if len(candidates) < self.top_k:
+            for field in fields:
+                field_name = _get_field_attr(field, 'name', 'field_name', default='')
+                if field_name not in matched_names:
+                    matched_names.add(field_name)
+                    candidates.append(self._field_to_candidate(
+                        field, confidence=0.5, source="fallback"
+                    ))
+                    if len(candidates) >= self.top_k:
+                        break
+        
+        return candidates[:self.top_k]
+
+    def _exact_match_by_term(self, term: str, fields: List[Any]) -> List[Any]:
+        """精确匹配：字段名或标题包含术语。"""
+        matched = []
+        term_lower = term.lower()
+        
         for field in fields:
             field_name = _get_field_attr(field, 'name', 'field_name', default='')
-            field_caption = _get_field_attr(field, 'fieldCaption', 'field_caption', 'caption', default=field_name)
-            role = _get_field_attr(field, 'role', default='dimension')
-            data_type = _get_field_attr(field, 'dataType', 'data_type', default='string')
-            category = _get_field_attr(field, 'category', default=None)
-            description = _get_field_attr(field, 'description', default=None)
-            
-            # 构建索引文本
-            index_text_parts = [field_name, field_caption]
-            if description:
-                index_text_parts.append(description)
-            index_text = " ".join(filter(None, index_text_parts))
-            
-            doc = IndexDocument(
-                id=field_name,
-                content=index_text,
-                metadata={
-                    "field_caption": field_caption,
-                    "role": role if isinstance(role, str) else str(role),
-                    "data_type": data_type if isinstance(data_type, str) else str(data_type),
-                    "category": category if category else "",
-                },
+            field_caption = _get_field_attr(
+                field, 'fieldCaption', 'field_caption', 'caption', default=''
             )
-            documents.append(doc)
+            
+            # 检查术语是否在字段名或标题中
+            if (term_lower in field_name.lower() or 
+                term_lower in field_caption.lower()):
+                matched.append(field)
         
-        return documents
+        return matched
 
+    def _retrieve_time_fields(self, dimensions: List[Any]) -> List[FieldCandidate]:
+        """检索时间字段。
+        
+        根据数据类型和字段名识别时间字段。
+        """
+        time_candidates = []
+        time_data_types = {"date", "datetime", "timestamp"}
+        time_keywords = {"date", "time", "year", "month", "day", "日期", "时间", "年", "月", "日"}
+        
+        for field in dimensions:
+            field_name = _get_field_attr(field, 'name', 'field_name', default='')
+            field_caption = _get_field_attr(
+                field, 'fieldCaption', 'field_caption', 'caption', default=''
+            )
+            data_type = _get_field_attr(field, 'dataType', 'data_type', default='')
+            
+            is_time_field = False
+            confidence = 0.7
+            
+            # 检查数据类型
+            if data_type.lower() in time_data_types:
+                is_time_field = True
+                confidence = 0.95
+            # 检查字段名/标题
+            elif any(kw in field_name.lower() or kw in field_caption.lower() 
+                     for kw in time_keywords):
+                is_time_field = True
+                confidence = 0.85
+            
+            if is_time_field:
+                time_candidates.append(self._field_to_candidate(
+                    field, confidence=confidence, source="time_detection"
+                ))
+        
+        # 按置信度排序
+        time_candidates.sort(key=lambda c: c.confidence, reverse=True)
+        
+        return time_candidates[:self.top_k]
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 辅助方法
+    # ═══════════════════════════════════════════════════════════════════════
     
     def _get_fields(self, data_model: Optional[Any]) -> List[Any]:
         """从数据模型获取字段列表。"""
@@ -572,481 +439,65 @@ class FieldRetriever:
         
         return dimensions, measures
     
-    def _retrieve_dimensions_by_rules(
-        self,
-        question: str,
-        dimensions: List[Any],
-        dimension_hierarchy: Optional[Dict[str, Any]],
-    ) -> List[FieldCandidate]:
-        """使用规则匹配检索维度。
-        
-        规则匹配策略：
-        1. 字段名/标题直接匹配
-        2. 类别关键词匹配 → 返回该类别所有维度
-        3. 层级扩展 → 包含父/子维度
-        """
-        matched_field_names: Set[str] = set()
-        expanded_field_names: Set[str] = set()
-        
-        # Step 1: 字段名/标题直接匹配
-        direct_matches = match_field_name_or_caption(question, dimensions)
-        matched_field_names.update(direct_matches)
-        
-        # Step 2: 类别关键词匹配
-        matched_categories = extract_categories_by_rules(question)
-        
-        if matched_categories and dimension_hierarchy:
-            # 从维度层级中找出匹配类别的所有维度
-            for field_name, attrs in dimension_hierarchy.items():
-                category = _get_field_attr(attrs, 'category', default=None)
-                if category:
-                    # category 可能是枚举或字符串
-                    category_str = category.value if hasattr(category, 'value') else str(category)
-                    if category_str.lower() in matched_categories:
-                        matched_field_names.add(field_name)
-        
-        # Step 3: 层级扩展（父/子维度）
-        if dimension_hierarchy:
-            for field_name in list(matched_field_names):
-                if field_name in dimension_hierarchy:
-                    attrs = dimension_hierarchy[field_name]
-                    parent = _get_field_attr(attrs, 'parent_dimension', default=None)
-                    child = _get_field_attr(attrs, 'child_dimension', default=None)
-                    if parent and parent not in matched_field_names:
-                        expanded_field_names.add(parent)
-                    if child and child not in matched_field_names:
-                        expanded_field_names.add(child)
-        
-        # 转换为 FieldCandidate
-        candidates = []
-        all_matched = matched_field_names | expanded_field_names
-        
-        for field in dimensions:
-            field_name = _get_field_attr(field, 'name', 'field_name', default='')
-            if field_name in all_matched:
-                # 判断来源和置信度
-                if field_name in direct_matches:
-                    source = "rule_match"
-                    confidence = self._rule_match_confidence
-                elif field_name in expanded_field_names:
-                    source = "hierarchy_expand"
-                    confidence = self._hierarchy_expand_confidence
-                else:
-                    source = "rule_match"
-                    confidence = self._rule_match_confidence
-                
-                candidate = self._field_to_candidate(field, source, confidence)
-                
-                # 增强层级信息
-                if dimension_hierarchy and field_name in dimension_hierarchy:
-                    self._apply_hierarchy_attrs(candidate, dimension_hierarchy[field_name])
-                
-                candidates.append(candidate)
-        
-        return candidates
-    
-    def _retrieve_measures_by_rules(
-        self,
-        question: str,
-        measures: List[Any],
-    ) -> List[FieldCandidate]:
-        """使用规则匹配检索度量。
-        
-        规则匹配策略：
-        1. 字段名/标题直接匹配
-        2. 度量类别关键词匹配（销售额、利润、成本等）
-        """
-        matched_field_names: Set[str] = set()
-        
-        # Step 1: 字段名/标题直接匹配
-        direct_matches = match_field_name_or_caption(question, measures)
-        matched_field_names.update(direct_matches)
-        
-        # Step 2: 度量关键词匹配
-        category_keywords = get_category_keywords()
-        measure_keywords = category_keywords.get("measure", set())
-        question_lower = question.lower()
-        
-        for measure in measures:
-            field_name = _get_field_attr(measure, 'name', 'field_name', default='')
-            field_caption = _get_field_attr(measure, 'fieldCaption', 'field_caption', 'caption', default='')
-            
-            # 检查度量名称是否包含关键词
-            caption_lower = field_caption.lower() if field_caption else ''
-            for keyword in measure_keywords:
-                # 关键词在问题中 且 关键词在字段名中
-                if keyword in question_lower and keyword in caption_lower:
-                    matched_field_names.add(field_name)
-                    break
-        
-        # 转换为 FieldCandidate
-        candidates = []
-        for measure in measures:
-            field_name = _get_field_attr(measure, 'name', 'field_name', default='')
-            if field_name in matched_field_names:
-                source = "rule_match" if field_name in direct_matches else "rule_match"
-                confidence = self._rule_match_confidence
-                
-                candidate = self._field_to_candidate(measure, source, confidence)
-                candidates.append(candidate)
-        
-        return candidates
-    
-    async def _retrieve_with_embedding_batch(
-        self,
-        question: str,
-        fields: List[Any],
-        dimension_hierarchy: Optional[Dict[str, Any]],
-        top_k: int,
-        index_name: str,
-    ) -> List[FieldCandidate]:
-        """批量使用 Embedding 检索所有字段（维度+度量）。
-        
-        使用 RAGService 进行检索，只调用一次 embedding。
-        
-        Args:
-            question: 用户问题
-            fields: 字段列表
-            dimension_hierarchy: 维度层级信息
-            top_k: 返回数量
-            index_name: 索引名称
-            
-        Returns:
-            FieldCandidate 列表
-        """
-        try:
-            # 使用 RAGService 检索
-            results = await self._rag_service.retrieval.search_async(
-                index_name=index_name,
-                query=question,
-                top_k=top_k * 2,  # 检索更多以便分离维度和度量
-            )
-            
-            candidates = []
-            matched_categories: Set[str] = set()
-            
-            for result in results:
-                role = result.metadata.get("role", "dimension")
-                if isinstance(role, str):
-                    role = role.lower()
-                
-                confidence = min(result.score * self._embedding_confidence_base + 0.3, 1.0)
-                
-                candidate = FieldCandidate(
-                    field_name=result.doc_id,
-                    field_caption=result.metadata.get("field_caption", result.doc_id),
-                    field_type=role,
-                    data_type=result.metadata.get("data_type", "string"),
-                    description=result.metadata.get("description"),
-                    sample_values=None,
-                    confidence=confidence,
-                    source="embedding",
-                    rank=result.rank,
-                    category=result.metadata.get("category"),
-                    formula=result.metadata.get("formula"),
-                    logical_table_caption=result.metadata.get("logical_table_caption"),
-                )
-                
-                # 增强层级信息（仅维度）
-                if role == "dimension" and dimension_hierarchy and result.doc_id in dimension_hierarchy:
-                    attrs = dimension_hierarchy[result.doc_id]
-                    self._apply_hierarchy_attrs(candidate, attrs)
-                    if candidate.hierarchy_category:
-                        matched_categories.add(candidate.hierarchy_category)
-                
-                candidates.append(candidate)
-            
-            # 按类别扩展维度（仅维度）
-            if matched_categories and dimension_hierarchy:
-                existing_names = {c.field_name for c in candidates}
-                for field in fields:
-                    field_name = _get_field_attr(field, 'name', 'field_name', default='')
-                    role = _get_field_attr(field, 'role', default='dimension')
-                    if isinstance(role, str):
-                        role = role.lower()
-                    
-                    if role != 'dimension' or field_name in existing_names:
-                        continue
-                    
-                    if field_name in dimension_hierarchy:
-                        attrs = dimension_hierarchy[field_name]
-                        category = _get_field_attr(attrs, 'category', default=None)
-                        if category:
-                            category_str = category.value if hasattr(category, 'value') else str(category)
-                            if category_str.lower() in matched_categories:
-                                candidate = self._field_to_candidate(
-                                    field, "hierarchy_expand", self._hierarchy_expand_confidence
-                                )
-                                self._apply_hierarchy_attrs(candidate, attrs)
-                                candidates.append(candidate)
-            
-            return candidates
-            
-        except IndexNotFoundError:
-            logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，跳过 Embedding 检索")
-            return []
-        except Exception as e:
-            logger.error(f"FieldRetriever: 批量 Embedding 检索失败: {e}")
-            return []
-
-    
-    async def _retrieve_dimensions_with_embedding(
-        self,
-        question: str,
-        dimensions: List[Any],
-        dimension_hierarchy: Optional[Dict[str, Any]],
-        top_k: int,
-        index_name: str,
-    ) -> List[FieldCandidate]:
-        """使用 Embedding 检索维度（L2 兜底）。
-        
-        Args:
-            question: 用户问题
-            dimensions: 维度字段列表
-            dimension_hierarchy: 维度层级信息
-            top_k: 返回数量
-            index_name: 索引名称
-            
-        Returns:
-            FieldCandidate 列表
-        """
-        try:
-            # 使用 RAGService 检索，过滤只返回维度
-            results = await self._rag_service.retrieval.search_async(
-                index_name=index_name,
-                query=question,
-                top_k=top_k,
-                filters={"role": "dimension"},
-            )
-            
-            candidates = []
-            matched_categories: Set[str] = set()
-            
-            for result in results:
-                confidence = min(result.score * self._embedding_confidence_base + 0.3, 1.0)
-                
-                candidate = FieldCandidate(
-                    field_name=result.doc_id,
-                    field_caption=result.metadata.get("field_caption", result.doc_id),
-                    field_type="dimension",
-                    data_type=result.metadata.get("data_type", "string"),
-                    description=result.metadata.get("description"),
-                    sample_values=None,
-                    confidence=confidence,
-                    source="embedding",
-                    rank=result.rank,
-                    category=result.metadata.get("category"),
-                    formula=result.metadata.get("formula"),
-                    logical_table_caption=result.metadata.get("logical_table_caption"),
-                )
-                
-                # 增强层级信息
-                if dimension_hierarchy and result.doc_id in dimension_hierarchy:
-                    attrs = dimension_hierarchy[result.doc_id]
-                    self._apply_hierarchy_attrs(candidate, attrs)
-                    # 记录类别用于扩展
-                    if candidate.hierarchy_category:
-                        matched_categories.add(candidate.hierarchy_category)
-                
-                candidates.append(candidate)
-            
-            # 按类别扩展：将同类别的其他维度也加入
-            if matched_categories and dimension_hierarchy:
-                existing_names = {c.field_name for c in candidates}
-                for field in dimensions:
-                    field_name = _get_field_attr(field, 'name', 'field_name', default='')
-                    if field_name in existing_names:
-                        continue
-                    if field_name in dimension_hierarchy:
-                        attrs = dimension_hierarchy[field_name]
-                        category = _get_field_attr(attrs, 'category', default=None)
-                        if category:
-                            category_str = category.value if hasattr(category, 'value') else str(category)
-                            if category_str.lower() in matched_categories:
-                                candidate = self._field_to_candidate(
-                                    field, "hierarchy_expand", self._hierarchy_expand_confidence
-                                )
-                                self._apply_hierarchy_attrs(candidate, attrs)
-                                candidates.append(candidate)
-            
-            return candidates
-            
-        except IndexNotFoundError:
-            logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，跳过 Embedding 检索")
-            return []
-        except Exception as e:
-            logger.error(f"FieldRetriever: Embedding 检索失败: {e}")
-            return []
-    
-    async def _retrieve_with_embedding(
-        self,
-        question: str,
-        data_model: Optional[Any],
-        dimension_hierarchy: Optional[Dict[str, Any]],
-        top_k: int,
-        index_name: str,
-    ) -> List[FieldCandidate]:
-        """强制使用 Embedding 检索所有字段。
-        
-        Args:
-            question: 用户问题
-            data_model: 数据模型
-            dimension_hierarchy: 维度层级信息
-            top_k: 返回数量
-            index_name: 索引名称
-            
-        Returns:
-            FieldCandidate 列表
-        """
-        try:
-            results = await self._rag_service.retrieval.search_async(
-                index_name=index_name,
-                query=question,
-                top_k=top_k,
-            )
-            
-            candidates = []
-            for result in results:
-                role = result.metadata.get("role", "dimension")
-                if isinstance(role, str):
-                    role = role.lower()
-                
-                # 分数已归一化
-                confidence = min(result.score, 1.0)
-                
-                candidate = FieldCandidate(
-                    field_name=result.doc_id,
-                    field_caption=result.metadata.get("field_caption", result.doc_id),
-                    field_type=role,
-                    data_type=result.metadata.get("data_type", "string"),
-                    description=result.metadata.get("description"),
-                    sample_values=None,
-                    confidence=confidence,
-                    source="embedding",
-                    rank=result.rank,
-                    category=result.metadata.get("category"),
-                    formula=result.metadata.get("formula"),
-                    logical_table_caption=result.metadata.get("logical_table_caption"),
-                )
-                
-                # 增强层级信息
-                if dimension_hierarchy and result.doc_id in dimension_hierarchy:
-                    self._apply_hierarchy_attrs(candidate, dimension_hierarchy[result.doc_id])
-                
-                candidates.append(candidate)
-            
-            # 按置信度排序
-            candidates.sort(key=lambda x: x.confidence, reverse=True)
-            
-            return candidates
-            
-        except IndexNotFoundError:
-            logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，回退到全量模式")
-            fields = self._get_fields(data_model)
-            return self._convert_all_fields(fields, dimension_hierarchy, "full_schema")[:top_k]
-        except Exception as e:
-            logger.error(f"FieldRetriever: Embedding 检索失败: {e}")
-            return []
-
-    
-    def _convert_all_fields(
-        self,
-        fields: List[Any],
-        dimension_hierarchy: Optional[Dict[str, Any]],
-        source: str,
-    ) -> List[FieldCandidate]:
-        """将所有字段转换为 FieldCandidate。"""
-        candidates = []
-        
-        for i, field in enumerate(fields, 1):
-            candidate = self._field_to_candidate(field, source, self._full_schema_confidence)
-            candidate.rank = i
-            
-            # 增强层级信息
-            if dimension_hierarchy and candidate.field_name in dimension_hierarchy:
-                self._apply_hierarchy_attrs(candidate, dimension_hierarchy[candidate.field_name])
-            
-            candidates.append(candidate)
-        
-        return candidates
-    
     def _field_to_candidate(
         self,
         field: Any,
-        source: str,
         confidence: float,
+        source: str,
     ) -> FieldCandidate:
-        """将字段转换为 FieldCandidate。"""
+        """将字段转换为 FieldCandidate。
+        
+        包含维度层级信息和样例值，用于 Prompt 展示。
+        """
         field_name = _get_field_attr(field, 'name', 'field_name', default='')
-        field_caption = _get_field_attr(field, 'fieldCaption', 'field_caption', 'caption', default=field_name)
+        field_caption = _get_field_attr(
+            field, 'fieldCaption', 'field_caption', 'caption', default=field_name
+        )
         role = _get_field_attr(field, 'role', default='dimension')
         data_type = _get_field_attr(field, 'dataType', 'data_type', default='string')
-        description = _get_field_attr(field, 'description', default=None)
-        sample_values = _get_field_attr(field, 'sample_values', 'sampleValues', default=None)
-        category = _get_field_attr(field, 'category', default=None)
-        formula = _get_field_attr(field, 'formula', default=None)
-        logical_table_caption = _get_field_attr(field, 'logicalTableCaption', 'logical_table_caption', default=None)
         
-        # 处理 role
-        if isinstance(role, str):
-            field_type = role.lower()
-        else:
-            field_type = 'dimension'
+        # 获取维度层级信息
+        category = _get_field_attr(field, 'category', 'hierarchy_category', default=None)
+        level = _get_field_attr(field, 'level', 'hierarchy_level', default=None)
+        granularity = _get_field_attr(field, 'granularity', default=None)
+        
+        # 获取样例值
+        sample_values = _get_field_attr(field, 'sample_values', default=None)
+        
+        # 获取公式和逻辑表
+        formula = _get_field_attr(field, 'calculation', 'formula', default=None)
+        logical_table_caption = _get_field_attr(
+            field, 'logical_table_caption', 'logicalTableCaption', default=None
+        )
         
         return FieldCandidate(
             field_name=field_name,
             field_caption=field_caption,
-            field_type=field_type,
-            data_type=data_type or 'string',
-            description=description,
-            sample_values=sample_values[:10] if sample_values else None,
+            field_type=role if isinstance(role, str) else str(role),
+            data_type=data_type if isinstance(data_type, str) else str(data_type),
             confidence=confidence,
             source=source,
-            rank=1,
             category=category,
+            level=level,
+            granularity=granularity,
+            sample_values=sample_values,
             formula=formula,
             logical_table_caption=logical_table_caption,
         )
     
-    def _apply_hierarchy_attrs(
+    def _convert_fields_to_candidates(
         self,
-        candidate: FieldCandidate,
-        attrs: Any,
-    ) -> None:
-        """将维度层级属性应用到候选字段。"""
-        candidate.hierarchy_level = _get_field_attr(attrs, 'level', default=None)
-        
-        category = _get_field_attr(attrs, 'category', default=None)
-        if category is not None:
-            candidate.hierarchy_category = category.value if hasattr(category, 'value') else str(category)
-        
-        candidate.parent_dimension = _get_field_attr(attrs, 'parent_dimension', default=None)
-        candidate.child_dimension = _get_field_attr(attrs, 'child_dimension', default=None)
-    
-    def _merge_candidates(
-        self,
-        primary: List[FieldCandidate],
-        secondary: List[FieldCandidate],
+        fields: List[Any],
+        confidence: float,
+        source: str,
     ) -> List[FieldCandidate]:
-        """合并两个候选列表，去重。"""
-        seen = {c.field_name for c in primary}
-        merged = list(primary)
-        
-        for c in secondary:
-            if c.field_name not in seen:
-                merged.append(c)
-                seen.add(c.field_name)
-        
-        return merged
+        """批量将字段转换为 FieldCandidate。"""
+        return [
+            self._field_to_candidate(field, confidence, source)
+            for field in fields
+        ]
 
 
 __all__ = [
-    "FieldCandidate",
     "FieldRetriever",
-    "get_full_schema_threshold",
-    "get_min_rule_match_dimensions",
-    "get_default_top_k",
-    "get_category_keywords",
-    "extract_categories_by_rules",
-    "match_field_name_or_caption",
 ]

@@ -13,24 +13,17 @@ Semantic Parser Components
 - QueryAdapter: 查询适配器
 - ErrorCorrector: 错误修正
 - FeedbackLearner: 反馈学习
+- DynamicSchemaBuilder: 动态 Schema 构建器
 """
 
 from .intent_router import IntentType, IntentRouterOutput, IntentRouter
+from .semantic_cache import SemanticCache
 from .query_cache import QueryCache, compute_schema_hash, compute_question_hash
-from .field_retriever import (
-    FieldCandidate,
-    FieldRetriever,
-    get_full_schema_threshold,
-    get_min_rule_match_dimensions,
-    get_default_top_k,
-    get_category_keywords,
-    extract_categories_by_rules,
-    match_field_name_or_caption,
-    get_full_schema_confidence,
-    get_rule_match_confidence,
-    get_hierarchy_expand_confidence,
-    get_embedding_confidence_base,
-)
+from .feature_cache import FeatureCache, compute_feature_hash
+from .field_retriever import FieldRetriever
+# FieldCandidate 和 FieldRAGResult 从 schemas 导入
+from ..schemas.prefilter import FieldRAGResult
+from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 from .few_shot_manager import FewShotManager
 from .semantic_understanding import (
     SemanticUnderstanding,
@@ -55,12 +48,29 @@ from .history_manager import (
     get_max_history_tokens,
     get_use_summarization,
 )
+from .dynamic_schema_builder import (
+    SchemaModule,
+    DynamicSchemaResult,
+    DynamicSchemaBuilder,
+    get_max_schema_fields,
+    COMPLEXITY_SCHEMA_FIELDS,
+    COMPLEXITY_CALC_TYPES,
+)
+from .output_validator import (
+    OutputValidator,
+    get_fuzzy_match_threshold,
+    get_auto_correct_case,
+)
+from .rule_prefilter import RulePrefilter
+from .feature_extractor import FeatureExtractor, get_feature_extractor_config
 
 from ..schemas.cache import CachedQuery, CachedFieldValues
 from ..schemas.error_correction import ErrorCorrectionHistory, CorrectionResult
 from ..schemas.feedback import FeedbackType, FeedbackRecord, SynonymMapping
 
 __all__ = [
+    # SemanticCache (基类)
+    "SemanticCache",
     # IntentRouter
     "IntentType",
     "IntentRouterOutput",
@@ -70,19 +80,13 @@ __all__ = [
     "QueryCache",
     "compute_schema_hash",
     "compute_question_hash",
+    # FeatureCache
+    "FeatureCache",
+    "compute_feature_hash",
     # FieldRetriever
     "FieldCandidate",
     "FieldRetriever",
-    "get_full_schema_threshold",
-    "get_min_rule_match_dimensions",
-    "get_default_top_k",
-    "get_category_keywords",
-    "extract_categories_by_rules",
-    "match_field_name_or_caption",
-    "get_full_schema_confidence",
-    "get_rule_match_confidence",
-    "get_hierarchy_expand_confidence",
-    "get_embedding_confidence_base",
+    "FieldRAGResult",
     # FewShotManager
     "FewShotManager",
     # SemanticUnderstanding
@@ -117,4 +121,20 @@ __all__ = [
     "estimate_history_tokens",
     "get_max_history_tokens",
     "get_use_summarization",
+    # DynamicSchemaBuilder
+    "SchemaModule",
+    "DynamicSchemaResult",
+    "DynamicSchemaBuilder",
+    "get_max_schema_fields",
+    "COMPLEXITY_SCHEMA_FIELDS",
+    "COMPLEXITY_CALC_TYPES",
+    # OutputValidator
+    "OutputValidator",
+    "get_fuzzy_match_threshold",
+    "get_auto_correct_case",
+    # RulePrefilter
+    "RulePrefilter",
+    # FeatureExtractor
+    "FeatureExtractor",
+    "get_feature_extractor_config",
 ]
