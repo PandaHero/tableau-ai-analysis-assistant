@@ -25,6 +25,19 @@ from .field_retriever import FieldRetriever
 from ..schemas.prefilter import FieldRAGResult
 from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 from .few_shot_manager import FewShotManager
+# HistoryManager 必须在 SemanticUnderstanding 之前导入
+# 因为 prompt_builder -> history_manager，而 semantic_understanding -> prompt_builder
+from .history_manager import (
+    HistoryManager,
+    get_history_manager,
+    truncate_history,
+    check_history_tokens,
+    estimate_tokens,
+    estimate_message_tokens,
+    estimate_history_tokens,
+    get_max_history_tokens,
+    get_use_summarization,
+)
 from .semantic_understanding import (
     SemanticUnderstanding,
     get_low_confidence_threshold,
@@ -37,25 +50,14 @@ from .field_value_cache import FieldValueCache
 from .filter_validator import FilterValueValidator, get_time_data_types
 from .error_corrector import ErrorCorrector
 from .feedback_learner import FeedbackLearner
-from .history_manager import (
-    HistoryManager,
-    get_history_manager,
-    truncate_history,
-    check_history_tokens,
-    estimate_tokens,
-    estimate_message_tokens,
-    estimate_history_tokens,
-    get_max_history_tokens,
-    get_use_summarization,
-)
 from .dynamic_schema_builder import (
     SchemaModule,
-    DynamicSchemaResult,
     DynamicSchemaBuilder,
     get_max_schema_fields,
     COMPLEXITY_SCHEMA_FIELDS,
     COMPLEXITY_CALC_TYPES,
 )
+from ..schemas.dynamic_schema import DynamicSchemaResult
 from .output_validator import (
     OutputValidator,
     get_fuzzy_match_threshold,

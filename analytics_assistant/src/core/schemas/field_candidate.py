@@ -126,6 +126,20 @@ class FieldCandidate(BaseModel):
         default=None,
         description="子维度字段名"
     )
+    
+    # 字段语义信息（来自 FieldSemantic 推断）
+    business_description: Optional[str] = Field(
+        default=None,
+        description="业务描述，一句话说明字段的业务含义"
+    )
+    aliases: Optional[List[str]] = Field(
+        default=None,
+        description="别名列表，用户可能使用的其他名称"
+    )
+    measure_category: Optional[str] = Field(
+        default=None,
+        description="度量类别：revenue/cost/profit/quantity/ratio/count/average/other"
+    )
 
 
 __all__ = [

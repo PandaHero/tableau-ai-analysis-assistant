@@ -136,7 +136,91 @@ class AppConfig:
         # 展开环境变量
         self.config = self._expand_env_vars(raw_data)
         
+        # 解析相对路径为绝对路径
+        self._resolve_paths()
+        
         logger.info(f"配置加载成功: {config_file}")
+    
+    def _get_project_root(self) -> Path:
+        """获取项目根目录
+        
+        通过配置文件位置确定项目根目录。
+        配置文件位于 analytics_assistant/config/app.yaml，
+        所以项目根目录是配置文件向上 2 级。
+        
+        注意：需要先将相对路径转换为绝对路径，再计算项目根目录。
+        """
+        # 使用实际找到的配置文件路径来确定项目根目录
+        if self.config_path.exists():
+            # 先转换为绝对路径
+            abs_config_path = self.config_path.resolve()
+            # config_path: .../analytics_assistant/config/app.yaml
+            # 项目根目录: 向上 2 级（config -> analytics_assistant -> project_root）
+            return abs_config_path.parent.parent.parent
+        
+        # 备用方案：通过模块位置确定
+        # 当前文件: analytics_assistant/src/infra/config/config_loader.py
+        # 项目根目录: 向上 5 级
+        return Path(__file__).resolve().parent.parent.parent.parent.parent
+    
+    def _resolve_paths(self):
+        """解析配置中的相对路径为绝对路径
+        
+        将以 'analytics_assistant/' 开头的相对路径解析为绝对路径，
+        确保无论从哪个工作目录运行，路径都是一致的。
+        """
+        project_root = self._get_project_root()
+        
+        # 需要解析路径的配置项
+        path_keys = [
+            ('storage', 'connection_string'),
+            ('vector_storage', 'index_dir'),
+            ('vector_storage', 'chroma', 'persist_directory'),
+            ('ssl', 'cert_dir'),
+            ('rag_service', 'index', 'persist_directory'),
+        ]
+        
+        # 存储命名空间中的 connection_string
+        namespaces = self.config.get('storage', {}).get('namespaces', {})
+        for ns_name in namespaces:
+            path_keys.append(('storage', 'namespaces', ns_name, 'connection_string'))
+        
+        # RAG 服务预定义索引中的 persist_directory
+        indexes = self.config.get('rag_service', {}).get('indexes', {})
+        for idx_name in indexes:
+            path_keys.append(('rag_service', 'indexes', idx_name, 'persist_directory'))
+        
+        for keys in path_keys:
+            self._resolve_path_in_config(keys, project_root)
+    
+    def _resolve_path_in_config(self, keys: tuple, project_root: Path):
+        """解析配置中指定路径的值
+        
+        Args:
+            keys: 配置键路径，如 ('storage', 'connection_string')
+            project_root: 项目根目录
+        """
+        # 遍历到倒数第二层
+        current = self.config
+        for key in keys[:-1]:
+            if not isinstance(current, dict) or key not in current:
+                return
+            current = current[key]
+        
+        # 获取并解析最后一个键的值
+        last_key = keys[-1]
+        if not isinstance(current, dict) or last_key not in current:
+            return
+        
+        value = current[last_key]
+        if not isinstance(value, str) or not value:
+            return
+        
+        # 如果以 analytics_assistant/ 开头，解析为绝对路径
+        if value.startswith('analytics_assistant/') or value.startswith('analytics_assistant\\'):
+            resolved = project_root / value
+            current[last_key] = str(resolved)
+            logger.debug(f"路径解析: {value} -> {resolved}")
     
     def _expand_env_vars(self, data: Any) -> Any:
         """
@@ -322,20 +406,53 @@ class AppConfig:
         return self.config.get('logging', {})
     
     # ============================================
-    # 维度层级配置
+    # 字段语义配置
     # ============================================
     
-    def get_dimension_hierarchy_config(self) -> Dict[str, Any]:
-        """获取维度层级推断配置"""
-        return self.config.get('dimension_hierarchy', {})
+    def get_field_semantic_config(self) -> Dict[str, Any]:
+        """获取字段语义推断配置"""
+        return self.config.get('field_semantic', {})
     
     def get_rag_threshold_seed(self) -> float:
         """获取 RAG seed/verified 数据阈值"""
-        return self.get_dimension_hierarchy_config().get('rag_threshold_seed', 0.85)
+        return self.get_field_semantic_config().get('rag_threshold_seed', 0.85)
     
     def get_rag_threshold_unverified(self) -> float:
         """获取 RAG llm/unverified 数据阈值"""
-        return self.get_dimension_hierarchy_config().get('rag_threshold_unverified', 0.90)
+        return self.get_field_semantic_config().get('rag_threshold_unverified', 0.90)
+    
+    # ============================================
+    # 语义解析器配置
+    # ============================================
+    
+    def get_semantic_parser_config(self) -> Dict[str, Any]:
+        """获取语义解析器配置"""
+        return self.config.get('semantic_parser', {})
+    
+    def get_semantic_parser_optimization_config(self) -> Dict[str, Any]:
+        """获取语义解析器优化配置
+        
+        包含：
+        - enabled: 是否启用优化
+        - low_confidence_threshold: 低置信度阈值
+        - field_retriever: 字段检索配置
+        - max_schema_fields: 最大 Schema 字段数
+        - feature_extractor: 特征提取器配置
+        - feature_cache: 特征缓存配置
+        """
+        return self.get_semantic_parser_config().get('optimization', {})
+    
+    def get_field_retriever_config(self) -> Dict[str, Any]:
+        """获取字段检索器配置"""
+        return self.get_semantic_parser_optimization_config().get('field_retriever', {})
+    
+    def get_feature_extractor_config(self) -> Dict[str, Any]:
+        """获取特征提取器配置"""
+        return self.get_semantic_parser_optimization_config().get('feature_extractor', {})
+    
+    def get_feature_cache_config(self) -> Dict[str, Any]:
+        """获取特征缓存配置"""
+        return self.get_semantic_parser_optimization_config().get('feature_cache', {})
     
     # ============================================
     # 批量 Embedding 配置

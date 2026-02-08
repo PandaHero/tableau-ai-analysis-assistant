@@ -101,7 +101,7 @@ response = llm.invoke("你好")
 
 - `semantic_parsing` - 语义解析
 - `field_mapping` - 字段映射
-- `dimension_hierarchy` - 维度层级
+- `field_semantic` - 字段语义推断
 - `insight_generation` - 洞察生成
 - `replanning` - 重新规划
 - `reasoning` - 推理任务

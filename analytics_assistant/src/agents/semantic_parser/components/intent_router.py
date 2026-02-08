@@ -20,14 +20,12 @@ import re
 from typing import Any, Dict, List, Optional
 
 from analytics_assistant.src.infra.config import get_config
+from analytics_assistant.src.infra.seeds import (
+    INTENT_KEYWORDS,
+    IRRELEVANT_PATTERNS,
+)
 
 from ..schemas.intent import IntentType, IntentRouterOutput
-from ..keywords_data import (
-    get_metadata_keywords,
-    get_data_analysis_keywords,
-    get_ambiguous_keywords,
-)
-from ..rules_data import get_irrelevant_patterns
 
 
 logger = logging.getLogger(__name__)
@@ -37,9 +35,9 @@ logger = logging.getLogger(__name__)
 # 模块级变量（用于外部访问）
 # ═══════════════════════════════════════════════════════════════════════════
 
-METADATA_KEYWORDS = get_metadata_keywords()
-DATA_ANALYSIS_KEYWORDS = get_data_analysis_keywords()
-SHORT_AMBIGUOUS_KEYWORDS = get_ambiguous_keywords()
+METADATA_KEYWORDS = INTENT_KEYWORDS["metadata"]
+DATA_ANALYSIS_KEYWORDS = INTENT_KEYWORDS["data_analysis"]
+SHORT_AMBIGUOUS_KEYWORDS = INTENT_KEYWORDS["ambiguous"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -86,6 +84,7 @@ class IntentRouter:
     _DEFAULT_HIGH_CONFIDENCE: float = 0.95
     _DEFAULT_FALLBACK_CONFIDENCE: float = 0.5
     _DEFAULT_SHORT_QUESTION_THRESHOLD: int = 10
+    _DEFAULT_L1_CONFIDENCE_THRESHOLD: float = 0.8
     
     def __init__(
         self,
@@ -128,7 +127,7 @@ class IntentRouter:
             
             # L1 配置
             self.enable_l1 = l1_config.get("enabled", False)
-            self.l1_confidence_threshold = l1_config.get("threshold", 0.8)
+            self.l1_confidence_threshold = l1_config.get("threshold", self._DEFAULT_L1_CONFIDENCE_THRESHOLD)
             
             # 规则配置
             self.SHORT_QUESTION_THRESHOLD = rules_config.get("short_question_threshold", self._DEFAULT_SHORT_QUESTION_THRESHOLD)
@@ -145,17 +144,17 @@ class IntentRouter:
             self.FALLBACK_CONFIDENCE = self._DEFAULT_FALLBACK_CONFIDENCE
             self.SHORT_QUESTION_THRESHOLD = self._DEFAULT_SHORT_QUESTION_THRESHOLD
             self.enable_l1 = False
-            self.l1_confidence_threshold = 0.8
+            self.l1_confidence_threshold = self._DEFAULT_L1_CONFIDENCE_THRESHOLD
         
         # 编译无关问题正则（性能优化）
         self._irrelevant_patterns = [
-            re.compile(p, re.IGNORECASE) for p in get_irrelevant_patterns()
+            re.compile(p, re.IGNORECASE) for p in IRRELEVANT_PATTERNS
         ]
         
-        # 关键词从 keywords_data.py 导入（预处理为小写用于匹配）
-        self._metadata_keywords = [kw.lower() for kw in get_metadata_keywords()]
-        self._data_analysis_keywords = [kw.lower() for kw in get_data_analysis_keywords()]
-        self._ambiguous_keywords = [kw.lower() for kw in get_ambiguous_keywords()]
+        # 关键词从 seeds 包导入（预处理为小写用于匹配）
+        self._metadata_keywords = [kw.lower() for kw in INTENT_KEYWORDS["metadata"]]
+        self._data_analysis_keywords = [kw.lower() for kw in INTENT_KEYWORDS["data_analysis"]]
+        self._ambiguous_keywords = [kw.lower() for kw in INTENT_KEYWORDS["ambiguous"]]
     
     async def route(
         self,

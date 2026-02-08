@@ -35,7 +35,7 @@ from analytics_assistant.src.agents.semantic_parser.components.query_cache impor
     compute_schema_hash,
     QueryCache,
 )
-from analytics_assistant.src.agents.dimension_hierarchy import DimensionHierarchyInference
+from analytics_assistant.src.agents.field_semantic import FieldSemanticInference
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +77,10 @@ class WorkflowContext(BaseModel):
     # 数据模型
     data_model: Optional[Any] = Field(default=None, description="完整的数据模型")
     
-    # 维度层级
-    dimension_hierarchy: Optional[Dict[str, Any]] = Field(
+    # 字段语义
+    field_semantic: Optional[Dict[str, Any]] = Field(
         default=None, 
-        description="维度层级信息"
+        description="字段语义信息（包含维度层级和度量类别）"
     )
     
     # ========== Schema Hash 相关 ==========
@@ -153,7 +153,6 @@ class WorkflowContext(BaseModel):
             return cached
         
         if self.data_model is None:
-            import hashlib
             result = hashlib.md5(b"empty").hexdigest()
             object.__setattr__(self, '_cached_schema_hash', result)
             return result
@@ -250,7 +249,7 @@ class WorkflowContext(BaseModel):
             auth=new_auth,
             datasource_luid=self.datasource_luid,
             data_model=self.data_model,
-            dimension_hierarchy=self.dimension_hierarchy,
+            field_semantic=self.field_semantic,
             previous_schema_hash=self.previous_schema_hash,
             current_time=self.current_time,
             timezone=self.timezone,
@@ -292,7 +291,7 @@ class WorkflowContext(BaseModel):
             auth=self.auth,
             datasource_luid=self.datasource_luid,
             data_model=self.data_model,
-            dimension_hierarchy=self.dimension_hierarchy,
+            field_semantic=self.field_semantic,
             previous_schema_hash=self.schema_hash,  # 保存当前 hash 作为历史
             current_time=datetime.now().isoformat(),
             timezone=self.timezone,
@@ -304,28 +303,26 @@ class WorkflowContext(BaseModel):
             user_id=self.user_id,
         )
     
-    async def load_dimension_hierarchy(
+    async def load_field_semantic(
         self,
         force_refresh: bool = False,
     ) -> "WorkflowContext":
-        """加载维度层级信息
+        """加载字段语义信息
         
-        使用 DimensionHierarchyInference 推断数据模型中的维度层级关系。
-        
-        Task 24.1.1: 在 WorkflowExecutor 中调用层级推断
+        使用 FieldSemanticInference 推断数据模型中的字段语义属性。
         
         Args:
             force_refresh: 是否强制刷新（跳过缓存）
         
         Returns:
-            更新了 dimension_hierarchy 的新 WorkflowContext
+            更新了 field_semantic 的新 WorkflowContext
         """
         if self.data_model is None:
-            logger.warning("无法加载维度层级：data_model 为空")
+            logger.warning("无法加载字段语义：data_model 为空")
             return self
         
-        # 如果已有层级信息且不强制刷新，直接返回
-        if self.dimension_hierarchy is not None and not force_refresh:
+        # 如果已有语义信息且不强制刷新，直接返回
+        if self.field_semantic is not None and not force_refresh:
             return self
         
         try:
@@ -335,36 +332,29 @@ class WorkflowContext(BaseModel):
                 fields = self.data_model.fields
             
             if not fields:
-                logger.warning("无法加载维度层级：字段列表为空")
+                logger.warning("无法加载字段语义：字段列表为空")
                 return self
             
-            # 推断维度层级
-            inference = DimensionHierarchyInference()
+            # 推断字段语义
+            inference = FieldSemanticInference()
             result = await inference.infer(
                 datasource_luid=self.datasource_luid,
                 fields=fields,
             )
             
-            # 构建层级字典
-            hierarchy_dict = {}
-            if result and hasattr(result, 'field_attributes'):
-                for field_name, attrs in result.field_attributes.items():
-                    hierarchy_dict[field_name] = {
-                        "category": attrs.category.value if hasattr(attrs.category, 'value') else str(attrs.category),
-                        "level": attrs.level,
-                        "granularity": attrs.granularity,
-                        "parent_dimension": attrs.parent_dimension,
-                        "child_dimension": attrs.child_dimension,
-                    }
+            # 直接使用 FieldSemanticAttributes 对象，不转换为字典
+            semantic_dict = {}
+            if result and hasattr(result, 'field_semantic'):
+                semantic_dict = result.field_semantic
             
-            logger.info(f"维度层级推断完成: {len(hierarchy_dict)} 个字段")
+            logger.info(f"字段语义推断完成: {len(semantic_dict)} 个字段")
             
             # 返回更新后的上下文
             return WorkflowContext(
                 auth=self.auth,
                 datasource_luid=self.datasource_luid,
                 data_model=self.data_model,
-                dimension_hierarchy=hierarchy_dict,
+                field_semantic=semantic_dict,
                 previous_schema_hash=self.previous_schema_hash,
                 current_time=self.current_time,
                 timezone=self.timezone,
@@ -377,28 +367,27 @@ class WorkflowContext(BaseModel):
             )
             
         except Exception as e:
-            logger.error(f"维度层级推断失败: {e}")
+            logger.error(f"字段语义推断失败: {e}")
             return self
     
     def enrich_field_candidates_with_hierarchy(
         self,
         field_candidates: List[Any],
     ) -> List[Any]:
-        """使用维度层级信息丰富字段候选
+        """使用字段语义信息丰富字段候选
         
-        Task 24.1.2: 在 Prompt 中包含层级信息
         Property 28: Hierarchy Enrichment
         
-        将 dimension_hierarchy 中的层级信息添加到 FieldCandidate 对象中，
+        将 field_semantic 中的语义信息添加到 FieldCandidate 对象中，
         使 DynamicPromptBuilder 可以在 Prompt 中包含下钻选项。
         
         Args:
             field_candidates: 字段候选列表
         
         Returns:
-            丰富了层级信息的字段候选列表
+            丰富了语义信息的字段候选列表
         """
-        if not self.dimension_hierarchy or not field_candidates:
+        if not self.field_semantic or not field_candidates:
             return field_candidates
         
         for candidate in field_candidates:
@@ -406,25 +395,25 @@ class WorkflowContext(BaseModel):
             if not field_name:
                 continue
             
-            hierarchy_info = self.dimension_hierarchy.get(field_name)
-            if not hierarchy_info:
+            semantic_info = self.field_semantic.get(field_name)
+            if not semantic_info:
                 continue
             
-            # 设置层级属性
+            # 设置语义属性
             if hasattr(candidate, 'hierarchy_category'):
-                candidate.hierarchy_category = hierarchy_info.get('category')
+                candidate.hierarchy_category = semantic_info.get('category')
             if hasattr(candidate, 'hierarchy_level'):
-                candidate.hierarchy_level = hierarchy_info.get('level')
+                candidate.hierarchy_level = semantic_info.get('level')
             if hasattr(candidate, 'granularity'):
-                candidate.granularity = hierarchy_info.get('granularity')
+                candidate.granularity = semantic_info.get('granularity')
             if hasattr(candidate, 'parent_dimension'):
-                candidate.parent_dimension = hierarchy_info.get('parent_dimension')
+                candidate.parent_dimension = semantic_info.get('parent_dimension')
             if hasattr(candidate, 'child_dimension'):
-                candidate.child_dimension = hierarchy_info.get('child_dimension')
+                candidate.child_dimension = semantic_info.get('child_dimension')
             
             # 构建下钻选项
-            if hasattr(candidate, 'drill_down_options') and hierarchy_info.get('child_dimension'):
-                candidate.drill_down_options = [hierarchy_info['child_dimension']]
+            if hasattr(candidate, 'drill_down_options') and semantic_info.get('child_dimension'):
+                candidate.drill_down_options = [semantic_info['child_dimension']]
         
         return field_candidates
 

@@ -9,6 +9,7 @@ RAGService 是 RAG 功能的统一入口，采用单例模式。
 """
 
 import logging
+import threading
 from typing import Optional
 
 from analytics_assistant.src.infra.config import get_config
@@ -24,6 +25,7 @@ class RAGService:
     """RAG 服务 - 统一入口
     
     采用单例模式，提供 RAG 功能的统一入口。
+    线程安全：单例创建使用双重检查锁定。
     
     使用方式：
     ```python
@@ -43,6 +45,7 @@ class RAGService:
     """
     
     _instance: Optional["RAGService"] = None
+    _instance_lock: threading.Lock = threading.Lock()
     
     def __init__(self):
         """初始化 RAGService
@@ -65,9 +68,11 @@ class RAGService:
     
     @classmethod
     def get_instance(cls) -> "RAGService":
-        """获取单例实例"""
+        """获取单例实例（线程安全，双重检查锁定）"""
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
     
     @classmethod

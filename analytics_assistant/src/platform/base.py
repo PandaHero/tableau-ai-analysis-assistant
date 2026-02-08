@@ -5,7 +5,7 @@
 """
 
 import threading
-from typing import Type
+from typing import Dict, List, Optional, Type
 
 from analytics_assistant.src.core.interfaces import BasePlatformAdapter
 
@@ -19,9 +19,9 @@ class PlatformRegistry:
     - _adapters 字典操作使用 RLock 保护
     """
     
-    _instance: "PlatformRegistry | None" = None
+    _instance: Optional["PlatformRegistry"] = None
     _instance_lock: threading.Lock = threading.Lock()
-    _adapters: dict[str, Type[BasePlatformAdapter]]
+    _adapters: Dict[str, Type[BasePlatformAdapter]]
     _adapters_lock: threading.RLock  # 实例级别的锁
     
     def __new__(cls) -> "PlatformRegistry":
@@ -67,7 +67,7 @@ class PlatformRegistry:
         # 在锁外创建实例，避免长时间持有锁
         return adapter_class(**kwargs)
     
-    def list_platforms(self) -> list[str]:
+    def list_platforms(self) -> List[str]:
         """列出所有已注册的平台名称（线程安全）。"""
         with self._adapters_lock:
             return list(self._adapters.keys())

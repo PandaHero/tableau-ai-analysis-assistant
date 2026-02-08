@@ -7,6 +7,8 @@
 - TableRelationship: 表关系
 - DataModel: 数据模型
 """
+import hashlib
+
 from pydantic import BaseModel, Field as PydanticField, ConfigDict
 from typing import List, Optional, Dict, Any
 
@@ -112,8 +114,6 @@ class DataModel(BaseModel):
         结果会被缓存，避免重复计算。
         """
         if self._cached_schema_hash is None:
-            import hashlib
-            
             if not self.fields:
                 self._cached_schema_hash = hashlib.md5(b"empty").hexdigest()
             else:
@@ -152,14 +152,6 @@ class DataModel(BaseModel):
     def measures(self) -> List[Field]:
         """获取所有度量字段。"""
         return [f for f in self.fields if f.is_measure]
-    
-    def get_dimensions(self) -> List[Field]:
-        """获取所有维度字段。"""
-        return self.dimensions
-    
-    def get_measures(self) -> List[Field]:
-        """获取所有度量字段。"""
-        return self.measures
     
     def get_field(self, name: str) -> Optional[Field]:
         """根据名称获取字段。"""

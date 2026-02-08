@@ -13,14 +13,18 @@ from analytics_assistant.src.platform.tableau.adapter import TableauAdapter
 from analytics_assistant.src.platform.tableau.query_builder import TableauQueryBuilder
 from analytics_assistant.src.platform.base import register_adapter
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 # 注册 Tableau 适配器到平台注册表
 def _register():
     """注册 Tableau 适配器到平台注册表。"""
     try:
         register_adapter("tableau", TableauAdapter)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"注册 Tableau 适配器失败: {e}")
 
 
 _register()

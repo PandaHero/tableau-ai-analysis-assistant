@@ -11,12 +11,51 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from analytics_assistant.src.core.schemas import (
     ExecuteResult,
     ValidationResult,
 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 工作流上下文协议
+# ═══════════════════════════════════════════════════════════════════════════
+
+@runtime_checkable
+class WorkflowContextProtocol(Protocol):
+    """工作流上下文协议 - Agent 节点可依赖的抽象接口。
+
+    定义 Agent 节点从 RunnableConfig 中获取的上下文对象应具备的属性和方法。
+    具体实现（WorkflowContext）位于 orchestration/ 中，通过结构化子类型自动满足。
+    """
+
+    @property
+    def datasource_luid(self) -> str: ...
+
+    @property
+    def data_model(self) -> Optional[Any]: ...
+
+    @property
+    def field_semantic(self) -> Optional[Dict[str, Any]]: ...
+
+    @property
+    def platform_adapter(self) -> Optional[Any]: ...
+
+    @property
+    def auth(self) -> Optional[Any]: ...
+
+    @property
+    def field_values_cache(self) -> Dict[str, List[str]]: ...
+
+    @property
+    def schema_hash(self) -> str: ...
+
+    def enrich_field_candidates_with_hierarchy(
+        self,
+        field_candidates: List[Any],
+    ) -> List[Any]: ...
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -112,7 +151,7 @@ class BasePlatformAdapter(ABC):
         field_name: str,
         datasource_id: str,
         **kwargs: Any,
-    ) -> list[str]:
+    ) -> List[str]:
         """获取字段的唯一值列表。
         
         用于筛选值验证，查询指定字段的所有唯一值。
@@ -245,6 +284,7 @@ class BaseFieldMapper(ABC):
 
 
 __all__ = [
+    "WorkflowContextProtocol",
     "BasePlatformAdapter",
     "BaseQueryBuilder",
     "BaseFieldMapper",

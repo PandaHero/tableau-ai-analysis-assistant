@@ -85,7 +85,7 @@ tableau-ai-analysis-assistant/
 │   │   │   │   ├── prompts/            # Prompt 模板
 │   │   │   │   └── subgraph.py         # LangGraph Subgraph
 │   │   │   ├── field_mapper/           # 字段映射 Agent
-│   │   │   ├── dimension_hierarchy/    # 维度层级 Agent
+│   │   │   ├── field_semantic/         # 字段语义推断 Agent (维度+度量)
 │   │   │   ├── insight/                # 洞察分析 Agent
 │   │   │   │   ├── components/         # Profiler, Coordinator, Analyzer
 │   │   │   │   └── models/             # Profile, Insight 模型

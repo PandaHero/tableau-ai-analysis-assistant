@@ -6,6 +6,7 @@
 """
 
 from enum import Enum
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +28,7 @@ class ValidationError(BaseModel):
     error_type: ValidationErrorType = Field(description="验证错误类型")
     field_path: str = Field(description="出错字段的路径（如 'computations[0].partition_by'）")
     message: str = Field(description="人类可读的错误消息")
-    suggestion: str | None = Field(default=None, description="建议的修复方法")
+    suggestion: Optional[str] = Field(default=None, description="建议的修复方法")
 
 
 class ValidationResult(BaseModel):
@@ -38,15 +39,15 @@ class ValidationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     is_valid: bool = Field(description="验证是否通过")
-    errors: list[ValidationError] = Field(
+    errors: List[ValidationError] = Field(
         default_factory=list,
         description="验证错误列表（当 is_valid=False 时）"
     )
-    warnings: list[ValidationError] = Field(
+    warnings: List[ValidationError] = Field(
         default_factory=list,
         description="验证警告列表（非阻塞）"
     )
-    auto_fixed: list[str] = Field(
+    auto_fixed: List[str] = Field(
         default_factory=list,
         description="已自动修复的字段列表"
     )

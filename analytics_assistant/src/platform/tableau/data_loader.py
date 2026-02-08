@@ -22,17 +22,25 @@ Tableau 数据模型加载器
 """
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from analytics_assistant.src.core.schemas import DataModel, Field, LogicalTable, TableRelationship
 from analytics_assistant.src.core.exceptions import VizQLServerError, VizQLError
 from analytics_assistant.src.platform.tableau.auth import get_tableau_auth_async, TableauAuthContext
 from analytics_assistant.src.platform.tableau.client import VizQLClient
+from analytics_assistant.src.agents.field_semantic import (
+    FieldSemanticInference,
+    build_enhanced_index_text,
+)
+from analytics_assistant.src.infra.rag import get_rag_service, IndexConfig, IndexDocument, IndexBackend
+from analytics_assistant.src.infra.config import get_config
 
 
 # 字段样例数据类型
 FieldSamples = Dict[str, Dict[str, Any]]  # {field_caption: {sample_values: [...], unique_count: int}}
 
+# 字段索引名称前缀
+FIELD_INDEX_PREFIX = "fields_"
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +86,7 @@ class TableauDataLoader:
         datasource_id: Optional[str] = None,
         datasource_name: Optional[str] = None,
         auth: Optional[TableauAuthContext] = None,
+        skip_index_creation: bool = False,
     ) -> DataModel:
         """
         加载数据源的数据模型（推荐方法）
@@ -164,7 +173,7 @@ class TableauDataLoader:
         measures = sum(1 for f in fields if f.role == "MEASURE")
         logger.info(f"字段统计: 维度 {dimensions}, 度量 {measures}, 逻辑表 {len(tables)}, 关系 {len(relationships)}")
         
-        return DataModel(
+        data_model = DataModel(
             datasource_id=datasource_id,
             datasource_name=ds.get("name"),
             datasource_description=ds.get("description"),
@@ -174,11 +183,206 @@ class TableauDataLoader:
             fields=fields,
             raw_metadata=graphql_data,
         )
+        
+        # 创建字段索引（等待完成，确保后续 FieldRetriever 能使用 RAG 检索）
+        if not skip_index_creation:
+            await self._ensure_field_index_async(datasource_id, data_model)
+            logger.info("字段索引创建完成")
+        
+        return data_model
+    
+    async def _ensure_field_index_async(
+        self,
+        datasource_id: str,
+        data_model: DataModel,
+    ) -> None:
+        """
+        异步创建字段索引（后台执行，不阻塞主流程）
+        
+        Args:
+            datasource_id: 数据源 LUID
+            data_model: 数据模型
+        """
+        try:
+            await self._ensure_field_index(datasource_id, data_model)
+        except Exception as e:
+            logger.warning(f"后台创建字段索引失败: {e}")
+    
+    async def _ensure_field_index(
+        self,
+        datasource_id: str,
+        data_model: DataModel,
+    ) -> None:
+        """
+        确保字段索引存在（使用字段语义推断结果）
+        
+        流程：
+        1. 检查索引是否已存在
+        2. 如果不存在，调用 FieldSemanticInference 进行推断
+        3. 使用推断结果创建字段索引（包含语义属性）
+        
+        索引文本格式：
+        {caption}: {business_description}。别名: {aliases}。类型: {role}, {data_type}
+        
+        Args:
+            datasource_id: 数据源 LUID
+            data_model: 数据模型
+        """
+        index_name = f"{FIELD_INDEX_PREFIX}{datasource_id}"
+        
+        try:
+            rag_service = get_rag_service()
+            
+            # 检查索引是否已存在
+            existing_index = rag_service.index.get_index(index_name)
+            if existing_index is not None:
+                logger.debug(f"字段索引已存在: {index_name}")
+                return
+            
+            logger.info(f"创建字段索引: {index_name}")
+            
+            # 调用字段语义推断
+            inference = FieldSemanticInference(
+                enable_rag=True,
+                enable_cache=True,
+                enable_self_learning=True,
+            )
+            
+            logger.info(f"开始语义推断，字段数: {len(data_model.fields)}")
+            semantic_result = await inference.infer(
+                datasource_luid=datasource_id,
+                fields=data_model.fields,
+            )
+            logger.info("语义推断完成")
+            logger.debug(f"语义结果字段数: {len(semantic_result.field_semantic)}")
+            
+            # 构建 IndexDocument 列表
+            documents = []
+            semantic_hit_count = 0
+            for field in data_model.fields:
+                field_caption = field.caption or field.name
+                role_str = field.role.lower() if field.role else "dimension"
+                data_type_str = field.data_type.lower() if field.data_type else "string"
+                
+                # 获取字段语义信息
+                semantic_attrs = semantic_result.field_semantic.get(field_caption)
+                
+                # 构建增强索引文本
+                if semantic_attrs:
+                    semantic_hit_count += 1
+                    index_text = build_enhanced_index_text(
+                        caption=field_caption,
+                        business_description=semantic_attrs.business_description,
+                        aliases=semantic_attrs.aliases,
+                        role=role_str,
+                        data_type=data_type_str,
+                    )
+                else:
+                    # 无语义信息时使用基本格式
+                    index_text = f"{field_caption}: {field.description or field_caption}。类型: {role_str}, {data_type_str}"
+                
+                # 构建元数据
+                metadata = {
+                    "field_caption": field_caption,
+                    "field_name": field.name,
+                    "role": role_str,
+                    "data_type": data_type_str,
+                    "description": field.description or "",
+                    "formula": field.calculation or "",
+                }
+                
+                # 添加语义信息
+                if semantic_attrs:
+                    metadata["business_description"] = semantic_attrs.business_description
+                    metadata["aliases"] = semantic_attrs.aliases
+                    metadata["confidence"] = semantic_attrs.confidence
+                    
+                    # 维度特定属性
+                    if semantic_attrs.role == "dimension":
+                        metadata["category"] = semantic_attrs.category.value if semantic_attrs.category else ""
+                        metadata["category_detail"] = semantic_attrs.category_detail or ""
+                        metadata["level"] = semantic_attrs.level
+                        metadata["granularity"] = semantic_attrs.granularity or ""
+                    # 度量特定属性
+                    elif semantic_attrs.role == "measure":
+                        metadata["measure_category"] = semantic_attrs.measure_category.value if semantic_attrs.measure_category else ""
+                
+                # 添加逻辑表信息
+                if field.upstream_tables:
+                    table_names = [t.get("name", "") for t in field.upstream_tables if t.get("name")]
+                    if table_names:
+                        metadata["logical_table_caption"] = table_names[0]
+                
+                doc = IndexDocument(
+                    id=field.name,
+                    content=index_text,
+                    metadata=metadata,
+                )
+                documents.append(doc)
+            
+            logger.info(f"语义信息命中: {semantic_hit_count}/{len(data_model.fields)}")
+            
+            # 获取字段样例数据（维度字段的 sample_values）
+            field_samples: FieldSamples = {}
+            try:
+                # 找一个度量字段用于 TOP 排序
+                measure_field = next(
+                    (f.caption or f.name for f in data_model.fields
+                     if f.role and f.role.upper() == "MEASURE" and not f.hidden),
+                    None,
+                )
+                if measure_field:
+                    field_samples = await self.fetch_field_samples(
+                        datasource_id=datasource_id,
+                        fields=data_model.fields,
+                        measure_field=measure_field,
+                    )
+                    logger.info(f"字段样例获取完成: {len(field_samples)} 个字段有样例")
+                else:
+                    logger.warning("无可用度量字段，跳过字段样例获取")
+            except Exception as e:
+                logger.warning(f"获取字段样例失败，继续创建索引: {e}")
+            
+            # 将 sample_values 写入对应字段的 metadata
+            for doc in documents:
+                field_caption = doc.metadata.get("field_caption", "")
+                if field_caption in field_samples:
+                    sample_info = field_samples[field_caption]
+                    sample_values = sample_info.get("sample_values", [])
+                    if sample_values:
+                        doc.metadata["sample_values"] = sample_values
+            
+            # 获取索引配置
+            app_config = get_config()
+            vector_cfg = app_config.config.get("vector_storage", {})
+            index_dir = vector_cfg.get("index_dir", "data/indexes")
+            retrieval_cfg = vector_cfg.get("retrieval", {})
+            
+            # 创建索引配置
+            config = IndexConfig(
+                backend=IndexBackend.FAISS,
+                persist_directory=index_dir,
+                default_top_k=retrieval_cfg.get("default_top_k", 10),
+                score_threshold=retrieval_cfg.get("score_threshold", 0.5),
+            )
+            
+            # 创建索引
+            rag_service.index.create_index(
+                name=index_name,
+                config=config,
+                documents=documents,
+            )
+            
+            logger.info(f"字段索引创建完成: {index_name}, {len(documents)} 个字段")
+            
+        except Exception as e:
+            # 索引创建失败不应阻塞数据模型加载
+            logger.warning(f"创建字段索引失败: {e}")
     
     def _convert_graphql_fields(
         self,
         raw_fields: List[Dict[str, Any]],
-    ) -> tuple[List[Field], List[LogicalTable]]:
+    ) -> Tuple[List[Field], List[LogicalTable]]:
         """
         从 GraphQL 字段数据转换为 Field 对象，并提取逻辑表信息
         
@@ -559,20 +763,77 @@ class TableauDataLoader:
         
         client = await self._get_client()
         
-        # 只查询维度字段
-        dimension_fields = [f for f in fields if f.is_dimension and not f.hidden]
+        # 查询所有维度字段（包括计算字段，排除隐藏字段和 TABLE 类型）
+        # 计算字段（如 门店名称、分类二级编码）大多可查询，个别不可查询的会在批次失败时逐个重试
+        dimension_fields = [
+            f for f in fields
+            if f.is_dimension and not f.hidden
+            and (f.data_type or "").upper() not in ("TABLE",)
+        ]
         if not dimension_fields:
             logger.warning("没有可查询的维度字段")
             return {}
         
-        logger.info(f"一次查询{len(dimension_fields)} 个维度字段的样例数据 (TOP {top_n})")
-        
-        # 构建查询：所有维度字段
+        # 分批查询，每批最多 batch_size 个字段，避免 VizQL 超时
+        batch_size = 5
         field_captions = [f.caption or f.name for f in dimension_fields]
-        query_fields = [{"fieldCaption": fc} for fc in field_captions]
+        all_results: Dict[str, Dict[str, Any]] = {}
         
-        # 用第一个维度字段做 TOP 过滤
-        first_dim = field_captions[0]
+        for batch_start in range(0, len(field_captions), batch_size):
+            batch_captions = field_captions[batch_start:batch_start + batch_size]
+            logger.info(
+                f"查询字段样例批次 {batch_start // batch_size + 1}: "
+                f"{len(batch_captions)} 个维度字段 (TOP {top_n})"
+            )
+            
+            batch_results = await self._query_field_samples_batch(
+                client=client,
+                datasource_id=datasource_id,
+                batch_captions=batch_captions,
+                measure_field=measure_field,
+                auth=auth,
+                top_n=top_n,
+                sample_size=sample_size,
+            )
+            all_results.update(batch_results)
+        
+        success_count = sum(1 for r in all_results.values() if r.get("sample_values"))
+        logger.info(f"字段样例统计完成: {success_count}/{len(field_captions)} 有样例值")
+        
+        return all_results
+    
+    async def _query_field_samples_batch(
+        self,
+        client: VizQLClient,
+        datasource_id: str,
+        batch_captions: List[str],
+        measure_field: str,
+        auth: TableauAuthContext,
+        top_n: int,
+        sample_size: int,
+    ) -> Dict[str, Dict[str, Any]]:
+        """查询一批字段的样例数据。
+        
+        如果批次查询失败（可能包含不可查询的计算字段），
+        自动降级为逐个字段查询，跳过有问题的字段。
+        
+        Args:
+            client: VizQL 客户端
+            datasource_id: 数据源 LUID
+            batch_captions: 字段标题列表
+            measure_field: 用于 TOP 排序的度量字段名
+            auth: 认证上下文
+            top_n: TOP 过滤的行数
+            sample_size: 每个字段保留的样例数量
+        
+        Returns:
+            {field_caption: {sample_values: [...], unique_count: int}}
+        """
+        results: Dict[str, Dict[str, Any]] = {}
+        
+        # 先尝试批量查询
+        query_fields = [{"fieldCaption": fc} for fc in batch_captions]
+        first_dim = batch_captions[0]
         query = {
             "fields": query_fields,
             "filters": [{
@@ -580,11 +841,11 @@ class TableauDataLoader:
                 "field": {"fieldCaption": first_dim},
                 "fieldToMeasure": {
                     "fieldCaption": measure_field,
-                    "function": "SUM"
+                    "function": "SUM",
                 },
                 "howMany": top_n,
-                "direction": "TOP"
-            }]
+                "direction": "TOP",
+            }],
         }
         
         try:
@@ -594,18 +855,63 @@ class TableauDataLoader:
                 api_key=auth.api_key,
                 site=auth.site,
             )
+            rows = data.get("data", [])
+            results = self._parse_sample_rows(rows, batch_captions, sample_size)
+            return results
         except Exception as e:
-            logger.error(f"查询字段样例失败: {e}")
-            return {}
+            logger.warning(
+                f"批次查询失败（{len(batch_captions)} 个字段），降级为逐个查询: {e}"
+            )
         
-        rows = data.get("data", [])
-        logger.info(f"查询返回 {len(rows)} 行数据")
+        # 批量失败 → 逐个字段查询，跳过有问题的字段
+        for fc in batch_captions:
+            single_query = {
+                "fields": [{"fieldCaption": fc}],
+                "filters": [{
+                    "filterType": "TOP",
+                    "field": {"fieldCaption": fc},
+                    "fieldToMeasure": {
+                        "fieldCaption": measure_field,
+                        "function": "SUM",
+                    },
+                    "howMany": top_n,
+                    "direction": "TOP",
+                }],
+            }
+            try:
+                data = await client.query_datasource(
+                    datasource_luid=datasource_id,
+                    query=single_query,
+                    api_key=auth.api_key,
+                    site=auth.site,
+                )
+                rows = data.get("data", [])
+                single_result = self._parse_sample_rows(rows, [fc], sample_size)
+                results.update(single_result)
+            except Exception as e:
+                logger.debug(f"字段 '{fc}' 不可查询，跳过: {e}")
         
-        # 在内存中统计每个字段的唯一值
+        return results
+    
+    @staticmethod
+    def _parse_sample_rows(
+        rows: List[Dict[str, Any]],
+        field_captions: List[str],
+        sample_size: int,
+    ) -> Dict[str, Dict[str, Any]]:
+        """从查询结果行中解析每个字段的唯一值。
+        
+        Args:
+            rows: VizQL 查询返回的数据行
+            field_captions: 要解析的字段标题列表
+            sample_size: 每个字段保留的样例数量
+        
+        Returns:
+            {field_caption: {sample_values: [...], unique_count: int}}
+        """
         results: Dict[str, Dict[str, Any]] = {}
         for fc in field_captions:
-            unique_values: Dict[str, int] = {}  # value -> count
-            
+            unique_values: Dict[str, int] = {}
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -615,16 +921,13 @@ class TableauDataLoader:
                     if value_str:
                         unique_values[value_str] = unique_values.get(value_str, 0) + 1
             
-            # 按出现次数排序，取前 sample_size 个
-            sorted_values = sorted(unique_values.keys(), key=lambda v: -unique_values[v])
+            sorted_values = sorted(
+                unique_values.keys(), key=lambda v: -unique_values[v]
+            )
             results[fc] = {
                 "sample_values": sorted_values[:sample_size],
                 "unique_count": len(unique_values),
             }
-        
-        success_count = sum(1 for r in results.values() if r["sample_values"])
-        logger.info(f"字段样例统计完成: {success_count}/{len(field_captions)} 有样例值")
-        
         return results
 
 

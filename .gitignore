@@ -127,3 +127,10 @@ desktop.ini
 
 # IDE specific
 .trae/
+
+# Sensitive files
+accounts.txt
+
+# Test outputs
+test_outputs/
+analytics_assistant/tests/test_outputs/

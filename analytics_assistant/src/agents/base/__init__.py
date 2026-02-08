@@ -50,6 +50,11 @@ from .node import (
     stream_llm_structured,
 )
 
+from .context import (
+    get_context,
+    get_context_or_raise,
+)
+
 from ...infra.ai import TaskType
 
 __all__ = [
@@ -62,6 +67,10 @@ __all__ = [
     
     # 流式结构化输出（统一方案）
     "stream_llm_structured",
+    
+    # 上下文获取
+    "get_context",
+    "get_context_or_raise",
     
     # 任务类型
     "TaskType",

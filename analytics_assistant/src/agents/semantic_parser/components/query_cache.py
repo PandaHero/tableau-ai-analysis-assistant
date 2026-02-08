@@ -4,11 +4,11 @@ QueryCache 组件 - 查询缓存管理
 
 功能：
 - 精确匹配缓存：基于问题 hash 的快速查找
-- 语义相似缓存：基于向量相似度的模糊匹配
+- 语义相似缓存：基于向量相似度的模糊匹配（FAISS 优化）
 - Schema Hash 失效：数据模型变更时自动失效缓存
 - TTL 过期：默认 24 小时
 
-存储后端：复用 CacheManager（基于 LangGraph SqliteStore）
+继承 SemanticCache 基类，复用 FAISS 索引和线性扫描回退逻辑。
 
 配置来源：analytics_assistant/config/app.yaml -> semantic_parser.query_cache
 
@@ -21,10 +21,10 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from analytics_assistant.src.infra.config import get_config
-from analytics_assistant.src.infra.storage import CacheManager, get_kv_store
-from analytics_assistant.src.infra.ai import get_embeddings
+from analytics_assistant.src.infra.storage import get_kv_store
 
 from ..schemas.cache import CachedQuery
+from .semantic_cache import SemanticCache
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def _get_config() -> Dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def compute_schema_hash(data_model: Any) -> str:
-    """计算数据模型的 schema hash。
+    """计算数据模型的 schema hash
     
     只包含影响查询生成的字段属性：
     - field.name: 字段名
@@ -75,26 +75,23 @@ def compute_schema_hash(data_model: Any) -> str:
 
 
 def compute_question_hash(question: str, datasource_luid: str) -> str:
-    """计算问题的 hash。"""
+    """计算问题的 hash"""
     content = f"{datasource_luid}:{question.strip().lower()}"
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# QueryCache 组件（基于 CacheManager 构建）
+# QueryCache 组件（继承 SemanticCache）
 # ═══════════════════════════════════════════════════════════════════════════
 
-class QueryCache:
-    """查询缓存管理器。
+class QueryCache(SemanticCache[CachedQuery]):
+    """查询缓存管理器
     
-    基于 infra 层的 CacheManager 构建，增加：
-    - Schema Hash 验证：数据模型变更时自动失效
-    - 语义相似匹配：基于向量相似度的模糊匹配
-    
-    存储结构：
-    - 使用 CacheManager，namespace 为 "query_cache_{datasource_luid}"
-    - key: question_hash
-    - value: CachedQuery.model_dump()
+    继承 SemanticCache 基类，提供：
+    - 精确匹配缓存
+    - 语义相似匹配（FAISS 索引优化）
+    - Schema Hash 验证
+    - TTL 24 小时
     
     配置来源：app.yaml -> semantic_parser.query_cache
     """
@@ -114,77 +111,95 @@ class QueryCache:
         default_ttl: Optional[int] = None,
         similarity_threshold: Optional[float] = None,
     ):
-        """初始化 QueryCache。
+        """初始化 QueryCache
         
         Args:
-            store: 直接传入的 store 实例（用于测试），None 则使用 CacheManager
-            embedding_model: Embedding 模型，用于语义相似匹配
-            default_ttl: 默认 TTL（秒），None 从配置读取
-            similarity_threshold: 语义相似匹配阈值，None 从配置读取
+            store: 直接传入的 store 实例（用于测试）
+            embedding_model: Embedding 模型
+            default_ttl: 默认 TTL（秒）
+            similarity_threshold: 语义相似匹配阈值
         """
-        self._direct_store = store  # 直接传入的 store（用于测试兼容）
-        self._cache_managers: Dict[str, Any] = {}  # datasource_luid -> CacheManager
-        self._embedding = embedding_model
-        
         # 从配置加载参数
-        self._load_config(default_ttl, similarity_threshold)
-        
-        # 直接初始化 embedding（如果未传入）
-        if self._embedding is None:
-            try:
-                self._embedding = get_embeddings()
-            except Exception as e:
-                logger.warning(f"无法初始化 embedding 模型: {e}")
-    
-    def _load_config(
-        self,
-        default_ttl: Optional[int],
-        similarity_threshold: Optional[float],
-    ) -> None:
-        """从配置加载参数。"""
         config = _get_config()
         
-        self.default_ttl = (
+        actual_ttl = (
             default_ttl
             if default_ttl is not None
             else config.get("default_ttl", self._DEFAULT_TTL)
         )
-        self.similarity_threshold = (
+        actual_threshold = (
             similarity_threshold
             if similarity_threshold is not None
             else config.get("similarity_threshold", self._DEFAULT_SIMILARITY_THRESHOLD)
         )
-    
-    def _get_cache_manager(self, datasource_luid: str) -> Optional[Any]:
-        """获取指定数据源的 CacheManager（直接初始化）。
+        max_cache_size = config.get("max_cache_size", self._DEFAULT_MAX_CACHE_SIZE)
         
-        Args:
-            datasource_luid: 数据源 ID
-            
-        Returns:
-            CacheManager 实例，如果使用直接传入的 store 则返回 None
-        """
-        # 如果直接传入了 store（测试场景），使用它
-        if self._direct_store is not None:
-            return None  # 返回 None 表示使用 _direct_store
+        # 调用父类初始化
+        super().__init__(
+            namespace_prefix=self.NAMESPACE_PREFIX,
+            default_ttl=actual_ttl,
+            similarity_threshold=actual_threshold,
+            max_cache_size=max_cache_size,
+        )
         
-        if datasource_luid not in self._cache_managers:
-            namespace = f"{self.NAMESPACE_PREFIX}_{datasource_luid}"
-            self._cache_managers[datasource_luid] = CacheManager(
-                namespace=namespace,
-                default_ttl=self.default_ttl,
-            )
-        return self._cache_managers[datasource_luid]
+        # 测试场景：直接传入 store
+        self._direct_store = store
+        
+        # 覆盖 embedding（如果传入）
+        if embedding_model is not None:
+            self._embedding = embedding_model
+        
+        logger.info(
+            f"QueryCache 已初始化: ttl={self._default_ttl}s, "
+            f"similarity_threshold={self._similarity_threshold}, "
+            f"faiss_available={self._faiss_available}"
+        )
     
-    def _get_store(self):
-        """获取底层 store（兼容测试场景）。"""
-        if self._direct_store is not None:
-            return self._direct_store
-        return get_kv_store()
+    # ═══════════════════════════════════════════════════════════════════════
+    # 实现抽象方法
+    # ═══════════════════════════════════════════════════════════════════════
     
     def _make_namespace(self, datasource_luid: str) -> tuple:
-        """生成存储命名空间（兼容直接 store 场景）。"""
+        """生成存储命名空间"""
         return ("semantic_parser", "query_cache", datasource_luid)
+    
+    def _validate_cached(self, cached: CachedQuery, **kwargs) -> bool:
+        """验证缓存条目是否有效
+        
+        QueryCache 需要检查：
+        1. TTL 是否过期
+        2. schema_hash 是否匹配
+        """
+        # TTL 检查
+        if datetime.now() > cached.expires_at:
+            return False
+        
+        # Schema hash 检查
+        current_schema_hash = kwargs.get("current_schema_hash")
+        if current_schema_hash and cached.schema_hash != current_schema_hash:
+            return False
+        
+        return True
+    
+    def _parse_cached(self, value: Dict[str, Any]) -> Optional[CachedQuery]:
+        """解析缓存值"""
+        try:
+            return CachedQuery.model_validate(value)
+        except Exception as e:
+            logger.debug(f"解析 QueryCache 缓存值失败: {e}")
+            return None
+    
+    def _get_cached_embedding(self, cached: CachedQuery) -> Optional[List[float]]:
+        """获取缓存条目的 embedding"""
+        return cached.question_embedding if cached.question_embedding else None
+    
+    def _get_cached_expires_at(self, cached: CachedQuery) -> datetime:
+        """获取缓存条目的过期时间"""
+        return cached.expires_at
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # 公共方法
+    # ═══════════════════════════════════════════════════════════════════════
     
     def get(
         self,
@@ -192,7 +207,7 @@ class QueryCache:
         datasource_luid: str,
         current_schema_hash: str,
     ) -> Optional[CachedQuery]:
-        """精确匹配查询缓存。
+        """精确匹配查询缓存
         
         流程：
         1. 计算 question hash
@@ -203,22 +218,11 @@ class QueryCache:
         question_hash = compute_question_hash(question, datasource_luid)
         
         try:
-            # 获取缓存值
-            cache_manager = self._get_cache_manager(datasource_luid)
-            if cache_manager is not None:
-                # 使用 CacheManager
-                value = cache_manager.get(question_hash)
-            else:
-                # 使用直接传入的 store（测试场景）
-                namespace = self._make_namespace(datasource_luid)
-                item = self._direct_store.get(namespace, question_hash)
-                value = item.value if item else None
+            cached = self._get_by_key(question_hash, datasource_luid)
             
-            if value is None:
+            if cached is None:
                 logger.debug(f"QueryCache 未命中: question_hash={question_hash[:8]}...")
                 return None
-            
-            cached = CachedQuery.model_validate(value)
             
             # TTL 检查
             if datetime.now() > cached.expires_at:
@@ -245,7 +249,7 @@ class QueryCache:
             return None
     
     def _put_cached(self, datasource_luid: str, key: str, cached: CachedQuery) -> None:
-        """存储缓存值。"""
+        """存储缓存值"""
         cache_manager = self._get_cache_manager(datasource_luid)
         if cache_manager is not None:
             cache_manager.set(key, cached.model_dump())
@@ -260,69 +264,16 @@ class QueryCache:
         current_schema_hash: str,
         threshold: Optional[float] = None,
     ) -> Optional[CachedQuery]:
-        """语义相似匹配。
+        """语义相似匹配
         
-        流程：
-        1. 计算 question embedding
-        2. 在该数据源的缓存中进行向量相似度搜索
-        3. 返回相似度 > threshold 的最佳匹配
-        4. 同样检查 schema_hash 是否匹配
+        重写父类方法，添加 schema_hash 验证。
         """
-        if self._embedding is None:
-            logger.debug("QueryCache 语义相似匹配不可用：未配置 embedding 模型")
-            return None
-        
-        threshold = threshold or self.similarity_threshold
-        
-        try:
-            # 计算问题的 embedding
-            question_embedding = self._embedding.embed_query(question)
-            
-            # 获取该数据源的所有缓存
-            store = self._get_store()
-            namespace = self._make_namespace(datasource_luid)
-            items = store.search(namespace, limit=100)
-            
-            best_match = None
-            best_similarity = 0.0
-            
-            for item in items:
-                if item.value is None:
-                    continue
-                
-                cached = CachedQuery.model_validate(item.value)
-                
-                # 跳过过期和 schema 不匹配的缓存
-                if datetime.now() > cached.expires_at:
-                    continue
-                if cached.schema_hash != current_schema_hash:
-                    continue
-                
-                # 计算相似度
-                if cached.question_embedding:
-                    similarity = self._cosine_similarity(
-                        question_embedding, 
-                        cached.question_embedding
-                    )
-                    if similarity > threshold and similarity > best_similarity:
-                        best_similarity = similarity
-                        best_match = cached
-            
-            if best_match:
-                logger.info(
-                    f"QueryCache 语义相似命中: similarity={best_similarity:.3f}, "
-                    f"cached_question='{best_match.question[:20]}...'"
-                )
-                # 更新命中计数
-                best_match.hit_count += 1
-                question_hash = compute_question_hash(best_match.question, datasource_luid)
-                self._put_cached(datasource_luid, question_hash, best_match)
-            
-            return best_match
-            
-        except Exception as e:
-            logger.error(f"QueryCache get_similar 失败: {e}")
-            return None
+        return super().get_similar(
+            question=question,
+            datasource_luid=datasource_luid,
+            threshold=threshold,
+            current_schema_hash=current_schema_hash,
+        )
     
     def set(
         self,
@@ -333,8 +284,8 @@ class QueryCache:
         query: str,
         ttl: Optional[int] = None,
     ) -> bool:
-        """设置缓存。"""
-        ttl = ttl or self.default_ttl
+        """设置缓存"""
+        ttl = ttl or self._default_ttl
         question_hash = compute_question_hash(question, datasource_luid)
         
         try:
@@ -348,7 +299,6 @@ class QueryCache:
                 except ValueError as e:
                     logger.warning(f"计算 question embedding 参数错误: {e}")
                 except Exception as e:
-                    # 记录未知错误但不中断缓存写入
                     logger.error(f"计算 question embedding 未知错误: {type(e).__name__}: {e}")
             
             cached = CachedQuery(
@@ -373,6 +323,10 @@ class QueryCache:
                 ttl_minutes = ttl // 60
                 self._direct_store.put(namespace, question_hash, cached.model_dump(), ttl=ttl_minutes)
             
+            # 添加到 FAISS 索引
+            if question_embedding:
+                self._add_to_faiss(question_hash, question_embedding)
+            
             logger.info(f"QueryCache 已缓存: question='{question[:20]}...', ttl={ttl}s")
             return True
             
@@ -381,12 +335,11 @@ class QueryCache:
             return False
     
     def invalidate_by_datasource(self, datasource_luid: str) -> int:
-        """失效指定数据源的所有缓存。"""
+        """失效指定数据源的所有缓存"""
         try:
             cache_manager = self._get_cache_manager(datasource_luid)
             if cache_manager is not None:
                 cache_manager.clear()
-                # CacheManager.clear() 不返回数量，返回 -1 表示已清空
                 logger.info(f"QueryCache 已失效缓存: datasource={datasource_luid}")
                 return -1
             else:
@@ -396,6 +349,7 @@ class QueryCache:
                 count = 0
                 for item in items:
                     store.delete(namespace, item.key)
+                    self._remove_from_faiss(item.key)
                     count += 1
                 logger.info(f"QueryCache 已失效 {count} 条缓存: datasource={datasource_luid}")
                 return count
@@ -409,7 +363,7 @@ class QueryCache:
         datasource_luid: str,
         new_schema_hash: str,
     ) -> int:
-        """当数据模型变更时，主动失效旧版本的缓存。"""
+        """当数据模型变更时，主动失效旧版本的缓存"""
         try:
             store = self._get_store()
             namespace = self._make_namespace(datasource_luid)
@@ -418,9 +372,14 @@ class QueryCache:
             for item in items:
                 if item.value is None:
                     continue
-                cached = CachedQuery.model_validate(item.value)
+                try:
+                    cached = CachedQuery.model_validate(item.value)
+                except Exception as e:
+                    logger.debug(f"解析 QueryCache 缓存条目失败（schema 变更检查）: {e}")
+                    continue
                 if cached.schema_hash != new_schema_hash:
                     store.delete(namespace, item.key)
+                    self._remove_from_faiss(item.key)
                     count += 1
             
             logger.info(
@@ -433,20 +392,51 @@ class QueryCache:
             logger.error(f"QueryCache invalidate_by_schema_change 失败: {e}")
             return 0
     
-    @staticmethod
-    def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
-        """计算余弦相似度。"""
-        if not vec1 or not vec2 or len(vec1) != len(vec2):
-            return 0.0
-        
-        dot_product = sum(a * b for a, b in zip(vec1, vec2))
-        norm1 = sum(a * a for a in vec1) ** 0.5
-        norm2 = sum(b * b for b in vec2) ** 0.5
-        
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        
-        return dot_product / (norm1 * norm2)
+    def get_stats(self, datasource_luid: Optional[str] = None) -> Dict[str, Any]:
+        """获取缓存统计信息"""
+        try:
+            store = self._get_store()
+            
+            if datasource_luid:
+                namespace = self._make_namespace(datasource_luid)
+                items = list(store.search(namespace, limit=self._max_cache_size))
+            else:
+                items = list(store.search(
+                    ("semantic_parser", "query_cache"), 
+                    limit=self._max_cache_size * 10
+                ))
+            
+            total_count = len(items)
+            total_hits = 0
+            expired_count = 0
+            now = datetime.now()
+            
+            for item in items:
+                if item.value is None:
+                    continue
+                try:
+                    cached = CachedQuery.model_validate(item.value)
+                    total_hits += cached.hit_count
+                    if now > cached.expires_at:
+                        expired_count += 1
+                except Exception as e:
+                    logger.debug(f"解析 QueryCache 缓存条目失败: {e}")
+                    pass
+            
+            return {
+                "total_count": total_count,
+                "active_count": total_count - expired_count,
+                "expired_count": expired_count,
+                "total_hits": total_hits,
+                "ttl_seconds": self._default_ttl,
+                "similarity_threshold": self._similarity_threshold,
+                "faiss_available": self._faiss_available,
+                "faiss_index_size": self._faiss_index.ntotal if self._faiss_index else 0,
+            }
+            
+        except Exception as e:
+            logger.error(f"获取 QueryCache 统计失败: {e}")
+            return {"error": str(e)}
 
 
 __all__ = [

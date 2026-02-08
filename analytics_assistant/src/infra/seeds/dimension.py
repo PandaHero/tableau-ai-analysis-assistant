@@ -37,6 +37,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-year",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示年份，时间维度最粗粒度",
+        "aliases": ["年份", "Year", "财年"],
         "reasoning": "时间维度最粗粒度，表示年份",
     },
     {
@@ -46,6 +48,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-year",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示年份，时间维度最粗粒度",
+        "aliases": ["年", "Year", "财年"],
         "reasoning": "时间维度最粗粒度，表示年份",
     },
     {
@@ -55,6 +59,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-quarter",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "表示季度，时间维度粗粒度",
+        "aliases": ["季", "Quarter", "Q"],
         "reasoning": "时间维度粗粒度，表示季度",
     },
     {
@@ -64,6 +70,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-month",
         "level": 3,
         "granularity": "medium",
+        "business_description": "表示月份，时间维度中等粒度",
+        "aliases": ["月份", "Month", "月度"],
         "reasoning": "时间维度中等粒度，表示月份",
     },
     {
@@ -73,6 +81,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-month",
         "level": 3,
         "granularity": "medium",
+        "business_description": "表示月份，时间维度中等粒度",
+        "aliases": ["月", "Month", "月度"],
         "reasoning": "时间维度中等粒度，表示月份",
     },
     {
@@ -82,6 +92,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-week",
         "level": 4,
         "granularity": "fine",
+        "business_description": "表示周，时间维度细粒度",
+        "aliases": ["周次", "Week", "星期"],
         "reasoning": "时间维度细粒度，表示周",
     },
     {
@@ -91,6 +103,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-date",
         "level": 5,
         "granularity": "finest",
+        "business_description": "表示具体日期，时间维度最细粒度",
+        "aliases": ["日", "Date", "天"],
         "reasoning": "时间维度最细粒度，表示日期",
     },
     {
@@ -100,6 +114,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-day",
         "level": 5,
         "granularity": "finest",
+        "business_description": "表示日，时间维度最细粒度",
+        "aliases": ["日期", "Day", "天"],
         "reasoning": "时间维度最细粒度，表示日",
     },
     # ─────────────────────────────────────────────────────────
@@ -112,6 +128,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-year",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Represents year, coarsest time dimension",
+        "aliases": ["年", "Year", "fiscal_year"],
         "reasoning": "Time dimension coarsest level, represents year",
     },
     {
@@ -121,6 +139,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-year",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Represents year, coarsest time dimension",
+        "aliases": ["年", "year", "fiscal_year"],
         "reasoning": "Time dimension coarsest level, represents year",
     },
     {
@@ -130,6 +150,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-year",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Fiscal year for financial reporting",
+        "aliases": ["财年", "Year", "FY"],
         "reasoning": "Fiscal year, time dimension coarsest level",
     },
     {
@@ -139,6 +161,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-quarter",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Represents quarter, coarse time dimension",
+        "aliases": ["季度", "Quarter", "Q"],
         "reasoning": "Time dimension coarse level, represents quarter",
     },
     {
@@ -148,6 +172,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-quarter",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Represents quarter, coarse time dimension",
+        "aliases": ["季度", "quarter", "Q"],
         "reasoning": "Time dimension coarse level, represents quarter",
     },
     {
@@ -157,6 +183,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-month",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Represents month, medium time dimension",
+        "aliases": ["月份", "Month", "月"],
         "reasoning": "Time dimension medium level, represents month",
     },
     {
@@ -166,6 +194,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-month",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Represents month, medium time dimension",
+        "aliases": ["月份", "month", "月"],
         "reasoning": "Time dimension medium level, represents month",
     },
     {
@@ -175,6 +205,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-month",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Month name for display",
+        "aliases": ["月份名称", "Month Name", "月名"],
         "reasoning": "Month name, time dimension medium level",
     },
     {
@@ -184,6 +216,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-week",
         "level": 4,
         "granularity": "fine",
+        "business_description": "Represents week number, fine time dimension",
+        "aliases": ["周", "Week", "周次"],
         "reasoning": "Time dimension fine level, represents week",
     },
     {
@@ -193,6 +227,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-week",
         "level": 4,
         "granularity": "fine",
+        "business_description": "Week number within year",
+        "aliases": ["周次", "Week", "周"],
         "reasoning": "Week number, time dimension fine level",
     },
     {
@@ -202,6 +238,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-date",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Represents specific date, finest time dimension",
+        "aliases": ["日期", "Date", "日"],
         "reasoning": "Time dimension finest level, represents date",
     },
     {
@@ -211,6 +249,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-date",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Date when order was placed",
+        "aliases": ["订单日期", "Order Date", "下单日期"],
         "reasoning": "Order date, time dimension finest level",
     },
     {
@@ -220,6 +260,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-date",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Date when order was shipped",
+        "aliases": ["发货日期", "Ship Date", "出货日期"],
         "reasoning": "Ship date, time dimension finest level",
     },
     {
@@ -229,6 +271,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-date",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Date when record was created",
+        "aliases": ["创建日期", "Create Date", "创建时间"],
         "reasoning": "Create date, time dimension finest level",
     },
     {
@@ -238,6 +282,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-day",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Day of month",
+        "aliases": ["日", "Day", "天"],
         "reasoning": "Day of month, time dimension finest level",
     },
     {
@@ -247,6 +293,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "time-day",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Day of week name",
+        "aliases": ["星期", "Weekday", "周几"],
         "reasoning": "Day of week, time dimension finest level",
     },
 
@@ -260,6 +308,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-country",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示国家，地理维度最粗粒度",
+        "aliases": ["国", "Country", "国家名称"],
         "reasoning": "地理维度最粗粒度，表示国家",
     },
     {
@@ -269,6 +319,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-province",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "表示省份，地理维度粗粒度",
+        "aliases": ["省", "Province", "省区"],
         "reasoning": "地理维度粗粒度，表示省份",
     },
     {
@@ -278,6 +330,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-province",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "表示省/区，地理维度粗粒度",
+        "aliases": ["省份", "Province", "省"],
         "reasoning": "地理维度粗粒度，表示省/区",
     },
     {
@@ -287,6 +341,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-city",
         "level": 3,
         "granularity": "medium",
+        "business_description": "表示城市，地理维度中等粒度",
+        "aliases": ["市", "City", "城市名称"],
         "reasoning": "地理维度中等粒度，表示城市",
     },
     {
@@ -296,6 +352,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-district",
         "level": 4,
         "granularity": "fine",
+        "business_description": "表示区县，地理维度细粒度",
+        "aliases": ["区", "县", "District"],
         "reasoning": "地理维度细粒度，表示区县",
     },
     {
@@ -305,6 +363,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-province",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "客户所在省份",
+        "aliases": ["客户省份", "Customer Province", "省"],
         "reasoning": "客户所在省份，地理维度粗粒度",
     },
     {
@@ -314,6 +374,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-district",
         "level": 4,
         "granularity": "fine",
+        "business_description": "客户所在区县",
+        "aliases": ["客户区县", "Customer District", "区"],
         "reasoning": "客户所在区县，地理维度细粒度",
     },
     {
@@ -323,6 +385,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-region",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "表示地区，地理维度粗粒度",
+        "aliases": ["区域", "Region", "大区"],
         "reasoning": "地理维度粗粒度，表示地区",
     },
     {
@@ -332,6 +396,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-region",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示大区，地理维度最粗粒度",
+        "aliases": ["区域", "Region", "地区"],
         "reasoning": "地理维度最粗粒度，表示大区",
     },
     # ─────────────────────────────────────────────────────────
@@ -344,6 +410,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-country",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Represents country, coarsest geography dimension",
+        "aliases": ["国家", "Country", "nation"],
         "reasoning": "Geography dimension coarsest level, represents country",
     },
     {
@@ -353,6 +421,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-country",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Represents country, coarsest geography dimension",
+        "aliases": ["国家", "country", "nation"],
         "reasoning": "Geography dimension coarsest level, represents country",
     },
     {
@@ -362,6 +432,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-country",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Country name for display",
+        "aliases": ["国家名称", "Country", "国家"],
         "reasoning": "Country name, geography dimension coarsest level",
     },
     {
@@ -371,6 +443,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-region",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Represents region, coarse geography dimension",
+        "aliases": ["区域", "Region", "大区"],
         "reasoning": "Geography dimension coarse level, represents region",
     },
     {
@@ -380,6 +454,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-region",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Represents region, coarse geography dimension",
+        "aliases": ["区域", "region", "大区"],
         "reasoning": "Geography dimension coarse level, represents region",
     },
     {
@@ -389,6 +465,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-province",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "State or province, coarse geography dimension",
+        "aliases": ["省份", "State", "省"],
         "reasoning": "State/Province, geography dimension coarse level",
     },
     {
@@ -398,6 +476,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-province",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "State or province, coarse geography dimension",
+        "aliases": ["省份", "state", "省"],
         "reasoning": "State/Province, geography dimension coarse level",
     },
     {
@@ -407,6 +487,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-province",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Province, coarse geography dimension",
+        "aliases": ["省份", "Province", "省"],
         "reasoning": "Province, geography dimension coarse level",
     },
     {
@@ -416,6 +498,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-city",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Represents city, medium geography dimension",
+        "aliases": ["城市", "City", "市"],
         "reasoning": "Geography dimension medium level, represents city",
     },
     {
@@ -425,6 +509,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-city",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Represents city, medium geography dimension",
+        "aliases": ["城市", "city", "市"],
         "reasoning": "Geography dimension medium level, represents city",
     },
     {
@@ -434,6 +520,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-city",
         "level": 3,
         "granularity": "medium",
+        "business_description": "City name for display",
+        "aliases": ["城市名称", "City", "城市"],
         "reasoning": "City name, geography dimension medium level",
     },
     {
@@ -443,6 +531,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-district",
         "level": 4,
         "granularity": "fine",
+        "business_description": "Represents district, fine geography dimension",
+        "aliases": ["区县", "District", "区"],
         "reasoning": "Geography dimension fine level, represents district",
     },
     {
@@ -452,6 +542,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-postal",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Postal code for mail delivery",
+        "aliases": ["邮编", "Postal Code", "邮政编码"],
         "reasoning": "Postal code, geography dimension finest level",
     },
     {
@@ -461,6 +553,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-postal",
         "level": 5,
         "granularity": "finest",
+        "business_description": "ZIP code for mail delivery",
+        "aliases": ["邮编", "ZIP Code", "邮政编码"],
         "reasoning": "Zip code, geography dimension finest level",
     },
     {
@@ -470,6 +564,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "geography-address",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Full address for delivery",
+        "aliases": ["地址", "Address", "详细地址"],
         "reasoning": "Address, geography dimension finest level",
     },
 
@@ -483,6 +579,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-category",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示产品大类，产品维度最粗粒度",
+        "aliases": ["产品大类", "Category", "类别"],
         "reasoning": "产品维度最粗粒度，表示产品大类",
     },
     {
@@ -492,6 +590,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-business-line",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示事业线，产品维度最粗粒度",
+        "aliases": ["事业线", "Business Line", "业务线"],
         "reasoning": "产品维度最粗粒度，表示事业线",
     },
     {
@@ -501,6 +601,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-subcategory",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "表示产品子类，产品维度粗粒度",
+        "aliases": ["子类", "Subcategory", "产品分类"],
         "reasoning": "产品维度粗粒度，表示产品子类",
     },
     {
@@ -510,6 +612,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-brand",
         "level": 3,
         "granularity": "medium",
+        "business_description": "表示品牌，产品维度中等粒度",
+        "aliases": ["品牌名称", "Brand", "商标"],
         "reasoning": "产品维度中等粒度，表示品牌",
     },
     {
@@ -519,6 +623,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-name",
         "level": 4,
         "granularity": "fine",
+        "business_description": "表示产品名称，产品维度细粒度",
+        "aliases": ["产品", "Product Name", "商品名称"],
         "reasoning": "产品维度细粒度，表示产品名称",
     },
     {
@@ -528,6 +634,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-name",
         "level": 4,
         "granularity": "fine",
+        "business_description": "物料名称，产品维度细粒度",
+        "aliases": ["物料", "Material Name", "材料名称"],
         "reasoning": "物料名称，产品维度细粒度",
     },
     {
@@ -537,6 +645,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-sku",
         "level": 5,
         "granularity": "finest",
+        "business_description": "物料编码，产品维度最细粒度",
+        "aliases": ["物料号", "Material Code", "物料ID"],
         "reasoning": "物料编码，产品维度最细粒度",
     },
     {
@@ -546,6 +656,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-sku",
         "level": 5,
         "granularity": "finest",
+        "business_description": "SKU编码，产品维度最细粒度",
+        "aliases": ["SKU编码", "Stock Keeping Unit", "库存单位"],
         "reasoning": "SKU编码，产品维度最细粒度",
     },
     # ─────────────────────────────────────────────────────────
@@ -558,6 +670,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-category",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Product category, coarsest product dimension",
+        "aliases": ["产品类别", "Category", "类别"],
         "reasoning": "Product dimension coarsest level, represents category",
     },
     {
@@ -567,6 +681,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-category",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Product category, coarsest product dimension",
+        "aliases": ["产品类别", "category", "类别"],
         "reasoning": "Product dimension coarsest level, represents category",
     },
     {
@@ -576,6 +692,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-category",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Product category for classification",
+        "aliases": ["产品类别", "Category", "产品分类"],
         "reasoning": "Product category, product dimension coarsest level",
     },
     {
@@ -585,6 +703,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-subcategory",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Product subcategory, coarse product dimension",
+        "aliases": ["产品子类", "Subcategory", "子类"],
         "reasoning": "Product dimension coarse level, represents subcategory",
     },
     {
@@ -594,6 +714,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-subcategory",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Product subcategory, coarse product dimension",
+        "aliases": ["产品子类", "subcategory", "子类"],
         "reasoning": "Product dimension coarse level, represents subcategory",
     },
     {
@@ -603,6 +725,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-subcategory",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Product subcategory for classification",
+        "aliases": ["产品子类", "Subcategory", "子分类"],
         "reasoning": "Product subcategory, product dimension coarse level",
     },
     {
@@ -612,6 +736,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-brand",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Product brand, medium product dimension",
+        "aliases": ["品牌", "Brand", "商标"],
         "reasoning": "Product dimension medium level, represents brand",
     },
     {
@@ -621,6 +747,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-brand",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Product brand, medium product dimension",
+        "aliases": ["品牌", "brand", "商标"],
         "reasoning": "Product dimension medium level, represents brand",
     },
     {
@@ -630,6 +758,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-brand",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Brand name for display",
+        "aliases": ["品牌名称", "Brand", "品牌"],
         "reasoning": "Brand name, product dimension medium level",
     },
     {
@@ -639,6 +769,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-name",
         "level": 4,
         "granularity": "fine",
+        "business_description": "Product name for identification",
+        "aliases": ["产品名称", "Product", "商品名称"],
         "reasoning": "Product name, product dimension fine level",
     },
     {
@@ -648,6 +780,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-name",
         "level": 4,
         "granularity": "fine",
+        "business_description": "Product name for identification",
+        "aliases": ["产品名称", "product_name", "商品名称"],
         "reasoning": "Product name, product dimension fine level",
     },
     {
@@ -657,6 +791,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-name",
         "level": 4,
         "granularity": "fine",
+        "business_description": "Material name for identification",
+        "aliases": ["物料名称", "Material", "材料名称"],
         "reasoning": "Material name, product dimension fine level",
     },
     {
@@ -666,6 +802,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-sku",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Stock Keeping Unit, finest product dimension",
+        "aliases": ["SKU", "库存单位", "SKU编码"],
         "reasoning": "SKU, product dimension finest level",
     },
     {
@@ -675,6 +813,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-sku",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Product unique identifier",
+        "aliases": ["产品ID", "Product ID", "产品编码"],
         "reasoning": "Product ID, product dimension finest level",
     },
     {
@@ -684,6 +824,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-sku",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Product unique identifier",
+        "aliases": ["产品ID", "product_id", "产品编码"],
         "reasoning": "Product ID, product dimension finest level",
     },
     {
@@ -693,6 +835,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-sku",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Material code for inventory",
+        "aliases": ["物料", "Material Code", "物料编码"],
         "reasoning": "Material code, product dimension finest level",
     },
     {
@@ -702,6 +846,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "product-sku",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Item unique identifier",
+        "aliases": ["商品ID", "Item ID", "商品编码"],
         "reasoning": "Item ID, product dimension finest level",
     },
 
@@ -715,6 +861,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示客户类型，客户维度最粗粒度",
+        "aliases": ["客户分类", "Customer Type", "类型"],
         "reasoning": "客户维度最粗粒度，表示客户类型",
     },
     {
@@ -724,6 +872,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-segment",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "表示客户分类，客户维度粗粒度",
+        "aliases": ["客户类型", "Customer Segment", "分类"],
         "reasoning": "客户维度粗粒度，表示客户分类",
     },
     {
@@ -733,6 +883,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-name",
         "level": 3,
         "granularity": "medium",
+        "business_description": "表示客户名称，客户维度中等粒度",
+        "aliases": ["客户", "Customer Name", "客户名"],
         "reasoning": "客户维度中等粒度，表示客户名称",
     },
     {
@@ -742,6 +894,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-id",
         "level": 5,
         "granularity": "finest",
+        "business_description": "客户唯一标识，客户维度最细粒度",
+        "aliases": ["客户编码", "Customer ID", "客户号"],
         "reasoning": "客户维度最细粒度，表示客户唯一标识",
     },
     {
@@ -751,6 +905,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-id",
         "level": 5,
         "granularity": "finest",
+        "business_description": "客户编码，客户维度最细粒度",
+        "aliases": ["客户ID", "Customer Code", "客户号"],
         "reasoning": "客户维度最细粒度，表示客户编码",
     },
     # ─────────────────────────────────────────────────────────
@@ -763,6 +919,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Customer type, coarsest customer dimension",
+        "aliases": ["客户类型", "Customer Type", "类型"],
         "reasoning": "Customer dimension coarsest level, represents customer type",
     },
     {
@@ -772,6 +930,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Customer type, coarsest customer dimension",
+        "aliases": ["客户类型", "customer_type", "类型"],
         "reasoning": "Customer dimension coarsest level, represents customer type",
     },
     {
@@ -781,6 +941,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-segment",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Customer segment, coarse customer dimension",
+        "aliases": ["客户分类", "Segment", "分类"],
         "reasoning": "Customer segment, customer dimension coarse level",
     },
     {
@@ -790,6 +952,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-segment",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Customer segment, coarse customer dimension",
+        "aliases": ["客户分类", "segment", "分类"],
         "reasoning": "Customer segment, customer dimension coarse level",
     },
     {
@@ -799,6 +963,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-segment",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Customer segment for classification",
+        "aliases": ["客户分类", "Segment", "客户类型"],
         "reasoning": "Customer segment, customer dimension coarse level",
     },
     {
@@ -808,6 +974,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-name",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Customer name for identification",
+        "aliases": ["客户名称", "Customer", "客户"],
         "reasoning": "Customer name, customer dimension medium level",
     },
     {
@@ -817,6 +985,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-name",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Customer name for identification",
+        "aliases": ["客户名称", "customer_name", "客户"],
         "reasoning": "Customer name, customer dimension medium level",
     },
     {
@@ -826,6 +996,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-id",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Customer unique identifier",
+        "aliases": ["客户ID", "Customer ID", "客户编码"],
         "reasoning": "Customer ID, customer dimension finest level",
     },
     {
@@ -835,6 +1007,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-id",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Customer unique identifier",
+        "aliases": ["客户ID", "customer_id", "客户编码"],
         "reasoning": "Customer ID, customer dimension finest level",
     },
     {
@@ -844,6 +1018,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-id",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Sold-to party code for customer",
+        "aliases": ["售达方", "Sold To", "客户代码"],
         "reasoning": "Sold-to party code, customer dimension finest level",
     },
     {
@@ -853,6 +1029,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "customer-id",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Ship-to party code for delivery",
+        "aliases": ["送达方", "Ship To", "收货方"],
         "reasoning": "Ship-to party code, customer dimension finest level",
     },
 
@@ -866,6 +1044,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-company",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示公司名称，组织维度最粗粒度",
+        "aliases": ["公司", "Company Name", "企业名称"],
         "reasoning": "组织维度最粗粒度，表示公司",
     },
     {
@@ -875,6 +1055,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-company",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "表示公司，组织维度最粗粒度",
+        "aliases": ["公司名称", "Company", "企业"],
         "reasoning": "组织维度最粗粒度，表示公司",
     },
     {
@@ -884,6 +1066,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-department",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "表示部门，组织维度粗粒度",
+        "aliases": ["部门名称", "Department", "科室"],
         "reasoning": "组织维度粗粒度，表示部门",
     },
     {
@@ -893,6 +1077,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-team",
         "level": 3,
         "granularity": "medium",
+        "business_description": "表示团队，组织维度中等粒度",
+        "aliases": ["团队名称", "Team", "小组"],
         "reasoning": "组织维度中等粒度，表示团队",
     },
     {
@@ -902,6 +1088,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-employee",
         "level": 5,
         "granularity": "finest",
+        "business_description": "表示员工，组织维度最细粒度",
+        "aliases": ["员工姓名", "Employee", "职员"],
         "reasoning": "组织维度最细粒度，表示员工",
     },
     {
@@ -911,6 +1099,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-employee",
         "level": 5,
         "granularity": "finest",
+        "business_description": "表示员工姓名，组织维度最细粒度",
+        "aliases": ["员工", "Employee Name", "姓名"],
         "reasoning": "组织维度最细粒度，表示员工姓名",
     },
     {
@@ -920,6 +1110,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-employee",
         "level": 5,
         "granularity": "finest",
+        "business_description": "销售员，组织维度最细粒度",
+        "aliases": ["销售人员", "Salesperson", "业务员"],
         "reasoning": "销售员，组织维度最细粒度",
     },
     # ─────────────────────────────────────────────────────────
@@ -932,6 +1124,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-company",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Company, coarsest organization dimension",
+        "aliases": ["公司", "Company", "企业"],
         "reasoning": "Organization dimension coarsest level, represents company",
     },
     {
@@ -941,6 +1135,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-company",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Company, coarsest organization dimension",
+        "aliases": ["公司", "company", "企业"],
         "reasoning": "Organization dimension coarsest level, represents company",
     },
     {
@@ -950,6 +1146,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-company",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Company name for identification",
+        "aliases": ["公司名称", "Company", "企业名称"],
         "reasoning": "Company name, organization dimension coarsest level",
     },
     {
@@ -959,6 +1157,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-department",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Sales department or company",
+        "aliases": ["销售公司", "Sales Company", "销售部门"],
         "reasoning": "Sales department, organization dimension coarse level",
     },
     {
@@ -968,6 +1168,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-department",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Department, coarse organization dimension",
+        "aliases": ["部门", "Department", "科室"],
         "reasoning": "Organization dimension coarse level, represents department",
     },
     {
@@ -977,6 +1179,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-department",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Department, coarse organization dimension",
+        "aliases": ["部门", "department", "科室"],
         "reasoning": "Organization dimension coarse level, represents department",
     },
     {
@@ -986,6 +1190,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-division",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Division, coarse organization dimension",
+        "aliases": ["事业部", "Division", "分部"],
         "reasoning": "Division, organization dimension coarse level",
     },
     {
@@ -995,6 +1201,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-team",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Team, medium organization dimension",
+        "aliases": ["团队", "Team", "小组"],
         "reasoning": "Organization dimension medium level, represents team",
     },
     {
@@ -1004,6 +1212,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-team",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Team, medium organization dimension",
+        "aliases": ["团队", "team", "小组"],
         "reasoning": "Organization dimension medium level, represents team",
     },
     {
@@ -1013,6 +1223,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-employee",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Employee, finest organization dimension",
+        "aliases": ["员工", "Employee", "职员"],
         "reasoning": "Organization dimension finest level, represents employee",
     },
     {
@@ -1022,6 +1234,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-employee",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Employee name for identification",
+        "aliases": ["员工姓名", "Employee", "姓名"],
         "reasoning": "Employee name, organization dimension finest level",
     },
     {
@@ -1031,6 +1245,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-employee",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Employee unique identifier",
+        "aliases": ["员工ID", "Employee ID", "员工编号"],
         "reasoning": "Employee ID, organization dimension finest level",
     },
     {
@@ -1040,6 +1256,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-employee",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Sales representative name",
+        "aliases": ["销售代表", "Sales Rep", "销售员"],
         "reasoning": "Sales representative, organization dimension finest level",
     },
     {
@@ -1049,6 +1267,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "organization-employee",
         "level": 5,
         "granularity": "finest",
+        "business_description": "Salesperson name",
+        "aliases": ["销售员", "Salesperson", "业务员"],
         "reasoning": "Salesperson, organization dimension finest level",
     },
 
@@ -1062,6 +1282,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level1",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "一级销售渠道，渠道维度最粗粒度",
+        "aliases": ["一级渠道", "Primary Channel", "主渠道"],
         "reasoning": "渠道维度最粗粒度，表示一级渠道",
     },
     {
@@ -1071,6 +1293,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "渠道类型，渠道维度最粗粒度",
+        "aliases": ["渠道分类", "Channel Type", "渠道"],
         "reasoning": "渠道维度最粗粒度，表示渠道类型",
     },
     {
@@ -1080,6 +1304,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level2",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "二级销售渠道，渠道维度粗粒度",
+        "aliases": ["二级渠道", "Secondary Channel", "子渠道"],
         "reasoning": "渠道维度粗粒度，表示二级渠道",
     },
     {
@@ -1089,6 +1315,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "销售类型（集团内/外），渠道维度最粗粒度",
+        "aliases": ["内销外销", "Domestic/Export", "销售类型"],
         "reasoning": "销售类型（集团内/外），渠道维度最粗粒度",
     },
     {
@@ -1098,6 +1326,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level1",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "销售渠道，渠道维度最粗粒度",
+        "aliases": ["渠道", "Sales Channel", "渠道类型"],
         "reasoning": "渠道维度最粗粒度，表示销售渠道",
     },
     # ─────────────────────────────────────────────────────────
@@ -1110,6 +1340,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level1",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Channel, coarsest channel dimension",
+        "aliases": ["渠道", "Channel", "销售渠道"],
         "reasoning": "Channel dimension coarsest level, represents channel",
     },
     {
@@ -1119,6 +1351,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level1",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Channel, coarsest channel dimension",
+        "aliases": ["渠道", "channel", "销售渠道"],
         "reasoning": "Channel dimension coarsest level, represents channel",
     },
     {
@@ -1128,6 +1362,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Channel type for classification",
+        "aliases": ["渠道类型", "Channel Type", "渠道分类"],
         "reasoning": "Channel type, channel dimension coarsest level",
     },
     {
@@ -1137,6 +1373,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level1",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Level 1 channel name",
+        "aliases": ["一级渠道", "Primary Channel", "一级渠道名称"],
         "reasoning": "Level 1 channel name, channel dimension coarsest level",
     },
     {
@@ -1146,6 +1384,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level1",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Sales channel for distribution",
+        "aliases": ["销售渠道", "Sales Channel", "渠道"],
         "reasoning": "Sales channel, channel dimension coarsest level",
     },
     {
@@ -1155,6 +1395,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level2",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Level 2 channel name",
+        "aliases": ["二级渠道", "Secondary Channel", "二级渠道名称"],
         "reasoning": "Level 2 channel name, channel dimension coarse level",
     },
     {
@@ -1164,6 +1406,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-level2",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Sub channel for detailed classification",
+        "aliases": ["子渠道", "Sub Channel", "二级渠道"],
         "reasoning": "Sub channel, channel dimension coarse level",
     },
     {
@@ -1173,6 +1417,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-ship-mode",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Shipping mode for delivery",
+        "aliases": ["配送方式", "Shipping Mode", "运输方式"],
         "reasoning": "Ship mode, channel dimension medium level",
     },
     {
@@ -1182,6 +1428,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "channel-ship-mode",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Shipping mode for delivery",
+        "aliases": ["配送方式", "Ship Mode", "运输方式"],
         "reasoning": "Ship mode, channel dimension medium level",
     },
 
@@ -1195,6 +1443,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "科目大类，财务维度最粗粒度",
+        "aliases": ["科目分类", "Account Type", "会计科目类别"],
         "reasoning": "财务维度最粗粒度，表示科目大类",
     },
     {
@@ -1204,6 +1454,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-cost-center",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "成本中心，财务维度粗粒度",
+        "aliases": ["成本中心代码", "Cost Center", "成本归集点"],
         "reasoning": "财务维度粗粒度，表示成本中心",
     },
     {
@@ -1213,6 +1465,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account",
         "level": 3,
         "granularity": "medium",
+        "business_description": "具体科目，财务维度中等粒度",
+        "aliases": ["会计科目", "Account", "科目名称"],
         "reasoning": "财务维度中等粒度，表示具体科目",
     },
     {
@@ -1222,6 +1476,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-profit-center",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "利润中心，财务维度粗粒度",
+        "aliases": ["利润中心代码", "Profit Center", "利润归集点"],
         "reasoning": "财务维度粗粒度，表示利润中心",
     },
     {
@@ -1231,6 +1487,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account",
         "level": 4,
         "granularity": "fine",
+        "business_description": "科目编码，财务维度细粒度",
+        "aliases": ["科目代码", "Account Code", "会计科目编码"],
         "reasoning": "财务维度细粒度，表示科目编码",
     },
     {
@@ -1240,6 +1498,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-budget-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "预算类型，财务维度最粗粒度",
+        "aliases": ["预算分类", "Budget Type", "预算类别"],
         "reasoning": "财务维度最粗粒度，表示预算类型",
     },
     # ─────────────────────────────────────────────────────────
@@ -1252,6 +1512,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Account type, coarsest financial dimension",
+        "aliases": ["科目类别", "Account Type", "科目分类"],
         "reasoning": "Financial dimension coarsest level, represents account type",
     },
     {
@@ -1261,6 +1523,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Account type, coarsest financial dimension",
+        "aliases": ["科目类别", "account_type", "科目分类"],
         "reasoning": "Financial dimension coarsest level, represents account type",
     },
     {
@@ -1270,6 +1534,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "GL account type for classification",
+        "aliases": ["总账科目类型", "GL Account Type", "科目类型"],
         "reasoning": "GL account type, financial dimension coarsest level",
     },
     {
@@ -1279,6 +1545,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-cost-center",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Cost center for expense allocation",
+        "aliases": ["成本中心", "Cost Center", "成本归集点"],
         "reasoning": "Financial dimension coarse level, represents cost center",
     },
     {
@@ -1288,6 +1556,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-cost-center",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Cost center for expense allocation",
+        "aliases": ["成本中心", "cost_center", "成本归集点"],
         "reasoning": "Financial dimension coarse level, represents cost center",
     },
     {
@@ -1297,6 +1567,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-cost-center",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Cost center code for identification",
+        "aliases": ["成本中心代码", "Cost Center Code", "成本中心编码"],
         "reasoning": "Cost center code, financial dimension coarse level",
     },
     {
@@ -1306,6 +1578,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-profit-center",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Profit center for revenue allocation",
+        "aliases": ["利润中心", "Profit Center", "利润归集点"],
         "reasoning": "Profit center, financial dimension coarse level",
     },
     {
@@ -1315,6 +1589,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-profit-center",
         "level": 2,
         "granularity": "coarse",
+        "business_description": "Profit center for revenue allocation",
+        "aliases": ["利润中心", "profit_center", "利润归集点"],
         "reasoning": "Profit center, financial dimension coarse level",
     },
     {
@@ -1324,6 +1600,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Account for financial tracking",
+        "aliases": ["科目", "Account", "会计科目"],
         "reasoning": "Financial dimension medium level, represents account",
     },
     {
@@ -1333,6 +1611,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account",
         "level": 3,
         "granularity": "medium",
+        "business_description": "Account for financial tracking",
+        "aliases": ["科目", "account", "会计科目"],
         "reasoning": "Financial dimension medium level, represents account",
     },
     {
@@ -1342,6 +1622,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account",
         "level": 3,
         "granularity": "medium",
+        "business_description": "GL account for ledger tracking",
+        "aliases": ["总账科目", "GL Account", "科目"],
         "reasoning": "GL account, financial dimension medium level",
     },
     {
@@ -1351,6 +1633,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account",
         "level": 4,
         "granularity": "fine",
+        "business_description": "Account code for identification",
+        "aliases": ["科目编码", "Account Code", "科目代码"],
         "reasoning": "Account code, financial dimension fine level",
     },
     {
@@ -1360,6 +1644,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-account",
         "level": 4,
         "granularity": "fine",
+        "business_description": "Account number for identification",
+        "aliases": ["科目号", "Account Number", "科目编号"],
         "reasoning": "Account number, financial dimension fine level",
     },
     {
@@ -1369,6 +1655,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-budget-type",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Budget type for planning",
+        "aliases": ["预算类型", "Budget Type", "预算分类"],
         "reasoning": "Budget type, financial dimension coarsest level",
     },
     {
@@ -1378,6 +1666,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-currency",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Currency for transactions",
+        "aliases": ["货币", "Currency", "币种"],
         "reasoning": "Currency, financial dimension attribute",
     },
     {
@@ -1387,6 +1677,8 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-currency",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Currency for transactions",
+        "aliases": ["货币", "currency", "币种"],
         "reasoning": "Currency, financial dimension attribute",
     },
     {
@@ -1396,7 +1688,702 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
         "category_detail": "financial-currency",
         "level": 1,
         "granularity": "coarsest",
+        "business_description": "Currency code for identification",
+        "aliases": ["货币代码", "Currency Code", "币种代码"],
         "reasoning": "Currency code, financial dimension attribute",
+    },
+    
+    # ─────────────────────────────────────────────────────────
+    # 扩展种子数据 - 通用命名模式（中文）
+    # 这些是通用的字段命名模式，不针对特定数据源
+    # ─────────────────────────────────────────────────────────
+    
+    # 通用 ID 模式 - 中文
+    {
+        "field_caption": "编码",
+        "data_type": "string",
+        "category": "identifier",
+        "category_detail": "identifier-code",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "通用编码标识符",
+        "aliases": ["code", "Code", "编号"],
+        "reasoning": "通用编码，标识符维度",
+    },
+    {
+        "field_caption": "ID",
+        "data_type": "string",
+        "category": "identifier",
+        "category_detail": "identifier-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "通用唯一标识符",
+        "aliases": ["id", "标识", "标识符"],
+        "reasoning": "通用ID，标识符维度",
+    },
+    
+    # 订单相关 - 中文
+    {
+        "field_caption": "订单号",
+        "data_type": "string",
+        "category": "transaction",
+        "category_detail": "transaction-order",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "订单的唯一编号",
+        "aliases": ["order_id", "Order ID", "订单ID", "订单编号"],
+        "reasoning": "订单号，交易维度最细粒度",
+    },
+    {
+        "field_caption": "订单类型",
+        "data_type": "string",
+        "category": "transaction",
+        "category_detail": "transaction-order-type",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "订单的分类类型",
+        "aliases": ["order_type", "Order Type"],
+        "reasoning": "订单类型，交易维度粗粒度",
+    },
+    {
+        "field_caption": "订单状态",
+        "data_type": "string",
+        "category": "transaction",
+        "category_detail": "transaction-status",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "订单的当前状态",
+        "aliases": ["order_status", "Order Status", "状态"],
+        "reasoning": "订单状态，交易维度中等粒度",
+    },
+    
+    # 状态相关 - 中文
+    {
+        "field_caption": "状态",
+        "data_type": "string",
+        "category": "status",
+        "category_detail": "status-general",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "通用状态字段",
+        "aliases": ["status", "Status", "状态码"],
+        "reasoning": "状态，通用维度",
+    },
+    
+    # 子类别 - 中文
+    {
+        "field_caption": "子类别",
+        "data_type": "string",
+        "category": "product",
+        "category_detail": "product-subcategory",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "产品的子分类",
+        "aliases": ["Sub-Category", "subcategory", "子类", "二级分类"],
+        "reasoning": "子类别，产品维度粗粒度",
+    },
+    
+    # 客户等级 - 中文
+    {
+        "field_caption": "客户等级",
+        "data_type": "string",
+        "category": "customer",
+        "category_detail": "customer-tier",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "客户的等级分类",
+        "aliases": ["customer_tier", "Customer Tier", "客户级别", "会员等级"],
+        "reasoning": "客户等级，客户维度粗粒度",
+    },
+    
+    # 经理/主管 - 中文
+    {
+        "field_caption": "经理",
+        "data_type": "string",
+        "category": "organization",
+        "category_detail": "organization-manager",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "管理人员",
+        "aliases": ["manager", "Manager", "主管", "负责人"],
+        "reasoning": "经理，组织维度中等粒度",
+    },
+    {
+        "field_caption": "经理姓名",
+        "data_type": "string",
+        "category": "organization",
+        "category_detail": "organization-manager",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "管理人员姓名",
+        "aliases": ["manager_name", "Manager Name", "主管姓名"],
+        "reasoning": "经理姓名，组织维度中等粒度",
+    },
+    
+    # 供应商 - 中文
+    {
+        "field_caption": "供应商",
+        "data_type": "string",
+        "category": "supplier",
+        "category_detail": "supplier-name",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "供应商名称",
+        "aliases": ["supplier", "Supplier", "供货商", "vendor"],
+        "reasoning": "供应商，供应商维度中等粒度",
+    },
+    {
+        "field_caption": "供应商编码",
+        "data_type": "string",
+        "category": "supplier",
+        "category_detail": "supplier-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "供应商唯一编码",
+        "aliases": ["supplier_id", "Supplier ID", "供应商ID"],
+        "reasoning": "供应商编码，供应商维度最细粒度",
+    },
+    
+    # 仓库 - 中文
+    {
+        "field_caption": "仓库",
+        "data_type": "string",
+        "category": "logistics",
+        "category_detail": "logistics-warehouse",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "仓库名称",
+        "aliases": ["warehouse", "Warehouse", "库房", "仓储"],
+        "reasoning": "仓库，物流维度中等粒度",
+    },
+    {
+        "field_caption": "仓库编码",
+        "data_type": "string",
+        "category": "logistics",
+        "category_detail": "logistics-warehouse",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "仓库唯一编码",
+        "aliases": ["warehouse_id", "Warehouse ID", "仓库ID"],
+        "reasoning": "仓库编码，物流维度最细粒度",
+    },
+    
+    # 项目 - 中文
+    {
+        "field_caption": "项目",
+        "data_type": "string",
+        "category": "project",
+        "category_detail": "project-name",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "项目名称",
+        "aliases": ["project", "Project", "项目名称"],
+        "reasoning": "项目，项目维度中等粒度",
+    },
+    {
+        "field_caption": "项目编码",
+        "data_type": "string",
+        "category": "project",
+        "category_detail": "project-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "项目唯一编码",
+        "aliases": ["project_id", "Project ID", "项目ID"],
+        "reasoning": "项目编码，项目维度最细粒度",
+    },
+    
+    # 合同 - 中文
+    {
+        "field_caption": "合同号",
+        "data_type": "string",
+        "category": "contract",
+        "category_detail": "contract-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "合同唯一编号",
+        "aliases": ["contract_id", "Contract ID", "合同编号", "合同ID"],
+        "reasoning": "合同号，合同维度最细粒度",
+    },
+    {
+        "field_caption": "合同类型",
+        "data_type": "string",
+        "category": "contract",
+        "category_detail": "contract-type",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "合同的分类类型",
+        "aliases": ["contract_type", "Contract Type"],
+        "reasoning": "合同类型，合同维度粗粒度",
+    },
+    
+    # 发票 - 中文
+    {
+        "field_caption": "发票号",
+        "data_type": "string",
+        "category": "invoice",
+        "category_detail": "invoice-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "发票唯一编号",
+        "aliases": ["invoice_id", "Invoice ID", "发票编号"],
+        "reasoning": "发票号，发票维度最细粒度",
+    },
+    
+    # 付款方式 - 中文
+    {
+        "field_caption": "付款方式",
+        "data_type": "string",
+        "category": "payment",
+        "category_detail": "payment-method",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "支付方式类型",
+        "aliases": ["payment_method", "Payment Method", "支付方式"],
+        "reasoning": "付款方式，支付维度粗粒度",
+    },
+    
+    # 来源 - 中文
+    {
+        "field_caption": "来源",
+        "data_type": "string",
+        "category": "source",
+        "category_detail": "source-general",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "数据或业务来源",
+        "aliases": ["source", "Source", "数据来源", "渠道来源"],
+        "reasoning": "来源，来源维度粗粒度",
+    },
+    
+    # 类型 - 中文
+    {
+        "field_caption": "类型",
+        "data_type": "string",
+        "category": "type",
+        "category_detail": "type-general",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "通用类型分类",
+        "aliases": ["type", "Type", "分类"],
+        "reasoning": "类型，通用维度粗粒度",
+    },
+    
+    # 名称 - 中文
+    {
+        "field_caption": "名称",
+        "data_type": "string",
+        "category": "name",
+        "category_detail": "name-general",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "通用名称字段",
+        "aliases": ["name", "Name", "名字"],
+        "reasoning": "名称，通用维度中等粒度",
+    },
+    
+    # 描述 - 中文
+    {
+        "field_caption": "描述",
+        "data_type": "string",
+        "category": "description",
+        "category_detail": "description-general",
+        "level": 4,
+        "granularity": "fine",
+        "business_description": "通用描述字段",
+        "aliases": ["description", "Description", "说明", "备注"],
+        "reasoning": "描述，通用维度细粒度",
+    },
+    
+    # ─────────────────────────────────────────────────────────
+    # 扩展种子数据 - 通用命名模式（英文）
+    # ─────────────────────────────────────────────────────────
+    
+    # 通用 ID 模式 - 英文
+    {
+        "field_caption": "code",
+        "data_type": "string",
+        "category": "identifier",
+        "category_detail": "identifier-code",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Generic code identifier",
+        "aliases": ["编码", "Code", "编号"],
+        "reasoning": "Generic code, identifier dimension",
+    },
+    {
+        "field_caption": "id",
+        "data_type": "string",
+        "category": "identifier",
+        "category_detail": "identifier-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Generic unique identifier",
+        "aliases": ["ID", "标识", "identifier"],
+        "reasoning": "Generic ID, identifier dimension",
+    },
+    
+    # 订单相关 - 英文
+    {
+        "field_caption": "order_id",
+        "data_type": "string",
+        "category": "transaction",
+        "category_detail": "transaction-order",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Unique order identifier",
+        "aliases": ["Order ID", "订单号", "订单ID"],
+        "reasoning": "Order ID, transaction dimension finest level",
+    },
+    {
+        "field_caption": "Order ID",
+        "data_type": "string",
+        "category": "transaction",
+        "category_detail": "transaction-order",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Unique order identifier",
+        "aliases": ["order_id", "订单号", "订单ID"],
+        "reasoning": "Order ID, transaction dimension finest level",
+    },
+    {
+        "field_caption": "order_type",
+        "data_type": "string",
+        "category": "transaction",
+        "category_detail": "transaction-order-type",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "Type classification of orders",
+        "aliases": ["Order Type", "订单类型"],
+        "reasoning": "Order type, transaction dimension coarse level",
+    },
+    {
+        "field_caption": "order_status",
+        "data_type": "string",
+        "category": "transaction",
+        "category_detail": "transaction-status",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Current status of order",
+        "aliases": ["Order Status", "订单状态", "status"],
+        "reasoning": "Order status, transaction dimension medium level",
+    },
+    
+    # 状态相关 - 英文
+    {
+        "field_caption": "status",
+        "data_type": "string",
+        "category": "status",
+        "category_detail": "status-general",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Generic status field",
+        "aliases": ["Status", "状态", "state"],
+        "reasoning": "Status, general dimension",
+    },
+    
+    # 经理/主管 - 英文
+    {
+        "field_caption": "manager",
+        "data_type": "string",
+        "category": "organization",
+        "category_detail": "organization-manager",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Manager or supervisor",
+        "aliases": ["Manager", "经理", "主管"],
+        "reasoning": "Manager, organization dimension medium level",
+    },
+    {
+        "field_caption": "manager_name",
+        "data_type": "string",
+        "category": "organization",
+        "category_detail": "organization-manager",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Manager name",
+        "aliases": ["Manager Name", "经理姓名", "主管姓名"],
+        "reasoning": "Manager name, organization dimension medium level",
+    },
+    {
+        "field_caption": "manager_id",
+        "data_type": "string",
+        "category": "organization",
+        "category_detail": "organization-manager",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Manager unique identifier",
+        "aliases": ["Manager ID", "经理ID"],
+        "reasoning": "Manager ID, organization dimension medium level",
+    },
+    
+    # 供应商 - 英文
+    {
+        "field_caption": "supplier",
+        "data_type": "string",
+        "category": "supplier",
+        "category_detail": "supplier-name",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Supplier name",
+        "aliases": ["Supplier", "供应商", "vendor"],
+        "reasoning": "Supplier, supplier dimension medium level",
+    },
+    {
+        "field_caption": "supplier_id",
+        "data_type": "string",
+        "category": "supplier",
+        "category_detail": "supplier-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Supplier unique identifier",
+        "aliases": ["Supplier ID", "供应商ID", "供应商编码"],
+        "reasoning": "Supplier ID, supplier dimension finest level",
+    },
+    {
+        "field_caption": "vendor",
+        "data_type": "string",
+        "category": "supplier",
+        "category_detail": "supplier-name",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Vendor name",
+        "aliases": ["Vendor", "供应商", "supplier"],
+        "reasoning": "Vendor, supplier dimension medium level",
+    },
+    
+    # 仓库 - 英文
+    {
+        "field_caption": "warehouse",
+        "data_type": "string",
+        "category": "logistics",
+        "category_detail": "logistics-warehouse",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Warehouse name",
+        "aliases": ["Warehouse", "仓库", "库房"],
+        "reasoning": "Warehouse, logistics dimension medium level",
+    },
+    {
+        "field_caption": "warehouse_id",
+        "data_type": "string",
+        "category": "logistics",
+        "category_detail": "logistics-warehouse",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Warehouse unique identifier",
+        "aliases": ["Warehouse ID", "仓库ID", "仓库编码"],
+        "reasoning": "Warehouse ID, logistics dimension finest level",
+    },
+    
+    # 项目 - 英文
+    {
+        "field_caption": "project",
+        "data_type": "string",
+        "category": "project",
+        "category_detail": "project-name",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Project name",
+        "aliases": ["Project", "项目", "项目名称"],
+        "reasoning": "Project, project dimension medium level",
+    },
+    {
+        "field_caption": "project_id",
+        "data_type": "string",
+        "category": "project",
+        "category_detail": "project-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Project unique identifier",
+        "aliases": ["Project ID", "项目ID", "项目编码"],
+        "reasoning": "Project ID, project dimension finest level",
+    },
+    
+    # 合同 - 英文
+    {
+        "field_caption": "contract_id",
+        "data_type": "string",
+        "category": "contract",
+        "category_detail": "contract-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Contract unique identifier",
+        "aliases": ["Contract ID", "合同号", "合同编号"],
+        "reasoning": "Contract ID, contract dimension finest level",
+    },
+    {
+        "field_caption": "contract_type",
+        "data_type": "string",
+        "category": "contract",
+        "category_detail": "contract-type",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "Type classification of contracts",
+        "aliases": ["Contract Type", "合同类型"],
+        "reasoning": "Contract type, contract dimension coarse level",
+    },
+    
+    # 发票 - 英文
+    {
+        "field_caption": "invoice_id",
+        "data_type": "string",
+        "category": "invoice",
+        "category_detail": "invoice-id",
+        "level": 5,
+        "granularity": "finest",
+        "business_description": "Invoice unique identifier",
+        "aliases": ["Invoice ID", "发票号", "发票编号"],
+        "reasoning": "Invoice ID, invoice dimension finest level",
+    },
+    
+    # 付款方式 - 英文
+    {
+        "field_caption": "payment_method",
+        "data_type": "string",
+        "category": "payment",
+        "category_detail": "payment-method",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "Payment method type",
+        "aliases": ["Payment Method", "付款方式", "支付方式"],
+        "reasoning": "Payment method, payment dimension coarse level",
+    },
+    
+    # 来源 - 英文
+    {
+        "field_caption": "source",
+        "data_type": "string",
+        "category": "source",
+        "category_detail": "source-general",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "Data or business source",
+        "aliases": ["Source", "来源", "数据来源"],
+        "reasoning": "Source, source dimension coarse level",
+    },
+    
+    # 类型 - 英文
+    {
+        "field_caption": "type",
+        "data_type": "string",
+        "category": "type",
+        "category_detail": "type-general",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "Generic type classification",
+        "aliases": ["Type", "类型", "分类"],
+        "reasoning": "Type, general dimension coarse level",
+    },
+    
+    # 名称 - 英文
+    {
+        "field_caption": "name",
+        "data_type": "string",
+        "category": "name",
+        "category_detail": "name-general",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Generic name field",
+        "aliases": ["Name", "名称", "名字"],
+        "reasoning": "Name, general dimension medium level",
+    },
+    
+    # 描述 - 英文
+    {
+        "field_caption": "description",
+        "data_type": "string",
+        "category": "description",
+        "category_detail": "description-general",
+        "level": 4,
+        "granularity": "fine",
+        "business_description": "Generic description field",
+        "aliases": ["Description", "描述", "说明"],
+        "reasoning": "Description, general dimension fine level",
+    },
+    
+    # 备注 - 英文
+    {
+        "field_caption": "notes",
+        "data_type": "string",
+        "category": "description",
+        "category_detail": "description-notes",
+        "level": 4,
+        "granularity": "fine",
+        "business_description": "Notes or remarks",
+        "aliases": ["Notes", "备注", "remarks"],
+        "reasoning": "Notes, description dimension fine level",
+    },
+    
+    # 行业 - 中英文
+    {
+        "field_caption": "行业",
+        "data_type": "string",
+        "category": "industry",
+        "category_detail": "industry-general",
+        "level": 1,
+        "granularity": "coarsest",
+        "business_description": "行业分类",
+        "aliases": ["industry", "Industry", "行业类型"],
+        "reasoning": "行业，行业维度最粗粒度",
+    },
+    {
+        "field_caption": "industry",
+        "data_type": "string",
+        "category": "industry",
+        "category_detail": "industry-general",
+        "level": 1,
+        "granularity": "coarsest",
+        "business_description": "Industry classification",
+        "aliases": ["Industry", "行业", "sector"],
+        "reasoning": "Industry, industry dimension coarsest level",
+    },
+    
+    # 优先级 - 中英文
+    {
+        "field_caption": "优先级",
+        "data_type": "string",
+        "category": "priority",
+        "category_detail": "priority-general",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "优先级别",
+        "aliases": ["priority", "Priority", "级别"],
+        "reasoning": "优先级，优先级维度粗粒度",
+    },
+    {
+        "field_caption": "priority",
+        "data_type": "string",
+        "category": "priority",
+        "category_detail": "priority-general",
+        "level": 2,
+        "granularity": "coarse",
+        "business_description": "Priority level",
+        "aliases": ["Priority", "优先级", "level"],
+        "reasoning": "Priority, priority dimension coarse level",
+    },
+    
+    # 标签 - 中英文
+    {
+        "field_caption": "标签",
+        "data_type": "string",
+        "category": "tag",
+        "category_detail": "tag-general",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "标签分类",
+        "aliases": ["tag", "Tag", "tags"],
+        "reasoning": "标签，标签维度中等粒度",
+    },
+    {
+        "field_caption": "tag",
+        "data_type": "string",
+        "category": "tag",
+        "category_detail": "tag-general",
+        "level": 3,
+        "granularity": "medium",
+        "business_description": "Tag classification",
+        "aliases": ["Tag", "标签", "label"],
+        "reasoning": "Tag, tag dimension medium level",
     },
 ]
 

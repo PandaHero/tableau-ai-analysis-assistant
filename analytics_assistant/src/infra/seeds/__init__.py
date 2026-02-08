@@ -36,6 +36,9 @@ from .computation import ComputationSeed, COMPUTATION_SEEDS
 # 维度种子
 from .dimension import DIMENSION_SEEDS, get_dimension_few_shot_examples
 
+# 度量种子
+from .measure import MEASURE_SEEDS, get_measure_few_shot_examples
+
 # 关键词
 from .keywords import COMPLEXITY_KEYWORDS, INTENT_KEYWORDS
 
@@ -49,6 +52,9 @@ __all__ = [
     # 维度种子
     "DIMENSION_SEEDS",
     "get_dimension_few_shot_examples",
+    # 度量种子
+    "MEASURE_SEEDS",
+    "get_measure_few_shot_examples",
     # 关键词
     "COMPLEXITY_KEYWORDS",
     "INTENT_KEYWORDS",

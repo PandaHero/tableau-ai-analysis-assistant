@@ -7,11 +7,32 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from enum import Enum
 
+from analytics_assistant.src.infra.config import get_config
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 配置加载
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _get_confidence_threshold() -> float:
+    """获取字段映射高置信度阈值。"""
+    try:
+        config = get_config()
+        return config.config.get("field_mapper", {}).get("low_confidence_threshold", 0.7)
+    except Exception as e:
+        logger.warning(f"获取置信度阈值失败，使用默认值: {e}")
+        return 0.7
+
 
 class RetrievalSource(Enum):
     """检索来源"""
     EMBEDDING = "embedding"  # 向量检索
     KEYWORD = "keyword"      # 关键词检索
+    BM25 = "bm25"            # BM25 关键词检索
     HYBRID = "hybrid"        # 混合检索
     EXACT = "exact"          # 精确匹配
     FUZZY = "fuzzy"          # 模糊匹配
@@ -83,25 +104,35 @@ class FieldChunk:
         支持两种字段格式：
         - 旧格式：fieldCaption, dataType 等
         - 新格式：caption, data_type 等（core/schemas/data_model.py 的 Field）
+        - 字典格式：直接从字典获取值
         
         Args:
-            field_metadata: FieldMetadata 对象
+            field_metadata: FieldMetadata 对象或字典
             max_samples: 最大样本值数量（默认 5）
         
         Returns:
             FieldChunk 实例
         """
-        # 兼容新旧格式
-        field_name = getattr(field_metadata, 'name', None) or getattr(field_metadata, 'field_name', '')
-        field_caption = (
-            getattr(field_metadata, 'caption', None) or 
-            getattr(field_metadata, 'fieldCaption', None) or 
-            field_name
+        # 辅助函数：从对象或字典获取属性
+        def get_attr(obj: Any, *names, default=None):
+            """从对象或字典中获取属性，支持多个候选名称"""
+            for name in names:
+                if isinstance(obj, dict):
+                    if name in obj:
+                        return obj[name]
+                else:
+                    if hasattr(obj, name):
+                        return getattr(obj, name)
+            return default
+        
+        # 兼容新旧格式和字典格式
+        field_name = get_attr(field_metadata, 'name', 'field_name', default='')
+        field_caption = get_attr(
+            field_metadata, 'caption', 'fieldCaption', 'field_caption', default=field_name
         )
-        role = getattr(field_metadata, 'role', 'DIMENSION')
-        data_type = (
-            getattr(field_metadata, 'data_type', None) or 
-            getattr(field_metadata, 'dataType', 'STRING')
+        role = get_attr(field_metadata, 'role', default='dimension')
+        data_type = get_attr(
+            field_metadata, 'data_type', 'dataType', default='string'
         )
         
         # 构建索引文本
@@ -113,22 +144,21 @@ class FieldChunk:
         ]
         
         # 添加可选信息
-        category = getattr(field_metadata, 'category', None)
+        category = get_attr(field_metadata, 'category', default=None)
         if category:
             index_parts.append(category)
         
-        logical_table_caption = (
-            getattr(field_metadata, 'logical_table_caption', None) or
-            getattr(field_metadata, 'logicalTableCaption', None)
+        logical_table_caption = get_attr(
+            field_metadata, 'logical_table_caption', 'logicalTableCaption', default=None
         )
         if logical_table_caption:
             index_parts.append(logical_table_caption)
         
-        formula = getattr(field_metadata, 'calculation', None) or getattr(field_metadata, 'formula', None)
+        formula = get_attr(field_metadata, 'calculation', 'formula', default=None)
         if formula:
             index_parts.append(formula)
         
-        sample_values = getattr(field_metadata, 'sample_values', None)
+        sample_values = get_attr(field_metadata, 'sample_values', default=None)
         if sample_values:
             # 取样本值
             samples = sample_values[:max_samples]
@@ -136,9 +166,8 @@ class FieldChunk:
         
         index_text = " | ".join(filter(None, index_parts))
         
-        logical_table_id = (
-            getattr(field_metadata, 'logical_table_id', None) or
-            getattr(field_metadata, 'logicalTableId', None)
+        logical_table_id = get_attr(
+            field_metadata, 'logical_table_id', 'logicalTableId', default=None
         )
         
         return cls(
@@ -147,15 +176,15 @@ class FieldChunk:
             role=role,
             data_type=data_type,
             index_text=index_text,
-            column_class=getattr(field_metadata, 'columnClass', None) or getattr(field_metadata, 'column_class', None),
+            column_class=get_attr(field_metadata, 'columnClass', 'column_class', default=None),
             category=category,
             formula=formula,
             logical_table_id=logical_table_id,
             logical_table_caption=logical_table_caption,
             sample_values=sample_values,
             metadata={
-                "data_category": getattr(field_metadata, 'data_category', None) or getattr(field_metadata, 'dataCategory', None),
-                "aggregation": getattr(field_metadata, 'aggregation', None),
+                "data_category": get_attr(field_metadata, 'data_category', 'dataCategory', default=None),
+                "aggregation": get_attr(field_metadata, 'aggregation', default=None),
             }
         )
 
@@ -215,7 +244,7 @@ class MappingResult:
     @property
     def is_confident(self) -> bool:
         """是否高置信度匹配"""
-        return self.confidence >= 0.7
+        return self.confidence >= _get_confidence_threshold()
     
     @property
     def needs_disambiguation(self) -> bool:

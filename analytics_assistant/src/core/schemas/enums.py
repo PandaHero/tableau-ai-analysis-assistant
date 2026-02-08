@@ -106,12 +106,7 @@ class RelativeTo(str, Enum):
 # ═══════════════════════════════════════════════════════════════════════════
 
 class HowType(str, Enum):
-    """计算复杂度分类：SIMPLE=简单聚合 | COMPLEX=需要表计算/LOD
-    
-    用于：
-    - SemanticOutput.how_type: 标识查询的计算复杂度
-    - DynamicPromptBuilder: 根据复杂度选择 Prompt 模板
-    """
+    """计算复杂度：SIMPLE=简单聚合 | COMPLEX=派生计算"""
     SIMPLE = "SIMPLE"
     COMPLEX = "COMPLEX"
 
@@ -165,3 +160,30 @@ class DimensionLevel(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     DETAIL = "detail"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 字段语义枚举
+# ═══════════════════════════════════════════════════════════════════════════
+
+class MeasureCategory(str, Enum):
+    """度量类别枚举
+    
+    用于分类度量字段的业务含义：
+    - REVENUE: 收入类（销售额、营业收入、GMV）
+    - COST: 成本类（成本、费用、支出）
+    - PROFIT: 利润类（利润、毛利、净利）
+    - QUANTITY: 数量类（数量、件数、订单数）
+    - RATIO: 比率类（占比、增长率、转化率）
+    - COUNT: 计数类（人数、次数、频次）
+    - AVERAGE: 平均类（均价、平均值）
+    - OTHER: 其他
+    """
+    REVENUE = "revenue"
+    COST = "cost"
+    PROFIT = "profit"
+    QUANTITY = "quantity"
+    RATIO = "ratio"
+    COUNT = "count"
+    AVERAGE = "average"
+    OTHER = "other"

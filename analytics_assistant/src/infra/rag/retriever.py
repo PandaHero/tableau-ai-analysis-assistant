@@ -4,24 +4,33 @@
 使用 langgraph_store 进行向量检索。
 支持：
 - ExactRetriever（精确匹配，O(1)）
+- BM25Retriever（BM25 关键词检索，使用 jieba 分词）
 - EmbeddingRetriever（向量检索）
 - CascadeRetriever（级联检索：精确匹配 → 向量检索）
+- HybridRetriever（混合检索：BM25 + Embedding + RRF 融合）
 - RetrievalPipeline（检索管道）
 - RetrieverFactory（检索器工厂）
 
-检索策略：精确匹配 → Embedding 检索 → LLM 重排序
-不使用 BM25，避免分词依赖。
+检索策略：
+- cascade: 精确匹配 → Embedding 检索
+- hybrid: BM25 + Embedding → RRF 融合
 """
 import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Callable
 
-from ..storage import get_vector_store
-from ..ai import get_embeddings
+import jieba
+from langchain_community.retrievers import BM25Retriever as LangChainBM25Retriever
+from langchain_core.documents import Document
+
+from ..storage.vector_store import get_vector_store
+from ..ai import get_embeddings, get_model_manager
 from ..config import get_config
 from .models import FieldChunk, RetrievalResult, RetrievalSource
+from .reranker import DefaultReranker, RRFReranker, LLMReranker
 
 
 logger = logging.getLogger(__name__)
@@ -229,23 +238,147 @@ class EmbeddingRetriever(BaseRetriever):
         return list(self._chunks.values())
 
 
+class BM25Retriever(BaseRetriever):
+    """BM25 关键词检索器
+    
+    基于 LangChain 的 BM25Retriever，使用 jieba 分词。
+    适用于中文文本的关键词匹配场景。
+    """
+    
+    def __init__(
+        self,
+        chunks: Dict[str, FieldChunk],
+        config: Optional[RetrievalConfig] = None,
+        preprocess_func: Optional[Callable[[str], List[str]]] = None,
+    ):
+        """初始化 BM25 检索器
+        
+        Args:
+            chunks: 字段分块字典 {field_name: FieldChunk}
+            config: 检索配置
+            preprocess_func: 分词函数，默认使用 jieba.lcut
+        """
+        super().__init__(config)
+        self._chunks = chunks
+        self._preprocess_func = preprocess_func or jieba.lcut
+        
+        # LangChain BM25 检索器
+        self._lc_bm25: Optional[LangChainBM25Retriever] = None
+        self._build_index()
+    
+    def _build_index(self) -> None:
+        """构建 BM25 索引"""
+        if not self._chunks:
+            logger.warning("BM25Retriever: 没有文档可索引")
+            return
+        
+        # 将 FieldChunk 转换为 LangChain Document
+        documents = []
+        for field_name, chunk in self._chunks.items():
+            doc = Document(
+                page_content=chunk.index_text,
+                metadata={
+                    "field_name": field_name,
+                    "field_caption": chunk.field_caption,
+                    "role": chunk.role,
+                    "data_type": chunk.data_type,
+                    "category": chunk.category or "",
+                }
+            )
+            documents.append(doc)
+        
+        # 创建 LangChain BM25 检索器
+        self._lc_bm25 = LangChainBM25Retriever.from_documents(
+            documents,
+            preprocess_func=self._preprocess_func,
+        )
+        # 设置默认 k 值
+        self._lc_bm25.k = self.config.top_k
+        
+        logger.info(f"BM25Retriever: 索引构建完成，共 {len(documents)} 个文档")
+    
+    def retrieve(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        filters: Optional[MetadataFilter] = None,
+        score_threshold: Optional[float] = None
+    ) -> List[RetrievalResult]:
+        """BM25 检索
+        
+        Args:
+            query: 查询文本
+            top_k: 返回结果数量
+            filters: 元数据过滤条件
+            score_threshold: 分数阈值（BM25 不支持，忽略）
+            
+        Returns:
+            检索结果列表
+        """
+        if not query or not query.strip() or self._lc_bm25 is None:
+            return []
+        
+        k = top_k if top_k is not None else self.config.top_k
+        
+        # 设置检索数量（多取一些用于过滤）
+        search_k = k * 2 if filters else k
+        self._lc_bm25.k = search_k
+        
+        # 使用 LangChain BM25 检索
+        docs = self._lc_bm25.invoke(query)
+        
+        # 转换为 RetrievalResult
+        results = []
+        for rank, doc in enumerate(docs, 1):
+            field_name = doc.metadata.get("field_name")
+            if field_name and field_name in self._chunks:
+                chunk = self._chunks[field_name]
+                
+                # BM25 不返回分数，使用排名计算伪分数
+                # 排名越靠前，分数越高
+                pseudo_score = 1.0 / rank
+                
+                results.append(RetrievalResult(
+                    field_chunk=chunk,
+                    score=pseudo_score,
+                    source=RetrievalSource.BM25,
+                    rank=rank,
+                    raw_score=pseudo_score,  # BM25 没有原始分数
+                    original_term=query,
+                ))
+        
+        # 应用过滤器
+        filtered = self._apply_filters(results, filters, 0.0)
+        return filtered[:k]
+    
+    def get_chunk(self, field_name: str) -> Optional[FieldChunk]:
+        return self._chunks.get(field_name)
+    
+    def get_all_chunks(self) -> List[FieldChunk]:
+        return list(self._chunks.values())
+
+
 class CascadeRetriever(BaseRetriever):
     """
     级联检索器
     
     检索策略：精确匹配 → 向量检索
     如果精确匹配成功，直接返回；否则使用向量检索。
+    
+    可选：包含 BM25 检索器用于混合检索场景。
     """
     
     def __init__(
         self,
         exact_retriever: ExactRetriever,
         embedding_retriever: EmbeddingRetriever,
-        config: Optional[RetrievalConfig] = None
+        config: Optional[RetrievalConfig] = None,
+        bm25_retriever: Optional[BM25Retriever] = None,
     ):
         super().__init__(config)
         self._exact = exact_retriever
         self._embedding = embedding_retriever
+        self._bm25 = bm25_retriever  # 可选，用于混合检索
     
     def retrieve(
         self,
@@ -350,30 +483,60 @@ class RetrievalPipeline:
 def _build_chunks_and_metadata(fields: List[Any]) -> tuple:
     """从字段列表构建 chunks 和 metadata
     
-    注意：role 和 data_type 统一转为小写，确保检索时 filters 匹配。
+    注意：
+    1. role 和 data_type 统一转为小写，确保检索时 filters 匹配
+    2. 如果传入的 field_data 已包含 index_text，优先使用它（支持增强索引文本）
     """
     chunks: Dict[str, FieldChunk] = {}
     texts = []
     metadatas = []
     
     for field_data in fields:
-        chunk = FieldChunk.from_field_metadata(field_data)
-        
-        # 统一转为小写，确保检索时 filters 匹配
-        role_lower = chunk.role.lower() if chunk.role else 'dimension'
-        data_type_lower = chunk.data_type.lower() if chunk.data_type else 'string'
-        
-        # 更新 chunk 的 role 和 data_type 为小写
-        chunk.role = role_lower
-        chunk.data_type = data_type_lower
+        # 检查是否已有预构建的 index_text（来自 IndexDocument）
+        # 这支持使用增强的索引文本格式（包含别名、业务描述等）
+        if isinstance(field_data, dict) and field_data.get("index_text"):
+            # 直接使用传入的 index_text，不重新生成
+            field_name = field_data.get("field_name", "")
+            field_caption = field_data.get("field_caption", field_name)
+            role_lower = (field_data.get("role") or "dimension").lower()
+            data_type_lower = (field_data.get("data_type") or "string").lower()
+            
+            chunk = FieldChunk(
+                field_name=field_name,
+                field_caption=field_caption,
+                role=role_lower,
+                data_type=data_type_lower,
+                index_text=field_data["index_text"],  # 使用预构建的增强索引文本
+                category=field_data.get("category"),
+                formula=field_data.get("formula"),
+                logical_table_id=field_data.get("logical_table_id"),
+                logical_table_caption=field_data.get("logical_table_caption"),
+                metadata={
+                    k: v for k, v in field_data.items()
+                    if k not in {"field_name", "field_caption", "role", "data_type", 
+                                "index_text", "category", "formula", 
+                                "logical_table_id", "logical_table_caption"}
+                },
+            )
+        else:
+            # 旧逻辑：从 field_metadata 生成（兼容旧代码）
+            chunk = FieldChunk.from_field_metadata(field_data)
+            
+            # 统一转为小写，确保检索时 filters 匹配
+            role_lower = chunk.role.lower() if chunk.role else 'dimension'
+            data_type_lower = chunk.data_type.lower() if chunk.data_type else 'string'
+            
+            # 更新 chunk 的 role 和 data_type 为小写
+            chunk.role = role_lower
+            chunk.data_type = data_type_lower
         
         chunks[chunk.field_name] = chunk
         texts.append(chunk.index_text)
         metadatas.append({
             "field_name": chunk.field_name,
             "field_caption": chunk.field_caption,
-            "role": role_lower,
-            "data_type": data_type_lower,
+            "role": chunk.role,
+            "data_type": chunk.data_type,
             "category": (chunk.category or "").lower() if chunk.category else "",
             "column_class": chunk.column_class or "",
             "formula": chunk.formula or "",
@@ -396,7 +559,6 @@ class RetrieverFactory:
             vector_config = app_config.config.get("vector_storage", {})
             persist_directory = vector_config.get("index_dir", "data/indexes")
         
-        from pathlib import Path
         index_path = Path(persist_directory) / collection_name
         return index_path.exists()
     
@@ -417,6 +579,7 @@ class RetrieverFactory:
         persist_directory: Optional[str] = None,
         embedding_model_id: Optional[str] = None,
         force_rebuild: bool = False,
+        use_batch_embedding: bool = True,
     ) -> EmbeddingRetriever:
         """创建向量检索器
         
@@ -427,6 +590,7 @@ class RetrieverFactory:
             persist_directory: 持久化目录
             embedding_model_id: Embedding 模型 ID
             force_rebuild: 强制重建索引（忽略已有索引）
+            use_batch_embedding: 是否使用批量 embedding（默认 True，首次创建时更快）
         """
         chunks, texts, metadatas = _build_chunks_and_metadata(fields)
         
@@ -446,7 +610,7 @@ class RetrieverFactory:
                 collection_name=collection_name,
                 persist_directory=index_dir,
                 texts=None,  # 不传 texts，触发加载已有索引
-                metadatas=None
+                metadatas=None,
             )
         else:
             vector_store = get_vector_store(
@@ -455,7 +619,8 @@ class RetrieverFactory:
                 collection_name=collection_name,
                 persist_directory=index_dir,
                 texts=texts,
-                metadatas=metadatas
+                metadatas=metadatas,
+                use_batch_embedding=use_batch_embedding,
             )
         
         return EmbeddingRetriever(vector_store, chunks, config)
@@ -468,6 +633,8 @@ class RetrieverFactory:
         persist_directory: Optional[str] = None,
         embedding_model_id: Optional[str] = None,
         force_rebuild: bool = False,
+        include_bm25: bool = True,
+        use_batch_embedding: bool = True,
     ) -> CascadeRetriever:
         """创建级联检索器（精确匹配 → 向量检索）
         
@@ -478,6 +645,8 @@ class RetrieverFactory:
             persist_directory: 持久化目录
             embedding_model_id: Embedding 模型 ID
             force_rebuild: 强制重建索引（忽略已有索引）
+            include_bm25: 是否包含 BM25 检索器（用于混合检索）
+            use_batch_embedding: 是否使用批量 embedding（默认 True，首次创建时更快）
         """
         chunks, texts, metadatas = _build_chunks_and_metadata(fields)
         
@@ -497,7 +666,7 @@ class RetrieverFactory:
                 collection_name=collection_name,
                 persist_directory=index_dir,
                 texts=None,  # 不传 texts，触发加载已有索引
-                metadatas=None
+                metadatas=None,
             )
         else:
             vector_store = get_vector_store(
@@ -506,13 +675,25 @@ class RetrieverFactory:
                 collection_name=collection_name,
                 persist_directory=index_dir,
                 texts=texts,
-                metadatas=metadatas
+                metadatas=metadatas,
+                use_batch_embedding=use_batch_embedding,
             )
         
         exact_retriever = ExactRetriever(chunks, config)
         embedding_retriever = EmbeddingRetriever(vector_store, chunks, config)
         
-        return CascadeRetriever(exact_retriever, embedding_retriever, config)
+        # 创建 BM25 检索器（用于混合检索）
+        bm25_retriever = None
+        if include_bm25:
+            bm25_retriever = BM25Retriever(chunks, config)
+            logger.info("BM25 检索器已创建，支持混合检索")
+        
+        return CascadeRetriever(
+            exact_retriever, 
+            embedding_retriever, 
+            config,
+            bm25_retriever=bm25_retriever,
+        )
     
     @staticmethod
     def create_pipeline(
@@ -524,6 +705,7 @@ class RetrieverFactory:
         persist_directory: Optional[str] = None,
         embedding_model_id: Optional[str] = None,
         force_rebuild: bool = False,
+        use_batch_embedding: bool = True,
         **kwargs
     ) -> RetrievalPipeline:
         """
@@ -538,16 +720,19 @@ class RetrieverFactory:
             persist_directory: 持久化目录
             embedding_model_id: Embedding 模型 ID
             force_rebuild: 强制重建索引
+            use_batch_embedding: 是否使用批量 embedding（默认 True）
         """
         if retriever_type == "exact":
             retriever = RetrieverFactory.create_exact_retriever(fields, config)
         elif retriever_type == "embedding":
             retriever = RetrieverFactory.create_embedding_retriever(
-                fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild
+                fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild,
+                use_batch_embedding=use_batch_embedding,
             )
         else:  # cascade
             retriever = RetrieverFactory.create_cascade_retriever(
-                fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild
+                fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild,
+                use_batch_embedding=use_batch_embedding,
             )
         
         reranker = None
@@ -559,15 +744,12 @@ class RetrieverFactory:
 
 def _create_reranker(reranker_type: str, top_k: int = 10) -> Optional[Any]:
     """创建重排序器"""
-    from .reranker import DefaultReranker, RRFReranker, LLMReranker
-    
     if reranker_type == "default":
         return DefaultReranker(top_k)
     elif reranker_type == "rrf":
         return RRFReranker(top_k)
     elif reranker_type == "llm":
         try:
-            from ..ai import get_model_manager
             manager = get_model_manager()
             llm = manager.create_llm()
             
@@ -591,6 +773,7 @@ def create_retriever(
     persist_directory: Optional[str] = None,
     embedding_model_id: Optional[str] = None,
     force_rebuild: bool = False,
+    use_batch_embedding: bool = True,
 ) -> BaseRetriever:
     """创建检索器（便捷函数）
     
@@ -602,16 +785,19 @@ def create_retriever(
         persist_directory: 持久化目录
         embedding_model_id: Embedding 模型 ID
         force_rebuild: 强制重建索引
+        use_batch_embedding: 是否使用批量 embedding（默认 True）
     """
     if retriever_type == "exact":
         return RetrieverFactory.create_exact_retriever(fields, config)
     elif retriever_type == "embedding":
         return RetrieverFactory.create_embedding_retriever(
-            fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild
+            fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild,
+            use_batch_embedding=use_batch_embedding,
         )
     else:  # cascade
         return RetrieverFactory.create_cascade_retriever(
-            fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild
+            fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild,
+            use_batch_embedding=use_batch_embedding,
         )
 
 
@@ -620,6 +806,7 @@ __all__ = [
     "MetadataFilter",
     "BaseRetriever",
     "ExactRetriever",
+    "BM25Retriever",
     "EmbeddingRetriever",
     "CascadeRetriever",
     "RetrievalPipeline",

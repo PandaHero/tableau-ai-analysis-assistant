@@ -15,6 +15,8 @@ import re
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any, Callable
 
+from analytics_assistant.src.infra.config import get_config
+
 from .models import (
     FieldChunk,
     RetrievalResult,
@@ -24,6 +26,44 @@ from .prompts import build_rerank_prompt
 
 
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 配置加载
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _get_reranker_config() -> Dict[str, Any]:
+    """获取重排序器配置。"""
+    try:
+        config = get_config()
+        return config.config.get("rag", {}).get("reranking", {})
+    except Exception as e:
+        logger.warning(f"获取重排序器配置失败，使用默认值: {e}")
+        return {}
+
+
+def _get_rrf_k() -> int:
+    """获取 RRF 参数 k。"""
+    try:
+        config = get_config()
+        return config.config.get("rag", {}).get("retrieval", {}).get("rrf_k", 60)
+    except Exception as e:
+        logger.warning(f"获取 RRF 参数失败，使用默认值: {e}")
+        return 60
+
+
+def _get_score_decay_config() -> Dict[str, float]:
+    """获取分数衰减配置。"""
+    try:
+        config = get_config()
+        reranking = config.config.get("rag", {}).get("reranking", {})
+        return {
+            "min_score": reranking.get("score_decay_min", 0.5),
+            "decay_step": reranking.get("score_decay_step", 0.1),
+        }
+    except Exception as e:
+        logger.warning(f"获取分数衰减配置失败，使用默认值: {e}")
+        return {"min_score": 0.5, "decay_step": 0.1}
 
 
 class BaseReranker(ABC):
@@ -95,10 +135,16 @@ class BaseReranker(ABC):
         """
         updated = []
         n = len(results)
+        
+        # 从配置读取分数衰减参数
+        decay_config = _get_score_decay_config()
+        min_score = decay_config["min_score"]
+        decay_step = decay_config["decay_step"]
+        
         for rank, result in enumerate(results, 1):
-            # 根据新排名重新计算分数：rank=1 -> 1.0, rank=2 -> 0.9, ...
+            # 根据新排名重新计算分数：rank=1 -> 1.0, rank=2 -> 1.0-decay_step, ...
             if recalculate_score and n > 0:
-                new_score = max(0.5, 1.0 - (rank - 1) * 0.1)  # 最低 0.5
+                new_score = max(min_score, 1.0 - (rank - 1) * decay_step)
             else:
                 new_score = result.score
             
@@ -143,16 +189,16 @@ class RRFReranker(BaseReranker):
     推荐用于混合检索场景。
     """
     
-    def __init__(self, top_k: int = 5, k: int = 60):
+    def __init__(self, top_k: int = 5, k: Optional[int] = None):
         """
         初始化 RRF 重排序器
         
         Args:
             top_k: 返回结果数量
-            k: RRF 参数 k（默认 60）
+            k: RRF 参数 k（None 从配置读取）
         """
         super().__init__(top_k)
-        self.k = k
+        self.k = k if k is not None else _get_rrf_k()
     
     def rerank(
         self,

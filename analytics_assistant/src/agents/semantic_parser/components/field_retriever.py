@@ -7,29 +7,42 @@ FieldRetriever 组件 - 基于特征的字段检索
 - 返回 FieldRAGResult（measures、dimensions、time_fields）
 - 支持降级模式（terms 为空时返回全量字段）
 
-检索策略：
-1. 数据类型优先：先按 role（measure/dimension）过滤
-2. 批量检索：使用批量检索而非逐个检索，提高效率
-3. 级联检索：精确匹配 → 向量检索
+检索策略（两阶段）：
+1. 粗召回（Recall）：RAG 向量检索，多取候选（top_k * rerank_candidate_multiplier）
+2. 精排序（Rerank）：LLMReranker 对候选做语义重排序，返回 top_k 个最相关字段
+3. 精确匹配：字段名或标题包含术语（作为补充）
+4. 降级模式：terms 为空时返回全量字段
+
+注意：
+- 字段语义信息（aliases、business_description）在索引构建时已写入索引文本
+- 检索时通过向量相似度自动匹配，无需额外的别名匹配逻辑
+- 索引构建流程：data_loader.py -> FieldSemanticInference.infer() -> build_enhanced_index_text()
+- Rerank 使用 LLMReranker，利用 DeepSeek 理解中文语义做精排
 
 配置来源：
 - analytics_assistant/config/app.yaml -> semantic_parser.optimization.field_retriever
 - analytics_assistant/config/app.yaml -> rag.retrieval（检索策略）
+- analytics_assistant/config/app.yaml -> rag.reranking（重排序配置）
 
 RAG 服务集成：
 - 使用 RAGService.retrieval.search_async() 进行检索
+- 使用 LLMReranker 进行重排序
 - 索引由 IndexManager 管理，需要预先创建
 - 检索策略由 app.yaml 配置决定，不硬编码
 
 Requirements: 5.1-5.6 - FieldRetriever 字段检索
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
 from analytics_assistant.src.infra.config import get_config
+from analytics_assistant.src.infra.ai import get_model_manager
 from analytics_assistant.src.infra.rag import get_rag_service
 from analytics_assistant.src.infra.rag.exceptions import IndexNotFoundError
+from analytics_assistant.src.infra.rag.models import FieldChunk, RetrievalResult, RetrievalSource
+from analytics_assistant.src.infra.rag.reranker import LLMReranker
 from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 
 from ..schemas.prefilter import FeatureExtractionOutput, FieldRAGResult
@@ -51,6 +64,16 @@ def _get_field_retriever_config() -> Dict[str, Any]:
         return {}
 
 
+def _get_rerank_config() -> Dict[str, Any]:
+    """获取重排序配置（rag.reranking 节）。"""
+    try:
+        config = get_config()
+        return config.config.get("rag", {}).get("reranking", {})
+    except Exception as e:
+        logger.warning(f"无法加载 rerank 配置，使用默认值: {e}")
+        return {}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 工具函数
 # ═══════════════════════════════════════════════════════════════════════════
@@ -67,19 +90,50 @@ def _get_field_attr(obj: Any, *names, default=None) -> Any:
     return default
 
 
+def _create_llm_reranker(top_k: int) -> Optional[LLMReranker]:
+    """创建 LLMReranker 实例。
+
+    使用 ModelManager 获取 deepseek-chat LLM（非推理模型，速度更快）。
+    失败时返回 None（降级为无 rerank）。
+
+    Args:
+        top_k: 重排序返回的结果数量
+
+    Returns:
+        LLMReranker 实例，或 None（创建失败时）
+    """
+    try:
+        manager = get_model_manager()
+        # 使用 deepseek-chat 而非 R1：rerank 是简单排序任务，不需要深度推理
+        llm = manager.create_llm(model_id="deepseek-chat")
+
+        def llm_call_fn(prompt: str) -> str:
+            response = llm.invoke(prompt)
+            return response.content if hasattr(response, 'content') else str(response)
+
+        return LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn)
+    except Exception as e:
+        logger.warning(f"创建 LLMReranker 失败，将跳过重排序: {e}")
+        return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # FieldRetriever 组件
 # ═══════════════════════════════════════════════════════════════════════════
 
 class FieldRetriever:
-    """字段检索器 - 基于特征的批量 Top-K 检索。
+    """字段检索器 - 两阶段检索：粗召回 + LLM 精排。
     
-    使用 RAGService 进行检索，索引需要预先创建。
+    使用 RAGService 进行粗召回，LLMReranker 进行精排。
+    索引在构建时已包含语义增强信息（aliases、business_description），
+    粗召回通过向量相似度匹配，精排通过 LLM 理解语义相关性。
     
     配置来源：
     - field_retriever.top_k: 每类字段返回的候选数
     - field_retriever.fallback_multiplier: 降级时的倍数
-    - rag.retrieval.retriever_type: 检索策略（由 RAGService 读取）
+    - rag.reranking.enabled: 是否启用重排序
+    - rag.reranking.reranker_type: 重排序器类型
+    - rag.reranking.rerank_top_k: 粗召回候选数量
     
     Examples:
         >>> retriever = FieldRetriever()
@@ -95,6 +149,7 @@ class FieldRetriever:
     # 默认配置
     _DEFAULT_TOP_K = 5
     _DEFAULT_FALLBACK_MULTIPLIER = 2.0
+    _DEFAULT_RERANK_CANDIDATE_MULTIPLIER = 3
     
     def __init__(
         self,
@@ -118,6 +173,15 @@ class FieldRetriever:
         # 延迟初始化：获取 RAGService 单例
         # 注意：在 __init__ 中获取全局单例，避免模块加载时初始化
         self._rag_service = get_rag_service()
+        
+        # 初始化 LLMReranker（如果配置启用）
+        self._reranker: Optional[LLMReranker] = None
+        if self._rerank_enabled:
+            self._reranker = _create_llm_reranker(self.top_k)
+            if self._reranker:
+                logger.info("FieldRetriever: LLMReranker 已启用")
+            else:
+                logger.warning("FieldRetriever: LLMReranker 创建失败，将跳过重排序")
     
     def _load_config(self) -> None:
         """从配置文件加载参数。"""
@@ -127,11 +191,20 @@ class FieldRetriever:
             fr_config.get("fallback_multiplier", self._DEFAULT_FALLBACK_MULTIPLIER)
         )
         
+        # 加载 rerank 配置
+        rerank_config = _get_rerank_config()
+        self._rerank_enabled = rerank_config.get("enabled", False)
+        self._rerank_candidate_multiplier = self._DEFAULT_RERANK_CANDIDATE_MULTIPLIER
+        
+        # rerank_top_k 从配置读取，作为粗召回的候选数量上限
+        self._rerank_top_k = rerank_config.get("rerank_top_k", 30)
+        
         logger.debug(
             f"FieldRetriever 配置: top_k={self.top_k}, "
-            f"fallback_multiplier={self.fallback_multiplier}"
+            f"fallback_multiplier={self.fallback_multiplier}, "
+            f"rerank_enabled={self._rerank_enabled}, "
+            f"rerank_top_k={self._rerank_top_k}"
         )
-
 
     async def retrieve(
         self,
@@ -170,23 +243,23 @@ class FieldRetriever:
         # 检查索引是否存在
         index_exists = self._check_index_exists(index_name)
         
-        # 1. 检索度量字段
-        measure_candidates = await self._retrieve_by_terms(
-            terms=feature_output.required_measures,
-            fields=measures,
-            role="measure",
-            index_name=index_name if index_exists else None,
+        # 1+2. 并行检索度量和维度字段（含 RAG 粗召回 + LLM 精排）
+        measure_candidates, dimension_candidates = await asyncio.gather(
+            self._retrieve_by_terms(
+                terms=feature_output.required_measures,
+                fields=measures,
+                role="measure",
+                index_name=index_name if index_exists else None,
+            ),
+            self._retrieve_by_terms(
+                terms=feature_output.required_dimensions,
+                fields=dimensions,
+                role="dimension",
+                index_name=index_name if index_exists else None,
+            ),
         )
         
-        # 2. 检索维度字段
-        dimension_candidates = await self._retrieve_by_terms(
-            terms=feature_output.required_dimensions,
-            fields=dimensions,
-            role="dimension",
-            index_name=index_name if index_exists else None,
-        )
-        
-        # 3. 检索时间字段
+        # 3. 检索时间字段（纯本地逻辑，无需异步）
         time_candidates = self._retrieve_time_fields(dimensions)
         
         logger.info(
@@ -215,8 +288,10 @@ class FieldRetriever:
         try:
             retriever = self._rag_service.index.get_index(index_name)
             return retriever is not None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"检查索引是否存在失败: index={index_name}, error={e}")
             return False
+
 
     async def _retrieve_by_terms(
         self,
@@ -225,12 +300,13 @@ class FieldRetriever:
         role: str,
         index_name: Optional[str] = None,
     ) -> List[FieldCandidate]:
-        """根据术语检索字段。
+        """根据术语检索字段（两阶段：粗召回 + LLM 精排）。
         
-        检索策略：
-        1. 如果 terms 为空 → 降级模式，返回全量字段
-        2. 如果索引存在 → 使用 RAGService 进行检索
-        3. 如果索引不存在 → 使用精确匹配回退
+        检索策略（优先级从高到低）：
+        1. RAG 粗召回：向量检索，多取候选（top_k * multiplier）
+        2. LLM 精排：对粗召回结果做语义重排序，返回 top_k 个最相关字段
+        3. 精确匹配：字段名或标题包含术语（作为补充）
+        4. 降级模式：terms 为空时返回全量字段
         
         Args:
             terms: 检索术语列表（如 ["利润", "销售额"]）
@@ -251,89 +327,126 @@ class FieldRetriever:
                 source="fallback",
             )
         
-        # 如果没有索引，使用精确匹配
-        if not index_name:
-            logger.info(f"FieldRetriever: 无索引，使用精确匹配")
-            return self._exact_match_fallback(terms, fields, role)
+        # 构建字段名到字段对象的映射
+        field_map = {
+            _get_field_attr(f, 'name', 'field_name', default=''): f
+            for f in fields
+        }
+        field_caption_map = {
+            _get_field_attr(f, 'fieldCaption', 'field_caption', 'caption', default=''): f
+            for f in fields
+        }
         
-        # 使用 RAGService 进行检索
-        try:
-            query = " ".join(terms)
-            
-            # 使用 RAGService.retrieval.search_async()
-            # 检索策略由 app.yaml 配置决定
-            results = await self._rag_service.retrieval.search_async(
-                index_name=index_name,
-                query=query,
-                top_k=self.top_k,
-                filters={"role": role},
+        candidates: List[FieldCandidate] = []
+        matched_names: set = set()
+        
+        # 1. RAG 粗召回（多取候选，供 rerank 精排）
+        # 如果启用 rerank，多取 rerank_candidate_multiplier 倍候选
+        if self._reranker:
+            recall_k = min(
+                self.top_k * self._rerank_candidate_multiplier,
+                self._rerank_top_k,
             )
-            
-            if results:
-                candidates = []
-                for result in results:
-                    # 从 metadata 获取字段信息
-                    metadata = result.metadata or {}
-                    
-                    # 将检索分数转换为置信度
-                    confidence = min(result.score * 0.8 + 0.15, 0.95)
-                    
-                    candidates.append(FieldCandidate(
-                        field_name=result.doc_id,
-                        field_caption=metadata.get("field_caption", result.doc_id),
-                        field_type=role,
-                        data_type=metadata.get("data_type", "string"),
-                        confidence=confidence,
-                        source="rag",
-                        rank=result.rank,
-                        category=metadata.get("category"),
-                        level=metadata.get("level"),
-                        granularity=metadata.get("granularity"),
-                        formula=metadata.get("formula"),
-                        logical_table_caption=metadata.get("logical_table_caption"),
-                        sample_values=metadata.get("sample_values"),
-                    ))
+        else:
+            recall_k = self.top_k
+        
+        rag_results = []  # 保存原始 SearchResult，用于 rerank
+        
+        if index_name:
+            try:
+                query = " ".join(terms)
+                results = await self._rag_service.retrieval.search_async(
+                    index_name=index_name,
+                    query=query,
+                    top_k=recall_k,
+                    filters={"role": role},
+                )
                 
-                logger.info(f"FieldRetriever: RAG 检索返回 {len(candidates)} 个 {role} 字段")
-                return candidates
-            
-            # RAG 检索无结果，回退到精确匹配
-            logger.info(f"FieldRetriever: RAG 检索无结果，回退到精确匹配")
-            return self._exact_match_fallback(terms, fields, role)
-            
-        except IndexNotFoundError:
-            logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，回退到精确匹配")
-            return self._exact_match_fallback(terms, fields, role)
-        except Exception as e:
-            logger.warning(f"FieldRetriever: RAG 检索失败: {e}，回退到精确匹配")
-            return self._exact_match_fallback(terms, fields, role)
-
-
-    def _exact_match_fallback(
-        self,
-        terms: List[str],
-        fields: List[Any],
-        role: str,
-    ) -> List[FieldCandidate]:
-        """精确匹配回退方案。"""
-        candidates = []
-        matched_names = set()
+                if results:
+                    rag_results = results
+                    logger.info(
+                        f"FieldRetriever: RAG 粗召回 {len(results)} 个 {role} 字段 "
+                        f"(recall_k={recall_k})"
+                    )
+                    
+            except IndexNotFoundError:
+                logger.warning(f"FieldRetriever: 索引 {index_name} 不存在，使用精确匹配")
+            except Exception as e:
+                logger.warning(f"FieldRetriever: RAG 检索失败: {e}，使用精确匹配")
         
-        for term in terms:
-            exact_matches = self._exact_match_by_term(term, fields)
-            for field in exact_matches:
-                field_name = _get_field_attr(field, 'name', 'field_name', default='')
-                if field_name not in matched_names:
-                    matched_names.add(field_name)
-                    candidates.append(self._field_to_candidate(
-                        field, confidence=0.9, source="exact_match"
-                    ))
+        # 2. LLM 精排（如果有 reranker 且有足够候选）
+        if self._reranker and len(rag_results) > 1:
+            rag_results = await self._rerank_results(
+                terms=terms,
+                results=rag_results,
+            )
         
-        # 如果精确匹配不足，补充更多字段
+        # 3. 将 RAG 结果转换为 FieldCandidate
+        if rag_results:
+            # 归一化分数到 [0.5, 0.95]
+            raw_scores = [r.score for r in rag_results]
+            max_score = max(raw_scores) if raw_scores else 1.0
+            min_score = min(raw_scores) if raw_scores else 0.0
+            score_range = max_score - min_score
+            
+            for result in rag_results:
+                field_name = result.doc_id
+                if field_name in matched_names:
+                    continue
+                
+                matched_names.add(field_name)
+                metadata = result.metadata or {}
+                
+                # 归一化分数：映射到 [0.5, 0.95]
+                if score_range > 0:
+                    normalized = (result.score - min_score) / score_range
+                else:
+                    normalized = 1.0
+                confidence = 0.5 + normalized * 0.45
+                
+                # 从 field_map 获取字段对象
+                field_map.get(field_name) or field_caption_map.get(field_name)
+                
+                candidates.append(FieldCandidate(
+                    field_name=field_name,
+                    field_caption=metadata.get("field_caption", field_name),
+                    field_type=role,
+                    data_type=metadata.get("data_type", "string"),
+                    confidence=confidence,
+                    source="rag+rerank" if self._reranker else "rag",
+                    rank=result.rank,
+                    category=metadata.get("category"),
+                    level=metadata.get("level"),
+                    granularity=metadata.get("granularity"),
+                    formula=metadata.get("formula"),
+                    logical_table_caption=metadata.get("logical_table_caption"),
+                    business_description=metadata.get("business_description"),
+                    aliases=metadata.get("aliases"),
+                    measure_category=metadata.get("measure_category"),
+                    sample_values=metadata.get("sample_values"),
+                ))
+        
+        # 4. 精确匹配补充（当结果不足时）
+        if len(candidates) < self.top_k:
+            for term in terms:
+                exact_matches = self._exact_match_by_term(term, fields)
+                for field in exact_matches:
+                    field_name = _get_field_attr(field, 'name', 'field_name', default='')
+                    if field_name and field_name not in matched_names:
+                        matched_names.add(field_name)
+                        candidates.append(self._field_to_candidate(
+                            field, confidence=0.8, source="exact_match"
+                        ))
+                        if len(candidates) >= self.top_k:
+                            break
+                if len(candidates) >= self.top_k:
+                    break
+        
+        # 5. 如果仍不足，补充更多字段
         if len(candidates) < self.top_k:
             for field in fields:
                 field_name = _get_field_attr(field, 'name', 'field_name', default='')
-                if field_name not in matched_names:
+                if field_name and field_name not in matched_names:
                     matched_names.add(field_name)
                     candidates.append(self._field_to_candidate(
                         field, confidence=0.5, source="fallback"
@@ -342,6 +455,104 @@ class FieldRetriever:
                         break
         
         return candidates[:self.top_k]
+
+    async def _rerank_results(
+        self,
+        terms: List[str],
+        results: List[Any],
+    ) -> List[Any]:
+        """使用 LLMReranker 对 RAG 结果做精排。
+
+        将 SearchResult 转换为 RetrievalResult，调用 LLMReranker.arerank()，
+        然后将排序后的结果映射回 SearchResult 顺序。
+
+        Args:
+            terms: 用户查询术语
+            results: RAG 粗召回的 SearchResult 列表
+
+        Returns:
+            重排序后的 SearchResult 列表
+        """
+        if not self._reranker or len(results) <= 1:
+            return results
+
+        query = " ".join(terms)
+
+        # SearchResult → RetrievalResult（LLMReranker 需要的格式）
+        retrieval_results: List[RetrievalResult] = []
+        result_map: Dict[str, Any] = {}  # field_name → SearchResult
+
+        for r in results:
+            field_name = r.doc_id
+            metadata = r.metadata or {}
+            result_map[field_name] = r
+
+            # 提取 sample_values（可能是列表或字符串）
+            raw_samples = metadata.get("sample_values")
+            sample_values = None
+            if isinstance(raw_samples, list):
+                sample_values = raw_samples[:5]
+
+            chunk = FieldChunk(
+                field_name=field_name,
+                field_caption=metadata.get("field_caption", field_name),
+                role=metadata.get("role", "dimension"),
+                data_type=metadata.get("data_type", "string"),
+                index_text=r.content or "",
+                category=metadata.get("category"),
+                sample_values=sample_values,
+                metadata={
+                    k: v for k, v in metadata.items()
+                    if k not in {
+                        "field_caption", "role", "data_type",
+                        "category", "sample_values",
+                    }
+                },
+            )
+            retrieval_results.append(RetrievalResult(
+                field_chunk=chunk,
+                score=r.score,
+                source=RetrievalSource.HYBRID,
+                rank=r.rank,
+            ))
+
+        try:
+            reranked = await self._reranker.arerank(
+                query=query,
+                candidates=retrieval_results,
+                top_k=self.top_k,
+            )
+
+            # RetrievalResult → SearchResult 顺序
+            reranked_results = []
+            for rr in reranked:
+                field_name = rr.field_chunk.field_name
+                if field_name in result_map:
+                    original = result_map[field_name]
+                    # 更新分数为 rerank 后的分数
+                    original.score = rr.score
+                    original.rank = rr.rank
+                    reranked_results.append(original)
+
+            logger.info(
+                f"FieldRetriever: LLM 精排完成, "
+                f"输入 {len(retrieval_results)} → 输出 {len(reranked_results)} 个候选"
+            )
+
+            if reranked_results:
+                for i, r in enumerate(reranked_results[:3]):
+                    logger.info(
+                        f"  Rerank[{i+1}]: {r.doc_id} "
+                        f"(score={r.score:.3f})"
+                    )
+
+            return reranked_results
+
+        except Exception as e:
+            logger.warning(
+                f"FieldRetriever: LLM 精排失败，使用原始 RAG 排序: {e}"
+            )
+            return results
 
     def _exact_match_by_term(self, term: str, fields: List[Any]) -> List[Any]:
         """精确匹配：字段名或标题包含术语。"""
@@ -360,6 +571,7 @@ class FieldRetriever:
                 matched.append(field)
         
         return matched
+
 
     def _retrieve_time_fields(self, dimensions: List[Any]) -> List[FieldCandidate]:
         """检索时间字段。

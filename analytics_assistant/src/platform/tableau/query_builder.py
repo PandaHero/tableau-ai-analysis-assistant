@@ -11,7 +11,7 @@
 """
 
 import logging
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from analytics_assistant.src.core.interfaces import BaseQueryBuilder
 from analytics_assistant.src.core.schemas import (
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 # AggregationType 到 VizQL function 字符串的映射
-AGGREGATION_TO_VIZQL: dict[AggregationType, str] = {
+AGGREGATION_TO_VIZQL: Dict[AggregationType, str] = {
     AggregationType.SUM: "SUM",
     AggregationType.AVG: "AVG",
     AggregationType.COUNT: "COUNT",
@@ -55,7 +55,7 @@ AGGREGATION_TO_VIZQL: dict[AggregationType, str] = {
 }
 
 # DateGranularity 到 VizQL TRUNC 函数的映射
-GRANULARITY_TO_TRUNC: dict[DateGranularity, str] = {
+GRANULARITY_TO_TRUNC: Dict[DateGranularity, str] = {
     DateGranularity.YEAR: "TRUNC_YEAR",
     DateGranularity.QUARTER: "TRUNC_QUARTER",
     DateGranularity.MONTH: "TRUNC_MONTH",
@@ -64,7 +64,7 @@ GRANULARITY_TO_TRUNC: dict[DateGranularity, str] = {
 }
 
 # DateGranularity 到 DATETRUNC 参数的映射
-GRANULARITY_TO_DATETRUNC: dict[DateGranularity, str] = {
+GRANULARITY_TO_DATETRUNC: Dict[DateGranularity, str] = {
     DateGranularity.YEAR: "year",
     DateGranularity.QUARTER: "quarter",
     DateGranularity.MONTH: "month",
@@ -91,7 +91,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
     DEFAULT_WINDOW_NEXT = 0
     DEFAULT_INCLUDE_CURRENT = True
     
-    def build(self, semantic_output: SemanticOutput, **kwargs: Any) -> dict:
+    def build(self, semantic_output: SemanticOutput, **kwargs: Any) -> Dict:
         """从 SemanticOutput 构建 VizQL API 请求。
         
         Args:
@@ -195,9 +195,9 @@ class TableauQueryBuilder(BaseQueryBuilder):
     
     def _collect_sorts(
         self, 
-        dimensions: list[DimensionField], 
-        measures: list[MeasureField]
-    ) -> list[dict]:
+        dimensions: List[DimensionField], 
+        measures: List[MeasureField]
+    ) -> List[Dict]:
         """从维度和度量收集排序规范。"""
         sorts = []
         
@@ -224,7 +224,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         return vizql_sorts
 
     
-    def _build_dimension_field(self, dim: DimensionField, field_metadata: dict[str, dict] | None = None) -> dict:
+    def _build_dimension_field(self, dim: DimensionField, field_metadata: Optional[Dict[str, Dict]] = None) -> Dict:
         """构建 VizQL 维度字段。"""
         field_metadata = field_metadata or {}
         field = {"fieldCaption": dim.field_name}
@@ -249,7 +249,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         
         return field
     
-    def _build_measure_field(self, measure: MeasureField) -> dict:
+    def _build_measure_field(self, measure: MeasureField) -> Dict:
         """构建 VizQL 度量字段。"""
         field = {"fieldCaption": measure.field_name}
         
@@ -265,10 +265,10 @@ class TableauQueryBuilder(BaseQueryBuilder):
     
     def _build_derived_computation_fields(
         self,
-        computations: list[DerivedComputation],
-        view_dimensions: list[str],
-        measures: list[MeasureField] | None = None,
-    ) -> list[dict]:
+        computations: List[DerivedComputation],
+        view_dimensions: List[str],
+        measures: Optional[List[MeasureField]] = None,
+    ) -> List[Dict]:
         """从 DerivedComputation 构建 VizQL 计算字段。
         
         DerivedComputation 是语义解析器的输出格式，需要转换为 VizQL 格式。
@@ -281,7 +281,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         fields = []
         
         # 构建度量聚合查找表
-        measure_agg_map: dict[str, AggregationType] = {}
+        measure_agg_map: Dict[str, AggregationType] = {}
         if measures:
             for m in measures:
                 measure_agg_map[m.field_name] = m.aggregation or AggregationType.SUM
@@ -310,7 +310,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         
         return fields
     
-    def _build_formula_field(self, comp: DerivedComputation) -> dict | None:
+    def _build_formula_field(self, comp: DerivedComputation) -> Optional[Dict]:
         """从 DerivedComputation 构建公式计算字段。"""
         if not comp.formula:
             logger.warning(f"计算 {comp.name} 缺少 formula")
@@ -321,7 +321,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
             "calculation": comp.formula,
         }
     
-    def _build_lod_from_derived(self, comp: DerivedComputation) -> dict | None:
+    def _build_lod_from_derived(self, comp: DerivedComputation) -> Optional[Dict]:
         """从 DerivedComputation (SUBQUERY) 构建 LOD 表达式。
         
         SUBQUERY 类型转换为 Tableau LOD 表达式。
@@ -353,9 +353,9 @@ class TableauQueryBuilder(BaseQueryBuilder):
     def _build_table_calc_from_derived(
         self,
         comp: DerivedComputation,
-        view_dimensions: list[str],
-        measure_agg_map: dict[str, AggregationType] | None = None,
-    ) -> dict | None:
+        view_dimensions: List[str],
+        measure_agg_map: Optional[Dict[str, AggregationType]] = None,
+    ) -> Optional[Dict]:
         """从 DerivedComputation (TABLE_CALC_*) 构建表计算字段。"""
         calc_type = comp.calc_type
         
@@ -436,7 +436,7 @@ class TableauQueryBuilder(BaseQueryBuilder):
         }
 
     
-    def _build_filter(self, f: Any, field_metadata: dict[str, dict] | None = None) -> dict | None:
+    def _build_filter(self, f: Any, field_metadata: Optional[Dict[str, Dict]] = None) -> Optional[Dict]:
         """从核心过滤器模型构建 VizQL 过滤器。"""
         field_metadata = field_metadata or {}
         

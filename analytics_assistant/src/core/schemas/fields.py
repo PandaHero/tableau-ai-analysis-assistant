@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """语义层字段模型。平台无关的字段定义。"""
 
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from analytics_assistant.src.core.schemas.enums import (
@@ -23,12 +25,12 @@ class DimensionField(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     field_name: str = Field(description="字段名称（业务术语）")
-    date_granularity: DateGranularity | None = Field(
+    date_granularity: Optional[DateGranularity] = Field(
         default=None, 
         description="日期粒度：年/季度/月/周/日"
     )
-    alias: str | None = Field(default=None, description="显示名称")
-    sort: SortSpec | None = Field(default=None, description="排序规格")
+    alias: Optional[str] = Field(default=None, description="显示名称")
+    sort: Optional[SortSpec] = Field(default=None, description="排序规格")
 
 
 class MeasureField(BaseModel):
@@ -36,9 +38,9 @@ class MeasureField(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     field_name: str = Field(description="字段名称（业务术语）")
-    aggregation: AggregationType | None = Field(
+    aggregation: Optional[AggregationType] = Field(
         default=AggregationType.SUM, 
         description="聚合函数（预聚合度量设为 null）"
     )
-    alias: str | None = Field(default=None, description="显示名称")
-    sort: SortSpec | None = Field(default=None, description="排序规格")
+    alias: Optional[str] = Field(default=None, description="显示名称")
+    sort: Optional[SortSpec] = Field(default=None, description="排序规格")

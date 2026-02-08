@@ -45,6 +45,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
     Type,
     TypeVar,
     Union,
@@ -53,7 +54,7 @@ from typing import (
 
 from pydantic import BaseModel
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.utils.json import parse_partial_json
 
 from ...infra.ai import get_model_manager, TaskType
@@ -165,7 +166,7 @@ async def stream_llm_structured(
     return_thinking: bool = False,
 ) -> T: ...
 
-# 类型重载：return_thinking=True 时返回 tuple[T, str]
+# 类型重载：return_thinking=True 时返回 Tuple[T, str]
 @overload
 async def stream_llm_structured(
     llm: BaseChatModel,
@@ -181,7 +182,7 @@ async def stream_llm_structured(
     on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
     return_thinking: bool = True,
-) -> tuple[T, str]: ...
+) -> Tuple[T, str]: ...
 
 
 async def stream_llm_structured(
@@ -198,7 +199,7 @@ async def stream_llm_structured(
     on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
     return_thinking: bool = False,
-) -> Union[T, tuple[T, str]]:
+) -> Union[T, Tuple[T, str]]:
     """
     流式调用 LLM 并返回结构化输出（统一方案）⭐推荐
     
@@ -274,7 +275,7 @@ async def _stream_structured_internal(
     on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]],
     on_thinking: Optional[Callable[[str], Awaitable[None]]],
     return_thinking: bool,
-) -> Union[T, tuple[T, str]]:
+) -> Union[T, Tuple[T, str]]:
     """内部：基础流式结构化输出
     
     使用 json_mode 时，LLM 只知道要输出 JSON，但不知道具体格式。
@@ -297,7 +298,6 @@ async def _stream_structured_internal(
     # 复制消息列表，在最后一条 HumanMessage 后追加 schema 指令
     augmented_messages = list(messages)
     if augmented_messages:
-        from langchain_core.messages import HumanMessage
         # 找到最后一条 HumanMessage 并追加 schema
         for i in range(len(augmented_messages) - 1, -1, -1):
             if isinstance(augmented_messages[i], HumanMessage):
@@ -308,6 +308,7 @@ async def _stream_structured_internal(
                 break
     
     collected_content: List[str] = []
+    collected_thinking: List[str] = []
     additional_kwargs: Dict[str, Any] = {}
     prev_partial: Optional[Dict[str, Any]] = None
     
@@ -325,18 +326,26 @@ async def _stream_structured_internal(
                         await on_partial(partial)
                         prev_partial = partial
                 except Exception:
+                    # 流式热路径：部分 JSON 解析失败是预期行为，无需记录日志
                     pass
         if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
-            if on_thinking and "thinking" in chunk.additional_kwargs:
-                await on_thinking(chunk.additional_kwargs["thinking"])
-            additional_kwargs.update(chunk.additional_kwargs)
+            if "thinking" in chunk.additional_kwargs:
+                thinking_chunk = chunk.additional_kwargs["thinking"]
+                collected_thinking.append(thinking_chunk)
+                if on_thinking:
+                    await on_thinking(thinking_chunk)
+            # 更新其他 kwargs（如 answer），但 thinking 单独累积
+            for k, v in chunk.additional_kwargs.items():
+                if k != "thinking":
+                    additional_kwargs[k] = v
     
     full_content = "".join(collected_content)
+    full_thinking = "".join(collected_thinking)
     final_content = additional_kwargs.get("answer", full_content)
     parsed = _parse_json_to_model(final_content, output_model)
     
     if return_thinking:
-        return parsed, additional_kwargs.get("thinking", "")
+        return parsed, full_thinking
     return parsed
 
 
@@ -351,7 +360,7 @@ async def _stream_structured_with_tools(
     on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]],
     on_thinking: Optional[Callable[[str], Awaitable[None]]],
     return_thinking: bool,
-) -> Union[T, tuple[T, str]]:
+) -> Union[T, Tuple[T, str]]:
     """内部：带工具调用的流式结构化输出"""
     llm_with_tools = llm.bind_tools(tools)
     current_messages = list(messages)
@@ -377,6 +386,7 @@ async def _stream_structured_with_tools(
                             await on_partial(partial)
                             prev_partial = partial
                     except Exception:
+                        # 流式热路径：部分 JSON 解析失败是预期行为，无需记录日志
                         pass
             
             if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
@@ -392,10 +402,14 @@ async def _stream_structured_with_tools(
                         tool_calls[idx]["id"] = tc_chunk["id"]
             
             if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
-                if on_thinking and "thinking" in chunk.additional_kwargs:
-                    await on_thinking(chunk.additional_kwargs["thinking"])
-                    collected_thinking.append(chunk.additional_kwargs["thinking"])
-                additional_kwargs.update(chunk.additional_kwargs)
+                if "thinking" in chunk.additional_kwargs:
+                    thinking_chunk = chunk.additional_kwargs["thinking"]
+                    collected_thinking.append(thinking_chunk)
+                    if on_thinking:
+                        await on_thinking(thinking_chunk)
+                for k, v in chunk.additional_kwargs.items():
+                    if k != "thinking":
+                        additional_kwargs[k] = v
         
         # 检查是否有工具调用
         valid_tool_calls = [tc for tc in tool_calls if tc.get("name") and tc.get("id")]
@@ -407,8 +421,7 @@ async def _stream_structured_with_tools(
             parsed = _parse_json_to_model(final_content, output_model)
             
             if return_thinking:
-                thinking = additional_kwargs.get("thinking", "".join(collected_thinking))
-                return parsed, thinking
+                return parsed, "".join(collected_thinking)
             return parsed
         
         # 执行工具调用
@@ -462,7 +475,7 @@ async def _stream_structured_with_middleware(
     on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]],
     on_thinking: Optional[Callable[[str], Awaitable[None]]],
     return_thinking: bool,
-) -> Union[T, tuple[T, str]]:
+) -> Union[T, Tuple[T, str]]:
     """内部：带 Middleware 的流式结构化输出"""
     current_messages = list(messages)
     current_state = dict(state) if state else {}

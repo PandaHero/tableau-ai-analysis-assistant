@@ -433,8 +433,8 @@ class FieldValueCache:
                         cardinality=cardinality,
                     )
                     return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"预加载字段值失败: field={getattr(field, 'name', '?')}, error={e}")
             return False
         
         # 并发执行

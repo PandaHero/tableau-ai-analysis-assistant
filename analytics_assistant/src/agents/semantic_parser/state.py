@@ -291,6 +291,97 @@ class SemanticParserState(TypedDict, total=False):
     
     thinking: Optional[str]
     """LLM 思考过程（来自 R1 等推理模型）"""
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # 语义解析优化字段
+    # ═══════════════════════════════════════════════════════════════════════
+    
+    prefilter_result: Optional[Dict[str, Any]]
+    """RulePrefilter 输出（PrefilterResult 序列化后）
+    
+    结构：
+    {
+        "time_hints": [{"original_expression": str, "hint_type": str, "parsed_hint": str, "confidence": float}],
+        "matched_computations": [{"seed_name": str, "display_name": str, "calc_type": str, "formula": str}],
+        "detected_complexity": ["simple" | "ratio" | "time_compare" | ...],
+        "detected_language": "zh" | "en" | "ja",
+        "match_confidence": float,
+        "low_confidence": bool
+    }
+    """
+    
+    feature_extraction_output: Optional[Dict[str, Any]]
+    """FeatureExtractor 输出（FeatureExtractionOutput 序列化后）
+    
+    结构：
+    {
+        "required_measures": [str],
+        "required_dimensions": [str],
+        "confirmed_time_hints": [str],
+        "confirmed_computations": [str | dict],
+        "confirmation_confidence": float,
+        "is_degraded": bool
+    }
+    """
+    
+    field_rag_result: Optional[Dict[str, Any]]
+    """FieldRetriever 输出（FieldRAGResult 序列化后）
+    
+    结构：
+    {
+        "measures": [FieldCandidate],
+        "dimensions": [FieldCandidate],
+        "time_fields": [FieldCandidate]
+    }
+    """
+    
+    dynamic_schema_result: Optional[Dict[str, Any]]
+    """DynamicSchemaBuilder 输出
+    
+    结构：
+    {
+        "field_candidates": [FieldCandidate],
+        "modules": ["base", "time", "computation", ...],
+        "computation_types": [str],
+        "time_expressions": [str]
+    }
+    """
+    
+    modular_prompt: Optional[str]
+    """ModularPromptBuilder 输出的增强 Prompt"""
+    
+    validation_result: Optional[Dict[str, Any]]
+    """OutputValidator 输出（ValidationResult 序列化后）
+    
+    结构：
+    {
+        "is_valid": bool,
+        "errors": [{"error_type": str, "field_name": str, "message": str, "auto_correctable": bool}],
+        "corrected_output": Optional[dict],
+        "needs_clarification": bool,
+        "clarification_message": Optional[str]
+    }
+    """
+    
+    is_degraded: Optional[bool]
+    """是否处于降级模式（FeatureExtractor 超时等）"""
+    
+    optimization_metrics: Optional[Dict[str, Any]]
+    """语义解析优化性能指标
+    
+    结构：
+    {
+        "rule_prefilter_ms": float,
+        "feature_extractor_ms": float,
+        "field_retriever_ms": float,
+        "dynamic_schema_builder_ms": float,
+        "modular_prompt_builder_ms": float,
+        "output_validator_ms": float,
+        "total_optimization_ms": float,
+        "feature_cache_hit": bool,
+        "token_reduction_percent": float
+    }
+    """
 
 
 __all__ = ["SemanticParserState"]

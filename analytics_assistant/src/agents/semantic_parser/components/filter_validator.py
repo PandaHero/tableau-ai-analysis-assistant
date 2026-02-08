@@ -26,6 +26,7 @@ Filter Value Validator - 筛选值验证器
 配置来源：analytics_assistant/config/app.yaml -> semantic_parser.filter_validator
 """
 
+import asyncio
 import logging
 from difflib import SequenceMatcher
 from typing import List, Dict, Optional, Any
@@ -216,13 +217,18 @@ class FilterValueValidator:
             
             return values if values else []
             
-        except Exception:
+        except Exception as e:
             # 查询失败，返回 None 表示无法验证
+            logger.warning(f"获取字段值失败: field_name={field_name}, error={e}")
             return None
     
     # ═══════════════════════════════════════════════════════════════════════════
     # 匹配逻辑
     # ═══════════════════════════════════════════════════════════════════════════
+    
+    # 相似度匹配分数常量
+    SUBSTRING_MATCH_SCORE = 0.95  # 目标是候选的子串
+    SUPERSTRING_MATCH_SCORE = 0.90  # 候选是目标的子串
     
     def _find_similar(
         self,
@@ -262,9 +268,9 @@ class FilterValueValidator:
             
             # 包含关系优先（给予高分）
             if target_lower in c_lower:
-                scored.append((c, 0.95))  # 目标是候选的子串
+                scored.append((c, self.SUBSTRING_MATCH_SCORE))
             elif c_lower in target_lower:
-                scored.append((c, 0.90))  # 候选是目标的子串
+                scored.append((c, self.SUPERSTRING_MATCH_SCORE))
             else:
                 # 编辑距离相似度
                 ratio = SequenceMatcher(None, target_lower, c_lower).ratio()
@@ -411,32 +417,43 @@ class FilterValueValidator:
         semantic_output: SemanticOutput,
         data_model: DataModel,
         datasource_id: str,
+        max_concurrency: Optional[int] = None,
         **kwargs: Any,
     ) -> FilterValidationSummary:
-        """验证所有筛选条件
+        """验证所有筛选条件（并行执行）
         
         Args:
             semantic_output: 语义理解输出
             data_model: 数据模型
             datasource_id: 数据源标识符
+            max_concurrency: 最大并发数（默认 5）
             **kwargs: 平台特定参数（如认证信息）
             
         Returns:
             FilterValidationSummary
         """
+        # 默认并发限制
+        _DEFAULT_MAX_CONCURRENCY = 5
+        actual_max_concurrency = max_concurrency or _DEFAULT_MAX_CONCURRENCY
+        
         results: List[FilterValidationResult] = []
         filters = semantic_output.where.filters
         
-        for f in filters:
+        # 收集需要验证的任务
+        validation_tasks = []
+        task_metadata = []  # 保存任务元数据用于结果排序
+        skipped_results = []  # 跳过验证的结果
+        
+        for filter_idx, f in enumerate(filters):
             # 只处理 SetFilter 类型
             if not isinstance(f, SetFilter):
-                results.append(FilterValidationResult(
+                skipped_results.append((filter_idx, -1, FilterValidationResult(
                     is_valid=True,
                     field_name=f.field_name,
                     requested_value="",
                     validation_type=FilterValidationType.SKIPPED,
                     skip_reason="non_set_filter",
-                ))
+                )))
                 continue
             
             # 检查是否需要验证
@@ -448,28 +465,65 @@ class FilterValueValidator:
             )
             
             if not should_val:
-                results.append(FilterValidationResult(
+                skipped_results.append((filter_idx, -1, FilterValidationResult(
                     is_valid=True,
                     field_name=f.field_name,
                     requested_value="",
                     validation_type=FilterValidationType.SKIPPED,
                     skip_reason=skip_reason,
-                ))
+                )))
                 continue
             
-            # 验证每个筛选值
-            for value in f.values:
+            # 收集需要验证的值
+            for value_idx, value in enumerate(f.values):
                 value_str = str(value) if value is not None else ""
                 if not value_str:
                     continue
                 
-                result = await self._validate_single_value(
-                    field_name=f.field_name,
-                    filter_value=value_str,
-                    datasource_id=datasource_id,
-                    **kwargs,
+                task_metadata.append((filter_idx, value_idx, f.field_name, value_str))
+                validation_tasks.append(
+                    self._validate_single_value(
+                        field_name=f.field_name,
+                        filter_value=value_str,
+                        datasource_id=datasource_id,
+                        **kwargs,
+                    )
                 )
-                results.append(result)
+        
+        # 使用 Semaphore 限制并发
+        semaphore = asyncio.Semaphore(actual_max_concurrency)
+        
+        async def limited_validate(task):
+            async with semaphore:
+                return await task
+        
+        # 并行执行所有验证任务
+        if validation_tasks:
+            task_results = await asyncio.gather(
+                *[limited_validate(task) for task in validation_tasks],
+                return_exceptions=True,
+            )
+            
+            # 处理结果，保持原始顺序
+            for idx, result in enumerate(task_results):
+                filter_idx, value_idx, field_name, value_str = task_metadata[idx]
+                
+                if isinstance(result, Exception):
+                    # 单个验证失败不影响其他任务
+                    logger.warning(f"验证失败 {field_name}={value_str}: {type(result).__name__}: {result}")
+                    results.append(FilterValidationResult(
+                        is_valid=True,
+                        field_name=field_name,
+                        requested_value=value_str,
+                        validation_type=FilterValidationType.SKIPPED,
+                        skip_reason=f"validation_error: {type(result).__name__}",
+                    ))
+                else:
+                    results.append(result)
+        
+        # 合并跳过的结果
+        for _, _, result in skipped_results:
+            results.append(result)
         
         return FilterValidationSummary.from_results(results)
     

@@ -454,7 +454,8 @@ class FeedbackLearner:
                     mapping = SynonymMapping.model_validate(item.value)
                     if mapping.confirmation_count >= min_count:
                         mappings.append(mapping)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"解析同义词映射条目失败: {e}")
                     continue
             
             # 按确认次数降序排序
@@ -512,7 +513,8 @@ class FeedbackLearner:
                     record = FeedbackRecord.model_validate(item.value)
                     if feedback_type is None or record.feedback_type == feedback_type:
                         records.append(record)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"解析反馈记录条目失败: {e}")
                     continue
             
             # 按创建时间降序排序
@@ -586,7 +588,8 @@ class FeedbackLearner:
                 try:
                     record = FeedbackRecord.model_validate(item.value)
                     records_with_key.append((item.key, record))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"解析反馈记录条目失败（淘汰检查）: {e}")
                     continue
             
             if len(records_with_key) <= self.max_feedback_per_datasource:

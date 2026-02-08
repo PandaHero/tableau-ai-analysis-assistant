@@ -2,7 +2,7 @@
 """语义层筛选器模型。平台无关的筛选器定义。"""
 
 from datetime import date
-from typing import Any
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,7 +25,7 @@ class SetFilter(Filter):
     """集合筛选器 - 按特定值筛选。"""
     filter_type: FilterType = Field(default=FilterType.SET)
     
-    values: list[Any] = Field(
+    values: List[Any] = Field(
         default_factory=list,
         description="要包含/排除的值列表"
     )
@@ -50,11 +50,11 @@ class DateRangeFilter(Filter):
     """日期范围筛选器。"""
     filter_type: FilterType = Field(default=FilterType.DATE_RANGE)
     
-    start_date: date | None = Field(
+    start_date: Optional[date] = Field(
         default=None,
         description="开始日期（YYYY-MM-DD）"
     )
-    end_date: date | None = Field(
+    end_date: Optional[date] = Field(
         default=None,
         description="结束日期（YYYY-MM-DD）"
     )
@@ -64,8 +64,8 @@ class NumericRangeFilter(Filter):
     """数值范围筛选器。"""
     filter_type: FilterType = Field(default=FilterType.NUMERIC_RANGE)
     
-    min_value: float | None = Field(default=None, description="最小值")
-    max_value: float | None = Field(default=None, description="最大值")
+    min_value: Optional[float] = Field(default=None, description="最小值")
+    max_value: Optional[float] = Field(default=None, description="最大值")
     include_min: bool = Field(default=True, description="是否包含最小值（>=）")
     include_max: bool = Field(default=True, description="是否包含最大值（<=）")
 

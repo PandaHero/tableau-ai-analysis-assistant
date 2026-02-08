@@ -45,35 +45,7 @@ logger = logging.getLogger(__name__)
 # SSL 配置辅助函数
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _get_ssl_verify() -> Any:
-    """
-    获取 SSL 验证参数
-    
-    Returns:
-        - ssl.SSLContext（如果配置了 ca_bundle）
-        - True（使用系统证书）
-        - False（禁用 SSL 验证）
-    """
-    import ssl
-    
-    config = get_config()
-    
-    if not config.get_ssl_verify():
-        return False
-    
-    ca_bundle = config.get_ssl_ca_bundle()
-    if ca_bundle:
-        # 使用新的 ssl.create_default_context API
-        ssl_context = ssl.create_default_context(cafile=ca_bundle)
-        return ssl_context
-    
-    # 尝试使用 certifi
-    try:
-        import certifi
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        return ssl_context
-    except ImportError:
-        return True
+from .ssl_utils import get_ssl_verify as _get_ssl_verify
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -166,7 +138,9 @@ class VizQLClient:
             error_code = error_data.get("errorCode")
             message = error_data.get("message", response.text)
             debug = error_data.get("debug")
-        except Exception:
+        except Exception as e:
+            # 响应体可能不是 JSON 格式，回退到纯文本
+            logger.debug(f"解析错误响应 JSON 失败: status_code={status_code}, error={e}")
             error_code = None
             message = response.text
             debug = None

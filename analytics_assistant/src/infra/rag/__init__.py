@@ -19,6 +19,15 @@ from .models import (
     MappingResult,
 )
 
+# 相似度计算模块
+from .similarity import (
+    cosine_similarity,
+    ScoreType,
+    SimilarityCalculator,
+    l2_similarity,
+    inner_product_similarity,
+)
+
 from .retriever import (
     RetrievalConfig,
     MetadataFilter,
@@ -69,11 +78,17 @@ from .exceptions import (
 
 __all__ = [
     # Models
+    "cosine_similarity",
     "RetrievalSource",
     "EmbeddingResult",
     "FieldChunk",
     "RetrievalResult",
     "MappingResult",
+    # Similarity
+    "ScoreType",
+    "SimilarityCalculator",
+    "l2_similarity",
+    "inner_product_similarity",
     # Retriever
     "RetrievalConfig",
     "MetadataFilter",

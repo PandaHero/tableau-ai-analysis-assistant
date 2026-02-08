@@ -4,7 +4,7 @@
 包含 LOD 表达式和表计算的定义。
 """
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -31,12 +31,12 @@ class LODFixed(BaseModel):
     
     calc_type: Literal["LOD_FIXED"] = Field(default="LOD_FIXED")
     target: str = Field(description="要聚合的目标度量字段")
-    dimensions: list[str] = Field(
+    dimensions: List[str] = Field(
         default_factory=list,
         description="定义固定聚合粒度的维度（空列表=全局聚合）"
     )
     aggregation: AggregationType = Field(description="聚合函数")
-    alias: str | None = Field(default=None, description="结果别名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -56,9 +56,9 @@ class LODInclude(BaseModel):
     
     calc_type: Literal["LOD_INCLUDE"] = Field(default="LOD_INCLUDE")
     target: str = Field(description="要聚合的目标度量字段")
-    dimensions: list[str] = Field(description="要添加到查询粒度的维度（至少一个）")
+    dimensions: List[str] = Field(description="要添加到查询粒度的维度（至少一个）")
     aggregation: AggregationType = Field(description="聚合函数")
-    alias: str | None = Field(default=None, description="结果别名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -69,7 +69,7 @@ class LODInclude(BaseModel):
     
     @field_validator("dimensions")
     @classmethod
-    def dimensions_not_empty(cls, v: list[str]) -> list[str]:
+    def dimensions_not_empty(cls, v: List[str]) -> List[str]:
         if not v:
             raise ValueError("LOD_INCLUDE 的 dimensions 不能为空")
         return [s.strip() for s in v if s and s.strip()]
@@ -85,9 +85,9 @@ class LODExclude(BaseModel):
     
     calc_type: Literal["LOD_EXCLUDE"] = Field(default="LOD_EXCLUDE")
     target: str = Field(description="要聚合的目标度量字段")
-    dimensions: list[str] = Field(description="要从查询粒度移除的维度（至少一个）")
+    dimensions: List[str] = Field(description="要从查询粒度移除的维度（至少一个）")
     aggregation: AggregationType = Field(description="聚合函数")
-    alias: str | None = Field(default=None, description="结果别名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -98,7 +98,7 @@ class LODExclude(BaseModel):
     
     @field_validator("dimensions")
     @classmethod
-    def dimensions_not_empty(cls, v: list[str]) -> list[str]:
+    def dimensions_not_empty(cls, v: List[str]) -> List[str]:
         if not v:
             raise ValueError("LOD_EXCLUDE 的 dimensions 不能为空")
         return [s.strip() for s in v if s and s.strip()]
@@ -114,7 +114,7 @@ class RankCalc(BaseModel):
     
     calc_type: Literal["RANK"] = Field(default="RANK")
     target: str = Field(description="排名依据的度量字段")
-    partition_by: list[DimensionField] = Field(
+    partition_by: List[DimensionField] = Field(
         default_factory=list,
         description="定义排名范围的维度（空=全局排名）"
     )
@@ -122,12 +122,12 @@ class RankCalc(BaseModel):
         default=SortDirection.DESC,
         description="排名方向（DESC=最高值排第1）"
     )
-    rank_style: RankStyle | None = Field(
+    rank_style: Optional[RankStyle] = Field(
         default=None,
         description="排名样式（默认：COMPETITION=1,2,2,4）"
     )
-    top_n: int | None = Field(default=None, description="排名后筛选前/后 N 名")
-    alias: str | None = Field(default=None, description="结果别名")
+    top_n: Optional[int] = Field(default=None, description="排名后筛选前/后 N 名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -143,13 +143,13 @@ class DenseRankCalc(BaseModel):
     
     calc_type: Literal["DENSE_RANK"] = Field(default="DENSE_RANK")
     target: str = Field(description="排名依据的度量字段")
-    partition_by: list[DimensionField] = Field(
+    partition_by: List[DimensionField] = Field(
         default_factory=list,
         description="定义排名范围的维度"
     )
     direction: SortDirection = Field(default=SortDirection.DESC, description="排名方向")
-    top_n: int | None = Field(default=None, description="筛选前/后 N 名")
-    alias: str | None = Field(default=None, description="结果别名")
+    top_n: Optional[int] = Field(default=None, description="筛选前/后 N 名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -165,12 +165,12 @@ class PercentileCalc(BaseModel):
     
     calc_type: Literal["PERCENTILE"] = Field(default="PERCENTILE")
     target: str = Field(description="目标度量字段")
-    partition_by: list[DimensionField] = Field(
+    partition_by: List[DimensionField] = Field(
         default_factory=list,
         description="定义百分位范围的维度"
     )
     direction: SortDirection = Field(default=SortDirection.DESC, description="排序方向")
-    alias: str | None = Field(default=None, description="结果别名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -190,12 +190,12 @@ class DifferenceCalc(BaseModel):
     
     calc_type: Literal["DIFFERENCE"] = Field(default="DIFFERENCE")
     target: str = Field(description="目标度量字段")
-    partition_by: list[DimensionField] = Field(
+    partition_by: List[DimensionField] = Field(
         default_factory=list,
         description="定义比较范围的维度"
     )
     relative_to: RelativeTo = Field(description="差异参考点")
-    alias: str | None = Field(default=None, description="结果别名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -214,12 +214,12 @@ class PercentDifferenceCalc(BaseModel):
     
     calc_type: Literal["PERCENT_DIFFERENCE"] = Field(default="PERCENT_DIFFERENCE")
     target: str = Field(description="目标度量字段")
-    partition_by: list[DimensionField] = Field(
+    partition_by: List[DimensionField] = Field(
         default_factory=list,
         description="定义比较范围的维度"
     )
     relative_to: RelativeTo = Field(description="百分比变化参考点")
-    alias: str | None = Field(default=None, description="结果别名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -242,7 +242,7 @@ class RunningTotalCalc(BaseModel):
     
     calc_type: Literal["RUNNING_TOTAL"] = Field(default="RUNNING_TOTAL")
     target: str = Field(description="目标度量字段")
-    partition_by: list[DimensionField] = Field(
+    partition_by: List[DimensionField] = Field(
         default_factory=list,
         description="定义累计范围的维度"
     )
@@ -250,11 +250,11 @@ class RunningTotalCalc(BaseModel):
         default=AggregationType.SUM,
         description="累计聚合函数（仅支持 SUM/AVG/MIN/MAX/COUNT）"
     )
-    restart_every: str | None = Field(
+    restart_every: Optional[str] = Field(
         default=None,
         description="重新开始累计的维度（如 YTD 设为 'Year'）"
     )
-    alias: str | None = Field(default=None, description="结果别名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -277,7 +277,7 @@ class MovingCalc(BaseModel):
     
     calc_type: Literal["MOVING_CALC"] = Field(default="MOVING_CALC")
     target: str = Field(description="目标度量字段")
-    partition_by: list[DimensionField] = Field(
+    partition_by: List[DimensionField] = Field(
         default_factory=list,
         description="定义窗口范围的维度"
     )
@@ -288,7 +288,7 @@ class MovingCalc(BaseModel):
     window_previous: int = Field(default=2, description="窗口中前面的行数")
     window_next: int = Field(default=0, description="窗口中后面的行数")
     include_current: bool = Field(default=True, description="是否包含当前行")
-    alias: str | None = Field(default=None, description="结果别名")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod
@@ -311,12 +311,12 @@ class PercentOfTotalCalc(BaseModel):
     
     calc_type: Literal["PERCENT_OF_TOTAL"] = Field(default="PERCENT_OF_TOTAL")
     target: str = Field(description="目标度量字段")
-    partition_by: list[DimensionField] = Field(
+    partition_by: List[DimensionField] = Field(
         default_factory=list,
         description="定义总计范围的维度（空=全局总计占比）"
     )
-    level_of: str | None = Field(default=None, description="特定聚合级别")
-    alias: str | None = Field(default=None, description="结果别名")
+    level_of: Optional[str] = Field(default=None, description="特定聚合级别")
+    alias: Optional[str] = Field(default=None, description="结果别名")
     
     @field_validator("target")
     @classmethod

@@ -17,13 +17,16 @@
 import json
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import CacheManager
 
 from .exceptions import IndexExistsError, IndexCreationError
 from .retriever import CascadeRetriever, RetrieverFactory
 from .schemas import (
+    IndexBackend,
     IndexConfig,
     IndexDocument,
     IndexInfo,
@@ -53,12 +56,14 @@ class IndexManager:
         self,
         registry_namespace: str = "rag_index_registry",
         doc_hash_namespace: str = "rag_doc_hashes",
+        fields_namespace: str = "rag_index_fields",
     ):
         """初始化 IndexManager
         
         Args:
             registry_namespace: 索引注册表的 KV 存储命名空间
             doc_hash_namespace: 文档哈希的 KV 存储命名空间
+            fields_namespace: 字段数据的 KV 存储命名空间
         """
         self._registry = CacheManager(registry_namespace, default_ttl=None)
         self._indexes: Dict[str, CascadeRetriever] = {}
@@ -68,6 +73,10 @@ class IndexManager:
         self._doc_hash_namespace = doc_hash_namespace
         self._doc_hash_cache = CacheManager(self._doc_hash_namespace, default_ttl=None)
         self._load_doc_hashes()  # 启动时加载
+        # 字段数据缓存（持久化到 KV 存储）
+        # 用于在加载索引时恢复 chunks 数据
+        self._fields_namespace = fields_namespace
+        self._fields_cache = CacheManager(self._fields_namespace, default_ttl=None)
         # 注意：索引实例采用懒加载模式，不在初始化时加载
         # 调用 get_index() 时如果内存中没有，会尝试从持久化存储加载
     
@@ -95,22 +104,61 @@ class IndexManager:
         except Exception as e:
             logger.warning(f"保存文档哈希失败: {e}")
     
+    def _save_fields(self, index_name: str, fields: List[Dict]) -> None:
+        """将索引的字段数据保存到 KV 存储
+        
+        用于在加载索引时恢复 chunks 数据。
+        
+        Args:
+            index_name: 索引名称
+            fields: 字段数据列表
+        """
+        try:
+            key = f"fields:{index_name}"
+            self._fields_cache.set(key, fields)
+            logger.debug(f"保存字段数据: {index_name}, {len(fields)} 条")
+        except Exception as e:
+            logger.warning(f"保存字段数据失败: {e}")
+    
+    def _load_fields(self, index_name: str) -> List[Dict]:
+        """从 KV 存储加载索引的字段数据
+        
+        Args:
+            index_name: 索引名称
+            
+        Returns:
+            字段数据列表，如果不存在返回空列表
+        """
+        try:
+            key = f"fields:{index_name}"
+            fields = self._fields_cache.get(key)
+            if fields:
+                logger.debug(f"加载字段数据: {index_name}, {len(fields)} 条")
+                return fields
+            return []
+        except Exception as e:
+            logger.warning(f"加载字段数据失败: {e}")
+            return []
+    
     def _list_registered_indexes(self) -> List[str]:
         """列出所有已注册的索引名称"""
         try:
             # 从注册表获取索引列表
             index_list = self._registry.get("_index_list")
             return index_list if index_list else []
-        except Exception:
+        except Exception as e:
+            logger.warning(f"列出已注册索引失败: {e}")
             return []
     
     def _register_index_name(self, name: str) -> None:
         """注册索引名称到列表"""
         try:
             index_list = self._list_registered_indexes()
+            logger.info(f"注册索引名称: {name}, 当前列表: {index_list}")
             if name not in index_list:
                 index_list.append(name)
-                self._registry.set("_index_list", index_list)
+                result = self._registry.set("_index_list", index_list)
+                logger.info(f"注册索引名称结果: {result}, 新列表: {index_list}")
         except Exception as e:
             logger.warning(f"注册索引名称失败: {e}")
     
@@ -132,27 +180,34 @@ class IndexManager:
         实现流程：
         1. 从 IndexRegistry 获取 IndexInfo
         2. 如果不存在，返回 None
-        3. 根据 IndexInfo.config.persist_directory 加载 FAISS 索引
-        4. 使用 RetrieverFactory 重建检索器实例
-        5. 缓存到 _indexes[name]
+        3. 加载持久化的字段数据
+        4. 根据 IndexInfo.config.persist_directory 加载 FAISS 索引
+        5. 使用 RetrieverFactory 重建检索器实例
+        6. 缓存到 _indexes[name]
         """
         # 1. 检查注册表
         index_info = self._get_index_info_from_registry(name)
         if index_info is None:
             return None
         
-        # 2. 使用 RetrieverFactory 加载已有索引
+        # 2. 加载持久化的字段数据
+        fields = self._load_fields(name)
+        if not fields:
+            logger.warning(f"索引 '{name}' 的字段数据不存在，检索功能可能受限")
+        
+        # 3. 使用 RetrieverFactory 加载已有索引
         try:
             retriever = RetrieverFactory.create_cascade_retriever(
-                fields=[],  # 空列表，因为是加载已有索引
+                fields=fields,  # 使用持久化的字段数据恢复 chunks
                 collection_name=name,
                 persist_directory=index_info.config.persist_directory,
-                force_rebuild=False,  # 不重建，加载已有
+                force_rebuild=False,  # 不重建，加载已有向量索引
+                use_batch_embedding=True,  # 如果需要重建，使用批量 embedding
             )
             
-            # 3. 缓存到内存
+            # 4. 缓存到内存
             self._indexes[name] = retriever
-            logger.info(f"从持久化存储加载索引: {name}")
+            logger.info(f"从持久化存储加载索引: {name}, 字段数: {len(fields)}")
             return retriever
             
         except Exception as e:
@@ -196,8 +251,6 @@ class IndexManager:
     
     def _dict_to_index_info(self, data: Dict[str, Any]) -> IndexInfo:
         """从字典反序列化 IndexInfo"""
-        from .schemas import IndexBackend
-        
         config_data = data.get("config", {})
         config = IndexConfig(
             backend=IndexBackend(config_data.get("backend", "faiss")),
@@ -262,6 +315,7 @@ class IndexManager:
                 persist_directory=config.persist_directory,
                 embedding_model_id=config.embedding_model_id,
                 force_rebuild=True,  # 新建索引，强制创建
+                use_batch_embedding=True,  # 使用批量 embedding 加速首次创建
             )
             
             # 4. 注册元数据
@@ -280,7 +334,7 @@ class IndexManager:
             # 5. 缓存检索器实例
             self._indexes[name] = retriever
             
-            # 6. 初始化文档哈希表
+            # 6. 初始化文档哈希表并保存字段数据
             if documents:
                 self._doc_hashes[name] = {
                     doc.id: {
@@ -290,6 +344,10 @@ class IndexManager:
                     for doc in documents
                 }
                 self._save_doc_hashes(name)
+            
+            # 7. 保存字段数据（用于加载索引时恢复 chunks）
+            if fields:
+                self._save_fields(name, fields)
             
             logger.info(f"创建索引成功: {name}, 文档数: {len(documents) if documents else 0}")
             return index_info
@@ -335,6 +393,22 @@ class IndexManager:
         # 尝试从持久化存储加载
         return self._load_index_from_storage(name)
     
+    def _get_embedding_batch_size(self) -> int:
+        """获取 Embedding API 的批次大小限制。
+        
+        从 app.yaml 的 batch_embedding.batch_size 读取，
+        默认 20（智谱 API 单次最多 64 条，保守使用 20）。
+        
+        Returns:
+            每批次最大文档数
+        """
+        try:
+            config = get_config()
+            batch_cfg = config.config.get("batch_embedding", {})
+            return batch_cfg.get("batch_size", 20)
+        except Exception:
+            return 20
+    
     def delete_index(self, name: str) -> bool:
         """删除索引
         
@@ -361,6 +435,9 @@ class IndexManager:
             if name in self._doc_hashes:
                 del self._doc_hashes[name]
             self._doc_hash_cache.delete(f"doc_hashes:{name}")
+            
+            # 删除字段数据
+            self._fields_cache.delete(f"fields:{name}")
             
             logger.info(f"删除索引成功: {name}")
             return True
@@ -398,14 +475,15 @@ class IndexManager:
         index_name: str,
         documents: List[IndexDocument],
     ) -> int:
-        """添加文档（增量）
-        
+        """添加文档（增量，自动分批）
+
         使用 FAISS 的 add_texts 方法实现真正的增量添加。
-        
+        自动分批处理，避免超过 Embedding API 的批次限制。
+
         Args:
             index_name: 索引名称
             documents: 要添加的文档列表
-            
+
         Returns:
             成功添加的文档数量
         """
@@ -413,21 +491,21 @@ class IndexManager:
         if retriever is None:
             logger.warning(f"索引不存在: {index_name}")
             return 0
-        
+
         # 过滤已存在的文档
         existing_hashes = self._doc_hashes.get(index_name, {})
         new_docs = [doc for doc in documents if doc.id not in existing_hashes]
-        
+
         if not new_docs:
             logger.info(f"没有新文档需要添加: {index_name}")
             return 0
-        
+
         # 获取向量存储并增量添加
         try:
             # 从 CascadeRetriever 获取 EmbeddingRetriever 的向量存储
             if hasattr(retriever, '_embedding') and hasattr(retriever._embedding, '_store'):
                 vector_store = retriever._embedding._store
-                
+
                 # 准备文本和元数据
                 texts = [doc.content for doc in new_docs]
                 metadatas = [
@@ -438,42 +516,52 @@ class IndexManager:
                     }
                     for doc in new_docs
                 ]
-                
-                # 使用 FAISS 的 add_texts 方法增量添加
-                vector_store.add_texts(texts, metadatas=metadatas)
-                
+
+                # 分批添加，避免超过 Embedding API 的批次限制（智谱限制 64 条）
+                batch_size = self._get_embedding_batch_size()
+                total = len(texts)
+                for batch_start in range(0, total, batch_size):
+                    batch_end = min(batch_start + batch_size, total)
+                    batch_texts = texts[batch_start:batch_end]
+                    batch_metadatas = metadatas[batch_start:batch_end]
+                    vector_store.add_texts(batch_texts, metadatas=batch_metadatas)
+                    logger.debug(
+                        f"增量添加批次: {batch_start // batch_size + 1}, "
+                        f"文档 {batch_start + 1}-{batch_end}/{total}"
+                    )
+
                 # 持久化索引
                 info = self._get_index_info_from_registry(index_name)
                 if info and info.config.persist_directory:
-                    from pathlib import Path
                     index_path = Path(info.config.persist_directory) / index_name
                     vector_store.save_local(str(index_path))
                     logger.debug(f"索引已持久化: {index_path}")
-                
+
                 logger.info(f"增量添加文档成功: {index_name}, {len(new_docs)} 条")
             else:
                 logger.warning(f"无法获取向量存储，跳过增量添加: {index_name}")
         except Exception as e:
             logger.error(f"增量添加文档失败: {index_name}, {e}")
-        
+
         # 更新哈希记录
         for doc in new_docs:
             existing_hashes[doc.id] = {
                 "content": doc.content_hash,
                 "metadata": doc.metadata_hash,
             }
-        
+
         self._doc_hashes[index_name] = existing_hashes
         self._save_doc_hashes(index_name)
-        
+
         # 更新索引信息
         info = self._get_index_info_from_registry(index_name)
         if info:
             info.document_count += len(new_docs)
             info.updated_at = datetime.now()
             self._registry.set(index_name, self._index_info_to_dict(info))
-        
+
         return len(new_docs)
+
     
     def update_documents(
         self,
@@ -593,7 +681,6 @@ class IndexManager:
                 # 持久化索引
                 info = self._get_index_info_from_registry(index_name)
                 if info and info.config.persist_directory:
-                    from pathlib import Path
                     index_path = Path(info.config.persist_directory) / index_name
                     vector_store.save_local(str(index_path))
                     logger.debug(f"索引已持久化: {index_path}")

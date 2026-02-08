@@ -9,6 +9,7 @@ DynamicPromptBuilder - 动态 Prompt 构建器
 Requirements: 12.1 - 动态 Prompt 生成, 7.1-7.5 - 模块化 Prompt 构建
 """
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -143,7 +144,7 @@ class DynamicPromptBuilder:
         ...     question="上个月各地区的利润率",
         ...     config=config,
         ...     field_candidates=schema_result.field_candidates,
-        ...     schema_json=schema_result.schema_json,  # 裁剪好的 Schema
+        ...     schema_json=schema_result.schema_text,  # 裁剪好的 Schema
         ...     detected_complexity=schema_result.detected_complexity,
         ...     allowed_calc_types=schema_result.allowed_calc_types,
         ... )
@@ -276,7 +277,10 @@ class DynamicPromptBuilder:
     def _format_field_list(self, field_candidates: List[FieldCandidate], max_tokens: int) -> str:
         """格式化字段列表
         
-        显示字段信息和检索置信度，帮助 LLM 理解字段匹配质量。
+        显示字段信息、语义信息和检索置信度，帮助 LLM 理解字段匹配质量。
+        
+        格式：
+        - 字段名 (显示名) [类型, 数据类型] 匹配度:XX%: 业务描述 别名: xxx, yyy [层级信息]
         """
         if not field_candidates:
             return "（无可用字段）"
@@ -296,8 +300,15 @@ class DynamicPromptBuilder:
             if field.confidence < 0.95:
                 line += f" 匹配度:{int(field.confidence * 100)}%"
             
-            if field.description:
-                line += f": {field.description}"
+            # 显示业务描述（优先使用 business_description，其次 description）
+            desc = field.business_description or field.description
+            if desc:
+                line += f": {desc}"
+            
+            # 显示别名（帮助 LLM 理解用户可能使用的其他名称）
+            if field.aliases:
+                aliases_str = ", ".join(field.aliases[:3])
+                line += f" 别名: {aliases_str}"
             
             # 层级信息
             hierarchy_info = self._format_hierarchy_info(field)
@@ -348,7 +359,6 @@ class DynamicPromptBuilder:
         if not examples:
             return ""
         
-        import json
         examples = examples[:max_examples]
         
         lines = ["<examples>"]
@@ -366,7 +376,10 @@ class DynamicPromptBuilder:
         return "\n".join(lines)
     
     def _format_history(self, history: Optional[List[Dict[str, str]]]) -> str:
-        """格式化对话历史"""
+        """格式化对话历史
+        
+        使用 HistoryManager 进行历史截断和格式化。
+        """
         if not history:
             return ""
         manager = HistoryManager()

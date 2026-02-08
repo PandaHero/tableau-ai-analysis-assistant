@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import get_kv_store
-from analytics_assistant.src.infra.rag import get_rag_service
+from analytics_assistant.src.infra.rag import get_rag_service, cosine_similarity
 from analytics_assistant.src.infra.rag.schemas import IndexConfig, IndexDocument
 from analytics_assistant.src.infra.rag.exceptions import IndexNotFoundError
 
@@ -290,7 +290,7 @@ class FewShotManager:
             scored_examples: List[tuple] = []
             for example in examples:
                 if example.question_embedding:
-                    similarity = self._cosine_similarity(
+                    similarity = cosine_similarity(
                         question_embedding,
                         example.question_embedding
                     )
@@ -538,7 +538,8 @@ class FewShotManager:
                 try:
                     example = FewShotExample.model_validate(item.value)
                     examples.append(example)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"解析示例条目失败: {e}")
                     continue
             
             return examples
@@ -586,7 +587,8 @@ class FewShotManager:
                 try:
                     example = FewShotExample.model_validate(item.value)
                     examples_with_key.append((item.key, example))
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"解析示例条目失败（淘汰检查）: {e}")
                     continue
             
             if len(examples_with_key) < self.max_examples_per_datasource:
@@ -609,21 +611,6 @@ class FewShotManager:
                 
         except Exception as e:
             logger.error(f"FewShotManager _evict_if_needed 失败: {e}")
-    
-    @staticmethod
-    def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
-        """计算余弦相似度。"""
-        if not vec1 or not vec2 or len(vec1) != len(vec2):
-            return 0.0
-        
-        dot_product = sum(a * b for a, b in zip(vec1, vec2))
-        norm1 = sum(a * a for a in vec1) ** 0.5
-        norm2 = sum(b * b for b in vec2) ** 0.5
-        
-        if norm1 == 0 or norm2 == 0:
-            return 0.0
-        
-        return dot_product / (norm1 * norm2)
 
 
 __all__ = [

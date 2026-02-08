@@ -9,7 +9,7 @@ SemanticOutput 是语义解析器的输出，直接作为适配器的输入，
 """
 
 import logging
-from typing import Any
+from typing import Any, List
 
 from analytics_assistant.src.core.interfaces import BasePlatformAdapter
 from analytics_assistant.src.core.schemas import (
@@ -152,7 +152,7 @@ class TableauAdapter(BasePlatformAdapter):
         field_name: str,
         datasource_id: str,
         **kwargs: Any,
-    ) -> list[str]:
+    ) -> List[str]:
         """获取字段的唯一值列表。
         
         通过 VizQL API 查询单个维度字段，返回该字段的唯一值。
