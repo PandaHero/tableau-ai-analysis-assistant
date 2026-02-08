@@ -1,6 +1,6 @@
-# Tableau AI Analysis Assistant
+# Analytics Assistant
 
-基于 LangGraph 的智能 Tableau 数据分析助手，采用 LLM 组合架构实现语义解析，支持自然语言查询、VizQL 查询生成和智能洞察分析。
+基于 LangGraph 的智能数据分析助手，采用多 Agent 组合架构实现语义解析，支持自然语言查询、VizQL 查询生成和智能洞察分析。当前适配 Tableau 平台，架构设计支持扩展到其他 BI 平台。
 
 ## ✨ 核心特性
 
@@ -9,25 +9,19 @@
 - 支持中英文混合查询
 - 智能识别时间表达式（"上个月"、"去年同期"等）
 
-### 🧠 LLM 组合架构 (Step1 + Step2 + ReAct)
-- **Step1 语义理解**：三元模型提取 (What × Where × How)、意图分类
-- **Step2 计算推理**：计算类型推断、LLM 自我验证
-- **ReAct 错误修正**：智能错误分类、CORRECT/RETRY/CLARIFY 决策
+### 🧠 多 Agent 组合架构
+- **SemanticParser Agent**：三元模型提取 (What × Where × How)、意图分类、计算推理、ReAct 错误修正
+- **FieldMapper Agent**：RAG 两阶段检索（向量 top-K + LLM Rerank），高置信度快速路径
+- **FieldSemantic Agent**：字段语义推断（维度/度量分类），种子匹配 + LLM 批量推断
 
 ### 🚀 Token 级流式输出
 - 实时推送 LLM 生成的每个 token
 - SSE (Server-Sent Events) 协议
-- 提供流畅的用户体验
 
 ### 🔍 RAG 语义字段映射
 - 两阶段检索：向量检索 top-K + LLM Rerank
 - 高置信度快速路径（≥0.9 直接返回，无需 LLM）
-- 字段映射缓存（24小时 TTL，基于 LangGraph SqliteStore）
-
-### 📊 渐进式洞察分析
-- **统计分析**：分布检测、异常检测、聚类分析、相关性分析
-- **双 LLM 协作**：分析师 + 主持人
-- **智能分块**：基于维度层级的优先级分块
+- 字段映射缓存（基于 LangGraph SqliteStore）
 
 ### 🏗️ 纯语义中间层
 - LLM 只做语义理解，输出平台无关的语义模型
@@ -37,16 +31,6 @@
 
 ## 🏗️ 系统架构
 
-### SemanticParser LLM 组合架构
-
-```
-用户问题 → Step1 (语义理解) → Step2 (计算推理) → Pipeline (执行)
-                ↓                    ↓                ↓
-           意图分类            计算类型推断        字段映射→构建→执行
-           三元模型提取         自我验证            ↓
-           (What/Where/How)                    ReAct (错误修正)
-```
-
 ### 三元模型 (What × Where × How)
 
 | 元素 | 说明 | 示例 |
@@ -55,88 +39,69 @@
 | Where | 维度 (分组) + 过滤器 (条件) | 维度: City, 过滤器: City="Beijing" |
 | How | 计算复杂度 | SIMPLE / COMPLEX |
 
-**Dimension vs Filter 区分**：
-- Dimension: 分组字段，用于 "by X", "per X", "for each X"
-- Filter: 值约束，用于 "in Beijing", "= X", 日期范围
-
 ### 计算类型 (CalcType)
 
-**Table Calculations**:
-- RANK, DENSE_RANK, PERCENTILE (排名)
-- RUNNING_TOTAL (累计)
-- MOVING_CALC (移动计算)
-- PERCENT_OF_TOTAL (占比)
-- DIFFERENCE, PERCENT_DIFFERENCE (差异/同比环比)
+**Table Calculations**: RANK, RUNNING_TOTAL, MOVING_CALC, PERCENT_OF_TOTAL, DIFFERENCE 等
 
-**LOD Expressions**:
-- LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE
+**LOD Expressions**: LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE
 
 ## 📁 项目结构
 
 ```
-tableau-ai-analysis-assistant/
-├── tableau_assistant/
+analytics-assistant/
+├── analytics_assistant/
+│   ├── config/                         # 配置文件
+│   │   └── app.yaml                    # 统一应用配置
 │   ├── src/
-│   │   ├── agents/                     # Agent 节点
-│   │   │   ├── base/                   # Agent 基类和工具
+│   │   ├── agents/                     # Agent 模块（LangGraph 工作流）
+│   │   │   ├── base/                   # Agent 基础设施（node.py, middleware_runner.py）
 │   │   │   ├── semantic_parser/        # 语义解析 Agent (Step1 + Step2 + ReAct)
-│   │   │   │   ├── components/         # Step1, Step2, Pipeline, ReAct 组件
-│   │   │   │   ├── models/             # Step1Output, Step2Output, ReActOutput
+│   │   │   │   ├── components/         # 业务组件
 │   │   │   │   ├── prompts/            # Prompt 模板
-│   │   │   │   └── subgraph.py         # LangGraph Subgraph
+│   │   │   │   ├── schemas/            # 数据模型
+│   │   │   │   ├── seeds/              # 种子数据
+│   │   │   │   ├── graph.py            # LangGraph 图定义
+│   │   │   │   └── state.py            # State 定义
 │   │   │   ├── field_mapper/           # 字段映射 Agent
-│   │   │   ├── field_semantic/         # 字段语义推断 Agent (维度+度量)
-│   │   │   ├── insight/                # 洞察分析 Agent
-│   │   │   │   ├── components/         # Profiler, Coordinator, Analyzer
-│   │   │   │   └── models/             # Profile, Insight 模型
-│   │   │   └── replanner/              # 重规划 Agent
+│   │   │   │   ├── prompts/
+│   │   │   │   ├── schemas/
+│   │   │   │   └── node.py
+│   │   │   └── field_semantic/         # 字段语义推断 Agent
+│   │   │       ├── components/
+│   │   │       ├── prompts/
+│   │   │       ├── schemas/
+│   │   │       └── inference.py
 │   │   │
-│   │   ├── nodes/                      # 纯代码节点
-│   │   │   ├── query_builder/          # 查询构建
-│   │   │   ├── execute/                # 查询执行
-│   │   │   └── self_correction/        # 自我修正
+│   │   ├── core/                       # 核心模块（接口、异常、通用 Schema）
+│   │   │   ├── schemas/                # 通用数据模型
+│   │   │   ├── interfaces.py           # 抽象接口定义
+│   │   │   └── exceptions.py           # 自定义异常
 │   │   │
-│   │   ├── core/                       # 核心层 (平台无关)
-│   │   │   ├── models/                 # 语义层数据模型
-│   │   │   │   ├── fields.py           # DimensionField, MeasureField
-│   │   │   │   ├── filters.py          # SetFilter, DateRangeFilter, ...
-│   │   │   │   ├── computations.py     # Computation, CalcParams
-│   │   │   │   ├── enums.py            # CalcType, HowType, IntentType
-│   │   │   │   └── query.py            # VizQLQuery
-│   │   │   ├── interfaces/             # 抽象接口
-│   │   │   └── exceptions.py           # 异常定义
-│   │   │
-│   │   ├── platforms/                  # 平台适配层
-│   │   │   └── tableau/                # Tableau 平台实现
-│   │   │       ├── models/             # TableCalc, LODExpression
-│   │   │       ├── query_builder.py    # 查询构建器
-│   │   │       ├── field_mapper.py     # 字段映射器
-│   │   │       ├── vizql_client.py     # VizQL API 客户端
-│   │   │       └── auth.py             # JWT/PAT 认证
-│   │   │
-│   │   ├── orchestration/              # 编排层
-│   │   │   ├── workflow/               # 工作流定义
-│   │   │   ├── middleware/             # 中间件栈
-│   │   │   └── tools/                  # LangChain 工具
-│   │   │
-│   │   ├── infra/                      # 基础设施层
-│   │   │   ├── ai/                     # LLM/Embedding/RAG
-│   │   │   ├── storage/                # 存储 (缓存、索引)
+│   │   ├── infra/                      # 基础设施
+│   │   │   ├── ai/                     # LLM、Embedding 封装
+│   │   │   ├── storage/                # 存储（SqliteStore、缓存）
 │   │   │   ├── config/                 # 配置管理
-│   │   │   ├── certs/                  # 证书管理
-│   │   │   └── monitoring/             # 监控日志
+│   │   │   ├── rag/                    # RAG 检索
+│   │   │   └── seeds/                  # 全局种子数据
 │   │   │
-│   │   └── api/                        # FastAPI 端点
+│   │   ├── orchestration/              # 工作流编排
+│   │   │   └── workflow/               # WorkflowContext
+│   │   │
+│   │   └── platform/                   # 平台适配器
+│   │       ├── base.py                 # 平台注册表和工厂
+│   │       └── tableau/                # Tableau 平台实现
 │   │
 │   ├── tests/                          # 测试
-│   │   ├── unit/                       # 单元测试
-│   │   └── integration/                # 集成测试
+│   │   ├── agents/                     # Agent 模块测试
+│   │   ├── integration/                # 集成测试
+│   │   └── manual/                     # 手动测试脚本
 │   │
-│   └── docs/                           # 文档
+│   ├── public/                         # Tableau Extension 静态资源
+│   └── data/                           # 数据目录（缓存、索引、证书）
 │
-├── data/                               # 数据目录 (缓存、索引)
-├── start.py                            # 一键启动脚本
-└── .env                                # 环境配置
+├── .env                                # 环境变量配置
+├── pytest.ini                          # 测试配置
+└── start.py                            # 启动脚本
 ```
 
 ## 🚀 快速开始
@@ -144,85 +109,49 @@ tableau-ai-analysis-assistant/
 ### 1. 安装依赖
 
 ```bash
-# 克隆仓库
 git clone https://github.com/PandaHero/tableau-ai-analysis-assistant.git
 cd tableau-ai-analysis-assistant
 
-# 创建虚拟环境
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# 安装依赖
-pip install -r tableau_assistant/requirements.txt
+pip install -r requirements.txt
 ```
 
-### 2. 配置环境变量
+### 2. 配置
+
+**环境变量** — 复制并编辑 `.env`：
 
 ```bash
 cp .env.example .env
-# 编辑 .env 文件，配置 LLM 和 Tableau 连接
 ```
 
 关键配置项：
 ```env
-# ========== Tableau 配置 ==========
+# Tableau 连接
 TABLEAU_DOMAIN=https://your-tableau-server.com
 TABLEAU_SITE=your-site
-DATASOURCE_LUID=your-datasource-luid
-
-# JWT 认证（推荐）
 TABLEAU_JWT_CLIENT_ID=your-client-id
 TABLEAU_JWT_SECRET_ID=your-secret-id
 TABLEAU_JWT_SECRET=your-secret
 
-# ========== LLM 配置 ==========
-LLM_API_BASE=http://your-llm-api/v1
-LLM_MODEL_PROVIDER=local
-TOOLING_LLM_MODEL=qwen3
+# LLM 配置
+ACTIVE_LLM=deepseek          # 可选: deepseek-r1 | deepseek | qwen3
+LLM_API_BASE=https://api.deepseek.com
 LLM_API_KEY=your-api-key
+
+# Embedding 配置
+ZHIPUAI_API_KEY=your-zhipu-api-key
 ```
+
+**应用配置** — 编辑 `analytics_assistant/config/app.yaml`：
+
+阈值、超时、缓存 TTL、RAG 参数等运行时配置统一在 `app.yaml` 中管理，参考 `app.example.yaml`。
 
 ### 3. 启动服务
 
 ```bash
-# 一键启动（推荐）
 python start.py
-
-# 或手动启动
-python -m tableau_assistant.src.main
-```
-
-## 📡 API 端点
-
-### 流式查询
-
-```
-POST /api/chat/stream
-Content-Type: application/json
-
-{
-    "question": "各产品类别的销售额是多少",
-    "datasource_luid": "your-datasource-luid"
-}
-```
-
-响应：SSE 事件流
-```
-data: {"event_type": "node_start", "data": {"node": "step1"}, ...}
-data: {"event_type": "token", "data": {"content": "{"}, ...}
-...
-data: {"event_type": "complete", ...}
-```
-
-### 预热 API
-
-```
-POST /api/preload/dimension-hierarchy
-Content-Type: application/json
-
-{
-    "datasource_luid": "your-datasource-luid"
-}
 ```
 
 ## 🛠️ 技术栈
@@ -233,23 +162,11 @@ Content-Type: application/json
 | LLM 框架 | LangChain 0.3+ |
 | API 框架 | FastAPI |
 | 数据验证 | Pydantic v2 |
-| 向量检索 | Sentence Transformers |
+| 向量检索 | FAISS + Sentence Transformers |
 | 缓存存储 | LangGraph SqliteStore |
 | BI 平台 | Tableau VizQL Data Service |
-
-## 📋 Prompt 与 Model 规范
-
-遵循 `docs/PROMPT_AND_MODEL_GUIDE.md` 规范：
-
-**核心原则**：
-- Prompt 教 LLM 如何思考，Schema 告诉 LLM 输出什么
-- 信息去重：每种信息只在最相关位置出现一次
-- 全英文 docstring
-
-**XML 标签规范**：
-- Class docstring: `<fill_order>`, `<examples>` (≤2), `<anti_patterns>` (≤3)
-- Field description: `<what>`, `<when>`, `<rule>`, `<dependency>`, `<must_not>`
-- Enum docstring: `<rule>` (选择逻辑) 或一行格式 (值含义)
+| Embedding | 智谱 AI |
+| LLM | DeepSeek / DeepSeek-R1 / Qwen3 |
 
 ## 🧪 测试
 
@@ -258,21 +175,33 @@ Content-Type: application/json
 pytest
 
 # 运行集成测试
-pytest tableau_assistant/tests/integration/
+pytest analytics_assistant/tests/integration/
 
-# 运行 SemanticParser 测试
-pytest tableau_assistant/tests/integration/test_semantic_parser_subgraph.py
+# 运行指定 Agent 测试
+pytest analytics_assistant/tests/agents/
 ```
 
-## 🔌 支持的 LLM 提供商
+测试配置见 `pytest.ini`，PYTHONPATH 已自动设置。
 
-| 提供商 | 配置 |
-|--------|------|
-| 本地部署 | `LLM_MODEL_PROVIDER=local` |
-| OpenAI | `LLM_MODEL_PROVIDER=openai` |
-| Azure OpenAI | `LLM_MODEL_PROVIDER=azure` |
-| DeepSeek | `LLM_MODEL_PROVIDER=deepseek` |
-| 智谱 AI | `LLM_MODEL_PROVIDER=zhipu` |
+## 🔌 支持的 LLM
+
+| 提供商 | ACTIVE_LLM | 说明 |
+|--------|------------|------|
+| DeepSeek R1 (私有部署) | `deepseek-r1` | 公司内部部署，推理模型 |
+| DeepSeek (官方) | `deepseek` | DeepSeek 官方 API |
+| Qwen3 (私有部署) | `qwen3` | 公司内部部署 |
+
+通过 `.env` 中的 `ACTIVE_LLM` 切换，对应的 API 地址和密钥自动生效。
+
+## 📐 编码规范
+
+项目遵循严格的编码规范，详见 `.kiro/steering/coding-standards.md`，核心要点：
+
+- 所有导入在文件顶部，禁止延迟导入
+- 配置参数统一放 `app.yaml`，禁止硬编码
+- Prompt 放 `prompts/`，Schema 放 `schemas/`
+- 使用 `typing` 模块泛型（`List[str]` 而非 `list[str]`）
+- 复用 `infra/` 基础设施，禁止重复造轮子
 
 ## 📄 许可证
 
@@ -284,4 +213,4 @@ pytest tableau_assistant/tests/integration/test_semantic_parser_subgraph.py
 
 ---
 
-**版本**: v2.3.0 | **更新**: 2024-12-29
+**版本**: v3.0.0 | **更新**: 2026-02-08

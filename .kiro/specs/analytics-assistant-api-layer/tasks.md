@@ -14,7 +14,7 @@
 ## Tasks
 
 - [-] 1. 搭建 API 层基础结构和数据库
-  - [-] 1.1 创建 API 目录结构和 FastAPI 应用入口
+  - [x] 1.1 创建 API 目录结构和 FastAPI 应用入口
     - 创建 `analytics_assistant/src/api/__init__.py`
     - 创建 `analytics_assistant/src/api/main.py`：FastAPI 应用、lifespan 管理（初始化/关闭数据库）、CORS 配置（从 `app.yaml` 读取 `api.cors.allowed_origins`）
     - 创建 `analytics_assistant/src/api/dependencies.py`：`get_tableau_username()` 依赖（从 `X-Tableau-Username` 请求头获取）、`get_db()` 依赖
