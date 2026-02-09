@@ -1,0 +1,195 @@
+# 实现计划：洞察与重规划 Agent
+
+## 任务列表
+
+- [x] 1. 数据模型定义（Schemas）
+  - [x] 1.1 创建 `analytics_assistant/src/agents/insight/schemas/__init__.py` 和 `output.py`，定义 `FindingType`、`AnalysisLevel`、`Finding`、`InsightOutput`、`NumericStats`、`CategoricalStats`、`ColumnProfile`、`DataProfile` 模型
+    - `FindingType` 枚举：anomaly/trend/comparison/distribution/correlation
+    - `AnalysisLevel` 枚举：descriptive/diagnostic
+    - `Finding`：finding_type、analysis_level（默认 descriptive）、description、supporting_data、confidence
+    - `InsightOutput`：findings（min_length=1）、summary、overall_confidence
+    - `NumericStats`：min/max/avg/median/std（均 Optional[float]）
+    - `CategoricalStats`：unique_count、top_values
+    - `ColumnProfile`：column_name、data_type、is_numeric、null_count、numeric_stats、categorical_stats、error
+    - `DataProfile`：row_count、column_count、columns_profile
+    - 所有模型使用 `ConfigDict(extra="forbid")`
+    - **验证**: Requirements 11.1, 11.2, 11.3, 11.5
+  - [x] 1.2 创建 `analytics_assistant/src/agents/replanner/schemas/__init__.py` 和 `output.py`，定义 `ReplanDecision` 模型
+    - `ReplanDecision`：should_replan、reason、new_question（Optional[str]）、suggested_questions（List[str]）
+    - 使用 `ConfigDict(extra="forbid")`
+    - **验证**: Requirements 11.4, 11.5
+  - [x] 1.3 编写 Schema 属性测试 `analytics_assistant/tests/agents/insight/test_schema_properties.py`
+    - Property 6: InsightOutput / ReplanDecision / DataProfile 序列化往返一致性
+    - 使用 Hypothesis 生成随机有效模型实例
+    - **验证**: Requirements 11.6, 11.7, 11.8
+    - **PBT**: Property 6 - 数据模型序列化往返一致性
+
+- [x] 2. DataStore 数据存储后端
+  - [x] 2.1 创建 `analytics_assistant/src/agents/insight/__init__.py` 和 `analytics_assistant/src/agents/insight/components/__init__.py`
+  - [x] 2.2 创建 `analytics_assistant/src/agents/insight/components/data_store.py`，实现 `DataStore` 类
+    - `__init__(store_id)`: 从 app.yaml 读取 memory_threshold 和 temp_dir
+    - `save(execute_result)`: 根据 row_count 与 memory_threshold 比较选择内存/文件模式
+    - `read_batch(offset, limit)`: 分批读取数据
+    - `read_filtered(column, values)`: 按列值筛选
+    - `get_column_stats(column)`: 从已注入的 DataProfile 提取列统计；如果 set_profile() 未调用则抛出 ValueError
+    - `set_profile(profile)`: 注入 DataProfile
+    - `columns` / `row_count` 属性
+    - `cleanup()`: 清理临时文件
+    - 文件写入失败时降级为内存模式（logger.warning）
+    - 文件读取失败时返回描述性错误（logger.error）
+    - **验证**: Requirements 1.1-1.7, 10.3
+  - [x] 2.3 编写 DataStore 单元测试 `analytics_assistant/tests/agents/insight/test_data_store.py`
+    - 测试内存模式保存/读取
+    - 测试文件模式保存/读取
+    - 测试分批读取（offset/limit 边界）
+    - 测试筛选读取
+    - 测试文件清理
+    - 测试文件写入失败降级
+  - [x] 2.4 编写 DataStore 属性测试 `analytics_assistant/tests/agents/insight/test_data_store_properties.py`
+    - Property 1: 保存/读取往返一致性
+    - Property 2: 存储策略选择正确性
+    - Property 3: 筛选读取正确性
+    - **PBT**: Property 1, 2, 3
+
+- [x] 3. DataProfiler 数据画像生成器
+  - [x] 3.1 创建 `analytics_assistant/src/agents/insight/components/data_profiler.py`，实现 `DataProfiler` 类
+    - `generate(execute_result)`: 生成 DataProfile
+    - `_is_numeric_column(column_info)`: 基于 ColumnInfo.data_type 判断是否为数值列（INTEGER/INT/REAL/FLOAT/DOUBLE/DECIMAL/NUMBER/NUMERIC，忽略大小写），不依赖 is_dimension/is_measure
+    - `_profile_numeric_column(values, column_name)`: 数值列统计（min/max/avg/median/std）
+    - `_profile_categorical_column(values, column_name)`: 分类列统计（unique_count/top_values）
+    - 从 app.yaml 读取 top_values_count 配置
+    - 单列计算失败时跳过并标记 error 字段
+    - 空数据返回零值 DataProfile
+    - **验证**: Requirements 2.1-2.5, 10.4
+  - [x] 3.2 编写 DataProfiler 单元测试 `analytics_assistant/tests/agents/insight/test_data_profiler.py`
+    - 测试数值列统计正确性
+    - 测试分类列统计正确性
+    - 测试空数据处理
+    - 测试单列失败跳过
+  - [x] 3.3 编写 DataProfiler 属性测试 `analytics_assistant/tests/agents/insight/test_data_profiler_properties.py`
+    - Property 4: 统计正确性（row_count、column_count、min<=avg<=max、std>=0、unique_count、top_values 排序）
+    - **PBT**: Property 4
+
+- [x] 4. Data Tools 工具定义
+  - [x] 4.1 创建 `analytics_assistant/src/agents/insight/components/data_tools.py`，实现 `create_insight_tools` 函数
+    - `read_data_batch(offset, limit)`: 调用 DataStore.read_batch，返回 JSON 格式数据
+    - `read_filtered_data(column, values)`: 调用 DataStore.read_filtered，返回 JSON 格式数据
+    - `get_column_stats(column)`: 调用 DataStore.get_column_stats，返回 JSON 格式统计
+    - `get_data_profile()`: 返回完整 DataProfile 的 JSON
+    - `finish_insight()`: 返回停止信号字符串
+    - 使用 `@tool` 装饰器定义，输入参数使用 Pydantic 验证
+    - **验证**: Requirements 3.2
+  - [x] 4.2 编写 Data Tools 单元测试 `analytics_assistant/tests/agents/insight/test_data_tools.py`
+    - 测试各工具的输入验证
+    - 测试返回格式正确性
+    - 测试 finish_insight 返回停止信号
+
+- [x] 5. Insight Agent Prompt
+  - [x] 5.1 创建 `analytics_assistant/src/agents/insight/prompts/__init__.py` 和 `insight_prompt.py`
+    - `SYSTEM_PROMPT`: 定义分析任务、可用工具说明、输出格式（InsightOutput JSON Schema）
+    - `build_user_prompt(data_profile_summary, semantic_output_summary, analysis_depth)`: 构建用户提示
+    - `get_system_prompt()`: 返回系统提示
+    - 分层洞察策略：detailed 以描述性为主，comprehensive 鼓励诊断性分析
+    - 洞察优先级引导：异常值 > 趋势变化 > 对比差异 > 分布特征 > 相关性
+    - 信息增益引导：每轮工具调用前评估预期信息增益
+    - **验证**: Requirements 3.1, 5.1, 5.2
+
+- [x] 6. Replanner Agent Prompt
+  - [x] 6.1 创建 `analytics_assistant/src/agents/replanner/__init__.py`、`analytics_assistant/src/agents/replanner/prompts/__init__.py` 和 `replanner_prompt.py`
+    - `SYSTEM_PROMPT`: 定义重规划任务、输出格式（ReplanDecision JSON Schema）
+    - `build_user_prompt(insight_summary, semantic_output_summary, data_profile_summary, replan_history_summary)`: 构建用户提示
+    - `get_system_prompt()`: 返回系统提示
+    - 多类型后续问题引导（趋势验证、范围扩大、不同角度、互补查询）
+    - 重规划历史去重
+    - 分析深度感知（detailed 倾向不重规划，comprehensive 鼓励深度重规划）
+    - 信息增益评估
+    - **验证**: Requirements 6.1, 6.4, 6.6, 6.7
+
+- [x] 7. Agent 中间件栈（使用框架现成实现）
+  - [x] 7.1 清理自建中间件，改用框架实现
+    - 删除 `analytics_assistant/src/agents/base/middleware/base_middleware.py`（改用 `langchain.agents.middleware.types.AgentMiddleware`）
+    - 删除 `analytics_assistant/src/agents/base/middleware/model_retry.py`（改用 `langchain.agents.middleware.ModelRetryMiddleware`）
+    - 删除 `analytics_assistant/src/agents/base/middleware/tool_retry.py`（改用 `langchain.agents.middleware.ToolRetryMiddleware`）
+    - 更新 `analytics_assistant/src/agents/base/middleware/__init__.py` 为框架导入说明
+    - **验证**: Requirements 9.1-9.4, 9.6, 9.7
+  - [x] 7.2 为 `ReplanDecision` 添加 `model_validator` 实现输出验证
+    - 在 `analytics_assistant/src/agents/replanner/schemas/output.py` 中添加 `@model_validator(mode="after")`
+    - `should_replan=True` 时 `new_question` 不能为空
+    - `should_replan=False` 时 `suggested_questions` 不能为空
+    - 不再需要 `OutputValidationMiddleware`，由 Pydantic 层 + `create_agent` 的 `response_format` 自动验证
+    - **验证**: Requirements 9.5
+  - [x] 7.3 验证 `create_agent` + `stream_mode="messages"` 支持 R1/thinking 输出
+    - 确认 `StreamMessagesHandler`（继承 `_StreamingCallbackHandler`）注入回调链
+    - 确认 `_should_stream()` 检测到 handler 后自动切换到 `_astream`
+    - 确认 `AIMessageChunk.additional_kwargs["thinking"]` 完整传递
+    - 结论：`create_agent` 可完全替代 `stream_llm_structured`，统一方案可行
+    - **验证**: Requirements 4.1-4.3
+
+- [x] 8. Insight Agent 执行逻辑
+  - [x] 8.1 创建 `analytics_assistant/src/agents/insight/graph.py`，实现 `run_insight_agent` 异步函数
+    - 使用 `get_llm(agent_name="insight", task_type=TaskType.INSIGHT_GENERATION)` 获取 LLM
+    - 使用 `stream_llm_structured` + `MiddlewareRunner` 实现 ReAct 循环（token 级流式 + 工具调用）
+    - 构建中间件栈（全部使用框架现成实现）：
+      - `langchain.agents.middleware.SummarizationMiddleware`
+      - `langchain.agents.middleware.ModelRetryMiddleware`
+      - `langchain.agents.middleware.ToolRetryMiddleware`
+      - `deepagents.FilesystemMiddleware`
+    - 从 app.yaml 读取 `analysis_depth_rounds` 映射确定 `max_iterations`
+    - 构建 Prompt（系统 + 用户），注入 DataProfile 摘要
+    - 支持 on_token / on_thinking / on_progress 回调
+    - **验证**: Requirements 3.1-3.7, 4.1-4.3, 5.1-5.3, 9.8
+
+- [x] 9. Replanner Agent 执行逻辑
+  - [x] 9.1 创建 `analytics_assistant/src/agents/replanner/graph.py`，实现 `run_replanner_agent` 异步函数
+    - 使用 `get_llm(agent_name="replanner", task_type=TaskType.REPLANNING)` 获取 LLM
+    - 使用 `stream_llm_structured` + `MiddlewareRunner` 实现单次 LLM 调用（无工具）
+    - 构建中间件栈：`langchain.agents.middleware.ModelRetryMiddleware`
+    - 构建 Prompt，注入 InsightOutput 摘要、SemanticOutput 摘要、DataProfile 摘要、重规划历史
+    - 支持 on_token / on_thinking 回调
+    - **验证**: Requirements 6.1-6.7, 9.9
+  - [x] 9.2 编写 ReplanDecision 属性测试 `analytics_assistant/tests/agents/replanner/test_replan_decision_properties.py`
+    - Property 5: should_replan=True 时 reason 和 new_question 非空；should_replan=False 时 suggested_questions 非空
+    - **PBT**: Property 5
+
+- [ ] 10. SSE 回调扩展
+  - [ ] 10.1 修改 `analytics_assistant/src/orchestration/workflow/callbacks.py`
+    - 从 `_VISIBLE_NODE_MAPPING` 中删除 `"feedback_learner": "generating"`（纯后台操作，用户无感知）
+    - 从 `_STAGE_NAMES_ZH` 和 `_STAGE_NAMES_EN` 中删除 `"generating"` 阶段
+    - 在 `_LLM_NODE_MAPPING` 中新增 `"insight_agent": "insight"` 和 `"replanner_agent": "replanning"`
+    - 在 `_STAGE_NAMES_ZH` 中新增 `"insight": "生成洞察"` 和 `"replanning": "重规划"`
+    - 在 `_STAGE_NAMES_EN` 中新增 `"insight": "Generating Insights"` 和 `"replanning": "Replanning"`
+    - **验证**: Requirements 4.3, 7.6
+
+- [ ] 11. app.yaml 配置新增
+  - [ ] 11.1 在 `analytics_assistant/config/app.yaml` 的 `agents` 节下新增配置
+    - `insight.max_react_rounds: 10`
+    - `insight.analysis_depth_rounds.detailed: 5`
+    - `insight.analysis_depth_rounds.comprehensive: 10`
+    - `insight.data_batch_size: 100`
+    - `replanner.max_replan_rounds: 10`
+    - `data_store.memory_threshold: 1000`
+    - `data_store.temp_dir: "analytics_assistant/data/temp"`
+    - `data_profiler.top_values_count: 10`
+    - `middleware.model_retry.max_retries: 3`
+    - `middleware.model_retry.base_delay: 1.0`
+    - `middleware.model_retry.max_delay: 30.0`
+    - `middleware.tool_retry.max_retries: 2`
+    - `middleware.tool_retry.base_delay: 0.5`
+    - `middleware.filesystem.max_tool_result_tokens: 2000`
+    - `middleware.filesystem.truncation_strategy: "head"`
+    - `middleware.output_validation.enabled: true`
+    - `middleware.summarization.max_history_tokens: 8000`
+    - `middleware.summarization.keep_recent_rounds: 3`
+    - **验证**: Requirements 8.1-8.5
+
+- [ ] 12. WorkflowExecutor 主循环扩展
+  - [ ] 12.1 修改 `analytics_assistant/src/orchestration/workflow/executor.py`，在 semantic_parser 子图执行完成后新增 Insight + Replanner 循环
+    - 从 app.yaml 读取 max_replan_rounds
+    - 第一轮复用 semantic_parser 已产生的 ExecuteResult 和 SemanticOutput
+    - 后续轮使用 new_question 重新执行 semantic_parser
+    - 每轮：DataProfile 生成 → DataStore 保存 → Insight Agent → Replanner Agent
+    - 发送 SSE 事件：insight（含 round）、replan（含 round + new_question）、insight_progress、suggestions
+    - Insight Agent 失败时跳过洞察，返回查询结果（logger.error）
+    - Replanner Agent 失败时停止重规划循环（logger.error）
+    - 循环结束后清理 DataStore 临时文件
+    - **验证**: Requirements 7.1-7.7, 10.1, 10.2

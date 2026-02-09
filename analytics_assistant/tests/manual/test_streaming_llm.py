@@ -272,7 +272,7 @@ async def test_real_tableau_full_pipeline() -> None:
     from langgraph.checkpoint.memory import MemorySaver
 
     datasource_name = "销售分析"
-    question = "上个月各地区的销售额是多少"
+    question = "本月各地区的销售额环比是多少"
 
     print(f"{Colors.GREEN}数据源: {datasource_name}{Colors.RESET}")
     print(f"{Colors.GREEN}问题:   {question}{Colors.RESET}")

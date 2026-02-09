@@ -120,6 +120,9 @@ tableau-mcp-main/
 # Data files
 data/*.db
 
+# Generated index files (FAISS, pickle)
+analytics_assistant/data/indexes/
+
 # Exclude Tableau temp files
 *.twbr
 desktop.ini
