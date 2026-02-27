@@ -19,7 +19,7 @@ Token 自动缓存（TTL 从配置读取，默认 10 分钟）
 """
 import time
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Any, Optional
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from threading import Lock
@@ -31,16 +31,13 @@ from pydantic import BaseModel, Field
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.core.exceptions import TableauAuthError
 
-
 logger = logging.getLogger(__name__)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 默认配置
 # ══════════════════════════════════════════════════════════════════════════════
 
 _DEFAULT_AUTH_TIMEOUT = 30  # 默认认证请求超时（秒）
-
 
 def _get_auth_timeout() -> int:
     """从配置获取认证请求超时时间"""
@@ -51,15 +48,13 @@ def _get_auth_timeout() -> int:
         logger.warning(f"获取认证超时配置失败，使用默认值: {e}")
         return _DEFAULT_AUTH_TIMEOUT
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Token 缓存
 # ══════════════════════════════════════════════════════════════════════════════
 
 _cache_lock = Lock()
-_token_cache: Dict[str, Dict[str, Any]] = {}  # domain -> cache_data
-_token_cached_at: Dict[str, float] = {}  # domain -> cached_at
-
+_token_cache: dict[str, dict[str, Any]] = {}  # domain -> cache_data
+_token_cached_at: dict[str, float] = {}  # domain -> cached_at
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Tableau 认证上下文
@@ -91,13 +86,11 @@ class TableauAuthContext(BaseModel):
         """剩余有效时间（秒）"""
         return max(0, self.expires_at - time.time())
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # SSL 配置辅助函数
 # ══════════════════════════════════════════════════════════════════════════════
 
 from .ssl_utils import get_ssl_verify as _get_ssl_verify
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # JWT 认证
@@ -108,7 +101,7 @@ def _build_jwt_token(
     secret_id: str,
     secret: str,
     user: str,
-    scopes: List[str],
+    scopes: list[str],
 ) -> str:
     """构建 JWT token"""
     return jwt.encode(
@@ -125,6 +118,59 @@ def _build_jwt_token(
         headers={"kid": secret_id, "iss": client_id},
     )
 
+def _build_jwt_auth_request(
+    domain: str,
+    site: str,
+    api_version: str,
+    user: str,
+    client_id: str,
+    secret_id: str,
+    secret: str,
+    scopes: list[str],
+) -> tuple[str, dict[str, Any], dict[str, str]]:
+    """构建 JWT 认证请求参数（公共逻辑）。
+
+    将 JWT token 生成、URL 构建、payload 构建等与 HTTP 无关的逻辑
+    提取为公共函数，供同步/异步版本共用。
+
+    Returns:
+        (endpoint, payload, headers) 三元组。
+    """
+    token = _build_jwt_token(client_id, secret_id, secret, user, scopes)
+    endpoint = f"{domain}/api/{api_version}/auth/signin"
+    payload = {
+        "credentials": {
+            "jwt": token,
+            "site": {"contentUrl": site},
+        }
+    }
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    return endpoint, payload, headers
+
+def _parse_auth_response(
+    response: httpx.Response,
+    auth_method: str,
+) -> dict[str, Any]:
+    """解析认证 HTTP 响应（公共逻辑）。
+
+    校验状态码并返回 JSON，失败时抛出 TableauAuthError。
+
+    Args:
+        response: httpx 响应对象。
+        auth_method: 认证方式标识（"jwt" 或 "pat"），用于错误信息。
+
+    Returns:
+        认证响应 JSON 字典。
+
+    Raises:
+        TableauAuthError: 状态码非 200 时抛出。
+    """
+    if response.status_code == 200:
+        return response.json()
+    raise TableauAuthError(
+        f"{auth_method.upper()} 认证失败: {response.status_code} - {response.text}",
+        auth_method=auth_method,
+    )
 
 def _jwt_authenticate(
     domain: str,
@@ -134,56 +180,20 @@ def _jwt_authenticate(
     client_id: str,
     secret_id: str,
     secret: str,
-    scopes: List[str],
-) -> Dict[str, Any]:
-    """
-    使用 JWT Connected App 认证（同步版本）
-    
-    Args:
-        domain: Tableau 域名
-        site: Tableau site
-        api_version: API 版本
-        user: Tableau 用户名
-        client_id: JWT Client ID
-        secret_id: JWT Secret ID
-        secret: JWT Secret
-        scopes: 权限范围
-    
-    Returns:
-        认证响应 JSON
-    
-    Raises:
-        TableauAuthError: 认证失败
-    """
-    token = _build_jwt_token(client_id, secret_id, secret, user, scopes)
-    
-    endpoint = f"{domain}/api/{api_version}/auth/signin"
-    payload = {
-        "credentials": {
-            "jwt": token,
-            "site": {"contentUrl": site},
-        }
-    }
-    
+    scopes: list[str],
+) -> dict[str, Any]:
+    """使用 JWT Connected App 认证（同步版本）"""
+    endpoint, payload, headers = _build_jwt_auth_request(
+        domain, site, api_version, user, client_id, secret_id, secret, scopes,
+    )
     try:
         response = httpx.post(
-            endpoint,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            json=payload,
-            verify=_get_ssl_verify(),
-            timeout=_get_auth_timeout(),
+            endpoint, headers=headers, json=payload,
+            verify=_get_ssl_verify(), timeout=_get_auth_timeout(),
         )
-        
-        if response.status_code == 200:
-            return response.json()
-        
-        raise TableauAuthError(
-            f"JWT 认证失败: {response.status_code} - {response.text}",
-            auth_method="jwt",
-        )
+        return _parse_auth_response(response, "jwt")
     except httpx.RequestError as e:
-        raise TableauAuthError(f"JWT 认证请求失败: {e}", auth_method="jwt")
-
+        raise TableauAuthError(f"JWT 认证请求失败: {e}", auth_method="jwt") from e
 
 async def _jwt_authenticate_async(
     domain: str,
@@ -193,59 +203,45 @@ async def _jwt_authenticate_async(
     client_id: str,
     secret_id: str,
     secret: str,
-    scopes: List[str],
-) -> Dict[str, Any]:
-    """
-    使用 JWT Connected App 认证（异步版本）
-    
-    Args:
-        domain: Tableau 域名
-        site: Tableau site
-        api_version: API 版本
-        user: Tableau 用户名
-        client_id: JWT Client ID
-        secret_id: JWT Secret ID
-        secret: JWT Secret
-        scopes: 权限范围
-    
-    Returns:
-        认证响应 JSON
-    
-    Raises:
-        TableauAuthError: 认证失败
-    """
-    token = _build_jwt_token(client_id, secret_id, secret, user, scopes)
-    
-    endpoint = f"{domain}/api/{api_version}/auth/signin"
-    payload = {
-        "credentials": {
-            "jwt": token,
-            "site": {"contentUrl": site},
-        }
-    }
-    
+    scopes: list[str],
+) -> dict[str, Any]:
+    """使用 JWT Connected App 认证（异步版本）"""
+    endpoint, payload, headers = _build_jwt_auth_request(
+        domain, site, api_version, user, client_id, secret_id, secret, scopes,
+    )
     try:
         async with httpx.AsyncClient(verify=_get_ssl_verify(), timeout=_get_auth_timeout()) as client:
-            response = await client.post(
-                endpoint,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                json=payload,
-            )
-        
-        if response.status_code == 200:
-            return response.json()
-        
-        raise TableauAuthError(
-            f"JWT 认证失败: {response.status_code} - {response.text}",
-            auth_method="jwt",
-        )
+            response = await client.post(endpoint, headers=headers, json=payload)
+        return _parse_auth_response(response, "jwt")
     except httpx.RequestError as e:
-        raise TableauAuthError(f"JWT 认证请求失败: {e}", auth_method="jwt")
-
+        raise TableauAuthError(f"JWT 认证请求失败: {e}", auth_method="jwt") from e
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAT 认证
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _build_pat_auth_request(
+    domain: str,
+    site: str,
+    api_version: str,
+    pat_name: str,
+    pat_secret: str,
+) -> tuple[str, dict[str, Any], dict[str, str]]:
+    """构建 PAT 认证请求参数（公共逻辑）。
+
+    Returns:
+        (endpoint, payload, headers) 三元组。
+    """
+    endpoint = f"{domain}/api/{api_version}/auth/signin"
+    payload = {
+        "credentials": {
+            "personalAccessTokenName": pat_name,
+            "personalAccessTokenSecret": pat_secret,
+            "site": {"contentUrl": site},
+        }
+    }
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    return endpoint, payload, headers
 
 def _pat_authenticate(
     domain: str,
@@ -253,51 +249,19 @@ def _pat_authenticate(
     api_version: str,
     pat_name: str,
     pat_secret: str,
-) -> Dict[str, Any]:
-    """
-    使用 Personal Access Token 认证（同步版本）
-    
-    Args:
-        domain: Tableau 域名
-        site: Tableau site
-        api_version: API 版本
-        pat_name: PAT 名称
-        pat_secret: PAT 密钥
-    
-    Returns:
-        认证响应 JSON
-    
-    Raises:
-        TableauAuthError: 认证失败
-    """
-    endpoint = f"{domain}/api/{api_version}/auth/signin"
-    payload = {
-        "credentials": {
-            "personalAccessTokenName": pat_name,
-            "personalAccessTokenSecret": pat_secret,
-            "site": {"contentUrl": site},
-        }
-    }
-    
+) -> dict[str, Any]:
+    """使用 Personal Access Token 认证（同步版本）"""
+    endpoint, payload, headers = _build_pat_auth_request(
+        domain, site, api_version, pat_name, pat_secret,
+    )
     try:
         response = httpx.post(
-            endpoint,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            json=payload,
-            verify=_get_ssl_verify(),
-            timeout=_get_auth_timeout(),
+            endpoint, headers=headers, json=payload,
+            verify=_get_ssl_verify(), timeout=_get_auth_timeout(),
         )
-        
-        if response.status_code == 200:
-            return response.json()
-        
-        raise TableauAuthError(
-            f"PAT 认证失败: {response.status_code} - {response.text}",
-            auth_method="pat",
-        )
+        return _parse_auth_response(response, "pat")
     except httpx.RequestError as e:
-        raise TableauAuthError(f"PAT 认证请求失败: {e}", auth_method="pat")
-
+        raise TableauAuthError(f"PAT 认证请求失败: {e}", auth_method="pat") from e
 
 async def _pat_authenticate_async(
     domain: str,
@@ -305,56 +269,23 @@ async def _pat_authenticate_async(
     api_version: str,
     pat_name: str,
     pat_secret: str,
-) -> Dict[str, Any]:
-    """
-    使用 Personal Access Token 认证（异步版本）
-    
-    Args:
-        domain: Tableau 域名
-        site: Tableau site
-        api_version: API 版本
-        pat_name: PAT 名称
-        pat_secret: PAT 密钥
-    
-    Returns:
-        认证响应 JSON
-    
-    Raises:
-        TableauAuthError: 认证失败
-    """
-    endpoint = f"{domain}/api/{api_version}/auth/signin"
-    payload = {
-        "credentials": {
-            "personalAccessTokenName": pat_name,
-            "personalAccessTokenSecret": pat_secret,
-            "site": {"contentUrl": site},
-        }
-    }
-    
+) -> dict[str, Any]:
+    """使用 Personal Access Token 认证（异步版本）"""
+    endpoint, payload, headers = _build_pat_auth_request(
+        domain, site, api_version, pat_name, pat_secret,
+    )
     try:
         async with httpx.AsyncClient(verify=_get_ssl_verify(), timeout=_get_auth_timeout()) as client:
-            response = await client.post(
-                endpoint,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                json=payload,
-            )
-        
-        if response.status_code == 200:
-            return response.json()
-        
-        raise TableauAuthError(
-            f"PAT 认证失败: {response.status_code} - {response.text}",
-            auth_method="pat",
-        )
+            response = await client.post(endpoint, headers=headers, json=payload)
+        return _parse_auth_response(response, "pat")
     except httpx.RequestError as e:
-        raise TableauAuthError(f"PAT 认证请求失败: {e}", auth_method="pat")
-
+        raise TableauAuthError(f"PAT 认证请求失败: {e}", auth_method="pat") from e
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 认证获取函数
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _get_auth_params() -> Dict[str, Any]:
+def _get_auth_params() -> dict[str, Any]:
     """
     从配置获取认证参数
     
@@ -392,8 +323,25 @@ def _get_auth_params() -> Dict[str, Any]:
         },
     }
 
+def _extract_api_key(response_data: dict[str, Any]) -> Optional[str]:
+    """从认证响应中提取 API Key。"""
+    return (response_data.get("credentials") or {}).get("token")
 
-def _authenticate_from_config() -> Dict[str, Any]:
+def _build_auth_result(
+    domain: str,
+    site: str,
+    api_key: str,
+    auth_method: str,
+) -> dict[str, Any]:
+    """构建认证结果字典（公共逻辑）。"""
+    return {
+        "domain": domain,
+        "site": site,
+        "api_key": api_key,
+        "auth_method": auth_method,
+    }
+
+def _authenticate_from_config() -> dict[str, Any]:
     """
     从配置获取认证信息（同步版本）
     
@@ -420,24 +368,15 @@ def _authenticate_from_config() -> Dict[str, Any]:
         try:
             logger.debug(f"尝试 JWT 认证: domain={domain}, user={jwt_cfg['user']}")
             response = _jwt_authenticate(
-                domain=domain,
-                site=site,
-                api_version=api_version,
-                user=jwt_cfg["user"],
-                client_id=jwt_cfg["client_id"],
-                secret_id=jwt_cfg["secret_id"],
-                secret=jwt_cfg["secret"],
+                domain=domain, site=site, api_version=api_version,
+                user=jwt_cfg["user"], client_id=jwt_cfg["client_id"],
+                secret_id=jwt_cfg["secret_id"], secret=jwt_cfg["secret"],
                 scopes=["tableau:content:read"],
             )
-            api_key = (response.get("credentials") or {}).get("token")
+            api_key = _extract_api_key(response)
             if api_key:
                 logger.info(f"JWT 认证成功: {domain}")
-                return {
-                    "domain": domain,
-                    "site": site,
-                    "api_key": api_key,
-                    "auth_method": "jwt",
-                }
+                return _build_auth_result(domain, site, api_key, "jwt")
         except TableauAuthError as e:
             jwt_error = str(e)
             logger.warning(f"JWT 认证失败: {e}")
@@ -449,33 +388,23 @@ def _authenticate_from_config() -> Dict[str, Any]:
         try:
             logger.debug(f"尝试 PAT 认证: domain={domain}, pat_name={pat_cfg['name']}")
             response = _pat_authenticate(
-                domain=domain,
-                site=site,
-                api_version=api_version,
-                pat_name=pat_cfg["name"],
-                pat_secret=pat_cfg["secret"],
+                domain=domain, site=site, api_version=api_version,
+                pat_name=pat_cfg["name"], pat_secret=pat_cfg["secret"],
             )
-            api_key = (response.get("credentials") or {}).get("token")
+            api_key = _extract_api_key(response)
             if api_key:
                 logger.info(f"PAT 认证成功: {domain}")
-                return {
-                    "domain": domain,
-                    "site": site,
-                    "api_key": api_key,
-                    "auth_method": "pat",
-                }
+                return _build_auth_result(domain, site, api_key, "pat")
         except TableauAuthError as e:
             pat_error = str(e)
             logger.warning(f"PAT 认证失败: {e}")
     else:
         logger.debug("PAT 配置不完整，跳过")
     
-    # 所有认证方式均失败
     error_msg = f"所有认证方式均失败。JWT: {jwt_error or '未配置'}, PAT: {pat_error or '未配置'}"
     raise TableauAuthError(error_msg)
 
-
-async def _authenticate_from_config_async() -> Dict[str, Any]:
+async def _authenticate_from_config_async() -> dict[str, Any]:
     """
     从配置获取认证信息（异步版本）
     
@@ -502,24 +431,15 @@ async def _authenticate_from_config_async() -> Dict[str, Any]:
         try:
             logger.debug(f"尝试 JWT 认证: domain={domain}, user={jwt_cfg['user']}")
             response = await _jwt_authenticate_async(
-                domain=domain,
-                site=site,
-                api_version=api_version,
-                user=jwt_cfg["user"],
-                client_id=jwt_cfg["client_id"],
-                secret_id=jwt_cfg["secret_id"],
-                secret=jwt_cfg["secret"],
+                domain=domain, site=site, api_version=api_version,
+                user=jwt_cfg["user"], client_id=jwt_cfg["client_id"],
+                secret_id=jwt_cfg["secret_id"], secret=jwt_cfg["secret"],
                 scopes=["tableau:content:read"],
             )
-            api_key = (response.get("credentials") or {}).get("token")
+            api_key = _extract_api_key(response)
             if api_key:
                 logger.info(f"JWT 认证成功: {domain}")
-                return {
-                    "domain": domain,
-                    "site": site,
-                    "api_key": api_key,
-                    "auth_method": "jwt",
-                }
+                return _build_auth_result(domain, site, api_key, "jwt")
         except TableauAuthError as e:
             jwt_error = str(e)
             logger.warning(f"JWT 认证失败: {e}")
@@ -531,31 +451,70 @@ async def _authenticate_from_config_async() -> Dict[str, Any]:
         try:
             logger.debug(f"尝试 PAT 认证: domain={domain}, pat_name={pat_cfg['name']}")
             response = await _pat_authenticate_async(
-                domain=domain,
-                site=site,
-                api_version=api_version,
-                pat_name=pat_cfg["name"],
-                pat_secret=pat_cfg["secret"],
+                domain=domain, site=site, api_version=api_version,
+                pat_name=pat_cfg["name"], pat_secret=pat_cfg["secret"],
             )
-            api_key = (response.get("credentials") or {}).get("token")
+            api_key = _extract_api_key(response)
             if api_key:
                 logger.info(f"PAT 认证成功: {domain}")
-                return {
-                    "domain": domain,
-                    "site": site,
-                    "api_key": api_key,
-                    "auth_method": "pat",
-                }
+                return _build_auth_result(domain, site, api_key, "pat")
         except TableauAuthError as e:
             pat_error = str(e)
             logger.warning(f"PAT 认证失败: {e}")
     else:
         logger.debug("PAT 配置不完整，跳过")
     
-    # 所有认证方式均失败
     error_msg = f"所有认证方式均失败。JWT: {jwt_error or '未配置'}, PAT: {pat_error or '未配置'}"
     raise TableauAuthError(error_msg)
 
+def _check_cache(cache_key: str, cache_ttl: float) -> Optional[TableauAuthContext]:
+    """检查认证缓存是否有效（公共逻辑）。
+
+    Args:
+        cache_key: 缓存键（通常是 domain 小写）。
+        cache_ttl: 缓存 TTL（秒）。
+
+    Returns:
+        缓存命中时返回 TableauAuthContext，否则返回 None。
+    """
+    now = time.time()
+    with _cache_lock:
+        if cache_key in _token_cache:
+            cached = _token_cache[cache_key]
+            cached_at = _token_cached_at.get(cache_key, 0)
+            if cached.get("api_key") and (now - cached_at) < cache_ttl:
+                logger.debug(f"使用缓存的认证: {cache_key}")
+                return TableauAuthContext(
+                    api_key=cached["api_key"],
+                    site=cached.get("site", ""),
+                    domain=cached.get("domain", ""),
+                    expires_at=cached_at + cache_ttl,
+                    auth_method=cached.get("auth_method", "unknown"),
+                )
+    return None
+
+def _update_cache(cache_key: str, auth_data: dict[str, Any]) -> None:
+    """更新认证缓存（公共逻辑）。"""
+    with _cache_lock:
+        _token_cache[cache_key] = auth_data
+        _token_cached_at[cache_key] = time.time()
+
+def _build_auth_context(auth_data: dict[str, Any], cache_ttl: float) -> TableauAuthContext:
+    """从认证数据构建 TableauAuthContext（公共逻辑）。"""
+    return TableauAuthContext(
+        api_key=auth_data["api_key"],
+        site=auth_data.get("site", ""),
+        domain=auth_data.get("domain", ""),
+        expires_at=time.time() + cache_ttl,
+        auth_method=auth_data.get("auth_method", "unknown"),
+    )
+
+def _get_cache_params() -> tuple[str, float]:
+    """获取缓存键和 TTL（公共逻辑）。"""
+    config = get_config()
+    cache_ttl = config.get_tableau_token_cache_ttl()
+    cache_key = config.get_tableau_domain().lower().rstrip("/")
+    return cache_key, cache_ttl
 
 def get_tableau_auth(force_refresh: bool = False) -> TableauAuthContext:
     """
@@ -564,116 +523,36 @@ def get_tableau_auth(force_refresh: bool = False) -> TableauAuthContext:
     优先级：
     1. 内存缓存（如果未过期）
     2. 调用认证 API 获取新 token
-    
-    Args:
-        force_refresh: 是否强制刷新 token
-    
-    Returns:
-        TableauAuthContext 认证上下文
-    
-    Raises:
-        TableauAuthError: 认证失败
     """
-    global _token_cache, _token_cached_at
+    cache_key, cache_ttl = _get_cache_params()
     
-    config = get_config()
-    cache_ttl = config.get_tableau_token_cache_ttl()
-    cache_key = config.get_tableau_domain().lower().rstrip("/")
-    
-    now = time.time()
-    
-    # 检查缓存
     if not force_refresh:
-        with _cache_lock:
-            if cache_key in _token_cache:
-                cached = _token_cache[cache_key]
-                cached_at = _token_cached_at.get(cache_key, 0)
-                if cached.get("api_key") and (now - cached_at) < cache_ttl:
-                    logger.debug(f"使用缓存的认证: {cache_key}")
-                    return TableauAuthContext(
-                        api_key=cached["api_key"],
-                        site=cached.get("site", ""),
-                        domain=cached.get("domain", ""),
-                        expires_at=cached_at + cache_ttl,
-                        auth_method=cached.get("auth_method", "unknown"),
-                    )
+        cached = _check_cache(cache_key, cache_ttl)
+        if cached:
+            return cached
     
-    # 获取新 token
     auth_data = _authenticate_from_config()
-    
-    # 更新缓存
-    with _cache_lock:
-        _token_cache[cache_key] = auth_data
-        _token_cached_at[cache_key] = now
-    
-    return TableauAuthContext(
-        api_key=auth_data["api_key"],
-        site=auth_data.get("site", ""),
-        domain=auth_data.get("domain", ""),
-        expires_at=now + cache_ttl,
-        auth_method=auth_data.get("auth_method", "unknown"),
-    )
-
+    _update_cache(cache_key, auth_data)
+    return _build_auth_context(auth_data, cache_ttl)
 
 async def get_tableau_auth_async(force_refresh: bool = False) -> TableauAuthContext:
     """
     获取 Tableau 认证上下文（异步版本）
     
-    使用 httpx.AsyncClient 进行真正的异步 HTTP 请求。
-    
     优先级：
     1. 内存缓存（如果未过期）
     2. 调用认证 API 获取新 token
-    
-    Args:
-        force_refresh: 是否强制刷新 token
-    
-    Returns:
-        TableauAuthContext 认证上下文
-    
-    Raises:
-        TableauAuthError: 认证失败
     """
-    global _token_cache, _token_cached_at
+    cache_key, cache_ttl = _get_cache_params()
     
-    config = get_config()
-    cache_ttl = config.get_tableau_token_cache_ttl()
-    cache_key = config.get_tableau_domain().lower().rstrip("/")
-    
-    now = time.time()
-    
-    # 检查缓存
     if not force_refresh:
-        with _cache_lock:
-            if cache_key in _token_cache:
-                cached = _token_cache[cache_key]
-                cached_at = _token_cached_at.get(cache_key, 0)
-                if cached.get("api_key") and (now - cached_at) < cache_ttl:
-                    logger.debug(f"使用缓存的认证: {cache_key}")
-                    return TableauAuthContext(
-                        api_key=cached["api_key"],
-                        site=cached.get("site", ""),
-                        domain=cached.get("domain", ""),
-                        expires_at=cached_at + cache_ttl,
-                        auth_method=cached.get("auth_method", "unknown"),
-                    )
+        cached = _check_cache(cache_key, cache_ttl)
+        if cached:
+            return cached
     
-    # 获取新 token（异步）
     auth_data = await _authenticate_from_config_async()
-    
-    # 更新缓存
-    with _cache_lock:
-        _token_cache[cache_key] = auth_data
-        _token_cached_at[cache_key] = now
-    
-    return TableauAuthContext(
-        api_key=auth_data["api_key"],
-        site=auth_data.get("site", ""),
-        domain=auth_data.get("domain", ""),
-        expires_at=now + cache_ttl,
-        auth_method=auth_data.get("auth_method", "unknown"),
-    )
-
+    _update_cache(cache_key, auth_data)
+    return _build_auth_context(auth_data, cache_ttl)
 
 def clear_auth_cache() -> None:
     """清除认证缓存"""
@@ -682,7 +561,6 @@ def clear_auth_cache() -> None:
         _token_cache.clear()
         _token_cached_at.clear()
     logger.info("认证缓存已清除")
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 导出

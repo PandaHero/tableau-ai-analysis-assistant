@@ -7,12 +7,11 @@ Semantic Parser Filter Validation Models
 - FilterValidationSummary: 所有筛选条件的验证汇总
 - FilterConfirmation: 筛选值确认记录（多轮确认累积）
 """
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 class FilterValidationType(str, Enum):
     """筛选值验证类型
@@ -28,7 +27,6 @@ class FilterValidationType(str, Enum):
     NOT_FOUND = "not_found"
     SKIPPED = "skipped"
     NEEDS_CONFIRMATION = "needs_confirmation"
-
 
 class FilterValidationResult(BaseModel):
     """单个筛选条件的验证结果
@@ -52,11 +50,11 @@ class FilterValidationResult(BaseModel):
     requested_value: str = Field(
         description="用户请求的筛选值"
     )
-    matched_values: List[str] = Field(
+    matched_values: list[str] = Field(
         default_factory=list,
         description="匹配到的值列表"
     )
-    similar_values: List[str] = Field(
+    similar_values: list[str] = Field(
         default_factory=list,
         description="相似的候选值列表（用于澄清）"
     )
@@ -80,7 +78,6 @@ class FilterValidationResult(BaseModel):
         description="给用户的提示信息"
     )
 
-
 class FilterValidationSummary(BaseModel):
     """所有筛选条件的验证汇总
     
@@ -91,7 +88,7 @@ class FilterValidationSummary(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     
-    results: List[FilterValidationResult] = Field(
+    results: list[FilterValidationResult] = Field(
         default_factory=list,
         description="每个筛选条件的验证结果"
     )
@@ -105,7 +102,7 @@ class FilterValidationSummary(BaseModel):
     )
     
     @classmethod
-    def from_results(cls, results: List[FilterValidationResult]) -> "FilterValidationSummary":
+    def from_results(cls, results: list[FilterValidationResult]) -> "FilterValidationSummary":
         """从验证结果列表创建汇总"""
         all_valid = all(r.is_valid for r in results)
         has_unresolvable = any(r.is_unresolvable for r in results)
@@ -114,7 +111,6 @@ class FilterValidationSummary(BaseModel):
             all_valid=all_valid,
             has_unresolvable_filters=has_unresolvable,
         )
-
 
 class FilterConfirmation(BaseModel):
     """筛选值确认记录
@@ -141,7 +137,6 @@ class FilterConfirmation(BaseModel):
         default_factory=datetime.now,
         description="确认时间"
     )
-
 
 __all__ = [
     "FilterValidationType",

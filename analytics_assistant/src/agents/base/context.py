@@ -16,13 +16,12 @@ Agent 上下文获取辅助函数
         datasource = ctx.datasource_luid
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.core.interfaces import WorkflowContextProtocol
 
-
 def get_context(
-    config: Optional[Dict[str, Any]],
+    config: Optional[dict[str, Any]],
 ) -> Optional[WorkflowContextProtocol]:
     """从 RunnableConfig 获取工作流上下文。
 
@@ -37,9 +36,8 @@ def get_context(
     configurable = config.get("configurable", {})
     return configurable.get("workflow_context")
 
-
 def get_context_or_raise(
-    config: Optional[Dict[str, Any]],
+    config: Optional[dict[str, Any]],
 ) -> WorkflowContextProtocol:
     """从 RunnableConfig 获取工作流上下文，不存在则抛出异常。
 
@@ -62,7 +60,6 @@ def get_context_or_raise(
             "Make sure to use create_workflow_config() to create the config."
         )
     return ctx
-
 
 __all__ = [
     "get_context",

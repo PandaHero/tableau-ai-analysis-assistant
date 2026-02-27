@@ -1,8 +1,7 @@
 """搜索相关数据模型"""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
-
+from typing import Any, Optional
 
 @dataclass
 class SearchResult:
@@ -11,7 +10,7 @@ class SearchResult:
     content: str
     score: float  # 归一化分数 [0, 1]
     rank: int
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     # 原始分数（用于调试）
     raw_score: Optional[float] = None

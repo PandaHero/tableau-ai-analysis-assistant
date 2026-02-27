@@ -4,7 +4,7 @@ RAG 相关数据模型
 定义 RAG 系统中使用的数据结构。
 """
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import Any, Optional
 from enum import Enum
 
 from analytics_assistant.src.infra.config import get_config
@@ -12,7 +12,6 @@ from analytics_assistant.src.infra.config import get_config
 import logging
 
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
@@ -27,7 +26,6 @@ def _get_confidence_threshold() -> float:
         logger.warning(f"获取置信度阈值失败，使用默认值: {e}")
         return 0.7
 
-
 class RetrievalSource(Enum):
     """检索来源"""
     EMBEDDING = "embedding"  # 向量检索
@@ -37,7 +35,6 @@ class RetrievalSource(Enum):
     EXACT = "exact"          # 精确匹配
     FUZZY = "fuzzy"          # 模糊匹配
     CASCADE = "cascade"      # 级联检索
-
 
 @dataclass
 class EmbeddingResult:
@@ -51,7 +48,7 @@ class EmbeddingResult:
         dimensions: 向量维度
     """
     text: str
-    vector: List[float]
+    vector: list[float]
     model: str
     dimensions: int
     
@@ -60,7 +57,6 @@ class EmbeddingResult:
             raise ValueError(
                 f"向量维度不匹配：期望 {self.dimensions}, 实际 {len(self.vector)}"
             )
-
 
 @dataclass
 class FieldChunk:
@@ -82,7 +78,7 @@ class FieldChunk:
     role: str
     data_type: str
     index_text: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     # 可选字段
     column_class: Optional[str] = None
@@ -90,7 +86,7 @@ class FieldChunk:
     formula: Optional[str] = None
     logical_table_id: Optional[str] = None
     logical_table_caption: Optional[str] = None
-    sample_values: Optional[List[str]] = None
+    sample_values: Optional[list[str]] = None
     
     @classmethod
     def from_field_metadata(
@@ -188,7 +184,6 @@ class FieldChunk:
             }
         )
 
-
 @dataclass
 class RetrievalResult:
     """
@@ -222,7 +217,6 @@ class RetrievalResult:
         if self.rank < 1:
             raise ValueError(f"排名必须 >= 1: {self.rank}")
 
-
 @dataclass
 class MappingResult:
     """
@@ -238,8 +232,8 @@ class MappingResult:
     user_field: str
     matched_field: Optional[str]
     confidence: float
-    alternatives: List[str] = field(default_factory=list)
-    retrieval_results: List[RetrievalResult] = field(default_factory=list)
+    alternatives: list[str] = field(default_factory=list)
+    retrieval_results: list[RetrievalResult] = field(default_factory=list)
     
     @property
     def is_confident(self) -> bool:
@@ -250,7 +244,6 @@ class MappingResult:
     def needs_disambiguation(self) -> bool:
         """是否需要消歧"""
         return not self.is_confident and len(self.alternatives) > 0
-
 
 __all__ = [
     "RetrievalSource",

@@ -12,10 +12,9 @@ SSE 格式规范:
 """
 
 import json
-from typing import Any, Dict
+from typing import Any
 
-
-def format_sse_event(event: Dict[str, Any]) -> str:
+def format_sse_event(event: dict[str, Any]) -> str:
     """将事件字典转换为 SSE 格式字符串。
 
     Args:
@@ -25,7 +24,6 @@ def format_sse_event(event: Dict[str, Any]) -> str:
         SSE 格式字符串，如 'data: {"type":"token","content":"你好"}\\n\\n'
     """
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
 
 def format_sse_heartbeat() -> str:
     """生成 SSE 心跳注释。

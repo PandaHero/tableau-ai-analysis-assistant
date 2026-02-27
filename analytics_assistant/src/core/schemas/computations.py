@@ -4,7 +4,7 @@
 包含 LOD 表达式和表计算的定义。
 """
 
-from typing import Annotated, List, Literal, Optional, Union
+from typing import Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -15,7 +15,6 @@ from analytics_assistant.src.core.schemas.enums import (
     SortDirection,
 )
 from analytics_assistant.src.core.schemas.fields import DimensionField
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LOD 表达式（详细级别）
@@ -31,7 +30,7 @@ class LODFixed(BaseModel):
     
     calc_type: Literal["LOD_FIXED"] = Field(default="LOD_FIXED")
     target: str = Field(description="要聚合的目标度量字段")
-    dimensions: List[str] = Field(
+    dimensions: list[str] = Field(
         default_factory=list,
         description="定义固定聚合粒度的维度（空列表=全局聚合）"
     )
@@ -45,7 +44,6 @@ class LODFixed(BaseModel):
             raise ValueError("target 不能为空")
         return v.strip()
 
-
 class LODInclude(BaseModel):
     """INCLUDE LOD - 在比查询更细的粒度计算（添加维度）。
     
@@ -56,7 +54,7 @@ class LODInclude(BaseModel):
     
     calc_type: Literal["LOD_INCLUDE"] = Field(default="LOD_INCLUDE")
     target: str = Field(description="要聚合的目标度量字段")
-    dimensions: List[str] = Field(description="要添加到查询粒度的维度（至少一个）")
+    dimensions: list[str] = Field(description="要添加到查询粒度的维度（至少一个）")
     aggregation: AggregationType = Field(description="聚合函数")
     alias: Optional[str] = Field(default=None, description="结果别名")
     
@@ -69,11 +67,10 @@ class LODInclude(BaseModel):
     
     @field_validator("dimensions")
     @classmethod
-    def dimensions_not_empty(cls, v: List[str]) -> List[str]:
+    def dimensions_not_empty(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("LOD_INCLUDE 的 dimensions 不能为空")
         return [s.strip() for s in v if s and s.strip()]
-
 
 class LODExclude(BaseModel):
     """EXCLUDE LOD - 在比查询更粗的粒度计算（移除维度）。
@@ -85,7 +82,7 @@ class LODExclude(BaseModel):
     
     calc_type: Literal["LOD_EXCLUDE"] = Field(default="LOD_EXCLUDE")
     target: str = Field(description="要聚合的目标度量字段")
-    dimensions: List[str] = Field(description="要从查询粒度移除的维度（至少一个）")
+    dimensions: list[str] = Field(description="要从查询粒度移除的维度（至少一个）")
     aggregation: AggregationType = Field(description="聚合函数")
     alias: Optional[str] = Field(default=None, description="结果别名")
     
@@ -98,11 +95,10 @@ class LODExclude(BaseModel):
     
     @field_validator("dimensions")
     @classmethod
-    def dimensions_not_empty(cls, v: List[str]) -> List[str]:
+    def dimensions_not_empty(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("LOD_EXCLUDE 的 dimensions 不能为空")
         return [s.strip() for s in v if s and s.strip()]
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 表计算 - 排名
@@ -114,7 +110,7 @@ class RankCalc(BaseModel):
     
     calc_type: Literal["RANK"] = Field(default="RANK")
     target: str = Field(description="排名依据的度量字段")
-    partition_by: List[DimensionField] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="定义排名范围的维度（空=全局排名）"
     )
@@ -136,14 +132,13 @@ class RankCalc(BaseModel):
             raise ValueError("target 不能为空")
         return v.strip()
 
-
 class DenseRankCalc(BaseModel):
     """DENSE_RANK - 对查询结果排名（无间隙：1,2,2,3）。"""
     model_config = ConfigDict(extra="forbid")
     
     calc_type: Literal["DENSE_RANK"] = Field(default="DENSE_RANK")
     target: str = Field(description="排名依据的度量字段")
-    partition_by: List[DimensionField] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="定义排名范围的维度"
     )
@@ -158,14 +153,13 @@ class DenseRankCalc(BaseModel):
             raise ValueError("target 不能为空")
         return v.strip()
 
-
 class PercentileCalc(BaseModel):
     """PERCENTILE - 查询结果的百分位排名（0-100%）。"""
     model_config = ConfigDict(extra="forbid")
     
     calc_type: Literal["PERCENTILE"] = Field(default="PERCENTILE")
     target: str = Field(description="目标度量字段")
-    partition_by: List[DimensionField] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="定义百分位范围的维度"
     )
@@ -179,7 +173,6 @@ class PercentileCalc(BaseModel):
             raise ValueError("target 不能为空")
         return v.strip()
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 表计算 - 差异/比较
 # ═══════════════════════════════════════════════════════════════════════════
@@ -190,7 +183,7 @@ class DifferenceCalc(BaseModel):
     
     calc_type: Literal["DIFFERENCE"] = Field(default="DIFFERENCE")
     target: str = Field(description="目标度量字段")
-    partition_by: List[DimensionField] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="定义比较范围的维度"
     )
@@ -204,7 +197,6 @@ class DifferenceCalc(BaseModel):
             raise ValueError("target 不能为空")
         return v.strip()
 
-
 class PercentDifferenceCalc(BaseModel):
     """PERCENT_DIFFERENCE - 查询结果行之间的百分比变化。
     
@@ -214,7 +206,7 @@ class PercentDifferenceCalc(BaseModel):
     
     calc_type: Literal["PERCENT_DIFFERENCE"] = Field(default="PERCENT_DIFFERENCE")
     target: str = Field(description="目标度量字段")
-    partition_by: List[DimensionField] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="定义比较范围的维度"
     )
@@ -227,7 +219,6 @@ class PercentDifferenceCalc(BaseModel):
         if not v or not v.strip():
             raise ValueError("target 不能为空")
         return v.strip()
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 表计算 - 累计/运行
@@ -242,7 +233,7 @@ class RunningTotalCalc(BaseModel):
     
     calc_type: Literal["RUNNING_TOTAL"] = Field(default="RUNNING_TOTAL")
     target: str = Field(description="目标度量字段")
-    partition_by: List[DimensionField] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="定义累计范围的维度"
     )
@@ -263,7 +254,6 @@ class RunningTotalCalc(BaseModel):
             raise ValueError("target 不能为空")
         return v.strip()
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 表计算 - 移动窗口
 # ═══════════════════════════════════════════════════════════════════════════
@@ -277,7 +267,7 @@ class MovingCalc(BaseModel):
     
     calc_type: Literal["MOVING_CALC"] = Field(default="MOVING_CALC")
     target: str = Field(description="目标度量字段")
-    partition_by: List[DimensionField] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="定义窗口范围的维度"
     )
@@ -297,7 +287,6 @@ class MovingCalc(BaseModel):
             raise ValueError("target 不能为空")
         return v.strip()
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 表计算 - 占比
 # ═══════════════════════════════════════════════════════════════════════════
@@ -311,7 +300,7 @@ class PercentOfTotalCalc(BaseModel):
     
     calc_type: Literal["PERCENT_OF_TOTAL"] = Field(default="PERCENT_OF_TOTAL")
     target: str = Field(description="目标度量字段")
-    partition_by: List[DimensionField] = Field(
+    partition_by: list[DimensionField] = Field(
         default_factory=list,
         description="定义总计范围的维度（空=全局总计占比）"
     )
@@ -324,7 +313,6 @@ class PercentOfTotalCalc(BaseModel):
         if not v or not v.strip():
             raise ValueError("target 不能为空")
         return v.strip()
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 联合类型

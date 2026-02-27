@@ -3,17 +3,15 @@
 FieldMapper 配置模型
 
 包含：
-- FieldMappingConfig: FieldMapper 配置类
+- FieldMappingConfig: FieldMapper 配置类（Pydantic BaseModel）
 """
-from dataclasses import dataclass
+from pydantic import BaseModel
 
 from analytics_assistant.src.infra.config import get_config
 
-
-@dataclass
-class FieldMappingConfig:
+class FieldMappingConfig(BaseModel):
     """FieldMapper 配置
-    
+
     配置来源：app.yaml -> field_mapper
     """
     high_confidence_threshold: float = 0.9
@@ -24,7 +22,7 @@ class FieldMappingConfig:
     max_alternatives: int = 3
     enable_cache: bool = True
     enable_llm_fallback: bool = True
-    
+
     @classmethod
     def from_yaml(cls) -> "FieldMappingConfig":
         """从 YAML 配置创建"""
@@ -40,7 +38,6 @@ class FieldMappingConfig:
             enable_cache=yaml_config.get("enable_cache", True),
             enable_llm_fallback=yaml_config.get("enable_llm_fallback", True),
         )
-
 
 __all__ = [
     "FieldMappingConfig",

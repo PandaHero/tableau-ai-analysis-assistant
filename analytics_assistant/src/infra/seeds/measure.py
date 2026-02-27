@@ -19,14 +19,13 @@
         get_measure_few_shot_examples,
     )
 """
-from typing import Any, Dict, List
-
+from typing import Any
 
 # ══════════════════════════════════════════════════════════════
 # 度量模式种子数据
 # ══════════════════════════════════════════════════════════════
 
-MEASURE_SEEDS: List[Dict[str, Any]] = [
+MEASURE_SEEDS: list[dict[str, Any]] = [
     # ─────────────────────────────────────────────────────────
     # REVENUE 收入类 - 中文
     # ─────────────────────────────────────────────────────────
@@ -691,15 +690,14 @@ MEASURE_SEEDS: List[Dict[str, Any]] = [
     },
 ]
 
-
 # ══════════════════════════════════════════════════════════════
 # 辅助函数
 # ══════════════════════════════════════════════════════════════
 
 def get_measure_few_shot_examples(
-    categories: List[str] = None,
+    categories: list[str] = None,
     max_per_category: int = 1,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     获取度量种子数据作为 few-shot 示例
     
@@ -732,7 +730,6 @@ def get_measure_few_shot_examples(
             category_counts[cat] += 1
     
     return examples
-
 
 __all__ = [
     "MEASURE_SEEDS",

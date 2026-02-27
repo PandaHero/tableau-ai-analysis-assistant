@@ -12,7 +12,7 @@ SemanticCache - 语义缓存抽象基类
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict, Generic, List, Optional, TypeVar
+from typing import Any, Generic, Optional, TypeVar
 
 import numpy as np
 
@@ -33,7 +33,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")  # 缓存条目类型
-
 
 class SemanticCache(ABC, Generic[T]):
     """语义缓存抽象基类
@@ -76,8 +75,8 @@ class SemanticCache(ABC, Generic[T]):
         # FAISS 索引相关
         self._faiss_available = False
         self._faiss_index = None
-        self._id_to_key: Dict[int, str] = {}  # FAISS ID -> cache key
-        self._key_to_id: Dict[str, int] = {}  # cache key -> FAISS ID
+        self._id_to_key: dict[int, str] = {}  # FAISS ID -> cache key
+        self._key_to_id: dict[str, int] = {}  # cache key -> FAISS ID
         self._next_id = 0
         
         # 相似度计算器（从配置读取 score_type）
@@ -91,7 +90,7 @@ class SemanticCache(ABC, Generic[T]):
         self._init_faiss()
         
         # CacheManager 实例缓存
-        self._cache_managers: Dict[str, CacheManager] = {}
+        self._cache_managers: dict[str, CacheManager] = {}
         
         # 直接传入的 store（用于测试）
         self._direct_store = None
@@ -118,7 +117,7 @@ class SemanticCache(ABC, Generic[T]):
             logger.warning(f"初始化 FAISS 索引失败: {e}")
             self._faiss_available = False
     
-    def _add_to_faiss(self, key: str, embedding: List[float]) -> None:
+    def _add_to_faiss(self, key: str, embedding: list[float]) -> None:
         """添加向量到 FAISS 索引
         
         Args:
@@ -172,9 +171,9 @@ class SemanticCache(ABC, Generic[T]):
     
     def _search_faiss(
         self, 
-        query_embedding: List[float], 
+        query_embedding: list[float], 
         top_k: int = 10
-    ) -> List[tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         """在 FAISS 索引中搜索相似向量
         
         Args:
@@ -211,10 +210,10 @@ class SemanticCache(ABC, Generic[T]):
     
     def _linear_search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         datasource_luid: str,
         top_k: int = 10,
-    ) -> List[tuple[str, float, Any]]:
+    ) -> list[tuple[str, float, Any]]:
         """线性扫描搜索（FAISS 不可用时的回退方案）
         
         Args:
@@ -308,7 +307,7 @@ class SemanticCache(ABC, Generic[T]):
         pass
     
     @abstractmethod
-    def _parse_cached(self, value: Dict[str, Any]) -> Optional[T]:
+    def _parse_cached(self, value: dict[str, Any]) -> Optional[T]:
         """解析缓存值为类型 T
         
         Args:
@@ -320,7 +319,7 @@ class SemanticCache(ABC, Generic[T]):
         pass
     
     @abstractmethod
-    def _get_cached_embedding(self, cached: T) -> Optional[List[float]]:
+    def _get_cached_embedding(self, cached: T) -> Optional[list[float]]:
         """获取缓存条目的 embedding
         
         Args:
@@ -509,6 +508,5 @@ class SemanticCache(ABC, Generic[T]):
     def similarity_threshold(self) -> float:
         """相似度阈值"""
         return self._similarity_threshold
-
 
 __all__ = ["SemanticCache"]

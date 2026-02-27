@@ -30,14 +30,13 @@
 import hashlib
 import json
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from langgraph.store.base import BaseStore
 
 from .kv_store import get_kv_store
 
 logger = logging.getLogger(__name__)
-
 
 class CacheManager:
     """统一缓存管理器
@@ -90,7 +89,7 @@ class CacheManager:
         else:
             self._store = get_kv_store()
 
-        self._stats: Dict[str, int] = {
+        self._stats: dict[str, int] = {
             "hits": 0,
             "misses": 0,
             "sets": 0,
@@ -208,6 +207,41 @@ class CacheManager:
                 f"清空缓存失败: namespace={self.namespace}, error={e}"
             )
             return False
+
+    def delete_by_filter(
+        self, filter_fn: Callable[[dict], bool]
+    ) -> int:
+        """按条件批量删除缓存项。
+
+        替代 search(limit=10000) + 循环删除模式，提供统一的批量删除接口。
+
+        Args:
+            filter_fn: 过滤函数，接收缓存值（dict），返回 True 表示需要删除
+
+        Returns:
+            实际删除的条目数
+        """
+        try:
+            items = self._store.search(self._namespace_tuple, limit=10000)
+            to_delete = [
+                item for item in items
+                if item.value is not None and filter_fn(item.value)
+            ]
+            for item in to_delete:
+                self._store.delete(self._namespace_tuple, item.key)
+            deleted = len(to_delete)
+            if self.enable_stats:
+                self._stats["deletes"] += deleted
+            logger.info(
+                f"批量删除完成: namespace={self.namespace}, "
+                f"deleted={deleted}"
+            )
+            return deleted
+        except Exception as e:
+            logger.error(
+                f"批量删除失败: namespace={self.namespace}, error={e}"
+            )
+            return 0
 
     def get_or_compute(
         self,
@@ -355,6 +389,41 @@ class CacheManager:
         await self.aset(key, value, ttl=ttl)
         return value
 
+    async def adelete_by_filter(
+        self, filter_fn: Callable[[dict], bool]
+    ) -> int:
+        """异步按条件批量删除缓存项。
+
+        替代 search(limit=10000) + 循环删除模式，提供统一的异步批量删除接口。
+
+        Args:
+            filter_fn: 过滤函数，接收缓存值（dict），返回 True 表示需要删除
+
+        Returns:
+            实际删除的条目数
+        """
+        try:
+            items = await self._store.asearch(self._namespace_tuple, limit=10000)
+            to_delete = [
+                item for item in items
+                if item.value is not None and filter_fn(item.value)
+            ]
+            for item in to_delete:
+                await self._store.adelete(self._namespace_tuple, item.key)
+            deleted = len(to_delete)
+            if self.enable_stats:
+                self._stats["deletes"] += deleted
+            logger.info(
+                f"异步批量删除完成: namespace={self.namespace}, "
+                f"deleted={deleted}"
+            )
+            return deleted
+        except Exception as e:
+            logger.error(
+                f"异步批量删除失败: namespace={self.namespace}, error={e}"
+            )
+            return 0
+
     # ========================================
     # 工具方法
     # ========================================
@@ -382,7 +451,7 @@ class CacheManager:
         except Exception:
             return str(hash(str(obj)))
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息。
 
         Returns:
@@ -421,7 +490,6 @@ class CacheManager:
         elif self.default_ttl is not None:
             return max(1, self.default_ttl // 60)
         return None
-
 
 __all__ = [
     "CacheManager",

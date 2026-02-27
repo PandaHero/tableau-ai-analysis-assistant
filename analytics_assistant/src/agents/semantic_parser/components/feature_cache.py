@@ -33,7 +33,7 @@ FeatureCache - 特征缓存
 import hashlib
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import get_kv_store
@@ -44,12 +44,11 @@ from .semantic_cache import SemanticCache
 
 logger = logging.getLogger(__name__)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_config() -> Dict[str, Any]:
+def _get_config() -> dict[str, Any]:
     """获取 feature_cache 配置。"""
     try:
         config = get_config()
@@ -58,12 +57,10 @@ def _get_config() -> Dict[str, Any]:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
 
-
 def compute_feature_hash(question: str, datasource_luid: str) -> str:
     """计算特征缓存的 hash。"""
     content = f"{datasource_luid}:{question.strip().lower()}"
     return hashlib.md5(content.encode('utf-8')).hexdigest()
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FeatureCache 组件（继承 SemanticCache）
@@ -154,7 +151,7 @@ class FeatureCache(SemanticCache[CachedFeature]):
         """
         return datetime.now() <= cached.expires_at
     
-    def _parse_cached(self, value: Dict[str, Any]) -> Optional[CachedFeature]:
+    def _parse_cached(self, value: dict[str, Any]) -> Optional[CachedFeature]:
         """解析缓存值"""
         try:
             return CachedFeature.model_validate(value)
@@ -162,7 +159,7 @@ class FeatureCache(SemanticCache[CachedFeature]):
             logger.debug(f"解析 FeatureCache 缓存值失败: {e}")
             return None
     
-    def _get_cached_embedding(self, cached: CachedFeature) -> Optional[List[float]]:
+    def _get_cached_embedding(self, cached: CachedFeature) -> Optional[list[float]]:
         """获取缓存条目的 embedding"""
         return cached.question_embedding if cached.question_embedding else None
     
@@ -280,9 +277,15 @@ class FeatureCache(SemanticCache[CachedFeature]):
         try:
             cache_manager = self._get_cache_manager(datasource_luid)
             if cache_manager is not None:
-                cache_manager.clear()
-                logger.info(f"FeatureCache 已失效缓存: datasource={datasource_luid}")
-                return -1
+                # 使用批量删除：删除所有条目
+                deleted = cache_manager.delete_by_filter(lambda _: True)
+                # 重置 FAISS 索引
+                self._init_faiss()
+                self._key_to_id.clear()
+                self._id_to_key.clear()
+                self._next_id = 0
+                logger.info(f"FeatureCache 已失效 {deleted} 条缓存: datasource={datasource_luid}")
+                return deleted
             else:
                 store = self._direct_store
                 namespace = self._make_namespace(datasource_luid)
@@ -290,7 +293,6 @@ class FeatureCache(SemanticCache[CachedFeature]):
                 count = 0
                 for item in items:
                     store.delete(namespace, item.key)
-                    # 从 FAISS 索引移除
                     self._remove_from_faiss(item.key)
                     count += 1
                 logger.info(f"FeatureCache 已失效 {count} 条缓存: datasource={datasource_luid}")
@@ -300,7 +302,7 @@ class FeatureCache(SemanticCache[CachedFeature]):
             logger.error(f"FeatureCache invalidate_by_datasource 失败: {e}")
             return 0
     
-    def get_stats(self, datasource_luid: Optional[str] = None) -> Dict[str, Any]:
+    def get_stats(self, datasource_luid: Optional[str] = None) -> dict[str, Any]:
         """获取缓存统计信息"""
         try:
             store = self._get_store()
@@ -345,7 +347,6 @@ class FeatureCache(SemanticCache[CachedFeature]):
         except Exception as e:
             logger.error(f"获取 FeatureCache 统计失败: {e}")
             return {"error": str(e)}
-
 
 __all__ = [
     "FeatureCache",

@@ -20,7 +20,7 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Callable
+from typing import Any, Callable, Optional
 
 import jieba
 from langchain_community.retrievers import BM25Retriever as LangChainBM25Retriever
@@ -32,9 +32,7 @@ from ..config import get_config
 from .models import FieldChunk, RetrievalResult, RetrievalSource
 from .reranker import DefaultReranker, RRFReranker, LLMReranker
 
-
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class RetrievalConfig:
@@ -42,7 +40,6 @@ class RetrievalConfig:
     top_k: int = 10
     score_threshold: float = 0.0
     use_reranker: bool = False
-
 
 @dataclass
 class MetadataFilter:
@@ -60,7 +57,7 @@ class MetadataFilter:
             return False
         return True
     
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         d = {}
         if self.role:
             d["role"] = self.role
@@ -69,7 +66,6 @@ class MetadataFilter:
         if self.category:
             d["category"] = self.category
         return d
-
 
 class BaseRetriever(ABC):
     """检索器抽象基类"""
@@ -84,7 +80,7 @@ class BaseRetriever(ABC):
         top_k: int = 10,
         filters: Optional[MetadataFilter] = None,
         score_threshold: float = 0.0
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         pass
     
     async def aretrieve(
@@ -93,7 +89,7 @@ class BaseRetriever(ABC):
         top_k: int = 10,
         filters: Optional[MetadataFilter] = None,
         score_threshold: float = 0.0
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             None, lambda: self.retrieve(query, top_k, filters, score_threshold)
@@ -101,10 +97,10 @@ class BaseRetriever(ABC):
     
     def _apply_filters(
         self,
-        results: List[RetrievalResult],
+        results: list[RetrievalResult],
         filters: Optional[MetadataFilter],
         score_threshold: float
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         filtered = []
         for result in results:
             if result.score < score_threshold:
@@ -114,13 +110,12 @@ class BaseRetriever(ABC):
             filtered.append(result)
         return filtered
 
-
 class ExactRetriever(BaseRetriever):
     """精确匹配检索器 - O(1) 哈希查找"""
     
     def __init__(
         self,
-        chunks: Dict[str, FieldChunk],
+        chunks: dict[str, FieldChunk],
         config: Optional[RetrievalConfig] = None,
         case_sensitive: bool = False,
         match_caption_first: bool = True
@@ -129,8 +124,8 @@ class ExactRetriever(BaseRetriever):
         self._chunks = chunks
         self.case_sensitive = case_sensitive
         self.match_caption_first = match_caption_first
-        self._name_index: Dict[str, FieldChunk] = {}
-        self._caption_index: Dict[str, FieldChunk] = {}
+        self._name_index: dict[str, FieldChunk] = {}
+        self._caption_index: dict[str, FieldChunk] = {}
         self._build_index()
     
     def _build_index(self) -> None:
@@ -147,7 +142,7 @@ class ExactRetriever(BaseRetriever):
         top_k: int = 1,
         filters: Optional[MetadataFilter] = None,
         score_threshold: float = 0.0
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         if not query:
             return []
         
@@ -177,14 +172,13 @@ class ExactRetriever(BaseRetriever):
     def get_chunk(self, field_name: str) -> Optional[FieldChunk]:
         return self._chunks.get(field_name)
 
-
 class EmbeddingRetriever(BaseRetriever):
     """向量检索器"""
     
     def __init__(
         self,
         vector_store,
-        chunks: Dict[str, FieldChunk],
+        chunks: dict[str, FieldChunk],
         config: Optional[RetrievalConfig] = None
     ):
         super().__init__(config)
@@ -197,7 +191,7 @@ class EmbeddingRetriever(BaseRetriever):
         top_k: Optional[int] = None,
         filters: Optional[MetadataFilter] = None,
         score_threshold: Optional[float] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         if not query or not query.strip() or not self._store:
             return []
         
@@ -234,9 +228,8 @@ class EmbeddingRetriever(BaseRetriever):
     def get_chunk(self, field_name: str) -> Optional[FieldChunk]:
         return self._chunks.get(field_name)
     
-    def get_all_chunks(self) -> List[FieldChunk]:
+    def get_all_chunks(self) -> list[FieldChunk]:
         return list(self._chunks.values())
-
 
 class BM25Retriever(BaseRetriever):
     """BM25 关键词检索器
@@ -247,9 +240,9 @@ class BM25Retriever(BaseRetriever):
     
     def __init__(
         self,
-        chunks: Dict[str, FieldChunk],
+        chunks: dict[str, FieldChunk],
         config: Optional[RetrievalConfig] = None,
-        preprocess_func: Optional[Callable[[str], List[str]]] = None,
+        preprocess_func: Optional[Callable[[str], list[str]]] = None,
     ):
         """初始化 BM25 检索器
         
@@ -303,7 +296,7 @@ class BM25Retriever(BaseRetriever):
         top_k: Optional[int] = None,
         filters: Optional[MetadataFilter] = None,
         score_threshold: Optional[float] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         """BM25 检索
         
         Args:
@@ -354,9 +347,8 @@ class BM25Retriever(BaseRetriever):
     def get_chunk(self, field_name: str) -> Optional[FieldChunk]:
         return self._chunks.get(field_name)
     
-    def get_all_chunks(self) -> List[FieldChunk]:
+    def get_all_chunks(self) -> list[FieldChunk]:
         return list(self._chunks.values())
-
 
 class CascadeRetriever(BaseRetriever):
     """
@@ -386,7 +378,7 @@ class CascadeRetriever(BaseRetriever):
         top_k: Optional[int] = None,
         filters: Optional[MetadataFilter] = None,
         score_threshold: Optional[float] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         if not query:
             return []
         
@@ -414,7 +406,7 @@ class CascadeRetriever(BaseRetriever):
         top_k: Optional[int] = None,
         filters: Optional[MetadataFilter] = None,
         score_threshold: Optional[float] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         if not query:
             return []
         
@@ -433,7 +425,6 @@ class CascadeRetriever(BaseRetriever):
         
         return embedding_results
 
-
 class RetrievalPipeline:
     """检索管道：检索器 + 重排序器"""
     
@@ -448,7 +439,7 @@ class RetrievalPipeline:
         filters: Optional[MetadataFilter] = None,
         score_threshold: float = 0.0,
         rerank_top_k: Optional[int] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         if self.reranker is not None:
             candidate_k = rerank_top_k or top_k * 3
             candidates = self.retriever.retrieve(query, top_k=candidate_k, filters=filters, score_threshold=score_threshold)
@@ -463,7 +454,7 @@ class RetrievalPipeline:
         filters: Optional[MetadataFilter] = None,
         score_threshold: float = 0.0,
         rerank_top_k: Optional[int] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         if self.reranker is not None:
             candidate_k = rerank_top_k or top_k * 3
             candidates = await self.retriever.aretrieve(query, top_k=candidate_k, filters=filters, score_threshold=score_threshold)
@@ -473,21 +464,20 @@ class RetrievalPipeline:
     
     def batch_search(
         self,
-        queries: List[str],
+        queries: list[str],
         top_k: int = 10,
         filters: Optional[MetadataFilter] = None
-    ) -> Dict[str, List[RetrievalResult]]:
+    ) -> dict[str, list[RetrievalResult]]:
         return {query: self.search(query, top_k, filters) for query in queries}
 
-
-def _build_chunks_and_metadata(fields: List[Any]) -> tuple:
+def _build_chunks_and_metadata(fields: list[Any]) -> tuple:
     """从字段列表构建 chunks 和 metadata
     
     注意：
     1. role 和 data_type 统一转为小写，确保检索时 filters 匹配
     2. 如果传入的 field_data 已包含 index_text，优先使用它（支持增强索引文本）
     """
-    chunks: Dict[str, FieldChunk] = {}
+    chunks: dict[str, FieldChunk] = {}
     texts = []
     metadatas = []
     
@@ -547,7 +537,6 @@ def _build_chunks_and_metadata(fields: List[Any]) -> tuple:
     
     return chunks, texts, metadatas
 
-
 class RetrieverFactory:
     """检索器工厂"""
     
@@ -564,7 +553,7 @@ class RetrieverFactory:
     
     @staticmethod
     def create_exact_retriever(
-        fields: List[Any],
+        fields: list[Any],
         config: Optional[RetrievalConfig] = None
     ) -> ExactRetriever:
         """创建精确匹配检索器"""
@@ -573,7 +562,7 @@ class RetrieverFactory:
     
     @staticmethod
     def create_embedding_retriever(
-        fields: List[Any],
+        fields: list[Any],
         config: Optional[RetrievalConfig] = None,
         collection_name: str = "fields",
         persist_directory: Optional[str] = None,
@@ -627,7 +616,7 @@ class RetrieverFactory:
     
     @staticmethod
     def create_cascade_retriever(
-        fields: List[Any],
+        fields: list[Any],
         config: Optional[RetrievalConfig] = None,
         collection_name: str = "fields",
         persist_directory: Optional[str] = None,
@@ -697,7 +686,7 @@ class RetrieverFactory:
     
     @staticmethod
     def create_pipeline(
-        fields: List[Any],
+        fields: list[Any],
         retriever_type: str = "cascade",
         reranker_type: Optional[str] = "llm",
         config: Optional[RetrievalConfig] = None,
@@ -741,7 +730,6 @@ class RetrieverFactory:
         
         return RetrievalPipeline(retriever, reranker)
 
-
 def _create_reranker(reranker_type: str, top_k: int = 10) -> Optional[Any]:
     """创建重排序器"""
     if reranker_type == "default":
@@ -764,9 +752,8 @@ def _create_reranker(reranker_type: str, top_k: int = 10) -> Optional[Any]:
     else:
         return DefaultReranker(top_k)
 
-
 def create_retriever(
-    fields: List[Any],
+    fields: list[Any],
     retriever_type: str = "cascade",
     config: Optional[RetrievalConfig] = None,
     collection_name: str = "fields",
@@ -799,7 +786,6 @@ def create_retriever(
             fields, config, collection_name, persist_directory, embedding_model_id, force_rebuild,
             use_batch_embedding=use_batch_embedding,
         )
-
 
 __all__ = [
     "RetrievalConfig",

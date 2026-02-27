@@ -23,9 +23,8 @@ SemanticParser 状态定义
 6. 最终输出：semantic_query, parse_result
 7. 调试：thinking
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 from typing_extensions import TypedDict
-
 
 class SemanticParserState(TypedDict, total=False):
     """SemanticParser LangGraph 子图状态
@@ -63,7 +62,7 @@ class SemanticParserState(TypedDict, total=False):
     question: str
     """用户问题"""
     
-    chat_history: Optional[List[Dict[str, Any]]]
+    chat_history: Optional[list[dict[str, Any]]]
     """对话历史，格式：[{"role": "user/assistant", "content": "..."}]"""
     
     datasource_luid: Optional[str]
@@ -76,7 +75,7 @@ class SemanticParserState(TypedDict, total=False):
     # 组件输出（存储为 dict，非 Pydantic 对象）
     # ═══════════════════════════════════════════════════════════════════════
     
-    intent_router_output: Optional[Dict[str, Any]]
+    intent_router_output: Optional[dict[str, Any]]
     """IntentRouter 输出（IntentRouterOutput 序列化后）
     
     结构：
@@ -91,25 +90,25 @@ class SemanticParserState(TypedDict, total=False):
     cache_hit: Optional[bool]
     """QueryCache 是否命中"""
     
-    field_candidates: Optional[List[Dict[str, Any]]]
-    """FieldRetriever 输出（List[FieldCandidate] 序列化后）
+    field_candidates: Optional[list[dict[str, Any]]]
+    """FieldRetriever 输出（list[FieldCandidate] 序列化后）
     
     结构：
     [
         {
             "field_name": str,
             "field_caption": str,
-            "field_type": "dimension" | "measure",
+            "field_type": "dimension" | "measure",  # 已合并为 role
             "data_type": str,
             "description": Optional[str],
-            "sample_values": Optional[List[str]],
+            "sample_values": Optional[list[str]],
             "confidence": float
         }
     ]
     """
     
-    few_shot_examples: Optional[List[Dict[str, Any]]]
-    """FewShotManager 输出（List[FewShotExample] 序列化后）
+    few_shot_examples: Optional[list[dict[str, Any]]]
+    """FewShotManager 输出（list[FewShotExample] 序列化后）
     
     结构：
     [
@@ -120,7 +119,7 @@ class SemanticParserState(TypedDict, total=False):
             "what": dict,
             "where": dict,
             "how_type": str,
-            "computations": Optional[List[dict]],
+            "computations": Optional[list[dict]],
             "query": str,
             "datasource_luid": str,
             "accepted_count": int
@@ -128,7 +127,7 @@ class SemanticParserState(TypedDict, total=False):
     ]
     """
     
-    semantic_output: Optional[Dict[str, Any]]
+    semantic_output: Optional[dict[str, Any]]
     """SemanticUnderstanding 输出（SemanticOutput 序列化后）
     
     结构：
@@ -142,7 +141,7 @@ class SemanticParserState(TypedDict, total=False):
         "computations": [...],
         "needs_clarification": bool,
         "clarification_question": Optional[str],
-        "clarification_options": Optional[List[str]],
+        "clarification_options": Optional[list[str]],
         "self_check": {...}
     }
     """
@@ -151,8 +150,8 @@ class SemanticParserState(TypedDict, total=False):
     # 筛选值确认（多轮累积）
     # ═══════════════════════════════════════════════════════════════════════
     
-    confirmed_filters: Optional[List[Dict[str, Any]]]
-    """多轮筛选值确认累积（List[FilterConfirmation] 序列化后）
+    confirmed_filters: Optional[list[dict[str, Any]]]
+    """多轮筛选值确认累积（list[FilterConfirmation] 序列化后）
     
     用于累积多轮 interrupt() 确认的结果，防止上下文丢失。
     
@@ -172,7 +171,7 @@ class SemanticParserState(TypedDict, total=False):
     ]
     """
     
-    filter_validation_result: Optional[Dict[str, Any]]
+    filter_validation_result: Optional[dict[str, Any]]
     """FilterValueValidator 验证结果
     
     结构：
@@ -182,7 +181,7 @@ class SemanticParserState(TypedDict, total=False):
                 "field_name": str,
                 "requested_value": str,
                 "is_valid": bool,
-                "similar_values": List[str],
+                "similar_values": list[str],
                 "needs_confirmation": bool,
                 "is_unresolvable": bool,
                 "message": Optional[str]
@@ -204,7 +203,7 @@ class SemanticParserState(TypedDict, total=False):
     clarification_question: Optional[str]
     """澄清问题（当 needs_clarification=True 时）"""
     
-    clarification_options: Optional[List[str]]
+    clarification_options: Optional[list[str]]
     """澄清选项列表（供用户选择）"""
     
     clarification_source: Optional[str]
@@ -220,7 +219,7 @@ class SemanticParserState(TypedDict, total=False):
     error_feedback: Optional[str]
     """传递给重试步骤的错误反馈信息"""
     
-    pipeline_error: Optional[Dict[str, Any]]
+    pipeline_error: Optional[dict[str, Any]]
     """管道执行错误（QueryError 序列化后）
     
     结构：
@@ -232,7 +231,7 @@ class SemanticParserState(TypedDict, total=False):
     }
     """
     
-    error_history: Optional[List[Dict[str, Any]]]
+    error_history: Optional[list[dict[str, Any]]]
     """错误历史记录（用于检测重复错误和交替错误模式）
     
     结构：
@@ -260,7 +259,7 @@ class SemanticParserState(TypedDict, total=False):
     # 最终输出
     # ═══════════════════════════════════════════════════════════════════════
     
-    semantic_query: Optional[Dict[str, Any]]
+    semantic_query: Optional[dict[str, Any]]
     """QueryAdapter 输出的最终查询（VizQL 或 SQL）
     
     结构取决于目标平台，VizQL 示例：
@@ -272,7 +271,7 @@ class SemanticParserState(TypedDict, total=False):
     }
     """
     
-    parse_result: Optional[Dict[str, Any]]
+    parse_result: Optional[dict[str, Any]]
     """解析结果汇总
     
     结构：
@@ -296,7 +295,7 @@ class SemanticParserState(TypedDict, total=False):
     # 语义解析优化字段
     # ═══════════════════════════════════════════════════════════════════════
     
-    prefilter_result: Optional[Dict[str, Any]]
+    prefilter_result: Optional[dict[str, Any]]
     """RulePrefilter 输出（PrefilterResult 序列化后）
     
     结构：
@@ -310,7 +309,7 @@ class SemanticParserState(TypedDict, total=False):
     }
     """
     
-    feature_extraction_output: Optional[Dict[str, Any]]
+    feature_extraction_output: Optional[dict[str, Any]]
     """FeatureExtractor 输出（FeatureExtractionOutput 序列化后）
     
     结构：
@@ -324,7 +323,7 @@ class SemanticParserState(TypedDict, total=False):
     }
     """
     
-    field_rag_result: Optional[Dict[str, Any]]
+    field_rag_result: Optional[dict[str, Any]]
     """FieldRetriever 输出（FieldRAGResult 序列化后）
     
     结构：
@@ -335,7 +334,7 @@ class SemanticParserState(TypedDict, total=False):
     }
     """
     
-    dynamic_schema_result: Optional[Dict[str, Any]]
+    dynamic_schema_result: Optional[dict[str, Any]]
     """DynamicSchemaBuilder 输出
     
     结构：
@@ -350,7 +349,7 @@ class SemanticParserState(TypedDict, total=False):
     modular_prompt: Optional[str]
     """ModularPromptBuilder 输出的增强 Prompt"""
     
-    validation_result: Optional[Dict[str, Any]]
+    validation_result: Optional[dict[str, Any]]
     """OutputValidator 输出（ValidationResult 序列化后）
     
     结构：
@@ -366,7 +365,7 @@ class SemanticParserState(TypedDict, total=False):
     is_degraded: Optional[bool]
     """是否处于降级模式（FeatureExtractor 超时等）"""
     
-    optimization_metrics: Optional[Dict[str, Any]]
+    optimization_metrics: Optional[dict[str, Any]]
     """语义解析优化性能指标
     
     结构：
@@ -382,6 +381,5 @@ class SemanticParserState(TypedDict, total=False):
         "token_reduction_percent": float
     }
     """
-
 
 __all__ = ["SemanticParserState"]

@@ -6,7 +6,7 @@
 从 inference.py 拆分而来。
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.core.schemas.data_model import Field
 from analytics_assistant.src.core.schemas.enums import DimensionCategory, MeasureCategory
@@ -20,7 +20,6 @@ from analytics_assistant.src.agents.field_semantic.utils import (
 
 logger = logging.getLogger(__name__)
 
-
 class CacheMixin:
     """缓存管理 Mixin
 
@@ -28,15 +27,15 @@ class CacheMixin:
     需要宿主类提供 self._cache 属性。
     """
 
-    def _get_cache(self, key: str) -> Optional[Dict[str, Any]]:
+    def _get_cache(self, key: str) -> Optional[dict[str, Any]]:
         return self._cache.get(key) if self._cache else None
 
     def _put_cache(
         self,
         key: str,
         field_hash: str,
-        field_hashes: Dict[str, str],
-        data: Dict[str, Any],
+        field_hashes: dict[str, str],
+        data: dict[str, Any],
     ) -> bool:
         if not self._cache:
             return False
@@ -46,7 +45,7 @@ class CacheMixin:
             "data": data,
         })
 
-    def _serialize_attrs(self, attrs: FieldSemanticAttributes) -> Dict[str, Any]:
+    def _serialize_attrs(self, attrs: FieldSemanticAttributes) -> dict[str, Any]:
         """序列化属性"""
         data = {
             "role": attrs.role,
@@ -70,7 +69,7 @@ class CacheMixin:
 
         return data
 
-    def _deserialize_attrs(self, data: Dict[str, Any]) -> FieldSemanticAttributes:
+    def _deserialize_attrs(self, data: dict[str, Any]) -> FieldSemanticAttributes:
         """反序列化属性"""
         role = data.get("role", "dimension")
 
@@ -109,8 +108,8 @@ class CacheMixin:
     def _update_cache(
         self,
         key: str,
-        fields: List[Field],
-        results: Dict[str, FieldSemanticAttributes],
+        fields: list[Field],
+        results: dict[str, FieldSemanticAttributes],
     ) -> None:
         """更新缓存"""
         if not self._cache:

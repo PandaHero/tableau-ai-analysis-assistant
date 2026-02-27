@@ -20,7 +20,7 @@ SSE 回调机制
 
 import asyncio
 import logging
-from typing import Dict, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -29,26 +29,29 @@ logger = logging.getLogger(__name__)
 # ========================================
 
 # LLM 调用节点 → ProcessingStage
-_LLM_NODE_MAPPING: Dict[str, str] = {
+_LLM_NODE_MAPPING: dict[str, str] = {
     "feature_extractor": "understanding",
     "semantic_understanding": "understanding",
-    "error_corrector": "understanding",
     "field_mapper": "mapping",
     "field_semantic": "understanding",
 }
 
 # 用户可见节点（不调用 LLM，但需要展示进度）
-_VISIBLE_NODE_MAPPING: Dict[str, str] = {
+_VISIBLE_NODE_MAPPING: dict[str, str] = {
     "query_adapter": "building",
     "tableau_query": "executing",
     "feedback_learner": "generating",
+    "rule_prefilter": "understanding",
+    "filter_validator": "building",
+    "output_validator": "building",
+    "error_corrector": "building",
 }
 
 # 合并映射
-_ALL_NODE_MAPPING: Dict[str, str] = {**_LLM_NODE_MAPPING, **_VISIBLE_NODE_MAPPING}
+_ALL_NODE_MAPPING: dict[str, str] = {**_LLM_NODE_MAPPING, **_VISIBLE_NODE_MAPPING}
 
 # 阶段显示名称
-_STAGE_NAMES_ZH: Dict[str, str] = {
+_STAGE_NAMES_ZH: dict[str, str] = {
     "understanding": "理解问题",
     "mapping": "字段映射",
     "building": "构建查询",
@@ -56,14 +59,13 @@ _STAGE_NAMES_ZH: Dict[str, str] = {
     "generating": "生成洞察",
 }
 
-_STAGE_NAMES_EN: Dict[str, str] = {
+_STAGE_NAMES_EN: dict[str, str] = {
     "understanding": "Understanding",
     "mapping": "Mapping Fields",
     "building": "Building Query",
     "executing": "Executing Analysis",
     "generating": "Generating Insights",
 }
-
 
 def get_processing_stage(node_name: str) -> Optional[str]:
     """根据节点名称返回 ProcessingStage。
@@ -79,7 +81,6 @@ def get_processing_stage(node_name: str) -> Optional[str]:
     """
     return _ALL_NODE_MAPPING.get(node_name)
 
-
 def get_stage_display_name(stage: str, language: str = "zh") -> str:
     """获取阶段的显示名称（支持中英文）。
 
@@ -94,7 +95,6 @@ def get_stage_display_name(stage: str, language: str = "zh") -> str:
         return _STAGE_NAMES_EN.get(stage, stage)
     return _STAGE_NAMES_ZH.get(stage, stage)
 
-
 class SSECallbacks:
     """SSE 回调函数集合。
 
@@ -108,7 +108,7 @@ class SSECallbacks:
 
     def __init__(
         self,
-        event_queue: "asyncio.Queue[Optional[Dict]]",
+        event_queue: "asyncio.Queue[Optional[dict]]",
         language: str = "zh",
     ):
         """初始化回调函数。
@@ -175,7 +175,6 @@ class SSECallbacks:
                 "name": get_stage_display_name(stage, self._language),
                 "status": "completed",
             })
-
 
 __all__ = [
     "SSECallbacks",

@@ -8,7 +8,7 @@ DataProfiler - 数据画像生成器
 import logging
 import statistics
 from collections import Counter
-from typing import Any, List, Set
+from typing import Any
 
 from analytics_assistant.src.core.schemas.execute_result import (
     ColumnInfo,
@@ -26,11 +26,10 @@ from ..schemas.output import (
 logger = logging.getLogger(__name__)
 
 # 数值类型集合（大写，用于忽略大小写比较）
-_NUMERIC_TYPES: Set[str] = {
+_NUMERIC_TYPES: set[str] = {
     "INTEGER", "INT", "REAL", "FLOAT",
     "DOUBLE", "DECIMAL", "NUMBER", "NUMERIC",
 }
-
 
 class DataProfiler:
     """数据画像生成器。
@@ -72,7 +71,7 @@ class DataProfiler:
                 columns_profile=[],
             )
 
-        columns_profile: List[ColumnProfile] = []
+        columns_profile: list[ColumnProfile] = []
         for col_info in execute_result.columns:
             try:
                 # 提取该列的所有值
@@ -125,7 +124,7 @@ class DataProfiler:
 
     def _profile_numeric_column(
         self,
-        values: List[Any],
+        values: list[Any],
         column_name: str,
         data_type: str,
     ) -> ColumnProfile:
@@ -175,7 +174,7 @@ class DataProfiler:
 
     def _profile_categorical_column(
         self,
-        values: List[Any],
+        values: list[Any],
         column_name: str,
         data_type: str,
     ) -> ColumnProfile:

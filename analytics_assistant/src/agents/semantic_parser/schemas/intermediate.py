@@ -8,14 +8,13 @@ Semantic Parser Intermediate Models
 - FewShotExample: Few-shot 示例
 """
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import Any, Optional
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
 # 从 core 导入共享的 FieldCandidate
 from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 时间提示
@@ -31,9 +30,7 @@ class TimeHint:
     start: str       # 开始日期 (ISO 格式)
     end: str         # 结束日期 (ISO 格式)
 
-
 # FieldCandidate 已从 core/schemas 导入，不再在此定义
-
 
 class FewShotExample(BaseModel):
     """Few-shot 示例
@@ -58,16 +55,16 @@ class FewShotExample(BaseModel):
     restated_question: str = Field(
         description="完整独立的问题描述"
     )
-    what: Dict[str, Any] = Field(
+    what: dict[str, Any] = Field(
         description="目标度量（序列化的 What 对象）"
     )
-    where: Dict[str, Any] = Field(
+    where: dict[str, Any] = Field(
         description="维度和筛选器（序列化的 Where 对象）"
     )
     how: str = Field(
         description="计算复杂度：SIMPLE / COMPLEX"
     )
-    computations: Optional[List[Dict[str, Any]]] = Field(
+    computations: Optional[list[dict[str, Any]]] = Field(
         default=None,
         description="派生度量计算逻辑列表"
     )
@@ -92,11 +89,10 @@ class FewShotExample(BaseModel):
     )
     
     # 向量检索相关
-    question_embedding: Optional[List[float]] = Field(
+    question_embedding: Optional[list[float]] = Field(
         default=None,
         description="问题的向量表示（用于语义检索）"
     )
-
 
 __all__ = [
     "TimeHint",

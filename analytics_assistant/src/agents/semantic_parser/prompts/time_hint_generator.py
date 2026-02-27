@@ -22,12 +22,11 @@ TimeHintGenerator - 时间提示生成器
 
 import re
 from datetime import date, timedelta
-from typing import List, Tuple, Callable
+from typing import Callable
 
 from dateutil.relativedelta import relativedelta
 
 from ..schemas.intermediate import TimeHint
-
 
 class TimeHintGenerator:
     """时间提示生成器
@@ -56,7 +55,7 @@ class TimeHintGenerator:
         self.fiscal_year_start_month = fiscal_year_start_month
         
         # 静态时间表达式 → 计算函数
-        self._static_patterns: dict[str, Callable[[date], Tuple[date, date]]] = {
+        self._static_patterns: dict[str, Callable[[date], tuple[date, date]]] = {
             # ========== 相对日期 ==========
             "今天": lambda d: (d, d),
             "昨天": lambda d: (d - timedelta(days=1), d - timedelta(days=1)),
@@ -108,7 +107,7 @@ class TimeHintGenerator:
         }
         
         # 动态模式：最近N天/周/月
-        self._dynamic_patterns: List[Tuple[str, Callable[[date, str], Tuple[date, date]]]] = [
+        self._dynamic_patterns: list[tuple[str, Callable[[date, str], tuple[date, date]]]] = [
             (r"最近(\d+)天", lambda d, n: (d - timedelta(days=int(n)), d)),
             (r"过去(\d+)天", lambda d, n: (d - timedelta(days=int(n)), d)),
             (r"最近(\d+)周", lambda d, n: (d - timedelta(weeks=int(n)), d)),
@@ -117,7 +116,7 @@ class TimeHintGenerator:
         ]
         
         # 财年季度模式：财年Q1, 财年Q2, 上财年Q3 等
-        self._fiscal_quarter_patterns: List[Tuple[str, Callable[[date, str], Tuple[date, date]]]] = [
+        self._fiscal_quarter_patterns: list[tuple[str, Callable[[date, str], tuple[date, date]]]] = [
             (r"(?:本)?财年Q([1-4])", lambda d, q: self._calc_fiscal_quarter(d, 0, int(q))),
             (r"上财年Q([1-4])", lambda d, q: self._calc_fiscal_quarter(d, -1, int(q))),
         ]
@@ -147,7 +146,7 @@ class TimeHintGenerator:
         else:
             return date(calendar_date.year - 1, fy_start, 1)
     
-    def _calc_fiscal_year(self, d: date, offset: int) -> Tuple[date, date]:
+    def _calc_fiscal_year(self, d: date, offset: int) -> tuple[date, date]:
         """
         计算财年日期范围
         
@@ -169,12 +168,12 @@ class TimeHintGenerator:
         
         return (fy_start, fy_end)
     
-    def _calc_fiscal_ytd(self, d: date) -> Tuple[date, date]:
+    def _calc_fiscal_ytd(self, d: date) -> tuple[date, date]:
         """计算财年至今（从财年开始到当前日期）"""
         fy_start = self._get_fiscal_year_start(d)
         return (fy_start, d)
     
-    def _calc_fiscal_quarter(self, d: date, fy_offset: int, quarter: int) -> Tuple[date, date]:
+    def _calc_fiscal_quarter(self, d: date, fy_offset: int, quarter: int) -> tuple[date, date]:
         """
         计算财年季度日期范围
         
@@ -200,7 +199,7 @@ class TimeHintGenerator:
     # 核心方法
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def generate_hints(self, question: str) -> List[TimeHint]:
+    def generate_hints(self, question: str) -> list[TimeHint]:
         """
         从问题中提取时间表达式，生成提示
         
@@ -220,7 +219,7 @@ class TimeHintGenerator:
             >>> hints[0].end
             '2024-12-31'
         """
-        hints: List[TimeHint] = []
+        hints: list[TimeHint] = []
         
         # 1. 匹配静态模式
         for expr, calc_fn in self._static_patterns.items():

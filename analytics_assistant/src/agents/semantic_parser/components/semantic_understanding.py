@@ -19,7 +19,7 @@ Requirements: 5.1 - 语义理解核心
 """
 import logging
 from datetime import date, datetime
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
@@ -35,15 +35,13 @@ from ..schemas.intermediate import FieldCandidate, FewShotExample
 from ..schemas.config import SemanticConfig
 from ..prompts.prompt_builder import DynamicPromptBuilder
 
-
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_config() -> Dict[str, Any]:
+def _get_config() -> dict[str, Any]:
     """获取 semantic_understanding 配置。"""
     try:
         config = get_config()
@@ -52,7 +50,6 @@ def _get_config() -> Dict[str, Any]:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
 
-
 # 默认配置（作为 fallback）
 _DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.7
 _DEFAULT_TIMEZONE = "Asia/Shanghai"
@@ -60,31 +57,25 @@ _DEFAULT_FISCAL_YEAR_START_MONTH = 1
 _DEFAULT_MAX_SCHEMA_TOKENS = 2000
 _DEFAULT_MAX_FEW_SHOT_EXAMPLES = 3
 
-
 def get_low_confidence_threshold() -> float:
     """获取低置信度阈值。"""
     return _get_config().get("low_confidence_threshold", _DEFAULT_LOW_CONFIDENCE_THRESHOLD)
-
 
 def get_default_timezone() -> str:
     """获取默认时区。"""
     return _get_config().get("default_timezone", _DEFAULT_TIMEZONE)
 
-
 def get_fiscal_year_start_month() -> int:
     """获取财年起始月份。"""
     return _get_config().get("fiscal_year_start_month", _DEFAULT_FISCAL_YEAR_START_MONTH)
-
 
 def get_max_schema_tokens() -> int:
     """获取 Schema 最大 token 数。"""
     return _get_config().get("max_schema_tokens", _DEFAULT_MAX_SCHEMA_TOKENS)
 
-
 def get_max_few_shot_examples() -> int:
     """获取最大 Few-shot 示例数。"""
     return _get_config().get("max_few_shot_examples", _DEFAULT_MAX_FEW_SHOT_EXAMPLES)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SemanticUnderstanding 类
@@ -142,14 +133,14 @@ class SemanticUnderstanding:
     async def understand(
         self,
         question: str,
-        field_candidates: List[FieldCandidate],
+        field_candidates: list[FieldCandidate],
         current_date: Optional[date] = None,
         timezone: Optional[str] = None,
         fiscal_year_start_month: Optional[int] = None,
-        history: Optional[List[Dict[str, str]]] = None,
-        few_shot_examples: Optional[List[FewShotExample]] = None,
+        history: Optional[list[dict[str, str]]] = None,
+        few_shot_examples: Optional[list[FewShotExample]] = None,
         on_token: Optional[Callable[[str], Awaitable[None]]] = None,
-        on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
         on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
         return_thinking: bool = False,
     ) -> SemanticOutput:
@@ -207,7 +198,7 @@ class SemanticUnderstanding:
         )
         
         # 5. 构建消息
-        messages: List[BaseMessage] = [
+        messages: list[BaseMessage] = [
             HumanMessage(content=prompt),
         ]
         
@@ -250,8 +241,8 @@ class SemanticUnderstanding:
     
     def _convert_field_candidates(
         self,
-        candidates: List[FieldCandidate],
-    ) -> List[FieldCandidate]:
+        candidates: list[FieldCandidate],
+    ) -> list[FieldCandidate]:
         """转换字段候选格式
         
         由于现在使用统一的 FieldCandidate，直接返回即可。
@@ -261,8 +252,8 @@ class SemanticUnderstanding:
     
     def _convert_few_shot_examples(
         self,
-        examples: Optional[List[FewShotExample]],
-    ) -> Optional[List[FewShotExample]]:
+        examples: Optional[list[FewShotExample]],
+    ) -> Optional[list[FewShotExample]]:
         """转换 Few-shot 示例格式
         
         由于现在使用统一的 FewShotExample，直接返回即可。
@@ -309,7 +300,6 @@ class SemanticUnderstanding:
             )
         
         return result
-
 
 __all__ = [
     "SemanticUnderstanding",

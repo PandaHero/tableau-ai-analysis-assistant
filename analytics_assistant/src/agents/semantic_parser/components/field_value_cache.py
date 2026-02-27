@@ -23,20 +23,18 @@ import asyncio
 import logging
 from collections import OrderedDict
 from datetime import datetime, timedelta
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.core.schemas.data_model import DataModel
 
-
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_config() -> Dict[str, Any]:
+def _get_config() -> dict[str, Any]:
     """获取 field_value_cache 配置。"""
     try:
         config = get_config()
@@ -44,7 +42,6 @@ def _get_config() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 内部缓存条目（轻量级，仅用于内存缓存）
@@ -60,7 +57,7 @@ class _CacheEntry:
     
     def __init__(
         self,
-        values: List[str],
+        values: list[str],
         expires_at: datetime,
         cached_at: datetime,
         cardinality: int = 0,
@@ -74,7 +71,6 @@ class _CacheEntry:
     def is_expired(self) -> bool:
         """检查是否过期"""
         return datetime.now() > self.expires_at
-
 
 class FieldValueCache:
     """字段值缓存
@@ -115,7 +111,7 @@ class FieldValueCache:
         self._load_config(max_fields, max_values_per_field, default_ttl, shard_count)
         
         # 分段锁：每个分片有独立的缓存和锁
-        self._shards: List[Dict[str, Any]] = [
+        self._shards: list[dict[str, Any]] = [
             {
                 "cache": OrderedDict(),
                 "lock": asyncio.Lock(),
@@ -164,7 +160,7 @@ class FieldValueCache:
         """生成缓存 key"""
         return f"{datasource_luid}:{field_name}"
     
-    def _get_shard(self, key: str) -> Dict[str, Any]:
+    def _get_shard(self, key: str) -> dict[str, Any]:
         """根据 key 获取对应的分片
         
         使用 hash 函数将 key 映射到分片索引。
@@ -225,7 +221,7 @@ class FieldValueCache:
         self,
         field_name: str,
         datasource_luid: str,
-    ) -> Optional[List[str]]:
+    ) -> Optional[list[str]]:
         """获取缓存的字段值（异步，线程安全）
         
         使用分段锁，不同 key 的读取可以并行执行。
@@ -262,7 +258,7 @@ class FieldValueCache:
         self,
         field_name: str,
         datasource_luid: str,
-        values: List[str],
+        values: list[str],
         ttl: Optional[int] = None,
         cardinality: int = 0,
     ) -> None:
@@ -370,7 +366,7 @@ class FieldValueCache:
         self,
         data_model: DataModel,
         datasource_luid: str,
-        fetch_field_values_func: Callable[[str], Coroutine[Any, Any, List[str]]],
+        fetch_field_values_func: Callable[[str], Coroutine[Any, Any, list[str]]],
     ) -> int:
         """预加载常用字段值（低基数维度字段）
         
@@ -386,7 +382,7 @@ class FieldValueCache:
             data_model: 数据模型
             datasource_luid: 数据源 LUID
             fetch_field_values_func: 获取字段值的异步函数
-                签名: async def fetch(field_name: str) -> List[str]
+                签名: async def fetch(field_name: str) -> list[str]
                 
         Returns:
             成功预加载的字段数
@@ -447,7 +443,7 @@ class FieldValueCache:
         success_count = sum(1 for r in results if r is True)
         return success_count
     
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """获取缓存统计信息"""
         total_entries = 0
         total_values = 0

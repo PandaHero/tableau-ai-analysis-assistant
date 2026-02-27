@@ -10,10 +10,9 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
-
 
 class FeedbackType(str, Enum):
     """反馈类型枚举。
@@ -26,7 +25,6 @@ class FeedbackType(str, Enum):
     ACCEPT = "accept"
     MODIFY = "modify"
     REJECT = "reject"
-
 
 class FeedbackRecord(BaseModel):
     """反馈记录模型。
@@ -53,7 +51,7 @@ class FeedbackRecord(BaseModel):
         default=None,
         description="重述的问题"
     )
-    semantic_output: Optional[Dict[str, Any]] = Field(
+    semantic_output: Optional[dict[str, Any]] = Field(
         default=None,
         description="语义解析输出"
     )
@@ -62,7 +60,7 @@ class FeedbackRecord(BaseModel):
         description="生成的查询语句"
     )
     feedback_type: FeedbackType = Field(description="反馈类型")
-    modification: Optional[Dict[str, Any]] = Field(
+    modification: Optional[dict[str, Any]] = Field(
         default=None,
         description="用户修改内容（仅 MODIFY 类型）"
     )
@@ -83,7 +81,6 @@ class FeedbackRecord(BaseModel):
         default_factory=datetime.now,
         description="创建时间"
     )
-
 
 class SynonymMapping(BaseModel):
     """同义词映射模型。
@@ -115,7 +112,6 @@ class SynonymMapping(BaseModel):
         default_factory=datetime.now,
         description="更新时间"
     )
-
 
 __all__ = [
     "FeedbackType",

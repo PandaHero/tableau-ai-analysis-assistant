@@ -11,7 +11,7 @@ Insight Agent 执行逻辑
 - run_insight_agent(): 执行 Insight Agent，返回 InsightOutput
 """
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain.agents.middleware import (
@@ -45,8 +45,7 @@ _DEFAULT_FS_MAX_TOKENS = 2000
 _DEFAULT_SUMMARIZATION_MAX_TOKENS = 8000
 _DEFAULT_SUMMARIZATION_KEEP_MESSAGES = 6
 
-
-def _load_insight_config() -> Dict[str, Any]:
+def _load_insight_config() -> dict[str, Any]:
     """从 app.yaml 加载 Insight Agent 配置。
 
     Returns:
@@ -59,8 +58,7 @@ def _load_insight_config() -> Dict[str, Any]:
         logger.warning(f"加载 Insight Agent 配置失败，使用默认值: {e}")
         return {}
 
-
-def _get_max_iterations(agents_config: Dict[str, Any], analysis_depth: str) -> int:
+def _get_max_iterations(agents_config: dict[str, Any], analysis_depth: str) -> int:
     """根据分析深度获取最大迭代次数。
 
     Args:
@@ -77,11 +75,10 @@ def _get_max_iterations(agents_config: Dict[str, Any], analysis_depth: str) -> i
         return depth_rounds.get("comprehensive", _DEFAULT_COMPREHENSIVE_ROUNDS)
     return depth_rounds.get("detailed", _DEFAULT_DETAILED_ROUNDS)
 
-
 def _build_middleware_stack(
-    agents_config: Dict[str, Any],
+    agents_config: dict[str, Any],
     llm: Any,
-) -> List[Any]:
+) -> list[Any]:
     """构建中间件栈。
 
     Args:
@@ -132,15 +129,14 @@ def _build_middleware_stack(
 
     return [summarization_mw, model_retry_mw, tool_retry_mw, fs_mw]
 
-
 async def run_insight_agent(
     data_store: DataStore,
     data_profile: DataProfile,
-    semantic_output_dict: Dict[str, Any],
+    semantic_output_dict: dict[str, Any],
     analysis_depth: str = "detailed",
     on_token: Optional[Callable[[str], Awaitable[None]]] = None,
     on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
-    on_progress: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    on_progress: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
 ) -> InsightOutput:
     """执行 Insight Agent。
 
@@ -190,7 +186,7 @@ async def run_insight_agent(
         analysis_depth=analysis_depth,
     )
 
-    messages: List[BaseMessage] = [
+    messages: list[BaseMessage] = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_prompt),
     ]
@@ -220,7 +216,6 @@ async def run_insight_agent(
     )
 
     return result
-
 
 def _build_data_profile_summary(data_profile: DataProfile) -> str:
     """构建 DataProfile 摘要文本。
@@ -262,8 +257,7 @@ def _build_data_profile_summary(data_profile: DataProfile) -> str:
 
     return "\n".join(lines)
 
-
-def _build_semantic_output_summary(semantic_output_dict: Dict[str, Any]) -> str:
+def _build_semantic_output_summary(semantic_output_dict: dict[str, Any]) -> str:
     """构建语义解析输出摘要。
 
     Args:

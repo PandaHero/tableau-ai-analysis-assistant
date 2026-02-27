@@ -11,10 +11,8 @@
     complexity = detector.detect("各地区的利润率同比增长")
     # ['RATIO', 'TIME_COMPARE']
 """
-from typing import List
 
 from analytics_assistant.src.infra.seeds import COMPLEXITY_KEYWORDS, ComputationSeed
-
 
 class ComplexityDetector:
     """复杂度检测器
@@ -36,8 +34,8 @@ class ComplexityDetector:
     def detect(
         self, 
         question: str, 
-        matched_computations: List[ComputationSeed] | None = None,
-    ) -> List[str]:
+        matched_computations: list[ComputationSeed] | None = None,
+    ) -> list[str]:
         """检测问题复杂度类型。
         
         复杂度主要从计算种子的 calc_type 推断，而不是重复匹配关键词。
@@ -49,7 +47,7 @@ class ComplexityDetector:
         Returns:
             复杂度类型列表，如 ['RATIO', 'TIME_COMPARE']
         """
-        detected: List[str] = []
+        detected: list[str] = []
         
         # 从计算种子的 calc_type 推断复杂度
         if matched_computations:
@@ -94,6 +92,5 @@ class ComplexityDetector:
         keywords = COMPLEXITY_KEYWORDS.get("table_calc", [])
         question_lower = question.lower()
         return any(kw in question_lower for kw in keywords)
-
 
 __all__ = ["ComplexityDetector"]

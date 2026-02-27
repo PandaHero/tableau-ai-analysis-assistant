@@ -4,7 +4,7 @@
 
 接口适配策略：
 - RetrievalService 作为适配层，将统一的 search() 接口转换为 CascadeRetriever.retrieve() 调用
-- filters 格式转换：Dict[str, Any] → MetadataFilter
+- filters 格式转换：dict[str, Any] → MetadataFilter
 - 返回结果转换：RetrievalResult → SearchResult
 - 分数归一化已在 CascadeRetriever 中完成，直接使用
 
@@ -16,7 +16,7 @@
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.ai import embed_documents_batch
@@ -28,7 +28,6 @@ from .retriever import MetadataFilter, RetrievalResult
 from .schemas import SearchResult
 
 logger = logging.getLogger(__name__)
-
 
 class RetrievalService:
     """检索服务 - 适配层
@@ -104,10 +103,10 @@ class RetrievalService:
         index_name: str,
         query: str,
         top_k: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Optional[dict[str, Any]] = None,
         score_threshold: float = 0.0,
         strategy: Optional[str] = None,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """向量搜索
         
         Args:
@@ -194,7 +193,7 @@ class RetrievalService:
         top_k: int,
         filters: Optional[MetadataFilter],
         score_threshold: float,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """混合检索：embedding + BM25
         
         Args:
@@ -254,10 +253,10 @@ class RetrievalService:
     
     def _rrf_fusion(
         self,
-        results1: List[RetrievalResult],
-        results2: List[RetrievalResult],
+        results1: list[RetrievalResult],
+        results2: list[RetrievalResult],
         top_k: int,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """RRF (Reciprocal Rank Fusion) 融合
         
         RRF 公式: score = sum(1 / (k + rank))
@@ -271,8 +270,8 @@ class RetrievalService:
         Returns:
             融合后的 SearchResult 列表
         """
-        scores: Dict[str, float] = {}
-        result_map: Dict[str, RetrievalResult] = {}
+        scores: dict[str, float] = {}
+        result_map: dict[str, RetrievalResult] = {}
         
         # 计算第一组结果的 RRF 分数
         for rank, result in enumerate(results1, 1):
@@ -312,10 +311,10 @@ class RetrievalService:
     
     def _weighted_fusion(
         self,
-        results1: List[RetrievalResult],
-        results2: List[RetrievalResult],
+        results1: list[RetrievalResult],
+        results2: list[RetrievalResult],
         top_k: int,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """加权融合
         
         使用配置的 embedding_weight 和 keyword_weight 进行加权平均
@@ -328,8 +327,8 @@ class RetrievalService:
         Returns:
             融合后的 SearchResult 列表
         """
-        scores: Dict[str, float] = {}
-        result_map: Dict[str, RetrievalResult] = {}
+        scores: dict[str, float] = {}
+        result_map: dict[str, RetrievalResult] = {}
         
         # 计算第一组结果的加权分数
         for result in results1:
@@ -367,8 +366,8 @@ class RetrievalService:
         
         return search_results
     
-    def _convert_filters(self, filters: Dict[str, Any]) -> MetadataFilter:
-        """将 Dict 格式转换为 MetadataFilter"""
+    def _convert_filters(self, filters: dict[str, Any]) -> MetadataFilter:
+        """将 dict 格式转换为 MetadataFilter"""
         return MetadataFilter(
             role=filters.get("role"),
             data_type=filters.get("data_type"),
@@ -376,8 +375,8 @@ class RetrievalService:
         )
     
     def _convert_results(
-        self, retrieval_results: List[RetrievalResult]
-    ) -> List[SearchResult]:
+        self, retrieval_results: list[RetrievalResult]
+    ) -> list[SearchResult]:
         """将 RetrievalResult 转换为 SearchResult"""
         search_results = []
         for rank, result in enumerate(retrieval_results, start=1):
@@ -402,10 +401,10 @@ class RetrievalService:
         index_name: str,
         query: str,
         top_k: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Optional[dict[str, Any]] = None,
         score_threshold: float = 0.0,
         strategy: Optional[str] = None,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """异步向量搜索
         
         复用 CascadeRetriever.aretrieve()。
@@ -482,7 +481,7 @@ class RetrievalService:
         top_k: int,
         filters: Optional[MetadataFilter],
         score_threshold: float,
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         """异步混合检索：embedding + BM25
         
         Args:
@@ -544,10 +543,10 @@ class RetrievalService:
     def batch_search(
         self,
         index_name: str,
-        queries: List[str],
+        queries: list[str],
         top_k: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, List[SearchResult]]:
+        filters: Optional[dict[str, Any]] = None,
+    ) -> dict[str, list[SearchResult]]:
         """批量搜索
         
         Args:
@@ -572,10 +571,10 @@ class RetrievalService:
     async def batch_search_async(
         self,
         index_name: str,
-        queries: List[str],
+        queries: list[str],
         top_k: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, List[SearchResult]]:
+        filters: Optional[dict[str, Any]] = None,
+    ) -> dict[str, list[SearchResult]]:
         """异步批量搜索（优化版：批量计算 embedding）
         
         优化策略：
@@ -617,7 +616,7 @@ class RetrievalService:
             query_embeddings = embed_documents_batch(queries)
             
             # 用 embedding 向量搜索
-            results: Dict[str, List[SearchResult]] = {}
+            results: dict[str, list[SearchResult]] = {}
             filter_dict = metadata_filter.to_dict() if metadata_filter else None
             threshold = retriever.config.score_threshold if hasattr(retriever, 'config') else 0.0
             
@@ -675,10 +674,10 @@ class RetrievalService:
     async def _batch_search_parallel(
         self,
         index_name: str,
-        queries: List[str],
+        queries: list[str],
         top_k: int = 10,
-        filters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, List[SearchResult]]:
+        filters: Optional[dict[str, Any]] = None,
+    ) -> dict[str, list[SearchResult]]:
         """并行批量搜索（回退方案）"""
         tasks = [
             self.search_async(index_name, query, top_k, filters)

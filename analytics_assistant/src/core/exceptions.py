@@ -4,8 +4,7 @@
 这些异常携带额外的上下文信息，用于基于 Observer 的错误修正。
 """
 
-from typing import Dict, List, Optional
-
+from typing import Optional
 
 class ValidationError(Exception):
     """带有原始输出的验证错误，用于 Observer 修正。
@@ -35,7 +34,6 @@ class ValidationError(Exception):
     def __str__(self) -> str:
         return f"[{self.step}] {self.message}"
 
-
 class TableauAuthError(Exception):
     """Tableau 认证错误。
     
@@ -60,6 +58,34 @@ class TableauAuthError(Exception):
             return f"{self.message}: {self.details}"
         return self.message
 
+class ConfigurationError(Exception):
+    """配置错误。
+
+    当配置缺失、格式错误或值无效时抛出。
+
+    Attributes:
+        config_key: 出错的配置键路径（如 "rag.retrieval.top_k"）
+    """
+
+    def __init__(
+        self,
+        message: str,
+        config_key: Optional[str] = None,
+    ):
+        """初始化 ConfigurationError。
+
+        Args:
+            message: 错误消息
+            config_key: 出错的配置键路径
+        """
+        super().__init__(message)
+        self.message = message
+        self.config_key = config_key
+
+    def __str__(self) -> str:
+        if self.config_key:
+            return f"[{self.config_key}] {self.message}"
+        return self.message
 
 class VizQLError(Exception):
     """VizQL API 基础错误。"""
@@ -92,21 +118,46 @@ class VizQLError(Exception):
             parts.append(f"(HTTP {self.status_code})")
         return " ".join(parts)
 
+    class ConfigurationError(Exception):
+        """配置错误。
+
+        当配置缺失、格式错误或值无效时抛出。
+
+        Attributes:
+            config_key: 出错的配置键路径（如 "rag.retrieval.top_k"）
+        """
+
+        def __init__(
+            self,
+            message: str,
+            config_key: Optional[str] = None,
+        ):
+            """初始化 ConfigurationError。
+
+            Args:
+                message: 错误消息
+                config_key: 出错的配置键路径
+            """
+            super().__init__(message)
+            self.message = message
+            self.config_key = config_key
+
+        def __str__(self) -> str:
+            if self.config_key:
+                return f"[{self.config_key}] {self.message}"
+            return self.message
 
 class VizQLAuthError(VizQLError):
     """VizQL 认证错误 (401/403)。"""
     pass
 
-
 class VizQLValidationError(VizQLError):
     """VizQL 验证错误 (400)。"""
     pass
 
-
 class VizQLServerError(VizQLError):
     """VizQL 服务器错误 (5xx)。"""
     pass
-
 
 class VizQLRateLimitError(VizQLError):
     """VizQL 限流错误 (429)。"""
@@ -121,7 +172,6 @@ class VizQLRateLimitError(VizQLError):
         super().__init__(message, status_code=429, error_code=error_code, debug=debug)
         self.retry_after = retry_after
 
-
 class VizQLTimeoutError(VizQLError):
     """VizQL 超时错误。"""
     
@@ -131,7 +181,6 @@ class VizQLTimeoutError(VizQLError):
     @property
     def is_retryable(self) -> bool:
         return True
-
 
 class VizQLNetworkError(VizQLError):
     """VizQL 网络错误。"""
@@ -143,11 +192,9 @@ class VizQLNetworkError(VizQLError):
     def is_retryable(self) -> bool:
         return True
 
-
 # =============================================================================
 # 语义解析优化异常定义
 # =============================================================================
-
 
 class SemanticOptimizationError(Exception):
     """语义解析优化异常基类。
@@ -158,7 +205,7 @@ class SemanticOptimizationError(Exception):
     def __init__(
         self,
         message: str,
-        context: Optional[Dict] = None,
+        context: Optional[dict] = None,
     ):
         """初始化 SemanticOptimizationError。
         
@@ -175,7 +222,6 @@ class SemanticOptimizationError(Exception):
             return f"{self.message} | context: {self.context}"
         return self.message
 
-
 class RulePrefilterError(SemanticOptimizationError):
     """规则预处理异常。
     
@@ -183,14 +229,12 @@ class RulePrefilterError(SemanticOptimizationError):
     """
     pass
 
-
 class FeatureExtractionError(SemanticOptimizationError):
     """特征提取异常。
     
     当 FeatureExtractor 执行失败时抛出。
     """
     pass
-
 
 class FeatureExtractorTimeoutError(FeatureExtractionError):
     """特征提取超时异常。
@@ -201,7 +245,7 @@ class FeatureExtractorTimeoutError(FeatureExtractionError):
     def __init__(
         self,
         timeout_ms: int,
-        context: Optional[Dict] = None,
+        context: Optional[dict] = None,
     ):
         """初始化 FeatureExtractorTimeoutError。
         
@@ -213,14 +257,12 @@ class FeatureExtractorTimeoutError(FeatureExtractionError):
         super().__init__(message, context)
         self.timeout_ms = timeout_ms
 
-
 class FieldRetrievalError(SemanticOptimizationError):
     """字段检索异常。
     
     当 FieldRetriever 执行失败时抛出。
     """
     pass
-
 
 class OutputValidationError(SemanticOptimizationError):
     """输出验证异常。
@@ -231,8 +273,8 @@ class OutputValidationError(SemanticOptimizationError):
     def __init__(
         self,
         message: str,
-        validation_errors: Optional[List] = None,
-        context: Optional[Dict] = None,
+        validation_errors: Optional[list] = None,
+        context: Optional[dict] = None,
     ):
         """初始化 OutputValidationError。
         
@@ -244,14 +286,12 @@ class OutputValidationError(SemanticOptimizationError):
         super().__init__(message, context)
         self.validation_errors = validation_errors or []
 
-
 class DynamicSchemaError(SemanticOptimizationError):
     """动态 Schema 构建异常。
     
     当 DynamicSchemaBuilder 执行失败时抛出。
     """
     pass
-
 
 class ModularPromptError(SemanticOptimizationError):
     """模块化 Prompt 构建异常。

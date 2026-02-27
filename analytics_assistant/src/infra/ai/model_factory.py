@@ -8,7 +8,7 @@ ModelFactory - 模型实例工厂
 """
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
@@ -18,7 +18,6 @@ from .custom_llm import CustomChatLLM
 from .models import ModelConfig, AuthType
 
 logger = logging.getLogger(__name__)
-
 
 class ModelFactory:
     """模型实例工厂
@@ -117,7 +116,7 @@ class ModelFactory:
             # 如果配置了 api_endpoint，拼接到 api_base
             api_url = config.api_base.rstrip("/") + config.api_endpoint
         
-        custom_kwargs: Dict[str, Any] = {
+        custom_kwargs: dict[str, Any] = {
             "api_base": api_url,
             "model_name": config.model_name,
             "api_key": config.api_key,
@@ -207,7 +206,7 @@ class ModelFactory:
         
         return llm_instance
     
-    def _get_json_mode_kwargs(self, provider: str, enable_json_mode: bool = True) -> Dict[str, Any]:
+    def _get_json_mode_kwargs(self, provider: str, enable_json_mode: bool = True) -> dict[str, Any]:
         """获取 JSON Mode 参数（适配不同提供商）"""
         if not enable_json_mode:
             return {}
@@ -292,6 +291,5 @@ class ModelFactory:
         config.last_used_at = datetime.now()
         
         return OpenAIEmbeddings(**openai_kwargs)
-
 
 __all__ = ["ModelFactory"]

@@ -7,7 +7,6 @@ Data Tools - Insight Agent 工具定义
 """
 import json
 import logging
-from typing import List
 
 from langchain_core.tools import BaseTool, tool
 
@@ -19,11 +18,10 @@ logger = logging.getLogger(__name__)
 # 停止信号常量
 _FINISH_SIGNAL = "INSIGHT_ANALYSIS_COMPLETE"
 
-
 def create_insight_tools(
     data_store: DataStore,
     data_profile: DataProfile,
-) -> List[BaseTool]:
+) -> list[BaseTool]:
     """创建 Insight Agent 的工具集。
 
     工具列表：
@@ -60,7 +58,7 @@ def create_insight_tools(
             return json.dumps({"error": str(e)}, ensure_ascii=False)
 
     @tool
-    def read_filtered_data(column: str, values: List[str]) -> str:
+    def read_filtered_data(column: str, values: list[str]) -> str:
         """按列值筛选数据。
 
         Args:

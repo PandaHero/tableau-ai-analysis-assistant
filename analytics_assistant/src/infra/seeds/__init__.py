@@ -34,7 +34,7 @@ Seeds 包 - 领域知识种子数据
 from .computation import ComputationSeed, COMPUTATION_SEEDS
 
 # 维度种子
-from .dimension import DIMENSION_SEEDS, get_dimension_few_shot_examples
+from .dimensions import DIMENSION_SEEDS, DimensionSeed, get_dimension_few_shot_examples
 
 # 度量种子
 from .measure import MEASURE_SEEDS, get_measure_few_shot_examples
@@ -50,6 +50,7 @@ __all__ = [
     "ComputationSeed",
     "COMPUTATION_SEEDS",
     # 维度种子
+    "DimensionSeed",
     "DIMENSION_SEEDS",
     "get_dimension_few_shot_examples",
     # 度量种子

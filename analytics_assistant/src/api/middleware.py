@@ -40,7 +40,6 @@ _SENSITIVE_KEYWORDS = [
     "db_path",
 ]
 
-
 def _sanitize_error_message(message: str) -> str:
     """清理错误消息，移除可能泄露内部细节的内容。
 
@@ -54,7 +53,6 @@ def _sanitize_error_message(message: str) -> str:
         if keyword.lower() in message.lower():
             return "服务内部错误，请稍后重试"
     return message
-
 
 def register_exception_handlers(app: FastAPI) -> None:
     """注册全局异常处理器。
@@ -112,7 +110,6 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=500,
             content={"error": safe_message},
         )
-
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """请求日志中间件，记录每个请求的用户名、端点、耗时。"""

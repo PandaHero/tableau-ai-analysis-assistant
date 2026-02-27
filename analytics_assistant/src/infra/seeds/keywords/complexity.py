@@ -13,10 +13,8 @@
 用法：
     from analytics_assistant.src.infra.seeds import COMPLEXITY_KEYWORDS
 """
-from typing import Dict, List
 
-
-COMPLEXITY_KEYWORDS: Dict[str, List[str]] = {
+COMPLEXITY_KEYWORDS: dict[str, list[str]] = {
     # ─────────────────────────────────────────────────────────
     # 派生度量关键词
     # 包含这些词时，问题可能涉及比率、百分比等计算
@@ -90,6 +88,5 @@ COMPLEXITY_KEYWORDS: Dict[str, List[str]] = {
         "前N", "TOP", "百分位", "分位",
     ],
 }
-
 
 __all__ = ["COMPLEXITY_KEYWORDS"]

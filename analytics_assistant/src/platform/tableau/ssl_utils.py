@@ -19,7 +19,6 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
 def get_ssl_verify() -> Union[ssl.SSLContext, bool]:
     """获取 SSL 验证参数。
 

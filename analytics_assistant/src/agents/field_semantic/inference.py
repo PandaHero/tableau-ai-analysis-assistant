@@ -20,8 +20,9 @@
 """
 import asyncio
 import logging
+import threading
 import time
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from analytics_assistant.src.core.schemas.data_model import Field
 from analytics_assistant.src.agents.field_semantic.schemas import (
@@ -54,7 +55,6 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 # ══════════════════════════════════════════════════════════════
 # 主推断类
@@ -103,8 +103,8 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
         self._seed_initialized = False
 
         # 并发控制
-        self._locks: Dict[str, asyncio.Lock] = {}
-        self._lock_times: Dict[str, float] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._lock_times: dict[str, float] = {}
         self._global_lock = asyncio.Lock()
 
         # 结果
@@ -148,11 +148,12 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
     async def infer(
         self,
         datasource_luid: str,
-        fields: List[Field],
+        fields: list[Field],
         table_id: Optional[str] = None,
         skip_cache: bool = False,
         on_token: Optional[Callable[[str], Awaitable[None]]] = None,
         on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
+        field_samples: Optional[dict[str, dict[str, Any]]] = None,
     ) -> FieldSemanticResult:
         """
         推断字段语义属性
@@ -164,6 +165,7 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
             skip_cache: 是否跳过缓存
             on_token: Token 回调（用于流式输出展示 - 结果内容）
             on_thinking: Thinking 回调（用于流式输出展示 - 思考过程）
+            field_samples: 字段样例数据 {field_caption: {sample_values: [...], unique_count: int}}
 
         Returns:
             FieldSemanticResult 推断结果
@@ -181,18 +183,20 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
         lock = await self._get_lock(cache_key)
         async with lock:
             return await self._infer_with_lock(
-                datasource_luid, fields, table_id, cache_key, skip_cache, on_token, on_thinking
+                datasource_luid, fields, table_id, cache_key, skip_cache,
+                on_token, on_thinking, field_samples,
             )
 
     async def _infer_with_lock(
         self,
         datasource_luid: str,
-        fields: List[Field],
+        fields: list[Field],
         table_id: Optional[str],
         cache_key: str,
         skip_cache: bool,
         on_token: Optional[Callable[[str], Awaitable[None]]],
         on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
+        field_samples: Optional[dict[str, dict[str, Any]]] = None,
     ) -> FieldSemanticResult:
         """在锁保护下执行推断
 
@@ -202,7 +206,7 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
         3. RAG 匹配 → 走 LLM 验证并生成 aliases
         4. 未匹配 → 走 LLM 推断
         """
-        results: Dict[str, FieldSemanticAttributes] = {}
+        results: dict[str, FieldSemanticAttributes] = {}
 
         # 1. 缓存检查
         cached_data, cached_hashes, cached_names = None, None, None
@@ -239,7 +243,7 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
         logger.info(f"增量推断: 新增={len(incremental.new_fields)}, 变更={len(incremental.changed_fields)}")
 
         # 3. 种子匹配：有 aliases 的直接使用，没有的需要 LLM 补充
-        fields_need_llm: List[Field] = []
+        fields_need_llm: list[Field] = []
         seed_hit_count = 0
 
         for f in fields_to_infer:
@@ -254,13 +258,22 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
 
         logger.info(f"种子匹配: {seed_hit_count} 个字段直接使用，{len(fields_need_llm)} 个需要 LLM")
 
-        # 4. RAG 检索（作为 LLM 参考，但不直接使用）
+        # 4. RAG 检索：高置信度命中直接使用，未命中传递给 LLM
         if self._enable_rag and fields_need_llm:
             self._init_rag()
+            rag_hits, fields_need_llm = await self._rag_search(
+                fields_need_llm, field_samples=field_samples,
+            )
+            results.update(rag_hits)
+            if rag_hits:
+                logger.info(f"RAG 检索命中 {len(rag_hits)} 个字段，剩余 {len(fields_need_llm)} 个需 LLM 推断")
 
         # 5. LLM 推断（生成 aliases）
         if fields_need_llm:
-            await self._llm_infer(fields_need_llm, results, on_token, on_thinking)
+            await self._llm_infer(
+                fields_need_llm, results, on_token, on_thinking,
+                field_samples=field_samples,
+            )
 
         # 6. 自学习
         if self._enable_self_learning:
@@ -282,7 +295,7 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
         """获取推断结果"""
         return self._last_result
 
-    def enrich_fields(self, fields: List[Field]) -> List[Field]:
+    def enrich_fields(self, fields: list[Field]) -> list[Field]:
         """使用推断结果更新 Field 对象"""
         if not self._last_result:
             return fields
@@ -311,21 +324,38 @@ class FieldSemanticInference(CacheMixin, SeedMatchMixin, RAGMixin, LLMMixin):
             return False
         return self._cache.delete(cache_key) if cache_key else False
 
+# ══════════════════════════════════════════════════════════════
+# 便捷函数（模块级单例）
+# ══════════════════════════════════════════════════════════════
 
-# ══════════════════════════════════════════════════════════════
-# 便捷函数
-# ══════════════════════════════════════════════════════════════
+_inference_instance: Optional[FieldSemanticInference] = None
+_inference_lock = threading.Lock()
 
 async def infer_field_semantic(
     datasource_luid: str,
-    fields: List[Field],
+    fields: list[Field],
     table_id: Optional[str] = None,
     on_token: Optional[Callable[[str], Awaitable[None]]] = None,
+    field_samples: Optional[dict[str, dict[str, Any]]] = None,
 ) -> FieldSemanticResult:
-    """便捷函数：推断字段语义属性"""
-    inference = FieldSemanticInference()
-    return await inference.infer(datasource_luid, fields, table_id, on_token=on_token)
+    """便捷函数：推断字段语义属性（使用模块级单例避免重复初始化）
 
+    Args:
+        datasource_luid: 数据源 LUID
+        fields: Field 模型列表
+        table_id: 逻辑表 ID（多表数据源时使用）
+        on_token: Token 回调
+        field_samples: 字段样例数据 {field_caption: {sample_values: [...], unique_count: int}}
+    """
+    global _inference_instance
+    if _inference_instance is None:
+        with _inference_lock:
+            if _inference_instance is None:
+                _inference_instance = FieldSemanticInference()
+    return await _inference_instance.infer(
+        datasource_luid, fields, table_id,
+        on_token=on_token, field_samples=field_samples,
+    )
 
 __all__ = [
     "FieldSemanticInference",

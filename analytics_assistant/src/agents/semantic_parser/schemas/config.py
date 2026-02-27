@@ -12,7 +12,6 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict
 
-
 class SemanticConfig(BaseModel):
     """语义解析运行时上下文
     
@@ -36,7 +35,6 @@ class SemanticConfig(BaseModel):
     fiscal_year_start_month: int = 1
     max_schema_tokens: int = 2000
     max_few_shot_examples: int = 3
-
 
 __all__ = [
     "SemanticConfig",

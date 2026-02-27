@@ -11,10 +11,9 @@
     seeds = matcher.find_in_text("各地区的利润率和同比增长")
     # [ComputationSeed(name='profit_rate', ...), ComputationSeed(name='yoy_growth', ...)]
 """
-from typing import Dict, List, Optional
+from typing import Optional
 
 from analytics_assistant.src.infra.seeds import COMPUTATION_SEEDS, ComputationSeed
-
 
 class ComputationMatcher:
     """计算种子匹配器
@@ -24,7 +23,7 @@ class ComputationMatcher:
     
     def __init__(self):
         """初始化匹配器，构建关键词索引。"""
-        self._keyword_to_seed: Dict[str, ComputationSeed] = {}
+        self._keyword_to_seed: dict[str, ComputationSeed] = {}
         self._build_index()
     
     def _build_index(self) -> None:
@@ -50,7 +49,7 @@ class ComputationMatcher:
         """
         return self._keyword_to_seed.get(keyword.lower())
     
-    def find_in_text(self, text: str) -> List[ComputationSeed]:
+    def find_in_text(self, text: str) -> list[ComputationSeed]:
         """从文本中查找匹配的计算种子。
         
         Args:
@@ -66,7 +65,7 @@ class ComputationMatcher:
             ['利润率', '同比增长率']
         """
         text_lower = text.lower()
-        found: List[ComputationSeed] = []
+        found: list[ComputationSeed] = []
         seen_names: set = set()
         
         for seed in COMPUTATION_SEEDS:
@@ -80,7 +79,7 @@ class ComputationMatcher:
         
         return found
     
-    def get_all_keywords(self) -> List[str]:
+    def get_all_keywords(self) -> list[str]:
         """获取所有计算关键词。
         
         Returns:
@@ -91,7 +90,7 @@ class ComputationMatcher:
             keywords.update(seed.keywords)
         return sorted(keywords)
     
-    def get_by_calc_type(self, calc_type: str) -> List[ComputationSeed]:
+    def get_by_calc_type(self, calc_type: str) -> list[ComputationSeed]:
         """根据计算类型获取种子列表。
         
         Args:
@@ -115,7 +114,7 @@ class ComputationMatcher:
         lines.append("")
         
         # 按类型分组
-        type_groups: Dict[str, List[ComputationSeed]] = {}
+        type_groups: dict[str, list[ComputationSeed]] = {}
         for seed in COMPUTATION_SEEDS:
             if seed.calc_type not in type_groups:
                 type_groups[seed.calc_type] = []
@@ -148,6 +147,5 @@ class ComputationMatcher:
         
         lines.append("</common_computations>")
         return "\n".join(lines)
-
 
 __all__ = ["ComputationMatcher"]

@@ -29,7 +29,7 @@ Filter Value Validator - 筛选值验证器
 import asyncio
 import logging
 from difflib import SequenceMatcher
-from typing import List, Dict, Optional, Any
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.core.interfaces import BasePlatformAdapter
@@ -44,15 +44,13 @@ from ..schemas.filters import (
 from ..schemas.output import SemanticOutput
 from .field_value_cache import FieldValueCache
 
-
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_config() -> Dict[str, Any]:
+def _get_config() -> dict[str, Any]:
     """获取 filter_validator 配置。"""
     try:
         config = get_config()
@@ -61,20 +59,17 @@ def _get_config() -> Dict[str, Any]:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
 
-
 # 默认配置（作为 fallback）
 _DEFAULT_SIMILARITY_THRESHOLD = 0.6
 _DEFAULT_TOP_K_SIMILAR = 5
 _DEFAULT_HIGH_CARDINALITY_THRESHOLD = 500
 _DEFAULT_TIME_DATA_TYPES = {"date", "datetime", "timestamp"}
 
-
 def get_time_data_types() -> set:
     """获取时间相关数据类型。"""
     config = _get_config()
     types = config.get("time_data_types", list(_DEFAULT_TIME_DATA_TYPES))
     return set(types)
-
 
 class FilterValueValidator:
     """筛选值验证器
@@ -158,7 +153,7 @@ class FilterValueValidator:
         field_name: str,
         datasource_id: str,
         **kwargs: Any,
-    ) -> List[str]:
+    ) -> list[str]:
         """从数据源查询字段的唯一值
         
         通过平台适配器查询字段值，支持不同的数据平台。
@@ -182,7 +177,7 @@ class FilterValueValidator:
         field_name: str,
         datasource_id: str,
         **kwargs: Any,
-    ) -> Optional[List[str]]:
+    ) -> Optional[list[str]]:
         """获取字段的唯一值（先查缓存，未命中则查询数据源）
         
         Args:
@@ -233,10 +228,10 @@ class FilterValueValidator:
     def _find_similar(
         self,
         target: str,
-        candidates: List[str],
+        candidates: list[str],
         threshold: Optional[float] = None,
         top_k: Optional[int] = None,
-    ) -> List[str]:
+    ) -> list[str]:
         """查找相似的候选值
         
         使用多种匹配策略：
@@ -432,11 +427,14 @@ class FilterValueValidator:
         Returns:
             FilterValidationSummary
         """
-        # 默认并发限制
+        # 从配置读取默认并发限制
         _DEFAULT_MAX_CONCURRENCY = 5
-        actual_max_concurrency = max_concurrency or _DEFAULT_MAX_CONCURRENCY
+        if max_concurrency is None:
+            config = _get_config()
+            max_concurrency = config.get("max_concurrency", _DEFAULT_MAX_CONCURRENCY)
+        actual_max_concurrency = max_concurrency
         
-        results: List[FilterValidationResult] = []
+        results: list[FilterValidationResult] = []
         filters = semantic_output.where.filters
         
         # 收集需要验证的任务
@@ -534,7 +532,7 @@ class FilterValueValidator:
     def apply_confirmations(
         self,
         semantic_output: SemanticOutput,
-        confirmations: Dict[str, str],
+        confirmations: dict[str, str],
     ) -> SemanticOutput:
         """应用用户确认的值到 semantic_output
         
@@ -591,6 +589,5 @@ class FilterValueValidator:
         
         updated_where = semantic_output.where.model_copy(update={"filters": updated_filters})
         return semantic_output.model_copy(update={"where": updated_where})
-
 
 __all__ = ["FilterValueValidator"]

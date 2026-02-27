@@ -3,9 +3,8 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 import hashlib
-
 
 class IndexStatus(str, Enum):
     """索引状态"""
@@ -15,12 +14,10 @@ class IndexStatus(str, Enum):
     ERROR = "error"
     DELETED = "deleted"
 
-
 class IndexBackend(str, Enum):
     """索引后端"""
     FAISS = "faiss"
     CHROMA = "chroma"
-
 
 @dataclass
 class IndexConfig:
@@ -34,15 +31,14 @@ class IndexConfig:
     score_threshold: float = 0.0
     
     # 元数据字段
-    metadata_fields: List[str] = field(default_factory=list)
-
+    metadata_fields: list[str] = field(default_factory=list)
 
 @dataclass
 class IndexDocument:
     """索引文档"""
     id: str
     content: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     
     # 缓存哈希（私有字段，懒加载）
     _content_hash: Optional[str] = field(default=None, init=False, repr=False)
@@ -71,7 +67,6 @@ class IndexDocument:
             self._metadata_hash = hashlib.md5(meta_str.encode()).hexdigest()
         return self._metadata_hash
 
-
 @dataclass
 class IndexInfo:
     """索引信息"""
@@ -85,7 +80,6 @@ class IndexInfo:
     # 统计信息
     total_searches: int = 0
     last_search_at: Optional[datetime] = None
-
 
 @dataclass
 class UpdateResult:

@@ -23,7 +23,7 @@ import hashlib
 import logging
 import re
 from datetime import datetime
-from typing import List, Optional, Set, Tuple, Any
+from typing import Any, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -34,9 +34,7 @@ from ..schemas.output import SemanticOutput
 from ..schemas.error_correction import ErrorCorrectionHistory, CorrectionResult
 from ..prompts.error_correction_prompt import SYSTEM_PROMPT, build_user_prompt
 
-
 logger = logging.getLogger(__name__)
-
 
 class ErrorCorrector:
     """错误修正器
@@ -87,7 +85,7 @@ class ErrorCorrector:
             llm: LLM 模型实例，用于生成修正
         """
         self._llm = llm
-        self._error_history: List[ErrorCorrectionHistory] = []
+        self._error_history: list[ErrorCorrectionHistory] = []
         
         # 从配置加载参数
         self._load_config()
@@ -112,7 +110,7 @@ class ErrorCorrector:
                 "non_retryable_errors",
                 list(self._DEFAULT_NON_RETRYABLE_ERRORS)
             )
-            self.non_retryable_errors: Set[str] = set(non_retryable_list)
+            self.non_retryable_errors: set[str] = set(non_retryable_list)
             
             logger.debug(
                 f"ErrorCorrector 配置加载成功: "
@@ -182,7 +180,7 @@ class ErrorCorrector:
         self,
         error_info: str,
         error_type: str,
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """判断是否应该重试
         
         防止交替错误绕过检测：
@@ -300,7 +298,7 @@ class ErrorCorrector:
         error_info: str,
         error_type: str,
         context: Optional[dict] = None,
-    ) -> Tuple[Optional[SemanticOutput], str]:
+    ) -> tuple[Optional[SemanticOutput], str]:
         """调用 LLM 进行修正
         
         Args:
@@ -354,7 +352,7 @@ class ErrorCorrector:
         self._error_history.clear()
     
     @property
-    def error_history(self) -> List[ErrorCorrectionHistory]:
+    def error_history(self) -> list[ErrorCorrectionHistory]:
         """获取错误历史（只读）"""
         return list(self._error_history)
     
@@ -377,7 +375,6 @@ class ErrorCorrector:
                 return "duplicate_error_detected"
         
         return None
-
 
 __all__ = [
     "ErrorCorrector",

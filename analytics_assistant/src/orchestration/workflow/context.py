@@ -22,7 +22,7 @@
 import hashlib
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -35,10 +35,9 @@ from analytics_assistant.src.agents.semantic_parser.components.query_cache impor
     compute_schema_hash,
     QueryCache,
 )
-from analytics_assistant.src.agents.field_semantic import FieldSemanticInference
+from analytics_assistant.src.agents.field_semantic import infer_field_semantic
 
 logger = logging.getLogger(__name__)
-
 
 class WorkflowContext(BaseModel):
     """
@@ -78,7 +77,7 @@ class WorkflowContext(BaseModel):
     data_model: Optional[Any] = Field(default=None, description="完整的数据模型")
     
     # 字段语义
-    field_semantic: Optional[Dict[str, Any]] = Field(
+    field_semantic: Optional[dict[str, Any]] = Field(
         default=None, 
         description="字段语义信息（包含维度层级和度量类别）"
     )
@@ -111,19 +110,19 @@ class WorkflowContext(BaseModel):
     )
     
     # 业务日历（可选）
-    business_calendar: Optional[Dict[str, Any]] = Field(
+    business_calendar: Optional[dict[str, Any]] = Field(
         default=None, 
         description="业务日历配置"
     )
     
     # 字段值缓存（用于筛选值验证）
-    field_values_cache: Dict[str, List[str]] = Field(
+    field_values_cache: dict[str, list[str]] = Field(
         default_factory=dict, 
         description="字段值缓存，key 为字段名，value 为字段值列表"
     )
     
     # 字段样例数据（用于 Prompt）
-    field_samples: Optional[Dict[str, Dict[str, Any]]] = Field(
+    field_samples: Optional[dict[str, dict[str, Any]]] = Field(
         default=None, 
         description="字段样例数据"
     )
@@ -227,41 +226,34 @@ class WorkflowContext(BaseModel):
         return True
     
     async def refresh_auth_if_needed(self) -> "WorkflowContext":
-        """如果认证过期，刷新并返回新的上下文
-        
+        """如果认证过期，通过平台适配器刷新并返回新的上下文。
+
+        优先使用 platform_adapter.refresh_auth()，
+        回退到 get_tableau_auth_async()（向后兼容）。
+
         Returns:
             更新了认证的 WorkflowContext（如果需要刷新）
         """
         if self.auth is None:
             return self
-        
+
         if self.is_auth_valid():
             return self
-        
-        logger.info("Token 即将过期，正在刷新...")
-        
-        new_auth = await get_tableau_auth_async(force_refresh=True)
-        
-        logger.info("Token 刷新成功")
-        
-        # 返回更新了 auth 的新上下文
-        return WorkflowContext(
-            auth=new_auth,
-            datasource_luid=self.datasource_luid,
-            data_model=self.data_model,
-            field_semantic=self.field_semantic,
-            previous_schema_hash=self.previous_schema_hash,
-            current_time=self.current_time,
-            timezone=self.timezone,
-            fiscal_year_start_month=self.fiscal_year_start_month,
-            business_calendar=self.business_calendar,
-            field_values_cache=self.field_values_cache,
-            field_samples=self.field_samples,
-            platform_adapter=self.platform_adapter,
-            user_id=self.user_id,
-        )
 
-    def get_field_values(self, field_name: str) -> Optional[List[str]]:
+        logger.info("Token 即将过期，正在刷新...")
+
+        # 优先使用平台适配器
+        if self.platform_adapter and hasattr(self.platform_adapter, 'refresh_auth'):
+            new_auth = await self.platform_adapter.refresh_auth()
+        else:
+            # 回退到直接调用（向后兼容）
+            logger.warning("无平台适配器，回退到 get_tableau_auth_async")
+            new_auth = await get_tableau_auth_async(force_refresh=True)
+
+        logger.info("Token 刷新成功")
+        return self.model_copy(update={"auth": new_auth})
+
+    def get_field_values(self, field_name: str) -> Optional[list[str]]:
         """获取字段的缓存值
         
         Args:
@@ -272,7 +264,7 @@ class WorkflowContext(BaseModel):
         """
         return self.field_values_cache.get(field_name)
     
-    def set_field_values(self, field_name: str, values: List[str]) -> None:
+    def set_field_values(self, field_name: str, values: list[str]) -> None:
         """缓存字段值
         
         Args:
@@ -287,21 +279,10 @@ class WorkflowContext(BaseModel):
         用于每次请求开始时更新时间戳。
         同时保留 schema_hash 以便检测变更。
         """
-        return WorkflowContext(
-            auth=self.auth,
-            datasource_luid=self.datasource_luid,
-            data_model=self.data_model,
-            field_semantic=self.field_semantic,
-            previous_schema_hash=self.schema_hash,  # 保存当前 hash 作为历史
-            current_time=datetime.now().isoformat(),
-            timezone=self.timezone,
-            fiscal_year_start_month=self.fiscal_year_start_month,
-            business_calendar=self.business_calendar,
-            field_values_cache=self.field_values_cache,
-            field_samples=self.field_samples,
-            platform_adapter=self.platform_adapter,
-            user_id=self.user_id,
-        )
+        return self.model_copy(update={
+            "previous_schema_hash": self.schema_hash,
+            "current_time": datetime.now().isoformat(),
+        })
     
     async def load_field_semantic(
         self,
@@ -309,7 +290,8 @@ class WorkflowContext(BaseModel):
     ) -> "WorkflowContext":
         """加载字段语义信息
         
-        使用 FieldSemanticInference 推断数据模型中的字段语义属性。
+        使用 infer_field_semantic 便捷函数（模块级单例）推断字段语义属性。
+        优先检查 data_model 中是否已有缓存的语义结果。
         
         Args:
             force_refresh: 是否强制刷新（跳过缓存）
@@ -325,6 +307,13 @@ class WorkflowContext(BaseModel):
         if self.field_semantic is not None and not force_refresh:
             return self
         
+        # 检查 data_model 中是否已有缓存的语义结果
+        if not force_refresh and hasattr(self.data_model, '_field_semantic_cache'):
+            cached = self.data_model._field_semantic_cache
+            if cached:
+                logger.info(f"复用 data_model 中缓存的语义结果: {len(cached)} 个字段")
+                return self.model_copy(update={"field_semantic": cached})
+        
         try:
             # 获取字段列表
             fields = []
@@ -335,9 +324,8 @@ class WorkflowContext(BaseModel):
                 logger.warning("无法加载字段语义：字段列表为空")
                 return self
             
-            # 推断字段语义
-            inference = FieldSemanticInference()
-            result = await inference.infer(
+            # 使用模块级单例推断字段语义
+            result = await infer_field_semantic(
                 datasource_luid=self.datasource_luid,
                 fields=fields,
             )
@@ -349,22 +337,15 @@ class WorkflowContext(BaseModel):
             
             logger.info(f"字段语义推断完成: {len(semantic_dict)} 个字段")
             
+            # 将结果缓存到 data_model 中，供后续复用
+            if semantic_dict:
+                try:
+                    self.data_model._field_semantic_cache = semantic_dict
+                except AttributeError:
+                    pass  # data_model 不支持动态属性，忽略
+            
             # 返回更新后的上下文
-            return WorkflowContext(
-                auth=self.auth,
-                datasource_luid=self.datasource_luid,
-                data_model=self.data_model,
-                field_semantic=semantic_dict,
-                previous_schema_hash=self.previous_schema_hash,
-                current_time=self.current_time,
-                timezone=self.timezone,
-                fiscal_year_start_month=self.fiscal_year_start_month,
-                business_calendar=self.business_calendar,
-                field_values_cache=self.field_values_cache,
-                field_samples=self.field_samples,
-                platform_adapter=self.platform_adapter,
-                user_id=self.user_id,
-            )
+            return self.model_copy(update={"field_semantic": semantic_dict})
             
         except Exception as e:
             logger.error(f"字段语义推断失败: {e}")
@@ -372,8 +353,8 @@ class WorkflowContext(BaseModel):
     
     def enrich_field_candidates_with_hierarchy(
         self,
-        field_candidates: List[Any],
-    ) -> List[Any]:
+        field_candidates: list[Any],
+    ) -> list[Any]:
         """使用字段语义信息丰富字段候选
         
         Property 28: Hierarchy Enrichment
@@ -399,30 +380,30 @@ class WorkflowContext(BaseModel):
             if not semantic_info:
                 continue
             
-            # 设置语义属性
+            # 设置语义属性（semantic_info 可能是 FieldSemanticAttributes 或 dict）
             if hasattr(candidate, 'hierarchy_category'):
-                candidate.hierarchy_category = semantic_info.get('category')
+                candidate.hierarchy_category = getattr(semantic_info, 'category', None)
             if hasattr(candidate, 'hierarchy_level'):
-                candidate.hierarchy_level = semantic_info.get('level')
+                candidate.hierarchy_level = getattr(semantic_info, 'level', None)
             if hasattr(candidate, 'granularity'):
-                candidate.granularity = semantic_info.get('granularity')
+                candidate.granularity = getattr(semantic_info, 'granularity', None)
             if hasattr(candidate, 'parent_dimension'):
-                candidate.parent_dimension = semantic_info.get('parent_dimension')
+                candidate.parent_dimension = getattr(semantic_info, 'parent_dimension', None)
             if hasattr(candidate, 'child_dimension'):
-                candidate.child_dimension = semantic_info.get('child_dimension')
+                candidate.child_dimension = getattr(semantic_info, 'child_dimension', None)
             
             # 构建下钻选项
-            if hasattr(candidate, 'drill_down_options') and semantic_info.get('child_dimension'):
-                candidate.drill_down_options = [semantic_info['child_dimension']]
+            child_dim = getattr(semantic_info, 'child_dimension', None)
+            if hasattr(candidate, 'drill_down_options') and child_dim:
+                candidate.drill_down_options = [child_dim]
         
         return field_candidates
-
 
 def create_workflow_config(
     thread_id: str,
     context: WorkflowContext,
     **extra_configurable: object,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """创建工作流配置
     
     Args:
@@ -441,8 +422,7 @@ def create_workflow_config(
         }
     }
 
-
-def get_context(config: Optional[Dict[str, Any]]) -> Optional[WorkflowContext]:
+def get_context(config: Optional[dict[str, Any]]) -> Optional[WorkflowContext]:
     """从 RunnableConfig 获取 WorkflowContext
     
     Args:
@@ -456,8 +436,7 @@ def get_context(config: Optional[Dict[str, Any]]) -> Optional[WorkflowContext]:
     configurable = config.get("configurable", {})
     return configurable.get("workflow_context")
 
-
-def get_context_or_raise(config: Optional[Dict[str, Any]]) -> WorkflowContext:
+def get_context_or_raise(config: Optional[dict[str, Any]]) -> WorkflowContext:
     """从 RunnableConfig 获取 WorkflowContext，不存在则抛出异常
     
     Args:
@@ -479,7 +458,6 @@ def get_context_or_raise(config: Optional[Dict[str, Any]]) -> WorkflowContext:
             "Make sure to use create_workflow_config() to create the config."
         )
     return ctx
-
 
 __all__ = [
     "WorkflowContext",

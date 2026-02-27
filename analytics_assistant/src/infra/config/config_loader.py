@@ -15,19 +15,16 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Optional
 from threading import Lock
 
 import yaml
 
-
 logger = logging.getLogger(__name__)
-
 
 class ConfigLoadError(Exception):
     """配置加载错误"""
     pass
-
 
 class AppConfig:
     """
@@ -73,7 +70,7 @@ class AppConfig:
         
         self.config_path = Path(config_path) if config_path else self._find_config_path()
         self.fallback_path = self._find_fallback_path()
-        self.config: Dict[str, Any] = {}
+        self.config: dict[str, Any] = {}
         
         self._load_config()
         self._initialized = True
@@ -260,7 +257,7 @@ class AppConfig:
     # AI 配置
     # ============================================
     
-    def get_ai_config(self) -> Dict[str, Any]:
+    def get_ai_config(self) -> dict[str, Any]:
         """获取 AI 配置"""
         return self.config.get('ai', {})
     
@@ -272,7 +269,7 @@ class AppConfig:
         """获取 Embedding 模型配置"""
         return self.get_ai_config().get('embedding_models', [])
     
-    def get_ai_global_config(self) -> Dict[str, Any]:
+    def get_ai_global_config(self) -> dict[str, Any]:
         """获取 AI 全局配置"""
         return self.get_ai_config().get('global', {})
     
@@ -280,7 +277,7 @@ class AppConfig:
     # 存储配置
     # ============================================
     
-    def get_storage_config(self) -> Dict[str, Any]:
+    def get_storage_config(self) -> dict[str, Any]:
         """获取存储配置"""
         return self.config.get('storage', {})
     
@@ -296,7 +293,7 @@ class AppConfig:
         """获取存储默认 TTL"""
         return self.get_storage_config().get('ttl')
     
-    def get_storage_namespace_config(self, namespace: str) -> Dict[str, Any]:
+    def get_storage_namespace_config(self, namespace: str) -> dict[str, Any]:
         """获取存储命名空间配置"""
         namespaces = self.get_storage_config().get('namespaces', {})
         return namespaces.get(namespace, {})
@@ -305,7 +302,7 @@ class AppConfig:
     # RAG 配置
     # ============================================
     
-    def get_rag_config(self) -> Dict[str, Any]:
+    def get_rag_config(self) -> dict[str, Any]:
         """获取 RAG 配置"""
         return self.config.get('rag', {})
     
@@ -313,23 +310,23 @@ class AppConfig:
     # RAG 服务层配置
     # ============================================
     
-    def get_rag_service_config(self) -> Dict[str, Any]:
+    def get_rag_service_config(self) -> dict[str, Any]:
         """获取 RAG 服务层配置"""
         return self.config.get('rag_service', {})
     
-    def get_rag_service_index_config(self) -> Dict[str, Any]:
+    def get_rag_service_index_config(self) -> dict[str, Any]:
         """获取 RAG 服务索引管理配置"""
         return self.get_rag_service_config().get('index', {})
     
-    def get_rag_service_embedding_config(self) -> Dict[str, Any]:
+    def get_rag_service_embedding_config(self) -> dict[str, Any]:
         """获取 RAG 服务 Embedding 配置"""
         return self.get_rag_service_config().get('embedding', {})
     
-    def get_rag_service_retrieval_config(self) -> Dict[str, Any]:
+    def get_rag_service_retrieval_config(self) -> dict[str, Any]:
         """获取 RAG 服务检索配置"""
         return self.get_rag_service_config().get('retrieval', {})
     
-    def get_rag_service_indexes_config(self) -> Dict[str, Any]:
+    def get_rag_service_indexes_config(self) -> dict[str, Any]:
         """获取 RAG 服务预定义索引配置"""
         return self.get_rag_service_config().get('indexes', {})
     
@@ -337,7 +334,7 @@ class AppConfig:
     # Tableau 配置
     # ============================================
     
-    def get_tableau_config(self) -> Dict[str, Any]:
+    def get_tableau_config(self) -> dict[str, Any]:
         """获取 Tableau 配置"""
         return self.config.get('tableau', {})
     
@@ -353,11 +350,11 @@ class AppConfig:
         """获取 Tableau API 版本"""
         return self.get_tableau_config().get('api_version', '3.21')
     
-    def get_tableau_jwt_config(self) -> Dict[str, Any]:
+    def get_tableau_jwt_config(self) -> dict[str, Any]:
         """获取 Tableau JWT 配置"""
         return self.get_tableau_config().get('jwt', {})
     
-    def get_tableau_pat_config(self) -> Dict[str, Any]:
+    def get_tableau_pat_config(self) -> dict[str, Any]:
         """获取 Tableau PAT 配置"""
         return self.get_tableau_config().get('pat', {})
     
@@ -369,7 +366,7 @@ class AppConfig:
     # VizQL 配置
     # ============================================
     
-    def get_vizql_config(self) -> Dict[str, Any]:
+    def get_vizql_config(self) -> dict[str, Any]:
         """获取 VizQL 配置"""
         return self.config.get('vizql', {})
     
@@ -385,7 +382,7 @@ class AppConfig:
     # SSL 配置
     # ============================================
     
-    def get_ssl_config(self) -> Dict[str, Any]:
+    def get_ssl_config(self) -> dict[str, Any]:
         """获取 SSL 配置"""
         return self.config.get('ssl', {})
     
@@ -401,7 +398,7 @@ class AppConfig:
     # 日志配置（未来扩展）
     # ============================================
     
-    def get_logging_config(self) -> Dict[str, Any]:
+    def get_logging_config(self) -> dict[str, Any]:
         """获取日志配置"""
         return self.config.get('logging', {})
     
@@ -409,7 +406,7 @@ class AppConfig:
     # 字段语义配置
     # ============================================
     
-    def get_field_semantic_config(self) -> Dict[str, Any]:
+    def get_field_semantic_config(self) -> dict[str, Any]:
         """获取字段语义推断配置"""
         return self.config.get('field_semantic', {})
     
@@ -425,11 +422,11 @@ class AppConfig:
     # 语义解析器配置
     # ============================================
     
-    def get_semantic_parser_config(self) -> Dict[str, Any]:
+    def get_semantic_parser_config(self) -> dict[str, Any]:
         """获取语义解析器配置"""
         return self.config.get('semantic_parser', {})
     
-    def get_semantic_parser_optimization_config(self) -> Dict[str, Any]:
+    def get_semantic_parser_optimization_config(self) -> dict[str, Any]:
         """获取语义解析器优化配置
         
         包含：
@@ -442,15 +439,15 @@ class AppConfig:
         """
         return self.get_semantic_parser_config().get('optimization', {})
     
-    def get_field_retriever_config(self) -> Dict[str, Any]:
+    def get_field_retriever_config(self) -> dict[str, Any]:
         """获取字段检索器配置"""
         return self.get_semantic_parser_optimization_config().get('field_retriever', {})
     
-    def get_feature_extractor_config(self) -> Dict[str, Any]:
+    def get_feature_extractor_config(self) -> dict[str, Any]:
         """获取特征提取器配置"""
         return self.get_semantic_parser_optimization_config().get('feature_extractor', {})
     
-    def get_feature_cache_config(self) -> Dict[str, Any]:
+    def get_feature_cache_config(self) -> dict[str, Any]:
         """获取特征缓存配置"""
         return self.get_semantic_parser_optimization_config().get('feature_cache', {})
     
@@ -458,7 +455,7 @@ class AppConfig:
     # 批量 Embedding 配置
     # ============================================
     
-    def get_batch_embedding_config(self) -> Dict[str, Any]:
+    def get_batch_embedding_config(self) -> dict[str, Any]:
         """获取批量 Embedding 配置"""
         return self.config.get('batch_embedding', {})
     
@@ -486,13 +483,11 @@ class AppConfig:
         """重新加载配置"""
         self._load_config()
 
-
 # ============================================
 # 全局配置实例
 # ============================================
 
 _config_instance: Optional[AppConfig] = None
-
 
 def get_config(config_path: Optional[str] = None) -> AppConfig:
     """
@@ -515,7 +510,6 @@ def get_config(config_path: Optional[str] = None) -> AppConfig:
     if _config_instance is None:
         _config_instance = AppConfig(config_path)
     return _config_instance
-
 
 __all__ = [
     "AppConfig",

@@ -8,7 +8,7 @@ DataStore - 数据存储后端
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.core.schemas.execute_result import (
     ColumnInfo,
@@ -18,7 +18,6 @@ from analytics_assistant.src.core.schemas.execute_result import (
 from analytics_assistant.src.infra.config import get_config
 
 logger = logging.getLogger(__name__)
-
 
 class DataStore:
     """数据存储后端。
@@ -39,11 +38,12 @@ class DataStore:
             store_id: 存储标识（用于文件命名和清理）
         """
         self.store_id = store_id
-        self._data: Optional[List[RowData]] = None
-        self._columns: List[ColumnInfo] = []
+        self._data: Optional[list[RowData]] = None
+        self._columns: list[ColumnInfo] = []
         self._row_count: int = 0
         self._file_path: Optional[Path] = None
         self._is_file_mode: bool = False
+        self._cached_file_data: Optional[list[RowData]] = None  # 文件模式缓存
         self._profile: Optional[Any] = None
         self._load_config()
 
@@ -74,6 +74,7 @@ class DataStore:
         """
         self._columns = list(execute_result.columns)
         self._row_count = execute_result.row_count
+        self._cached_file_data = None  # 清除旧的文件缓存
 
         if self._row_count > self._memory_threshold:
             # 文件模式
@@ -104,7 +105,7 @@ class DataStore:
                 f"row_count={self._row_count}"
             )
 
-    def _save_to_file(self, data: List[RowData]) -> None:
+    def _save_to_file(self, data: list[RowData]) -> None:
         """将数据写入 JSON 临时文件。
 
         Args:
@@ -120,7 +121,7 @@ class DataStore:
             json.dumps(data, ensure_ascii=False), encoding="utf-8"
         )
 
-    def _load_from_file(self) -> List[RowData]:
+    def _load_from_file(self) -> list[RowData]:
         """从 JSON 临时文件加载全部数据。
 
         Returns:
@@ -137,15 +138,20 @@ class DataStore:
         content = self._file_path.read_text(encoding="utf-8")
         return json.loads(content)
 
-    def _get_all_data(self) -> List[RowData]:
+    def _get_all_data(self) -> list[RowData]:
         """获取全部数据（内存或文件）。
+
+        文件模式下首次加载后缓存到内存，后续调用从缓存读取。
 
         Returns:
             数据行列表
         """
         if self._is_file_mode:
+            if self._cached_file_data is not None:
+                return self._cached_file_data
             try:
-                return self._load_from_file()
+                self._cached_file_data = self._load_from_file()
+                return self._cached_file_data
             except (FileNotFoundError, json.JSONDecodeError) as e:
                 logger.error(
                     f"DataStore '{self.store_id}': 文件读取失败: {e}"
@@ -153,7 +159,7 @@ class DataStore:
                 raise
         return self._data or []
 
-    def read_batch(self, offset: int, limit: int) -> List[RowData]:
+    def read_batch(self, offset: int, limit: int) -> list[RowData]:
         """分批读取数据。
 
         Args:
@@ -167,8 +173,8 @@ class DataStore:
         return data[offset: offset + limit]
 
     def read_filtered(
-        self, column: str, values: List[str]
-    ) -> List[RowData]:
+        self, column: str, values: list[str]
+    ) -> list[RowData]:
         """按列值筛选数据。
 
         Args:
@@ -186,7 +192,7 @@ class DataStore:
             if column in row and str(row[column]) in values_set
         ]
 
-    def get_column_stats(self, column: str) -> Dict[str, Any]:
+    def get_column_stats(self, column: str) -> dict[str, Any]:
         """获取单列统计信息（委托 DataProfile）。
 
         从已注入的 DataProfile 中提取对应列的统计信息，
@@ -227,7 +233,7 @@ class DataStore:
         self._profile = profile
 
     @property
-    def columns(self) -> List[ColumnInfo]:
+    def columns(self) -> list[ColumnInfo]:
         """获取列信息列表。"""
         return self._columns
 
@@ -254,4 +260,5 @@ class DataStore:
                     f"DataStore '{self.store_id}': 清理临时文件失败: {e}"
                 )
         self._data = None
+        self._cached_file_data = None
         self._profile = None

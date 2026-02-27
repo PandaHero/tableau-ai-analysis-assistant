@@ -12,18 +12,16 @@
 5. OutputValidator：OutputValidationError, ValidationResult
 """
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 # 从 core 导入共享的 FieldCandidate
 from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 
-
 # =============================================================================
 # 枚举类型
 # =============================================================================
-
 
 class ComplexityType(str, Enum):
     """复杂度类型。
@@ -38,7 +36,6 @@ class ComplexityType(str, Enum):
     CUMULATIVE = "cumulative"   # 累计
     SUBQUERY = "subquery"       # 子查询
 
-
 class ValidationErrorType(str, Enum):
     """验证错误类型。"""
     INVALID_FIELD = "invalid_field"           # 无效字段引用
@@ -46,11 +43,9 @@ class ValidationErrorType(str, Enum):
     MISSING_REQUIRED = "missing_required"     # 缺少必需字段
     TYPE_MISMATCH = "type_mismatch"           # 类型不匹配
 
-
 # =============================================================================
 # RulePrefilter 相关模型
 # =============================================================================
-
 
 class RuleTimeHint(BaseModel):
     """规则时间提示。
@@ -68,7 +63,6 @@ class RuleTimeHint(BaseModel):
     parsed_hint: str = Field(description="解析提示（如 '2024-01 到 2024-01'）")
     confidence: float = Field(default=1.0, ge=0.0, le=1.0, description="解析置信度")
 
-
 class MatchedComputation(BaseModel):
     """匹配的计算种子。
     
@@ -80,8 +74,7 @@ class MatchedComputation(BaseModel):
     display_name: str = Field(description="显示名称（如 利润率）")
     calc_type: str = Field(description="计算类型（如 RATIO）")
     formula: Optional[str] = Field(default=None, description="公式模板")
-    keywords_matched: List[str] = Field(default_factory=list, description="匹配的关键词")
-
+    keywords_matched: list[str] = Field(default_factory=list, description="匹配的关键词")
 
 class PrefilterResult(BaseModel):
     """规则预处理结果。
@@ -90,13 +83,13 @@ class PrefilterResult(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     
-    time_hints: List[RuleTimeHint] = Field(
+    time_hints: list[RuleTimeHint] = Field(
         default_factory=list, description="时间表达式解析提示"
     )
-    matched_computations: List[MatchedComputation] = Field(
+    matched_computations: list[MatchedComputation] = Field(
         default_factory=list, description="匹配的计算种子"
     )
-    detected_complexity: List[ComplexityType] = Field(
+    detected_complexity: list[ComplexityType] = Field(
         default_factory=list, description="检测到的复杂度类型"
     )
     detected_language: str = Field(default="zh", description="检测到的语言")
@@ -105,11 +98,9 @@ class PrefilterResult(BaseModel):
     )
     low_confidence: bool = Field(default=False, description="是否低置信度")
 
-
 # =============================================================================
 # FeatureExtractor 相关模型
 # =============================================================================
-
 
 class FeatureExtractionOutput(BaseModel):
     """特征提取输出。
@@ -118,19 +109,19 @@ class FeatureExtractionOutput(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     
-    required_measures: List[str] = Field(
+    required_measures: list[str] = Field(
         default_factory=list,
         description="需要的度量字段（业务术语，如 '利润', '销售额'）"
     )
-    required_dimensions: List[str] = Field(
+    required_dimensions: list[str] = Field(
         default_factory=list,
         description="需要的维度字段（业务术语，如 '城市', '地区'）"
     )
-    confirmed_time_hints: List[str] = Field(
+    confirmed_time_hints: list[str] = Field(
         default_factory=list,
         description="确认后的时间提示"
     )
-    confirmed_computations: List[str] = Field(
+    confirmed_computations: list[str] = Field(
         default_factory=list,
         description="确认后的计算种子名称"
     )
@@ -142,14 +133,12 @@ class FeatureExtractionOutput(BaseModel):
         description="是否为降级模式（超时后使用规则结果）"
     )
 
-
 # =============================================================================
 # FieldRetriever 相关模型
 # =============================================================================
 
 # 注意：FieldCandidate 从 core/schemas/field_candidate.py 导入
 # 不再重复定义，直接复用
-
 
 class FieldRAGResult(BaseModel):
     """字段检索结果。
@@ -159,24 +148,22 @@ class FieldRAGResult(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     
-    measures: List[FieldCandidate] = Field(
+    measures: list[FieldCandidate] = Field(
         default_factory=list,
         description="度量字段候选列表，按置信度降序"
     )
-    dimensions: List[FieldCandidate] = Field(
+    dimensions: list[FieldCandidate] = Field(
         default_factory=list,
         description="维度字段候选列表，按置信度降序"
     )
-    time_fields: List[FieldCandidate] = Field(
+    time_fields: list[FieldCandidate] = Field(
         default_factory=list,
         description="时间字段候选列表，按置信度降序"
     )
 
-
 # =============================================================================
 # OutputValidator 相关模型
 # =============================================================================
-
 
 class OutputValidationError(BaseModel):
     """输出验证错误。"""
@@ -188,7 +175,6 @@ class OutputValidationError(BaseModel):
     auto_correctable: bool = Field(default=False, description="是否可自动修正")
     suggested_correction: Optional[str] = Field(default=None, description="建议的修正")
 
-
 class ValidationResult(BaseModel):
     """验证结果。
     
@@ -197,7 +183,7 @@ class ValidationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     
     is_valid: bool = Field(description="是否验证通过")
-    errors: List[OutputValidationError] = Field(
+    errors: list[OutputValidationError] = Field(
         default_factory=list, description="验证错误列表"
     )
     corrected_output: Optional[dict] = Field(
@@ -205,7 +191,6 @@ class ValidationResult(BaseModel):
     )
     needs_clarification: bool = Field(default=False, description="是否需要澄清")
     clarification_message: Optional[str] = Field(default=None, description="澄清消息")
-
 
 __all__ = [
     # 枚举

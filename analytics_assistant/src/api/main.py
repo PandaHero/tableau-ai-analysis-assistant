@@ -19,7 +19,6 @@ from .middleware import register_exception_handlers, RequestLoggingMiddleware
 
 logger = logging.getLogger(__name__)
 
-
 def _get_api_config() -> dict:
     """从 app.yaml 读取 API 配置。
 
@@ -33,7 +32,6 @@ def _get_api_config() -> dict:
         logger.warning(f"加载 API 配置失败，使用默认值: {e}")
         return {}
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期管理。
@@ -43,7 +41,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Analytics Assistant API 启动中...")
     yield
     logger.info("Analytics Assistant API 已关闭")
-
 
 def create_app() -> FastAPI:
     """创建并配置 FastAPI 应用实例。
@@ -62,11 +59,21 @@ def create_app() -> FastAPI:
 
     # 配置 CORS
     cors_config = api_config.get("cors", {})
-    allowed_origins = cors_config.get("allowed_origins", ["*"])
+    allowed_origins = cors_config.get("allowed_origins", [])  # 默认空列表，需显式配置
+    allow_credentials = cors_config.get("allow_credentials", False)
+
+    # 安全检查：credentials=True 时禁止 origins=["*"]
+    if allow_credentials and "*" in allowed_origins:
+        logger.warning(
+            "CORS 安全冲突: allow_credentials=True 时不应使用 "
+            "allowed_origins=['*']，已自动禁用 credentials"
+        )
+        allow_credentials = False
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -88,10 +95,8 @@ def create_app() -> FastAPI:
 
     return app
 
-
 # 应用实例（供 uvicorn 使用）
 app = create_app()
-
 
 if __name__ == "__main__":
     import uvicorn

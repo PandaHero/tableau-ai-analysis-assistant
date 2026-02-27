@@ -13,7 +13,7 @@ from typing import AsyncIterator
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from analytics_assistant.src.agents.semantic_parser.components.history_manager import (
+from analytics_assistant.src.orchestration.workflow.history import (
     get_history_manager,
 )
 from analytics_assistant.src.api.dependencies import get_tableau_username
@@ -29,7 +29,6 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 # 默认心跳间隔（秒）
 _DEFAULT_SSE_KEEPALIVE = 30
 
-
 def _get_sse_keepalive() -> int:
     """从 app.yaml 读取 SSE 心跳间隔。
 
@@ -43,7 +42,6 @@ def _get_sse_keepalive() -> int:
         ).get("sse_keepalive", _DEFAULT_SSE_KEEPALIVE)
     except Exception:
         return _DEFAULT_SSE_KEEPALIVE
-
 
 @router.post("/stream")
 async def chat_stream(
@@ -131,7 +129,6 @@ async def chat_stream(
         logger.exception(f"聊天请求处理失败: {e}")
         raise HTTPException(status_code=500, detail="服务器内部错误") from e
 
-
 async def _stream_with_heartbeat(
     event_stream: AsyncIterator,
     keepalive_seconds: int = _DEFAULT_SSE_KEEPALIVE,
@@ -142,7 +139,7 @@ async def _stream_with_heartbeat(
     防止代理或浏览器超时断开连接。
 
     Args:
-        event_stream: 原始事件流（yield Dict）
+        event_stream: 原始事件流（yield dict）
         keepalive_seconds: 心跳间隔秒数
 
     Yields:

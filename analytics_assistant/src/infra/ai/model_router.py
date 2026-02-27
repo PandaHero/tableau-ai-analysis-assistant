@@ -14,7 +14,6 @@ from .model_registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
 
-
 class TaskRouter:
     """任务路由器
     
@@ -51,7 +50,7 @@ class TaskRouter:
         """
         # 获取适合该任务的活跃模型
         suitable_models = []
-        for config in self._registry.list(
+        for config in self._registry.list_configs(
             model_type=model_type, 
             status=ModelStatus.ACTIVE
         ):
@@ -85,7 +84,7 @@ class TaskRouter:
             适合的模型列表（按优先级排序）
         """
         suitable_models = []
-        for config in self._registry.list(
+        for config in self._registry.list_configs(
             model_type=model_type, 
             status=ModelStatus.ACTIVE
         ):
@@ -94,6 +93,5 @@ class TaskRouter:
         
         suitable_models.sort(key=lambda m: m.priority, reverse=True)
         return suitable_models
-
 
 __all__ = ["TaskRouter"]

@@ -35,7 +35,7 @@ Requirements: 5.1-5.6 - FieldRetriever 字段检索
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.ai import get_model_manager
@@ -49,12 +49,11 @@ from ..schemas.prefilter import FeatureExtractionOutput, FieldRAGResult
 
 logger = logging.getLogger(__name__)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_field_retriever_config() -> Dict[str, Any]:
+def _get_field_retriever_config() -> dict[str, Any]:
     """获取 FieldRetriever 配置。"""
     try:
         config = get_config()
@@ -63,8 +62,7 @@ def _get_field_retriever_config() -> Dict[str, Any]:
         logger.warning(f"无法加载 field_retriever 配置，使用默认值: {e}")
         return {}
 
-
-def _get_rerank_config() -> Dict[str, Any]:
+def _get_rerank_config() -> dict[str, Any]:
     """获取重排序配置（rag.reranking 节）。"""
     try:
         config = get_config()
@@ -72,7 +70,6 @@ def _get_rerank_config() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"无法加载 rerank 配置，使用默认值: {e}")
         return {}
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 工具函数
@@ -88,7 +85,6 @@ def _get_field_attr(obj: Any, *names, default=None) -> Any:
             if hasattr(obj, name):
                 return getattr(obj, name)
     return default
-
 
 def _create_llm_reranker(top_k: int) -> Optional[LLMReranker]:
     """创建 LLMReranker 实例。
@@ -115,7 +111,6 @@ def _create_llm_reranker(top_k: int) -> Optional[LLMReranker]:
     except Exception as e:
         logger.warning(f"创建 LLMReranker 失败，将跳过重排序: {e}")
         return None
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FieldRetriever 组件
@@ -292,14 +287,13 @@ class FieldRetriever:
             logger.warning(f"检查索引是否存在失败: index={index_name}, error={e}")
             return False
 
-
     async def _retrieve_by_terms(
         self,
-        terms: List[str],
-        fields: List[Any],
+        terms: list[str],
+        fields: list[Any],
         role: str,
         index_name: Optional[str] = None,
-    ) -> List[FieldCandidate]:
+    ) -> list[FieldCandidate]:
         """根据术语检索字段（两阶段：粗召回 + LLM 精排）。
         
         检索策略（优先级从高到低）：
@@ -317,12 +311,16 @@ class FieldRetriever:
         Returns:
             FieldCandidate 列表，按置信度降序
         """
-        # 降级模式：terms 为空时返回全量字段
+        # 降级模式：terms 为空时返回全量字段（过滤不可查询的幽灵字段）
         if not terms:
+            queryable_fields = [
+                f for f in fields
+                if _get_field_attr(f, 'queryable', default=True)
+            ]
             fallback_count = int(self.top_k * self.fallback_multiplier)
             logger.info(f"FieldRetriever: 降级模式, 返回 {fallback_count} 个 {role} 字段")
             return self._convert_fields_to_candidates(
-                fields[:fallback_count],
+                queryable_fields[:fallback_count],
                 confidence=0.5,
                 source="fallback",
             )
@@ -337,7 +335,7 @@ class FieldRetriever:
             for f in fields
         }
         
-        candidates: List[FieldCandidate] = []
+        candidates: list[FieldCandidate] = []
         matched_names: set = set()
         
         # 1. RAG 粗召回（多取候选，供 rerank 精排）
@@ -394,6 +392,13 @@ class FieldRetriever:
                 if field_name in matched_names:
                     continue
                 
+                metadata = result.metadata or {}
+                
+                # 跳过不可查询的幽灵字段
+                if metadata.get("queryable") is False:
+                    logger.debug(f"FieldRetriever: 跳过幽灵字段 '{field_name}'（不可查询）")
+                    continue
+                
                 matched_names.add(field_name)
                 metadata = result.metadata or {}
                 
@@ -410,7 +415,7 @@ class FieldRetriever:
                 candidates.append(FieldCandidate(
                     field_name=field_name,
                     field_caption=metadata.get("field_caption", field_name),
-                    field_type=role,
+                    role=role,
                     data_type=metadata.get("data_type", "string"),
                     confidence=confidence,
                     source="rag+rerank" if self._reranker else "rag",
@@ -431,6 +436,9 @@ class FieldRetriever:
             for term in terms:
                 exact_matches = self._exact_match_by_term(term, fields)
                 for field in exact_matches:
+                    # 跳过不可查询的幽灵字段
+                    if not _get_field_attr(field, 'queryable', default=True):
+                        continue
                     field_name = _get_field_attr(field, 'name', 'field_name', default='')
                     if field_name and field_name not in matched_names:
                         matched_names.add(field_name)
@@ -445,6 +453,9 @@ class FieldRetriever:
         # 5. 如果仍不足，补充更多字段
         if len(candidates) < self.top_k:
             for field in fields:
+                # 跳过不可查询的幽灵字段
+                if not _get_field_attr(field, 'queryable', default=True):
+                    continue
                 field_name = _get_field_attr(field, 'name', 'field_name', default='')
                 if field_name and field_name not in matched_names:
                     matched_names.add(field_name)
@@ -458,9 +469,9 @@ class FieldRetriever:
 
     async def _rerank_results(
         self,
-        terms: List[str],
-        results: List[Any],
-    ) -> List[Any]:
+        terms: list[str],
+        results: list[Any],
+    ) -> list[Any]:
         """使用 LLMReranker 对 RAG 结果做精排。
 
         将 SearchResult 转换为 RetrievalResult，调用 LLMReranker.arerank()，
@@ -479,8 +490,8 @@ class FieldRetriever:
         query = " ".join(terms)
 
         # SearchResult → RetrievalResult（LLMReranker 需要的格式）
-        retrieval_results: List[RetrievalResult] = []
-        result_map: Dict[str, Any] = {}  # field_name → SearchResult
+        retrieval_results: list[RetrievalResult] = []
+        result_map: dict[str, Any] = {}  # field_name → SearchResult
 
         for r in results:
             field_name = r.doc_id
@@ -500,12 +511,15 @@ class FieldRetriever:
                 data_type=metadata.get("data_type", "string"),
                 index_text=r.content or "",
                 category=metadata.get("category"),
+                formula=metadata.get("formula"),
                 sample_values=sample_values,
+                logical_table_caption=metadata.get("logical_table_caption"),
                 metadata={
                     k: v for k, v in metadata.items()
                     if k not in {
                         "field_caption", "role", "data_type",
-                        "category", "sample_values",
+                        "category", "sample_values", "formula",
+                        "logical_table_caption",
                     }
                 },
             )
@@ -554,7 +568,7 @@ class FieldRetriever:
             )
             return results
 
-    def _exact_match_by_term(self, term: str, fields: List[Any]) -> List[Any]:
+    def _exact_match_by_term(self, term: str, fields: list[Any]) -> list[Any]:
         """精确匹配：字段名或标题包含术语。"""
         matched = []
         term_lower = term.lower()
@@ -572,17 +586,26 @@ class FieldRetriever:
         
         return matched
 
-
-    def _retrieve_time_fields(self, dimensions: List[Any]) -> List[FieldCandidate]:
+    def _retrieve_time_fields(self, dimensions: list[Any]) -> list[FieldCandidate]:
         """检索时间字段。
         
         根据数据类型和字段名识别时间字段。
+        跳过不可查询的幽灵字段（queryable=False）。
         """
         time_candidates = []
         time_data_types = {"date", "datetime", "timestamp"}
-        time_keywords = {"date", "time", "year", "month", "day", "日期", "时间", "年", "月", "日"}
+        time_keywords = {
+            "date", "time", "year", "month", "day", "week", "quarter",
+            "日期", "时间", "年", "月", "日", "周", "季度",
+            "dt", "yyyymm", "yyyymmdd", "yyyy", "mm", "dd"  # 常见的日期字段命名
+        }
         
         for field in dimensions:
+            # 跳过不可查询的幽灵字段
+            queryable = _get_field_attr(field, 'queryable', default=True)
+            if not queryable:
+                continue
+            
             field_name = _get_field_attr(field, 'name', 'field_name', default='')
             field_caption = _get_field_attr(
                 field, 'fieldCaption', 'field_caption', 'caption', default=''
@@ -616,7 +639,7 @@ class FieldRetriever:
     # 辅助方法
     # ═══════════════════════════════════════════════════════════════════════
     
-    def _get_fields(self, data_model: Optional[Any]) -> List[Any]:
+    def _get_fields(self, data_model: Optional[Any]) -> list[Any]:
         """从数据模型获取字段列表。"""
         if data_model is None:
             return []
@@ -630,7 +653,7 @@ class FieldRetriever:
         
         return []
     
-    def _split_fields(self, fields: List[Any]) -> tuple:
+    def _split_fields(self, fields: list[Any]) -> tuple:
         """将字段分为维度和度量。
         
         Returns:
@@ -685,8 +708,8 @@ class FieldRetriever:
         return FieldCandidate(
             field_name=field_name,
             field_caption=field_caption,
-            field_type=role if isinstance(role, str) else str(role),
-            data_type=data_type if isinstance(data_type, str) else str(data_type),
+            role=role.lower() if isinstance(role, str) else str(role).lower(),
+            data_type=data_type.lower() if isinstance(data_type, str) else str(data_type).lower(),
             confidence=confidence,
             source=source,
             category=category,
@@ -699,16 +722,15 @@ class FieldRetriever:
     
     def _convert_fields_to_candidates(
         self,
-        fields: List[Any],
+        fields: list[Any],
         confidence: float,
         source: str,
-    ) -> List[FieldCandidate]:
+    ) -> list[FieldCandidate]:
         """批量将字段转换为 FieldCandidate。"""
         return [
             self._field_to_candidate(field, confidence, source)
             for field in fields
         ]
-
 
 __all__ = [
     "FieldRetriever",

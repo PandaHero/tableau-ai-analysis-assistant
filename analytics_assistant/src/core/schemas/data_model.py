@@ -10,8 +10,7 @@
 import hashlib
 
 from pydantic import BaseModel, Field as PydanticField, ConfigDict
-from typing import List, Optional, Dict, Any
-
+from typing import Any, Optional
 
 class Field(BaseModel):
     """字段元数据模型。
@@ -33,12 +32,15 @@ class Field(BaseModel):
     folder: Optional[str] = PydanticField(default=None, description="文件夹")
     hidden: bool = PydanticField(default=False, description="是否隐藏")
     calculation: Optional[str] = PydanticField(default=None, description="计算公式")
-    upstream_tables: Optional[List[Dict[str, str]]] = PydanticField(default=None, description="上游表信息")
+    upstream_tables: Optional[list[dict[str, str]]] = PydanticField(default=None, description="上游表信息")
     
     # 维度层级推断结果
     category: Optional[str] = PydanticField(default=None, description="维度类别")
     level: Optional[int] = PydanticField(default=None, description="层级级别")
     granularity: Optional[str] = PydanticField(default=None, description="粒度描述")
+    
+    # 可查询性标志（GraphQL 返回但 VizQL 查询失败的"幽灵字段"标记为 False）
+    queryable: bool = PydanticField(default=True, description="是否可通过 VizQL 查询")
     
     @property
     def is_dimension(self) -> bool:
@@ -50,7 +52,6 @@ class Field(BaseModel):
         """是否为度量字段。"""
         return self.role.upper() == "MEASURE"
 
-
 class LogicalTable(BaseModel):
     """逻辑表。"""
     model_config = ConfigDict(extra="allow")
@@ -58,7 +59,6 @@ class LogicalTable(BaseModel):
     id: str = PydanticField(..., description="逻辑表唯一标识")
     name: str = PydanticField(..., description="逻辑表显示名称")
     field_count: int = PydanticField(default=0, description="字段数量")
-
 
 class TableRelationship(BaseModel):
     """表关系。"""
@@ -68,8 +68,7 @@ class TableRelationship(BaseModel):
     from_table_name: Optional[str] = PydanticField(default=None, description="源表名称")
     to_table_id: str = PydanticField(..., description="目标表 ID")
     to_table_name: Optional[str] = PydanticField(default=None, description="目标表名称")
-    join_conditions: List[Dict[str, str]] = PydanticField(default_factory=list, description="关联条件")
-
+    join_conditions: list[dict[str, str]] = PydanticField(default_factory=list, description="关联条件")
 
 class DataModel(BaseModel):
     """数据模型。
@@ -86,14 +85,14 @@ class DataModel(BaseModel):
     datasource_owner: Optional[str] = PydanticField(default=None, description="数据源所有者")
     
     # 逻辑表结构
-    tables: List[LogicalTable] = PydanticField(default_factory=list, description="逻辑表列表")
-    relationships: List[TableRelationship] = PydanticField(default_factory=list, description="表关系列表")
+    tables: list[LogicalTable] = PydanticField(default_factory=list, description="逻辑表列表")
+    relationships: list[TableRelationship] = PydanticField(default_factory=list, description="表关系列表")
     
     # 字段元数据
-    fields: List[Field] = PydanticField(default_factory=list, description="字段元数据列表")
+    fields: list[Field] = PydanticField(default_factory=list, description="字段元数据列表")
     
     # 原始响应
-    raw_metadata: Optional[Dict[str, Any]] = PydanticField(default=None, description="原始 API 响应")
+    raw_metadata: Optional[dict[str, Any]] = PydanticField(default=None, description="原始 API 响应")
     
     # 缓存的 schema_hash（延迟计算）
     _cached_schema_hash: Optional[str] = None
@@ -144,12 +143,12 @@ class DataModel(BaseModel):
         return len(self.tables) > 1
     
     @property
-    def dimensions(self) -> List[Field]:
+    def dimensions(self) -> list[Field]:
         """获取所有维度字段。"""
         return [f for f in self.fields if f.is_dimension]
     
     @property
-    def measures(self) -> List[Field]:
+    def measures(self) -> list[Field]:
         """获取所有度量字段。"""
         return [f for f in self.fields if f.is_measure]
     
@@ -159,7 +158,6 @@ class DataModel(BaseModel):
             if field.name == name or field.caption == name:
                 return field
         return None
-
 
 __all__ = [
     "Field",

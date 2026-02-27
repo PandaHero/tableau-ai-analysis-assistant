@@ -18,7 +18,7 @@ Requirements: 8.1, 8.2, 8.3, 8.4, 8.5
 
 import logging
 from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 
@@ -30,7 +30,6 @@ from ..schemas.prefilter import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
@@ -48,7 +47,6 @@ def get_fuzzy_match_threshold() -> float:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return 0.8
 
-
 def get_auto_correct_case() -> bool:
     """获取是否自动修正大小写。"""
     try:
@@ -60,7 +58,6 @@ def get_auto_correct_case() -> bool:
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return True
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # OutputValidator 组件
@@ -126,8 +123,8 @@ class OutputValidator:
         Returns:
             ValidationResult 包含验证结果和可能的修正
         """
-        errors: List[OutputValidationError] = []
-        corrected_output: Optional[Dict[str, Any]] = None
+        errors: list[OutputValidationError] = []
+        corrected_output: Optional[dict[str, Any]] = None
         
         # 获取输出字典
         if hasattr(semantic_output, 'model_dump'):
@@ -202,9 +199,9 @@ class OutputValidator:
     
     def _validate_measures(
         self,
-        measures: List[Any],
+        measures: list[Any],
         field_rag_result: FieldRAGResult,
-    ) -> Tuple[List[OutputValidationError], List[str]]:
+    ) -> tuple[list[OutputValidationError], list[str]]:
         """验证度量字段。"""
         errors = []
         corrected = []
@@ -227,9 +224,9 @@ class OutputValidator:
     
     def _validate_dimensions(
         self,
-        dimensions: List[Any],
+        dimensions: list[Any],
         field_rag_result: FieldRAGResult,
-    ) -> Tuple[List[OutputValidationError], List[str]]:
+    ) -> tuple[list[OutputValidationError], list[str]]:
         """验证维度字段。"""
         errors = []
         corrected = []
@@ -254,9 +251,9 @@ class OutputValidator:
     
     def _validate_computations(
         self,
-        computations: List[Any],
+        computations: list[Any],
         field_rag_result: FieldRAGResult,
-    ) -> List[OutputValidationError]:
+    ) -> list[OutputValidationError]:
         """验证计算表达式。"""
         errors = []
         valid_measures = {
@@ -290,7 +287,7 @@ class OutputValidator:
         
         return errors
     
-    def _build_valid_names_map(self, candidates: List[Any]) -> Dict[str, str]:
+    def _build_valid_names_map(self, candidates: list[Any]) -> dict[str, str]:
         """构建有效字段名映射（小写 -> 原始名）。
         
         同时考虑：
@@ -323,7 +320,7 @@ class OutputValidator:
         
         return valid_names
     
-    def _extract_aliases(self, obj: Any) -> Optional[List[str]]:
+    def _extract_aliases(self, obj: Any) -> Optional[list[str]]:
         """从对象中提取字段别名列表。"""
         if isinstance(obj, dict):
             return obj.get("aliases") or []
@@ -353,7 +350,7 @@ class OutputValidator:
     def _validate_field(
         self,
         field_name: str,
-        valid_names: Dict[str, str],
+        valid_names: dict[str, str],
         field_type: str,
     ) -> "_FieldValidationResult":
         """验证单个字段。"""
@@ -402,7 +399,7 @@ class OutputValidator:
     def _fuzzy_match(
         self,
         target: str,
-        candidates: List[str],
+        candidates: list[str],
     ) -> Optional[str]:
         """模糊匹配。"""
         best_match = None
@@ -434,7 +431,7 @@ class OutputValidator:
     
     def _build_clarification_message(
         self,
-        errors: List[OutputValidationError],
+        errors: list[OutputValidationError],
     ) -> str:
         """构建澄清消息。"""
         messages = []
@@ -445,7 +442,6 @@ class OutputValidator:
                 messages.append(error.message)
         
         return "请确认以下问题：\n" + "\n".join(f"- {m}" for m in messages)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 内部数据类
@@ -461,7 +457,6 @@ class _FieldValidationResult:
     ):
         self.corrected_name = corrected_name
         self.error = error
-
 
 __all__ = [
     "OutputValidator",

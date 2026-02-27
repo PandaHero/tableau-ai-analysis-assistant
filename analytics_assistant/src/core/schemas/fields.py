@@ -11,14 +11,12 @@ from analytics_assistant.src.core.schemas.enums import (
     SortDirection,
 )
 
-
 class SortSpec(BaseModel):
     """排序规格。"""
     model_config = ConfigDict(extra="forbid")
     
     direction: SortDirection = Field(default=SortDirection.DESC, description="排序方向")
     priority: int = Field(default=0, description="排序优先级（0=主排序）")
-
 
 class DimensionField(BaseModel):
     """维度字段。"""
@@ -31,7 +29,6 @@ class DimensionField(BaseModel):
     )
     alias: Optional[str] = Field(default=None, description="显示名称")
     sort: Optional[SortSpec] = Field(default=None, description="排序规格")
-
 
 class MeasureField(BaseModel):
     """度量字段。"""

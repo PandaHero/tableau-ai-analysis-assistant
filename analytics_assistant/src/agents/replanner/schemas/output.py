@@ -4,10 +4,9 @@ Replanner Agent 输出数据模型
 
 定义重规划决策相关的 Pydantic 模型。
 """
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 
 class ReplanDecision(BaseModel):
     """重规划决策。"""
@@ -20,7 +19,7 @@ class ReplanDecision(BaseModel):
         default=None,
         description="新问题（自然语言，should_replan=True 时非空）",
     )
-    suggested_questions: List[str] = Field(
+    suggested_questions: list[str] = Field(
         default_factory=list,
         description="建议问题列表",
     )

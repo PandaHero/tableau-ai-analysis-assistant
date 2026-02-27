@@ -20,7 +20,6 @@ from .retrieval_service import RetrievalService
 
 logger = logging.getLogger(__name__)
 
-
 class RAGService:
     """RAG 服务 - 统一入口
     
@@ -117,7 +116,6 @@ class RAGService:
     def get_config(self) -> dict:
         """获取 RAG 服务配置"""
         return self._config
-
 
 def get_rag_service() -> RAGService:
     """获取 RAG 服务实例（便捷函数）

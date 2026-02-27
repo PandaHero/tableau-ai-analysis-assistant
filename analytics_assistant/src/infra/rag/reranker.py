@@ -13,7 +13,7 @@ import asyncio
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any, Callable
+from typing import Any, Callable, Optional
 
 from analytics_assistant.src.infra.config import get_config
 
@@ -24,15 +24,13 @@ from .models import (
 )
 from .prompts import build_rerank_prompt
 
-
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_reranker_config() -> Dict[str, Any]:
+def _get_reranker_config() -> dict[str, Any]:
     """获取重排序器配置。"""
     try:
         config = get_config()
@@ -40,7 +38,6 @@ def _get_reranker_config() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"获取重排序器配置失败，使用默认值: {e}")
         return {}
-
 
 def _get_rrf_k() -> int:
     """获取 RRF 参数 k。"""
@@ -51,8 +48,7 @@ def _get_rrf_k() -> int:
         logger.warning(f"获取 RRF 参数失败，使用默认值: {e}")
         return 60
 
-
-def _get_score_decay_config() -> Dict[str, float]:
+def _get_score_decay_config() -> dict[str, float]:
     """获取分数衰减配置。"""
     try:
         config = get_config()
@@ -64,7 +60,6 @@ def _get_score_decay_config() -> Dict[str, float]:
     except Exception as e:
         logger.warning(f"获取分数衰减配置失败，使用默认值: {e}")
         return {"min_score": 0.5, "decay_step": 0.1}
-
 
 class BaseReranker(ABC):
     """
@@ -84,9 +79,9 @@ class BaseReranker(ABC):
     def rerank(
         self,
         query: str,
-        candidates: List[RetrievalResult],
+        candidates: list[RetrievalResult],
         top_k: Optional[int] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         """
         重排序
         
@@ -103,9 +98,9 @@ class BaseReranker(ABC):
     async def arerank(
         self,
         query: str,
-        candidates: List[RetrievalResult],
+        candidates: list[RetrievalResult],
         top_k: Optional[int] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         """异步重排序"""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
@@ -113,7 +108,7 @@ class BaseReranker(ABC):
             lambda: self.rerank(query, candidates, top_k)
         )
     
-    def _filter_duplicates(self, candidates: List[RetrievalResult]) -> List[RetrievalResult]:
+    def _filter_duplicates(self, candidates: list[RetrievalResult]) -> list[RetrievalResult]:
         """过滤重复候选"""
         seen = set()
         unique = []
@@ -124,7 +119,7 @@ class BaseReranker(ABC):
                 unique.append(candidate)
         return unique
     
-    def _update_ranks(self, results: List[RetrievalResult], recalculate_score: bool = False) -> List[RetrievalResult]:
+    def _update_ranks(self, results: list[RetrievalResult], recalculate_score: bool = False) -> list[RetrievalResult]:
         """
         更新排名
         
@@ -158,7 +153,6 @@ class BaseReranker(ABC):
             ))
         return updated
 
-
 class DefaultReranker(BaseReranker):
     """
     默认重排序器
@@ -169,15 +163,14 @@ class DefaultReranker(BaseReranker):
     def rerank(
         self,
         query: str,
-        candidates: List[RetrievalResult],
+        candidates: list[RetrievalResult],
         top_k: Optional[int] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         """按分数重排序"""
         k = top_k or self.top_k
         unique = self._filter_duplicates(candidates)
         sorted_results = sorted(unique, key=lambda x: x.score, reverse=True)
         return self._update_ranks(sorted_results[:k])
-
 
 class RRFReranker(BaseReranker):
     """
@@ -203,9 +196,9 @@ class RRFReranker(BaseReranker):
     def rerank(
         self,
         query: str,
-        candidates: List[RetrievalResult],
+        candidates: list[RetrievalResult],
         top_k: Optional[int] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         """RRF 重排序"""
         k = top_k or self.top_k
         unique = self._filter_duplicates(candidates)
@@ -235,15 +228,15 @@ class RRFReranker(BaseReranker):
     def rerank_multiple(
         self,
         query: str,
-        result_lists: List[List[RetrievalResult]],
+        result_lists: list[list[RetrievalResult]],
         top_k: Optional[int] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         """融合多个检索结果列表"""
         k = top_k or self.top_k
         
-        rrf_scores: Dict[str, float] = {}
-        field_chunks: Dict[str, FieldChunk] = {}
-        original_ranks: Dict[str, int] = {}
+        rrf_scores: dict[str, float] = {}
+        field_chunks: dict[str, FieldChunk] = {}
+        original_ranks: dict[str, int] = {}
         
         for result_list in result_lists:
             for result in result_list:
@@ -273,7 +266,6 @@ class RRFReranker(BaseReranker):
             ))
         
         return results
-
 
 class LLMReranker(BaseReranker):
     """
@@ -313,9 +305,9 @@ class LLMReranker(BaseReranker):
     def rerank(
         self,
         query: str,
-        candidates: List[RetrievalResult],
+        candidates: list[RetrievalResult],
         top_k: Optional[int] = None
-    ) -> List[RetrievalResult]:
+    ) -> list[RetrievalResult]:
         """使用 LLM 重排序"""
         k = top_k or self.top_k
         
@@ -353,12 +345,35 @@ class LLMReranker(BaseReranker):
             logger.error(f"LLM 重排序失败: {e}")
             return DefaultReranker(k).rerank(query, candidates, k)
     
-    def _build_rerank_prompt(self, query: str, candidates: List[RetrievalResult]) -> str:
+    def _build_rerank_prompt(self, query: str, candidates: list[RetrievalResult]) -> str:
         """构建重排序提示"""
         return build_rerank_prompt(query, candidates)
     
-    def _parse_ranking(self, text: str, num_candidates: int) -> List[int]:
-        """解析 LLM 返回的排序结果"""
+    def _parse_ranking(self, text: str, num_candidates: int) -> list[int]:
+        """解析 LLM 返回的排序结果
+        
+        支持多种输出格式：
+        - 逗号分隔: "2,0,4,1,3"
+        - 逗号+空格: "2, 0, 4, 1, 3"
+        - 换行分隔: "2\\n0\\n4"
+        - 带方括号: "[2,0,4,1,3]"
+        
+        优先提取最后一行（LLM 可能先输出分析再给结果）。
+        """
+        # 清理文本：去除首尾空白和方括号
+        text = text.strip().strip("[]")
+        
+        # 优先取最后一行非空内容（LLM 可能先分析再给结果）
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        if lines:
+            # 找到包含逗号分隔数字的行（最可能是排序结果）
+            for line in reversed(lines):
+                # 匹配 "数字,数字,..." 模式
+                cleaned = line.strip("[]").strip()
+                if re.match(r'^\d+(\s*,\s*\d+)*$', cleaned):
+                    text = cleaned
+                    break
+        
         numbers = re.findall(r'\d+', text)
         indices = []
         
@@ -368,7 +383,6 @@ class LLMReranker(BaseReranker):
                 indices.append(idx)
         
         return indices
-
 
 __all__ = [
     "BaseReranker",

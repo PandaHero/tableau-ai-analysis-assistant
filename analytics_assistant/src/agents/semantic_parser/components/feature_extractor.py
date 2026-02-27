@@ -16,7 +16,7 @@ Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.agents.base.node import get_llm
@@ -32,12 +32,11 @@ from ..prompts.feature_extractor_prompt import (
 
 logger = logging.getLogger(__name__)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def get_feature_extractor_config() -> Dict[str, Any]:
+def get_feature_extractor_config() -> dict[str, Any]:
     """获取 FeatureExtractor 配置。"""
     try:
         config = get_config()
@@ -47,7 +46,6 @@ def get_feature_extractor_config() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FeatureExtractor 组件
@@ -204,6 +202,5 @@ class FeatureExtractor:
             confirmation_confidence=prefilter_result.match_confidence,
             is_degraded=True,
         )
-
 
 __all__ = ["FeatureExtractor", "get_feature_extractor_config"]

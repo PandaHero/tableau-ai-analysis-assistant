@@ -13,12 +13,11 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
 
 from analytics_assistant.src.infra.ai import get_model_manager, EmbeddingResult
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class EmbeddingStats:
@@ -34,7 +33,6 @@ class EmbeddingStats:
         if total == 0:
             return 0.0
         return self.cache_hits / total
-
 
 class EmbeddingService:
     """统一的 Embedding 服务
@@ -60,7 +58,7 @@ class EmbeddingService:
         self._model_id = model_id
         self._stats = EmbeddingStats()
     
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str) -> list[float]:
         """单文本向量化
         
         委托给 ModelManager，利用其内置缓存。
@@ -83,10 +81,10 @@ class EmbeddingService:
     
     def embed_documents(
         self,
-        texts: List[str],
+        texts: list[str],
         batch_size: int = 20,
         max_concurrency: int = 5,
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """批量文本向量化
         
         委托给 ModelManager.embed_documents_batch_with_stats()。
@@ -113,10 +111,10 @@ class EmbeddingService:
     
     async def embed_documents_async(
         self,
-        texts: List[str],
+        texts: list[str],
         batch_size: int = 20,
         max_concurrency: int = 5,
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """异步批量文本向量化
         
         委托给 ModelManager.embed_documents_batch_with_stats_async()。

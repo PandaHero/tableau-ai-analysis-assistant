@@ -22,7 +22,7 @@ VizQL Data Service 客户端
 """
 import logging
 import asyncio
-from typing import Dict, Any, Optional, Union
+from typing import Any, Optional, Union
 
 import httpx
 
@@ -37,16 +37,13 @@ from analytics_assistant.src.core.exceptions import (
     VizQLNetworkError,
 )
 
-
 logger = logging.getLogger(__name__)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SSL 配置辅助函数
 # ══════════════════════════════════════════════════════════════════════════════
 
 from .ssl_utils import get_ssl_verify as _get_ssl_verify
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # VizQL 客户端
@@ -187,9 +184,9 @@ class VizQLClient:
     async def _execute_request(
         self,
         url: str,
-        headers: Dict[str, str],
-        payload: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         执行 HTTP 请求（带重试）
         
@@ -257,11 +254,11 @@ class VizQLClient:
     async def query_datasource(
         self,
         datasource_luid: str,
-        query: Dict[str, Any],
+        query: dict[str, Any],
         api_key: str,
         site: Optional[str] = None,
-        options: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        options: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """
         执行 VizQL 查询
         
@@ -305,7 +302,7 @@ class VizQLClient:
         datasource_luid: str,
         api_key: str,
         site: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         读取数据源元数据
         
@@ -340,7 +337,7 @@ class VizQLClient:
         datasource_luid: str,
         api_key: str,
         site: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         获取数据源数据模型（逻辑表和关系）
         
@@ -383,9 +380,9 @@ class VizQLClient:
     async def graphql_query(
         self,
         query: str,
-        variables: Optional[Dict[str, Any]],
+        variables: Optional[dict[str, Any]],
         api_key: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         执行 GraphQL 查询（Tableau Metadata API）
         
@@ -417,7 +414,7 @@ class VizQLClient:
         self,
         datasource_luid: str,
         api_key: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         通过 GraphQL 获取数据源字段的完整元数据
         
@@ -551,7 +548,6 @@ class VizQLClient:
                 return ds.get("luid")
         
         return None
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 导出

@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 
-
 @router.post("")
 def submit_feedback(
     request: FeedbackRequest,

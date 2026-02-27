@@ -5,10 +5,9 @@
 """
 
 import threading
-from typing import Dict, List, Optional, Type
+from typing import Optional, Type
 
 from analytics_assistant.src.core.interfaces import BasePlatformAdapter
-
 
 class PlatformRegistry:
     """平台适配器注册表。
@@ -21,7 +20,7 @@ class PlatformRegistry:
     
     _instance: Optional["PlatformRegistry"] = None
     _instance_lock: threading.Lock = threading.Lock()
-    _adapters: Dict[str, Type[BasePlatformAdapter]]
+    _adapters: dict[str, Type[BasePlatformAdapter]]
     _adapters_lock: threading.RLock  # 实例级别的锁
     
     def __new__(cls) -> "PlatformRegistry":
@@ -67,7 +66,7 @@ class PlatformRegistry:
         # 在锁外创建实例，避免长时间持有锁
         return adapter_class(**kwargs)
     
-    def list_platforms(self) -> List[str]:
+    def list_platforms(self) -> list[str]:
         """列出所有已注册的平台名称（线程安全）。"""
         with self._adapters_lock:
             return list(self._adapters.keys())
@@ -77,15 +76,12 @@ class PlatformRegistry:
         with self._adapters_lock:
             return name.lower() in self._adapters
 
-
 # 模块级便捷函数
 _registry = PlatformRegistry()
-
 
 def register_adapter(name: str, adapter_class: Type[BasePlatformAdapter]) -> None:
     """注册平台适配器。"""
     _registry.register(name, adapter_class)
-
 
 def get_adapter(name: str, **kwargs) -> BasePlatformAdapter:
     """获取平台适配器实例。"""

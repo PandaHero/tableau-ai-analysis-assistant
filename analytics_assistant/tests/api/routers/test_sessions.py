@@ -132,7 +132,7 @@ class TestGetSessionDetail:
         """不存在的会话返回 404。"""
         client = TestClient(app)
         response = client.get(
-            "/api/sessions/nonexistent-id",
+            "/api/sessions/00000000-0000-0000-0000-000000000000",
             headers=HEADERS_ALICE,
         )
         assert response.status_code == 404
@@ -204,7 +204,7 @@ class TestUpdateSession:
         """更新不存在的会话返回 404。"""
         client = TestClient(app)
         response = client.put(
-            "/api/sessions/nonexistent",
+            "/api/sessions/00000000-0000-0000-0000-000000000000",
             json={"title": "x"},
             headers=HEADERS_ALICE,
         )
@@ -259,7 +259,7 @@ class TestDeleteSession:
         """删除不存在的会话返回 404。"""
         client = TestClient(app)
         response = client.delete(
-            "/api/sessions/nonexistent",
+            "/api/sessions/00000000-0000-0000-0000-000000000000",
             headers=HEADERS_ALICE,
         )
         assert response.status_code == 404

@@ -34,13 +34,15 @@ ModelManager - 统一的模型管理器（门面类）
         enable_json_mode=True
     )
 """
+from __future__ import annotations
+
 import asyncio
 import concurrent.futures
 import hashlib
 import logging
-from typing import Dict, List, Optional, Any, Callable
+import threading
+from typing import Any, Callable, Optional
 
-import aiohttp
 from langchain_core.language_models import BaseChatModel
 from langchain_core.embeddings import Embeddings
 
@@ -62,7 +64,6 @@ from ..storage import CacheManager
 
 logger = logging.getLogger(__name__)
 
-
 class ModelManager:
     """
     模型管理器（门面类）
@@ -79,10 +80,14 @@ class ModelManager:
     """
     
     _instance = None
+    _lock = threading.Lock()  # 双重检查锁定，确保线程安全
     
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            with cls._lock:
+                # 双重检查：在获取锁后再次检查，避免竞态条件
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
         return cls._instance
     
     def __init__(self):
@@ -193,14 +198,14 @@ class ModelManager:
         """获取模型配置"""
         return self._registry.get(model_id)
     
-    def list(
+    def list_configs(
         self,
         model_type: Optional[ModelType] = None,
         status: Optional[ModelStatus] = None,
-        tags: Optional[List[str]] = None,
-    ) -> List[ModelConfig]:
+        tags: Optional[list[str]] = None,
+    ) -> list[ModelConfig]:
         """列出模型配置"""
-        return self._registry.list(model_type=model_type, status=status, tags=tags)
+        return self._registry.list_configs(model_type=model_type, status=status, tags=tags)
     
     def update(self, model_id: str, request: ModelUpdateRequest) -> Optional[ModelConfig]:
         """更新模型配置"""
@@ -305,7 +310,7 @@ class ModelManager:
         """检查持久化是否启用"""
         return self._persistence.enabled
     
-    def get_dynamic_config_ids(self) -> List[str]:
+    def get_dynamic_config_ids(self) -> list[str]:
         """获取动态添加的配置 ID 列表"""
         return list(self._dynamic_config_ids)
     
@@ -313,110 +318,79 @@ class ModelManager:
     # 批量 Embedding
     # ═══════════════════════════════════════════════════════════════════════
     
-    def _get_batch_embedding_defaults(self) -> Dict[str, Any]:
+    def _get_batch_embedding_defaults(self) -> dict[str, Any]:
         """从配置获取批量 Embedding 默认参数"""
         try:
             config = get_config()
             batch_config = config.get_batch_embedding_config()
+            # 统一从 ai.embedding_cache_ttl 读取缓存 TTL，batch_embedding.cache_ttl 作为 fallback
+            ai_config = config.config.get("ai", {})
+            cache_ttl = ai_config.get(
+                "embedding_cache_ttl",
+                batch_config.get("cache_ttl", 3600),
+            )
             return {
-                'batch_size': batch_config.get('batch_size', 20),
-                'max_concurrency': batch_config.get('max_concurrency', 5),
-                'use_cache': batch_config.get('use_cache', True),
+                "batch_size": batch_config.get("batch_size", 20),
+                "max_concurrency": batch_config.get("max_concurrency", 5),
+                "use_cache": batch_config.get("use_cache", True),
+                "cache_ttl": cache_ttl,
             }
         except Exception as e:
             logger.warning(f"获取批量 Embedding 配置失败，使用默认值: {e}")
-            return {'batch_size': 20, 'max_concurrency': 5, 'use_cache': True}
-    
-    def embed_documents_batch(
-        self,
-        texts: List[str],
-        model_id: Optional[str] = None,
-        batch_size: int = None,
-        max_concurrency: int = None,
-        use_cache: bool = None,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-    ) -> List[List[float]]:
-        """
-        批量生成文档 Embedding（同步版本）
-        
-        优化策略：
-        1. 缓存：已计算的 embedding 直接从缓存读取
-        2. 批量：将文本分批处理，每批 batch_size 条
-        3. 并发：max_concurrency 个批次同时执行
-        """
-        defaults = self._get_batch_embedding_defaults()
-        actual_batch_size = batch_size if batch_size is not None else defaults['batch_size']
-        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults['max_concurrency']
-        actual_use_cache = use_cache if use_cache is not None else defaults['use_cache']
-        
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self.embed_documents_batch_async(
-                            texts, model_id, actual_batch_size, actual_max_concurrency, 
-                            actual_use_cache, progress_callback
-                        )
-                    )
-                    return future.result()
-            else:
-                return loop.run_until_complete(
-                    self.embed_documents_batch_async(
-                        texts, model_id, actual_batch_size, actual_max_concurrency,
-                        actual_use_cache, progress_callback
-                    )
-                )
-        except RuntimeError:
-            return asyncio.run(
-                self.embed_documents_batch_async(
-                    texts, model_id, actual_batch_size, actual_max_concurrency,
-                    actual_use_cache, progress_callback
-                )
-            )
+            return {"batch_size": 20, "max_concurrency": 5, "use_cache": True, "cache_ttl": 3600}
 
-    async def embed_documents_batch_async(
+    async def _embed_batch_core_async(
         self,
-        texts: List[str],
+        texts: list[str],
         model_id: Optional[str] = None,
-        batch_size: int = None,
-        max_concurrency: int = None,
-        use_cache: bool = None,
+        batch_size: Optional[int] = None,
+        max_concurrency: Optional[int] = None,
+        use_cache: Optional[bool] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-    ) -> List[List[float]]:
-        """批量生成文档 Embedding（异步版本）"""
+    ) -> tuple[list[Optional[list[float]]], int, int]:
+        """批量 Embedding 核心逻辑，返回 (results, cache_hits, cache_misses)。
+
+        使用 ModelFactory.create_embedding() 创建 LangChain Embeddings 实例，
+        替代直接 aiohttp 调用，与框架对齐。
+
+        Args:
+            texts: 待向量化的文本列表。
+            model_id: 指定 Embedding 模型 ID。
+            batch_size: 每批文本数量。
+            max_concurrency: 最大并发批次数。
+            use_cache: 是否启用缓存。
+            progress_callback: 进度回调 (completed, total)。
+
+        Returns:
+            (results, cache_hits, cache_misses) 三元组。
+        """
         if not texts:
-            return []
-        
+            return [], 0, 0
+
         defaults = self._get_batch_embedding_defaults()
-        actual_batch_size = batch_size if batch_size is not None else defaults['batch_size']
-        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults['max_concurrency']
-        actual_use_cache = use_cache if use_cache is not None else defaults['use_cache']
-        
+        actual_batch_size = batch_size if batch_size is not None else defaults["batch_size"]
+        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults["max_concurrency"]
+        actual_use_cache = use_cache if use_cache is not None else defaults["use_cache"]
+        cache_ttl = defaults["cache_ttl"]
+
         total = len(texts)
-        results: List[Optional[List[float]]] = [None] * total
-        
-        # 初始化缓存
+        results: list[Optional[list[float]]] = [None] * total
+
+        # 初始化缓存，统一使用 ai.embedding_cache_ttl
         cache = None
         if actual_use_cache:
             try:
-                cache = CacheManager(namespace="embedding", default_ttl=3600)
+                cache = CacheManager(namespace="embedding", default_ttl=cache_ttl)
             except Exception as e:
                 logger.warning(f"无法初始化 embedding 缓存: {e}")
-        
-        # 获取 embedding 模型配置
-        config = self._resolve_config(model_id, None, ModelType.EMBEDDING)
-        if not config:
-            raise ValueError("No Embedding model available")
-        
+
         def make_cache_key(text: str) -> str:
-            return hashlib.md5(text.encode('utf-8')).hexdigest()
-        
+            return hashlib.md5(text.encode("utf-8")).hexdigest()
+
         # 检查缓存
-        uncached_indices: List[int] = []
-        uncached_texts: List[str] = []
-        
+        uncached_indices: list[int] = []
+        uncached_texts: list[str] = []
+
         for i, text in enumerate(texts):
             if cache:
                 cache_key = make_cache_key(text)
@@ -426,17 +400,22 @@ class ModelManager:
                     continue
             uncached_indices.append(i)
             uncached_texts.append(text)
-        
-        cached_count = total - len(uncached_texts)
-        if cached_count > 0:
-            logger.info(f"Embedding 缓存命中: {cached_count}/{total}")
-        
+
+        cache_hits = total - len(uncached_texts)
+        cache_misses = len(uncached_texts)
+
+        if cache_hits > 0:
+            logger.info(f"Embedding 缓存命中: {cache_hits}/{total}")
+
         if progress_callback:
-            progress_callback(cached_count, total)
-        
+            progress_callback(cache_hits, total)
+
         if not uncached_texts:
-            return results
-        
+            return results, cache_hits, cache_misses
+
+        # 使用 ModelFactory 创建 LangChain Embeddings 实例，替代直接 aiohttp 调用
+        embedding_instance = self.create_embedding(model_id=model_id)
+
         # 分批处理
         batches = [
             uncached_texts[i:i + actual_batch_size]
@@ -446,253 +425,144 @@ class ModelManager:
             uncached_indices[i:i + actual_batch_size]
             for i in range(0, len(uncached_indices), actual_batch_size)
         ]
-        
+
         logger.info(f"开始批量 Embedding: {len(uncached_texts)} 条文本, {len(batches)} 批次")
-        
+
         semaphore = asyncio.Semaphore(actual_max_concurrency)
-        completed = cached_count
+        completed = cache_hits
         completed_lock = asyncio.Lock()
-        
-        async def call_embedding_api(batch_texts: List[str]) -> List[List[float]]:
-            api_base = config.api_base.rstrip('/')
-            url = f"{api_base}/embeddings"
-            
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {config.api_key}",
-            }
-            
-            payload = {
-                "model": config.model_name,
-                "input": batch_texts,
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        raise Exception(f"Embedding API 错误 {resp.status}: {error_text}")
-                    
-                    data = await resp.json()
-                    embeddings_data = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
-                    return [item["embedding"] for item in embeddings_data]
-        
-        async def process_batch(batch_texts: List[str], indices: List[int]) -> None:
+
+        async def process_batch(batch_texts: list[str], indices: list[int]) -> None:
             nonlocal completed
-            
+
             async with semaphore:
                 try:
-                    batch_vectors = await call_embedding_api(batch_texts)
-                    
+                    # 使用 LangChain Embeddings 异步接口
+                    batch_vectors = await embedding_instance.aembed_documents(batch_texts)
+
                     for idx, text, vector in zip(indices, batch_texts, batch_vectors):
                         results[idx] = vector
                         if cache:
                             cache_key = make_cache_key(text)
                             cache.set(cache_key, vector)
-                    
+
                     async with completed_lock:
                         completed += len(batch_texts)
                         if progress_callback:
                             progress_callback(completed, total)
-                    
+
                 except Exception as e:
-                    logger.error(f"批量 Embedding 失败: {e}")
+                    logger.error(
+                        f"批量 Embedding 失败: batch_size={len(batch_texts)}, error={e}"
+                    )
                     for idx in indices:
                         if results[idx] is None:
                             results[idx] = []
-        
+
         tasks = [
             process_batch(batch_texts, indices)
             for batch_texts, indices in zip(batches, batch_indices)
         ]
         await asyncio.gather(*tasks)
-        
-        logger.info(f"批量 Embedding 完成: {total} 条文本")
-        return results
-    
-    def embed_documents_batch_with_stats(
-        self,
-        texts: List[str],
-        model_id: Optional[str] = None,
-        batch_size: int = None,
-        max_concurrency: int = None,
-        use_cache: bool = None,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-    ) -> EmbeddingResult:
-        """批量生成文档 Embedding，返回缓存命中信息"""
-        defaults = self._get_batch_embedding_defaults()
-        actual_batch_size = batch_size if batch_size is not None else defaults['batch_size']
-        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults['max_concurrency']
-        actual_use_cache = use_cache if use_cache is not None else defaults['use_cache']
-        
+
+        logger.info(
+            f"批量 Embedding 完成: {total} 条文本 "
+            f"(缓存命中: {cache_hits}, 未命中: {cache_misses})"
+        )
+        return results, cache_hits, cache_misses
+
+    def _run_async_in_sync(self, coro) -> Any:
+        """在同步上下文中运行异步协程的辅助方法"""
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        asyncio.run,
-                        self.embed_documents_batch_with_stats_async(
-                            texts, model_id, actual_batch_size, actual_max_concurrency, 
-                            actual_use_cache, progress_callback
-                        )
-                    )
+                    future = executor.submit(asyncio.run, coro)
                     return future.result()
             else:
-                return loop.run_until_complete(
-                    self.embed_documents_batch_with_stats_async(
-                        texts, model_id, actual_batch_size, actual_max_concurrency,
-                        actual_use_cache, progress_callback
-                    )
-                )
+                return loop.run_until_complete(coro)
         except RuntimeError:
-            return asyncio.run(
-                self.embed_documents_batch_with_stats_async(
-                    texts, model_id, actual_batch_size, actual_max_concurrency,
-                    actual_use_cache, progress_callback
-                )
+            return asyncio.run(coro)
+
+    def embed_documents_batch(
+        self,
+        texts: list[str],
+        model_id: Optional[str] = None,
+        batch_size: Optional[int] = None,
+        max_concurrency: Optional[int] = None,
+        use_cache: Optional[bool] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> list[list[float]]:
+        """批量生成文档 Embedding（同步版本）
+
+        优化策略：
+        1. 缓存：已计算的 embedding 直接从缓存读取
+        2. 批量：将文本分批处理，每批 batch_size 条
+        3. 并发：max_concurrency 个批次同时执行
+        """
+        return self._run_async_in_sync(
+            self.embed_documents_batch_async(
+                texts, model_id, batch_size, max_concurrency,
+                use_cache, progress_callback,
             )
-    
+        )
+
+    async def embed_documents_batch_async(
+        self,
+        texts: list[str],
+        model_id: Optional[str] = None,
+        batch_size: Optional[int] = None,
+        max_concurrency: Optional[int] = None,
+        use_cache: Optional[bool] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> list[list[float]]:
+        """批量生成文档 Embedding（异步版本）"""
+        results, _, _ = await self._embed_batch_core_async(
+            texts, model_id, batch_size, max_concurrency,
+            use_cache, progress_callback,
+        )
+        return results
+
+    def embed_documents_batch_with_stats(
+        self,
+        texts: list[str],
+        model_id: Optional[str] = None,
+        batch_size: Optional[int] = None,
+        max_concurrency: Optional[int] = None,
+        use_cache: Optional[bool] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> EmbeddingResult:
+        """批量生成文档 Embedding，返回缓存命中信息"""
+        return self._run_async_in_sync(
+            self.embed_documents_batch_with_stats_async(
+                texts, model_id, batch_size, max_concurrency,
+                use_cache, progress_callback,
+            )
+        )
+
     async def embed_documents_batch_with_stats_async(
         self,
-        texts: List[str],
+        texts: list[str],
         model_id: Optional[str] = None,
-        batch_size: int = None,
-        max_concurrency: int = None,
-        use_cache: bool = None,
+        batch_size: Optional[int] = None,
+        max_concurrency: Optional[int] = None,
+        use_cache: Optional[bool] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> EmbeddingResult:
         """批量生成文档 Embedding，返回缓存命中信息（异步版本）"""
-        if not texts:
-            return EmbeddingResult(vectors=[], cache_hits=0, cache_misses=0)
-        
-        defaults = self._get_batch_embedding_defaults()
-        actual_batch_size = batch_size if batch_size is not None else defaults['batch_size']
-        actual_max_concurrency = max_concurrency if max_concurrency is not None else defaults['max_concurrency']
-        actual_use_cache = use_cache if use_cache is not None else defaults['use_cache']
-        
-        total = len(texts)
-        results: List[Optional[List[float]]] = [None] * total
-        cache_hits = 0
-        cache_misses = 0
-        
-        cache = None
-        if actual_use_cache:
-            try:
-                cache = CacheManager(namespace="embedding", default_ttl=86400)
-            except Exception as e:
-                logger.warning(f"无法初始化 embedding 缓存: {e}")
-        
-        config = self._resolve_config(model_id, None, ModelType.EMBEDDING)
-        if not config:
-            raise ValueError("No Embedding model available")
-        
-        def make_cache_key(text: str) -> str:
-            return hashlib.md5(text.encode('utf-8')).hexdigest()
-        
-        uncached_indices: List[int] = []
-        uncached_texts: List[str] = []
-        
-        for i, text in enumerate(texts):
-            if cache:
-                cache_key = make_cache_key(text)
-                cached = cache.get(cache_key)
-                if cached is not None:
-                    results[i] = cached
-                    cache_hits += 1
-                    continue
-            uncached_indices.append(i)
-            uncached_texts.append(text)
-        
-        cache_misses = len(uncached_texts)
-        
-        if cache_hits > 0:
-            logger.info(f"Embedding 缓存命中: {cache_hits}/{total}")
-        
-        if progress_callback:
-            progress_callback(cache_hits, total)
-        
-        if not uncached_texts:
-            return EmbeddingResult(vectors=results, cache_hits=cache_hits, cache_misses=cache_misses)
-        
-        batches = [
-            uncached_texts[i:i + actual_batch_size]
-            for i in range(0, len(uncached_texts), actual_batch_size)
-        ]
-        batch_indices = [
-            uncached_indices[i:i + actual_batch_size]
-            for i in range(0, len(uncached_indices), actual_batch_size)
-        ]
-        
-        logger.info(f"开始批量 Embedding: {len(uncached_texts)} 条文本, {len(batches)} 批次")
-        
-        semaphore = asyncio.Semaphore(actual_max_concurrency)
-        completed = cache_hits
-        completed_lock = asyncio.Lock()
-        
-        async def call_embedding_api(batch_texts: List[str]) -> List[List[float]]:
-            api_base = config.api_base.rstrip('/')
-            url = f"{api_base}/embeddings"
-            
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {config.api_key}",
-            }
-            
-            payload = {
-                "model": config.model_name,
-                "input": batch_texts,
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-                    if resp.status != 200:
-                        error_text = await resp.text()
-                        raise Exception(f"Embedding API 错误 {resp.status}: {error_text}")
-                    
-                    data = await resp.json()
-                    embeddings_data = sorted(data.get("data", []), key=lambda x: x.get("index", 0))
-                    return [item["embedding"] for item in embeddings_data]
-        
-        async def process_batch(batch_texts: List[str], indices: List[int]) -> None:
-            nonlocal completed
-            
-            async with semaphore:
-                try:
-                    batch_vectors = await call_embedding_api(batch_texts)
-                    
-                    for idx, text, vector in zip(indices, batch_texts, batch_vectors):
-                        results[idx] = vector
-                        if cache:
-                            cache_key = make_cache_key(text)
-                            cache.set(cache_key, vector)
-                    
-                    async with completed_lock:
-                        completed += len(batch_texts)
-                        if progress_callback:
-                            progress_callback(completed, total)
-                    
-                except Exception as e:
-                    logger.error(f"批量 Embedding 失败: {e}")
-                    for idx in indices:
-                        if results[idx] is None:
-                            results[idx] = []
-        
-        tasks = [
-            process_batch(batch_texts, indices)
-            for batch_texts, indices in zip(batches, batch_indices)
-        ]
-        await asyncio.gather(*tasks)
-        
-        logger.info(f"批量 Embedding 完成: {total} 条文本 (缓存命中: {cache_hits}, 未命中: {cache_misses})")
-        return EmbeddingResult(vectors=results, cache_hits=cache_hits, cache_misses=cache_misses)
-
+        results, cache_hits, cache_misses = await self._embed_batch_core_async(
+            texts, model_id, batch_size, max_concurrency,
+            use_cache, progress_callback,
+        )
+        return EmbeddingResult(
+            vectors=results, cache_hits=cache_hits, cache_misses=cache_misses,
+        )
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 全局单例访问
 # ═══════════════════════════════════════════════════════════════════════════
 
 _model_manager_instance: Optional[ModelManager] = None
-
 
 def get_model_manager() -> ModelManager:
     """获取 ModelManager 单例实例"""
@@ -701,21 +571,19 @@ def get_model_manager() -> ModelManager:
         _model_manager_instance = ModelManager()
     return _model_manager_instance
 
-
 def get_embeddings(model_id: Optional[str] = None, **kwargs) -> Embeddings:
     """获取 Embedding 实例（便捷函数）"""
     manager = get_model_manager()
     return manager.create_embedding(model_id=model_id, **kwargs)
 
-
 def embed_documents_batch(
-    texts: List[str],
+    texts: list[str],
     model_id: Optional[str] = None,
-    batch_size: int = None,
-    max_concurrency: int = None,
-    use_cache: bool = None,
+    batch_size: Optional[int] = None,
+    max_concurrency: Optional[int] = None,
+    use_cache: Optional[bool] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> List[List[float]]:
+) -> list[list[float]]:
     """批量生成文档 Embedding（便捷函数）"""
     manager = get_model_manager()
     return manager.embed_documents_batch(
@@ -726,7 +594,6 @@ def embed_documents_batch(
         use_cache=use_cache,
         progress_callback=progress_callback,
     )
-
 
 __all__ = [
     "ModelManager",

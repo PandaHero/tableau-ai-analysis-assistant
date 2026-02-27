@@ -13,7 +13,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .output import SemanticOutput
 
-
 class ErrorCorrectionHistory(BaseModel):
     """错误修正历史记录
     
@@ -43,7 +42,6 @@ class ErrorCorrectionHistory(BaseModel):
         description="时间戳"
     )
 
-
 class CorrectionResult(BaseModel):
     """修正结果
     
@@ -70,7 +68,6 @@ class CorrectionResult(BaseModel):
         default=None,
         description="终止原因，如 duplicate_error_detected, total_error_history_exceeded, non_retryable_error"
     )
-
 
 __all__ = [
     "ErrorCorrectionHistory",

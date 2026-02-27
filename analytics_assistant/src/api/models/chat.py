@@ -6,10 +6,9 @@
 """
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
-
 
 class Message(BaseModel):
     """消息模型。"""
@@ -18,11 +17,10 @@ class Message(BaseModel):
     content: str
     created_at: Optional[datetime] = None
 
-
 class ChatRequest(BaseModel):
     """聊天请求模型。"""
 
-    messages: List[Message] = Field(..., description="对话历史")
+    messages: list[Message] = Field(..., description="对话历史")
     datasource_name: str = Field(..., description="数据源名称")
     language: Literal["zh", "en"] = Field(default="zh", description="语言")
     analysis_depth: Literal["detailed", "comprehensive"] = Field(

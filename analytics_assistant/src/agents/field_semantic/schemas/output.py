@@ -8,12 +8,11 @@
 - LLMFieldSemanticItem: LLM 输出的单个字段属性
 - LLMFieldSemanticOutput: LLM 输出 schema（用于 stream_llm_structured）
 """
-from typing import Dict, List, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
 from analytics_assistant.src.core.schemas.enums import DimensionCategory, MeasureCategory
-
 
 class FieldSemanticAttributes(BaseModel):
     """
@@ -36,7 +35,7 @@ class FieldSemanticAttributes(BaseModel):
     business_description: str = Field(
         description="业务描述，一句话说明字段的业务含义"
     )
-    aliases: List[str] = Field(
+    aliases: list[str] = Field(
         default_factory=list,
         description="别名列表，用户可能使用的其他名称"
     )
@@ -116,13 +115,11 @@ class FieldSemanticAttributes(BaseModel):
         
         return self
 
-
 class FieldSemanticResult(BaseModel):
     """字段语义推断结果"""
-    field_semantic: Dict[str, FieldSemanticAttributes] = Field(
+    field_semantic: dict[str, FieldSemanticAttributes] = Field(
         description="字段语义字典，key 为字段名，value 为 FieldSemanticAttributes"
     )
-
 
 # ══════════════════════════════════════════════════════════════
 # LLM 输出 Schema（用于 stream_llm_structured）
@@ -133,7 +130,7 @@ class LLMFieldSemanticItem(BaseModel):
     
     role: str = Field(description="字段角色: dimension/measure")
     business_description: str = Field(description="业务描述")
-    aliases: List[str] = Field(default_factory=list, description="别名列表")
+    aliases: list[str] = Field(default_factory=list, description="别名列表")
     confidence: float = Field(ge=0.0, le=1.0, description="置信度 0-1")
     reasoning: Optional[str] = Field(default=None, description="推断理由")
     
@@ -146,11 +143,10 @@ class LLMFieldSemanticItem(BaseModel):
     # 度量属性（可选）
     measure_category: Optional[str] = Field(default=None, description="度量类别")
 
-
 class LLMFieldSemanticOutput(BaseModel):
     """LLM 输出的字段语义结果（用于 stream_llm_structured）"""
     
-    field_semantic: Dict[str, LLMFieldSemanticItem] = Field(
+    field_semantic: dict[str, LLMFieldSemanticItem] = Field(
         description="字段语义字典，key 为字段名"
     )
     
@@ -205,7 +201,6 @@ class LLMFieldSemanticOutput(BaseModel):
             result[name] = FieldSemanticAttributes(**attrs_dict)
         
         return FieldSemanticResult(field_semantic=result)
-
 
 __all__ = [
     "FieldSemanticAttributes",

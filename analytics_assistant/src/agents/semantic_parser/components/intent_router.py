@@ -17,7 +17,7 @@ Requirements: 0.12 - IntentRouter 意图识别
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.seeds import (
@@ -27,9 +27,7 @@ from analytics_assistant.src.infra.seeds import (
 
 from ..schemas.intent import IntentType, IntentRouterOutput
 
-
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 模块级变量（用于外部访问）
@@ -38,7 +36,6 @@ logger = logging.getLogger(__name__)
 METADATA_KEYWORDS = INTENT_KEYWORDS["metadata"]
 DATA_ANALYSIS_KEYWORDS = INTENT_KEYWORDS["data_analysis"]
 SHORT_AMBIGUOUS_KEYWORDS = INTENT_KEYWORDS["ambiguous"]
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # IntentRouter 组件
@@ -159,7 +156,7 @@ class IntentRouter:
     async def route(
         self,
         question: str,
-        context: Optional[Dict[str, Any]] = None,
+        context: Optional[dict[str, Any]] = None,
     ) -> IntentRouterOutput:
         """执行意图识别。
         
@@ -304,7 +301,7 @@ class IntentRouter:
             source="L0_RULES",
         )
     
-    def _filter_weak_keywords(self, keywords: List[str]) -> List[str]:
+    def _filter_weak_keywords(self, keywords: list[str]) -> list[str]:
         """过滤弱关键词（太短/太模糊的词）。
         
         Args:
@@ -332,7 +329,7 @@ class IntentRouter:
     async def _try_l1_classifier(
         self,
         question: str,
-        context: Optional[Dict[str, Any]],
+        context: Optional[dict[str, Any]],
     ) -> Optional[IntentRouterOutput]:
         """L1 小模型分类 - LLM 判断。
         
@@ -366,7 +363,6 @@ class IntentRouter:
         
         logger.debug("L1 小模型分类未实现，跳过")
         return None
-
 
 __all__ = [
     "IntentType",

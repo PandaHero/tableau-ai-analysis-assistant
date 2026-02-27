@@ -20,19 +20,17 @@ Property 9: Incremental State Update
 """
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 
-
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_token_optimization_config() -> Dict[str, Any]:
+def _get_token_optimization_config() -> dict[str, Any]:
     """获取 token_optimization 配置。"""
     try:
         config = get_config()
@@ -41,12 +39,10 @@ def _get_token_optimization_config() -> Dict[str, Any]:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
 
-
 # 默认配置（作为 fallback）
 _DEFAULT_MAX_HISTORY_TOKENS = 1000
 _DEFAULT_USE_SUMMARIZATION = True
 _DEFAULT_CHARS_PER_TOKEN = 2  # 中文约 2 字符/token
-
 
 def get_max_history_tokens() -> int:
     """获取对话历史最大 token 数。"""
@@ -54,13 +50,11 @@ def get_max_history_tokens() -> int:
         "max_history_tokens", _DEFAULT_MAX_HISTORY_TOKENS
     )
 
-
 def get_use_summarization() -> bool:
     """获取是否使用历史摘要。"""
     return _get_token_optimization_config().get(
         "use_summarization", _DEFAULT_USE_SUMMARIZATION
     )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Token 计数工具
@@ -84,8 +78,7 @@ def estimate_tokens(text: str, chars_per_token: int = _DEFAULT_CHARS_PER_TOKEN) 
         return 0
     return max(1, len(text) // chars_per_token)
 
-
-def estimate_message_tokens(message: Dict[str, str]) -> int:
+def estimate_message_tokens(message: dict[str, str]) -> int:
     """估算单条消息的 token 数
     
     包括 role 和 content 的 token 数，
@@ -105,8 +98,7 @@ def estimate_message_tokens(message: Dict[str, str]) -> int:
     
     return estimate_tokens(role) + estimate_tokens(content) + overhead
 
-
-def estimate_history_tokens(history: List[Dict[str, str]]) -> int:
+def estimate_history_tokens(history: list[dict[str, str]]) -> int:
     """估算对话历史的总 token 数
     
     Args:
@@ -118,7 +110,6 @@ def estimate_history_tokens(history: List[Dict[str, str]]) -> int:
     if not history:
         return 0
     return sum(estimate_message_tokens(msg) for msg in history)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # HistoryManager 类
@@ -174,8 +165,8 @@ class HistoryManager:
     
     def check_history_tokens(
         self,
-        history: Optional[List[Dict[str, str]]],
-    ) -> Tuple[int, bool]:
+        history: Optional[list[dict[str, str]]],
+    ) -> tuple[int, bool]:
         """检查历史 token 数是否超过限制
         
         Args:
@@ -199,9 +190,9 @@ class HistoryManager:
     
     def truncate_history(
         self,
-        history: Optional[List[Dict[str, str]]],
+        history: Optional[list[dict[str, str]]],
         max_tokens: Optional[int] = None,
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         """截断对话历史（保留最近消息）
         
         从最新的消息开始保留，直到达到 token 限制。
@@ -229,7 +220,7 @@ class HistoryManager:
             return history
         
         # 从最新消息开始保留
-        truncated = []
+        collected: list[dict[str, str]] = []
         current_tokens = 0
         
         # 反向遍历（从最新到最旧）
@@ -240,8 +231,11 @@ class HistoryManager:
                 # 达到限制，停止添加
                 break
             
-            truncated.insert(0, msg)  # 插入到开头以保持顺序
+            collected.append(msg)
             current_tokens += msg_tokens
+        
+        # 反转恢复时间顺序
+        truncated = list(reversed(collected))
         
         logger.info(
             f"对话历史已截断: {len(history)} -> {len(truncated)} 条消息, "
@@ -252,9 +246,9 @@ class HistoryManager:
     
     def merge_state(
         self,
-        existing_state: Dict[str, Any],
-        new_info: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        existing_state: dict[str, Any],
+        new_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """增量状态更新（合并新信息）
         
         Property 9: Incremental State Update
@@ -304,7 +298,7 @@ class HistoryManager:
     
     def format_history_for_prompt(
         self,
-        history: Optional[List[Dict[str, str]]],
+        history: Optional[list[dict[str, str]]],
         max_tokens: Optional[int] = None,
     ) -> str:
         """格式化对话历史用于 Prompt
@@ -337,14 +331,12 @@ class HistoryManager:
         
         return "\n".join(lines)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 便捷函数
 # ═══════════════════════════════════════════════════════════════════════════
 
 # 全局单例
 _history_manager: Optional[HistoryManager] = None
-
 
 def get_history_manager() -> HistoryManager:
     """获取全局 HistoryManager 单例"""
@@ -353,11 +345,10 @@ def get_history_manager() -> HistoryManager:
         _history_manager = HistoryManager()
     return _history_manager
 
-
 def truncate_history(
-    history: Optional[List[Dict[str, str]]],
+    history: Optional[list[dict[str, str]]],
     max_tokens: Optional[int] = None,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """便捷函数：截断对话历史
     
     Args:
@@ -369,10 +360,9 @@ def truncate_history(
     """
     return get_history_manager().truncate_history(history, max_tokens)
 
-
 def check_history_tokens(
-    history: Optional[List[Dict[str, str]]],
-) -> Tuple[int, bool]:
+    history: Optional[list[dict[str, str]]],
+) -> tuple[int, bool]:
     """便捷函数：检查历史 token 数
     
     Args:
@@ -382,7 +372,6 @@ def check_history_tokens(
         (token_count, exceeds_limit) 元组
     """
     return get_history_manager().check_history_tokens(history)
-
 
 __all__ = [
     "HistoryManager",

@@ -12,10 +12,8 @@
 用法：
     from analytics_assistant.src.infra.seeds import INTENT_KEYWORDS
 """
-from typing import Dict, List
 
-
-INTENT_KEYWORDS: Dict[str, List[str]] = {
+INTENT_KEYWORDS: dict[str, list[str]] = {
     # ─────────────────────────────────────────────────────────
     # 元数据问答关键词（优先级最高）
     # 匹配这些关键词时，返回 GENERAL 意图
@@ -72,6 +70,5 @@ INTENT_KEYWORDS: Dict[str, List[str]] = {
         "按", "分", "各", "每",
     ],
 }
-
 
 __all__ = ["INTENT_KEYWORDS"]

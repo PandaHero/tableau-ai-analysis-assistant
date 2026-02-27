@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 
 from analytics_assistant.src.core.schemas.enums import IntentType
 
-
 class IntentRouterOutput(BaseModel):
     """IntentRouter 输出模型。
     
@@ -24,7 +23,6 @@ class IntentRouterOutput(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     reason: str
     source: str = Field(description="识别来源：L0_RULES / L1_CLASSIFIER / L2_FALLBACK")
-
 
 __all__ = [
     "IntentType",

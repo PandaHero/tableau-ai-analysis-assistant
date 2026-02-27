@@ -46,16 +46,7 @@ import inspect
 import logging
 import time
 from dataclasses import dataclass, field, replace
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    TypeVar,
-    Union,
-)
+from typing import Any, Awaitable, Callable, Optional, TypeVar, Union
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -63,8 +54,7 @@ from langchain_core.tools import BaseTool
 
 logger = logging.getLogger(__name__)
 
-StateT = TypeVar('StateT', bound=Dict[str, Any])
-
+StateT = TypeVar('StateT', bound=dict[str, Any])
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 异常类
@@ -86,11 +76,9 @@ class MiddlewareError(Exception):
             f"Middleware '{middleware_name}' 在钩子 '{hook_name}' 中失败: {original_error}"
         )
 
-
 class MiddlewareChainError(MiddlewareError):
     """Middleware 链式调用错误"""
     pass
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 类型定义
@@ -105,47 +93,43 @@ class Runtime:
     """
     context: Any = None
     store: Any = None
-    config: Dict[str, Any] = field(default_factory=dict)
-
+    config: dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class ModelRequest:
     """LLM 调用请求"""
     model: BaseChatModel
-    messages: List[BaseMessage]
+    messages: list[BaseMessage]
     system_message: Optional[BaseMessage] = None
     system_prompt: Optional[str] = None
     tool_choice: Any = None
-    tools: Optional[List[Any]] = None
+    tools: Optional[list[Any]] = None
     response_format: Any = None
-    state: Optional[Dict[str, Any]] = None
+    state: Optional[dict[str, Any]] = None
     runtime: Any = None
-    model_settings: Optional[Dict[str, Any]] = None
+    model_settings: Optional[dict[str, Any]] = None
     
     def override(self, **kwargs) -> 'ModelRequest':
         """创建修改后的副本"""
         return replace(self, **kwargs)
 
-
 @dataclass
 class ModelResponse:
     """LLM 调用响应"""
-    result: List[AIMessage]
+    result: list[AIMessage]
     structured_response: Any = None
-
 
 @dataclass
 class ToolCallRequest:
     """工具调用请求"""
-    tool_call: Dict[str, Any]
+    tool_call: dict[str, Any]
     tool: BaseTool
-    state: Dict[str, Any]
+    state: dict[str, Any]
     runtime: Any
     
     def override(self, **kwargs) -> 'ToolCallRequest':
         """创建修改后的副本"""
         return replace(self, **kwargs)
-
 
 @dataclass
 class HookExecutionResult:
@@ -154,7 +138,6 @@ class HookExecutionResult:
     middleware_name: str
     error: Optional[Exception] = None
     duration_ms: int = 0
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # MiddlewareRunner
@@ -173,16 +156,16 @@ class MiddlewareRunner:
         fail_fast: 是否在第一个错误时停止（默认 True）
     """
     
-    middleware: List[Any]
+    middleware: list[Any]
     fail_fast: bool = True
     
     # 按钩子类型分类的 middleware（初始化时计算）
-    _mw_before_agent: List[Any] = field(default_factory=list, init=False)
-    _mw_before_model: List[Any] = field(default_factory=list, init=False)
-    _mw_after_model: List[Any] = field(default_factory=list, init=False)
-    _mw_after_agent: List[Any] = field(default_factory=list, init=False)
-    _mw_wrap_model_call: List[Any] = field(default_factory=list, init=False)
-    _mw_wrap_tool_call: List[Any] = field(default_factory=list, init=False)
+    _mw_before_agent: list[Any] = field(default_factory=list, init=False)
+    _mw_before_model: list[Any] = field(default_factory=list, init=False)
+    _mw_after_model: list[Any] = field(default_factory=list, init=False)
+    _mw_after_agent: list[Any] = field(default_factory=list, init=False)
+    _mw_wrap_model_call: list[Any] = field(default_factory=list, init=False)
+    _mw_wrap_tool_call: list[Any] = field(default_factory=list, init=False)
     
     def __post_init__(self):
         """初始化后分类 middleware"""
@@ -249,7 +232,7 @@ class MiddlewareRunner:
         return method_class == obj_class_name
     
     @property
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         """返回所有已注册 middleware 的名称列表"""
         return [type(mw).__name__ for mw in self.middleware]
     
@@ -259,7 +242,7 @@ class MiddlewareRunner:
     
     def build_runtime(
         self,
-        config: Optional[Dict[str, Any]] = None,
+        config: Optional[dict[str, Any]] = None,
         context: Any = None,
         store: Any = None,
     ) -> Runtime:
@@ -273,9 +256,9 @@ class MiddlewareRunner:
     def build_model_request(
         self,
         model: BaseChatModel,
-        messages: List[BaseMessage],
-        tools: Optional[List[Any]] = None,
-        state: Optional[Dict[str, Any]] = None,
+        messages: list[BaseMessage],
+        tools: Optional[list[Any]] = None,
+        state: Optional[dict[str, Any]] = None,
         runtime: Optional[Runtime] = None,
         system_prompt: Optional[str] = None,
     ) -> ModelRequest:
@@ -291,7 +274,7 @@ class MiddlewareRunner:
     
     def build_model_response(
         self,
-        result: List[AIMessage],
+        result: list[AIMessage],
         structured_response: Any = None,
     ) -> ModelResponse:
         """构建 ModelResponse 对象"""
@@ -302,9 +285,9 @@ class MiddlewareRunner:
     
     def build_tool_call_request(
         self,
-        tool_call: Dict[str, Any],
+        tool_call: dict[str, Any],
         tool: BaseTool,
-        state: Dict[str, Any],
+        state: dict[str, Any],
         runtime: Runtime,
     ) -> ToolCallRequest:
         """构建 ToolCallRequest 对象"""
@@ -383,7 +366,7 @@ class MiddlewareRunner:
     
     async def _run_hooks(
         self,
-        middleware_list: List[Any],
+        middleware_list: list[Any],
         sync_hook_name: str,
         async_hook_name: str,
         state: StateT,
@@ -439,8 +422,8 @@ class MiddlewareRunner:
     def _filter_kwargs_for_hook(
         self,
         hook: Callable,
-        kwargs: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
         """根据钩子函数的签名过滤 kwargs"""
         try:
             sig = inspect.signature(hook)
@@ -609,9 +592,9 @@ class MiddlewareRunner:
     async def call_model_with_middleware(
         self,
         model: BaseChatModel,
-        messages: List[BaseMessage],
-        tools: Optional[List[Any]] = None,
-        state: Optional[Dict[str, Any]] = None,
+        messages: list[BaseMessage],
+        tools: Optional[list[Any]] = None,
+        state: Optional[dict[str, Any]] = None,
         runtime: Optional[Runtime] = None,
         system_prompt: Optional[str] = None,
     ) -> ModelResponse:
@@ -678,8 +661,8 @@ class MiddlewareRunner:
     async def call_tool_with_middleware(
         self,
         tool: BaseTool,
-        tool_call: Dict[str, Any],
-        state: Dict[str, Any],
+        tool_call: dict[str, Any],
+        state: dict[str, Any],
         runtime: Runtime,
     ) -> ToolMessage:
         """完整的工具调用流程，包含所有 middleware 钩子"""
@@ -708,14 +691,13 @@ class MiddlewareRunner:
         
         return await self.wrap_tool_call(request, base_tool_handler)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 辅助函数
 # ═══════════════════════════════════════════════════════════════════════════
 
 def get_middleware_from_config(
-    config: Optional[Dict[str, Any]],
-) -> Optional[List[Any]]:
+    config: Optional[dict[str, Any]],
+) -> Optional[list[Any]]:
     """从 config 中获取 middleware 栈"""
     if not config:
         return None
@@ -727,7 +709,6 @@ def get_middleware_from_config(
         return middleware
     
     return config.get('middleware')
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 导出

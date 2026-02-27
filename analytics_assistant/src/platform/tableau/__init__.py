@@ -17,7 +17,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 # 注册 Tableau 适配器到平台注册表
 def _register():
     """注册 Tableau 适配器到平台注册表。"""
@@ -25,7 +24,6 @@ def _register():
         register_adapter("tableau", TableauAdapter)
     except Exception as e:
         logger.warning(f"注册 Tableau 适配器失败: {e}")
-
 
 _register()
 

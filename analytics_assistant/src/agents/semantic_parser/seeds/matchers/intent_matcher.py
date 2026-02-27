@@ -11,13 +11,11 @@
     intent = matcher.match("有哪些字段")
     # 'METADATA'
 """
-from typing import List, Literal, Optional
+from typing import Literal, Optional
 
 from analytics_assistant.src.infra.seeds import INTENT_KEYWORDS
 
-
 IntentType = Literal["METADATA", "DATA_QUERY", "AMBIGUOUS", "UNKNOWN"]
-
 
 class IntentMatcher:
     """意图匹配器
@@ -65,7 +63,7 @@ class IntentMatcher:
         """检测是否为数据分析查询。"""
         return self._match_keywords(question.lower(), "data_analysis")
     
-    def get_matched_keywords(self, question: str, category: str) -> List[str]:
+    def get_matched_keywords(self, question: str, category: str) -> list[str]:
         """获取匹配的关键词列表。
         
         Args:
@@ -78,6 +76,5 @@ class IntentMatcher:
         question_lower = question.lower()
         keywords = INTENT_KEYWORDS.get(category, [])
         return [kw for kw in keywords if kw.lower() in question_lower]
-
 
 __all__ = ["IntentMatcher", "IntentType"]

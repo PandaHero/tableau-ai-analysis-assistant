@@ -22,7 +22,7 @@ WorkflowExecutor - 工作流执行器
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Optional
 
 from analytics_assistant.src.agents.semantic_parser.graph import (
     compile_semantic_parser_graph,
@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 
 # 默认超时（秒）
 _DEFAULT_WORKFLOW_TIMEOUT = 60
-
 
 class WorkflowExecutor:
     """工作流执行器。
@@ -83,11 +82,11 @@ class WorkflowExecutor:
         self,
         question: str,
         datasource_name: str,
-        history: Optional[List[Dict[str, str]]] = None,
+        history: Optional[list[dict[str, str]]] = None,
         language: str = "zh",
         analysis_depth: str = "detailed",
         session_id: Optional[str] = None,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """执行工作流并返回 SSE 事件流。
 
         内部流程：
@@ -108,7 +107,7 @@ class WorkflowExecutor:
         Yields:
             SSE 事件字典，如 {"type": "token", "content": "..."}
         """
-        event_queue: asyncio.Queue[Optional[Dict[str, Any]]] = asyncio.Queue()
+        event_queue: asyncio.Queue[Optional[dict[str, Any]]] = asyncio.Queue()
         callbacks = SSECallbacks(event_queue, language=language)
 
         async def _run_workflow() -> None:
@@ -210,23 +209,33 @@ class WorkflowExecutor:
                 # 标记队列结束
                 await event_queue.put(None)
 
-        # 启动后台任务（带超时）
+        # 启动后台任务（带总超时控制）
         workflow_task = asyncio.create_task(_run_workflow())
+        loop = asyncio.get_event_loop()
+        start_time = loop.time()
 
         try:
             while True:
-                try:
-                    event = await asyncio.wait_for(
-                        event_queue.get(),
-                        timeout=float(self._timeout),
-                    )
-                except asyncio.TimeoutError:
+                elapsed = loop.time() - start_time
+                remaining = float(self._timeout) - elapsed
+                if remaining <= 0:
                     logger.error(
-                        f"工作流超时: timeout={self._timeout}s, "
+                        f"工作流总超时: timeout={self._timeout}s, "
                         f"user={self._tableau_username}"
                     )
                     yield {"type": "error", "error": "工作流执行超时"}
                     break
+
+                try:
+                    # 每次最多等待 30 秒，超时发心跳保持连接
+                    event = await asyncio.wait_for(
+                        event_queue.get(),
+                        timeout=min(remaining, 30.0),
+                    )
+                except asyncio.TimeoutError:
+                    # 30 秒内无事件，发送心跳保持 SSE 连接
+                    yield {"type": "heartbeat"}
+                    continue
 
                 if event is None:
                     break
@@ -239,7 +248,6 @@ class WorkflowExecutor:
                     await workflow_task
                 except asyncio.CancelledError:
                     pass
-
 
 __all__ = [
     "WorkflowExecutor",

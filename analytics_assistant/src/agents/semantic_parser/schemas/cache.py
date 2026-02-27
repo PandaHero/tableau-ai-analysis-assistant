@@ -7,11 +7,10 @@ Semantic Parser Cache Models
 - CachedFeature: 特征缓存条目（中间特征提取结果）
 - CachedFieldValues: 字段值缓存条目
 """
-from typing import List, Dict, Any, Optional
+from typing import Any, Optional
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 class CachedQuery(BaseModel):
     """查询缓存条目
@@ -32,7 +31,7 @@ class CachedQuery(BaseModel):
     question_hash: str = Field(
         description="问题的 hash 值（用于精确匹配）"
     )
-    question_embedding: Optional[List[float]] = Field(
+    question_embedding: Optional[list[float]] = Field(
         default=None,
         description="问题的向量表示（用于语义相似匹配）"
     )
@@ -42,7 +41,7 @@ class CachedQuery(BaseModel):
     schema_hash: str = Field(
         description="数据模型的 schema hash（用于失效检测）"
     )
-    semantic_output: Dict[str, Any] = Field(
+    semantic_output: dict[str, Any] = Field(
         description="语义理解输出（序列化的 SemanticOutput）"
     )
     query: str = Field(
@@ -60,7 +59,6 @@ class CachedQuery(BaseModel):
         ge=0,
         description="命中次数统计"
     )
-
 
 class CachedFieldValues(BaseModel):
     """字段值缓存条目
@@ -81,7 +79,7 @@ class CachedFieldValues(BaseModel):
     datasource_luid: str = Field(
         description="数据源 LUID"
     )
-    values: List[str] = Field(
+    values: list[str] = Field(
         description="字段值列表（最多 1000 个）"
     )
     cardinality: Optional[int] = Field(
@@ -95,7 +93,6 @@ class CachedFieldValues(BaseModel):
         default_factory=datetime.now,
         description="缓存时间"
     )
-
 
 class CachedFeature(BaseModel):
     """特征缓存条目
@@ -117,14 +114,14 @@ class CachedFeature(BaseModel):
     question_hash: str = Field(
         description="问题的 hash 值（用于精确匹配）"
     )
-    question_embedding: List[float] = Field(
+    question_embedding: list[float] = Field(
         default_factory=list,
         description="问题的向量表示（用于语义相似匹配）"
     )
     datasource_luid: str = Field(
         description="数据源 LUID"
     )
-    feature_output: Dict[str, Any] = Field(
+    feature_output: dict[str, Any] = Field(
         description="特征提取输出（序列化的 FeatureExtractionOutput）"
     )
     created_at: datetime = Field(
@@ -139,7 +136,6 @@ class CachedFeature(BaseModel):
         ge=0,
         description="命中次数统计"
     )
-
 
 __all__ = [
     "CachedQuery",

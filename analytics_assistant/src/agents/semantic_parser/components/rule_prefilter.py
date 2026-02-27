@@ -13,7 +13,7 @@ RulePrefilter - 规则预处理器
 import logging
 import re
 from datetime import date
-from typing import List, Optional
+from typing import Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.seeds import COMPLEXITY_KEYWORDS
@@ -29,7 +29,6 @@ from ..seeds import ComputationMatcher
 
 logger = logging.getLogger(__name__)
 
-
 class RulePrefilter:
     """规则预处理器
     
@@ -44,6 +43,11 @@ class RulePrefilter:
     # 默认配置
     _DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.7
     _DEFAULT_FISCAL_YEAR_START_MONTH = 1
+    _DEFAULT_CONFIDENCE_WEIGHTS = {
+        "time_hint": 0.3,
+        "computation": 0.4,
+        "complexity": 0.3,
+    }
     
     def __init__(
         self,
@@ -85,6 +89,14 @@ class RulePrefilter:
                 self._DEFAULT_LOW_CONFIDENCE_THRESHOLD
             )
             
+            # 置信度计算权重
+            weights_config = rule_prefilter_config.get("confidence_weights", {})
+            self._confidence_weights = {
+                "time_hint": weights_config.get("time_hint", self._DEFAULT_CONFIDENCE_WEIGHTS["time_hint"]),
+                "computation": weights_config.get("computation", self._DEFAULT_CONFIDENCE_WEIGHTS["computation"]),
+                "complexity": weights_config.get("complexity", self._DEFAULT_CONFIDENCE_WEIGHTS["complexity"]),
+            }
+            
             # 财年配置从 semantic_understanding 读取
             su_config = config.get("semantic_parser", {}).get("semantic_understanding", {})
             self._config_fiscal_year_start_month = su_config.get(
@@ -95,6 +107,7 @@ class RulePrefilter:
         except Exception as e:
             logger.warning(f"加载配置失败，使用默认值: {e}")
             self.low_confidence_threshold = self._DEFAULT_LOW_CONFIDENCE_THRESHOLD
+            self._confidence_weights = dict(self._DEFAULT_CONFIDENCE_WEIGHTS)
             self._config_fiscal_year_start_month = self._DEFAULT_FISCAL_YEAR_START_MONTH
     
     def prefilter(self, question: str) -> PrefilterResult:
@@ -140,7 +153,7 @@ class RulePrefilter:
             return "ja"
         return "en"
     
-    def _generate_time_hints(self, question: str) -> List[RuleTimeHint]:
+    def _generate_time_hints(self, question: str) -> list[RuleTimeHint]:
         """生成时间提示（复用 TimeHintGenerator）。"""
         raw_hints = self._time_hint_generator.generate_hints(question)
         
@@ -160,7 +173,7 @@ class RulePrefilter:
             return "range"
         return "relative"
     
-    def _match_computations(self, question: str) -> List[MatchedComputation]:
+    def _match_computations(self, question: str) -> list[MatchedComputation]:
         """匹配计算种子（使用 ComputationMatcher）。"""
         seeds = self._computation_matcher.find_in_text(question)
         return [
@@ -177,13 +190,13 @@ class RulePrefilter:
     def _detect_complexity(
         self, 
         question: str, 
-        matched_computations: List[MatchedComputation],
-    ) -> List[ComplexityType]:
+        matched_computations: list[MatchedComputation],
+    ) -> list[ComplexityType]:
         """检测复杂度类型（基于 matched_computations 的 calc_type）。
         
         复杂度主要从计算种子的 calc_type 推断，而不是重复匹配关键词。
         """
-        detected: List[ComplexityType] = []
+        detected: list[ComplexityType] = []
         
         # 从计算种子的 calc_type 推断复杂度
         calc_type_to_complexity = {
@@ -216,30 +229,30 @@ class RulePrefilter:
     
     def _calculate_confidence(
         self,
-        time_hints: List[RuleTimeHint],
-        matched_computations: List[MatchedComputation],
-        detected_complexity: List[ComplexityType],
+        time_hints: list[RuleTimeHint],
+        matched_computations: list[MatchedComputation],
+        detected_complexity: list[ComplexityType],
     ) -> float:
         """计算匹配置信度。
         
-        置信度计算逻辑：
-        - 时间提示匹配：+0.3
-        - 计算种子匹配：+0.4
-        - 复杂度检测（非 SIMPLE）：+0.3
+        置信度计算逻辑（权重从 app.yaml 读取）：
+        - 时间提示匹配：+time_hint 权重
+        - 计算种子匹配：+computation 权重
+        - 复杂度检测（非 SIMPLE）：+complexity 权重
         """
         confidence = 0.0
+        w = self._confidence_weights
         
         if time_hints:
             avg_hint_confidence = sum(h.confidence for h in time_hints) / len(time_hints)
-            confidence += 0.3 * min(1.0, avg_hint_confidence)
+            confidence += w["time_hint"] * min(1.0, avg_hint_confidence)
         
         if matched_computations:
-            confidence += 0.4
+            confidence += w["computation"]
         
         if detected_complexity and ComplexityType.SIMPLE not in detected_complexity:
-            confidence += 0.3
+            confidence += w["complexity"]
         
         return min(1.0, confidence)
-
 
 __all__ = ["RulePrefilter"]

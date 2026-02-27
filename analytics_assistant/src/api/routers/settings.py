@@ -38,7 +38,6 @@ _DEFAULT_SETTINGS = {
     "show_thinking_process": True,
 }
 
-
 @router.get("", response_model=UserSettingsResponse)
 def get_settings(
     tableau_username: str = Depends(get_tableau_username),
@@ -74,7 +73,6 @@ def get_settings(
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )
-
 
 @router.put("", response_model=UserSettingsResponse)
 def update_settings(

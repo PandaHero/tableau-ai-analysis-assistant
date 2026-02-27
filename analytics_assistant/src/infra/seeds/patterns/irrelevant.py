@@ -10,8 +10,6 @@
 用法：
     from analytics_assistant.src.infra.seeds import IRRELEVANT_PATTERNS
 """
-from typing import List
-
 
 # ══════════════════════════════════════════════════════════════
 # IntentRouter 无关问题检测模式
@@ -19,7 +17,7 @@ from typing import List
 
 # 明确无关的模式（高置信度拒绝）- 正则表达式
 # 匹配这些模式时，返回 IRRELEVANT 意图
-IRRELEVANT_PATTERNS: List[str] = [
+IRRELEVANT_PATTERNS: list[str] = [
     # ─────────────────────────────────────────────────────────
     # 简单问候/告别（完整匹配）
     # ─────────────────────────────────────────────────────────
@@ -58,7 +56,6 @@ IRRELEVANT_PATTERNS: List[str] = [
     # ─────────────────────────────────────────────────────────
     r"(菜谱|食谱|做菜|烹饪)",
 ]
-
 
 __all__ = [
     "IRRELEVANT_PATTERNS",

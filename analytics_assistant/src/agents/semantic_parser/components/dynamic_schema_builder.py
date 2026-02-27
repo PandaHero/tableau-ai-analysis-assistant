@@ -28,7 +28,7 @@ Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7
 import json
 import logging
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
@@ -36,7 +36,6 @@ from ..schemas.prefilter import ComplexityType
 from ..schemas.dynamic_schema import DynamicSchemaResult
 
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Schema 模块枚举
@@ -48,7 +47,6 @@ class SchemaModule(str, Enum):
     TIME = "time"               # 时间模块（DateRangeFilter 等）
     COMPUTATION = "computation" # 计算模块（DerivedComputation）
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # DerivedComputation Schema 字段定义
 # ═══════════════════════════════════════════════════════════════════════════
@@ -57,7 +55,7 @@ class SchemaModule(str, Enum):
 COMPUTATION_BASE_FIELDS = ["name", "display_name", "calc_type"]
 
 # 各 ComplexityType 需要的额外字段
-COMPLEXITY_SCHEMA_FIELDS: Dict[ComplexityType, List[str]] = {
+COMPLEXITY_SCHEMA_FIELDS: dict[ComplexityType, list[str]] = {
     ComplexityType.SIMPLE: [],  # 不需要 computations
     ComplexityType.RATIO: ["formula", "base_measures"],
     ComplexityType.TIME_COMPARE: ["relative_to", "partition_by", "base_measures"],
@@ -68,7 +66,7 @@ COMPLEXITY_SCHEMA_FIELDS: Dict[ComplexityType, List[str]] = {
 }
 
 # 各 ComplexityType 对应的 CalcType 枚举值
-COMPLEXITY_CALC_TYPES: Dict[ComplexityType, List[str]] = {
+COMPLEXITY_CALC_TYPES: dict[ComplexityType, list[str]] = {
     ComplexityType.SIMPLE: [],
     ComplexityType.RATIO: ["RATIO", "DIFFERENCE", "PRODUCT", "SUM", "FORMULA"],
     ComplexityType.TIME_COMPARE: ["TABLE_CALC_PERCENT_DIFF", "TABLE_CALC_DIFFERENCE"],
@@ -78,9 +76,7 @@ COMPLEXITY_CALC_TYPES: Dict[ComplexityType, List[str]] = {
     ComplexityType.SUBQUERY: ["SUBQUERY"],
 }
 
-
 # DynamicSchemaResult 已迁移到 schemas/dynamic_schema.py
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
@@ -94,7 +90,6 @@ def get_max_schema_fields() -> int:
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return 20
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # DynamicSchemaBuilder 组件
@@ -187,7 +182,7 @@ class DynamicSchemaBuilder:
     def _get_detected_complexity(
         self,
         prefilter_result: Optional[Any],
-    ) -> List[ComplexityType]:
+    ) -> list[ComplexityType]:
         """获取检测到的 ComplexityType
         
         Args:
@@ -223,9 +218,9 @@ class DynamicSchemaBuilder:
     
     def _select_modules(
         self,
-        detected_complexity: List[ComplexityType],
+        detected_complexity: list[ComplexityType],
         prefilter_result: Optional[Any],
-    ) -> Set[SchemaModule]:
+    ) -> set[SchemaModule]:
         """选择需要的 Schema 模块
         
         Args:
@@ -255,8 +250,8 @@ class DynamicSchemaBuilder:
     def _collect_fields(
         self,
         field_rag_result: Any,
-        modules: Set[SchemaModule],
-    ) -> List[FieldCandidate]:
+        modules: set[SchemaModule],
+    ) -> list[FieldCandidate]:
         """收集字段（Top-K 优化）
         
         Args:
@@ -266,7 +261,7 @@ class DynamicSchemaBuilder:
         Returns:
             FieldCandidate 列表
         """
-        candidates: List[FieldCandidate] = []
+        candidates: list[FieldCandidate] = []
         
         if field_rag_result is None:
             return candidates
@@ -290,8 +285,8 @@ class DynamicSchemaBuilder:
     
     def _get_allowed_calc_types(
         self,
-        detected_complexity: List[ComplexityType],
-    ) -> List[str]:
+        detected_complexity: list[ComplexityType],
+    ) -> list[str]:
         """根据 ComplexityType 获取允许的 CalcType 枚举值
         
         核心裁剪逻辑：
@@ -311,7 +306,7 @@ class DynamicSchemaBuilder:
             return []
         
         # 收集所有允许的 CalcType
-        calc_types: Set[str] = set()
+        calc_types: set[str] = set()
         
         for complexity in detected_complexity:
             if complexity == ComplexityType.SIMPLE:
@@ -323,8 +318,8 @@ class DynamicSchemaBuilder:
     
     def _build_schema_json(
         self,
-        detected_complexity: List[ComplexityType],
-        allowed_calc_types: List[str],
+        detected_complexity: list[ComplexityType],
+        allowed_calc_types: list[str],
     ) -> str:
         """构建裁剪后的 Schema JSON
         
@@ -342,7 +337,7 @@ class DynamicSchemaBuilder:
             return ""
         
         # 收集需要的字段
-        schema_fields: Set[str] = set(COMPUTATION_BASE_FIELDS)
+        schema_fields: set[str] = set(COMPUTATION_BASE_FIELDS)
         for complexity in detected_complexity:
             if complexity == ComplexityType.SIMPLE:
                 continue
@@ -400,7 +395,6 @@ class DynamicSchemaBuilder:
                 schema_def["properties"][field_name] = field_definitions[field_name]
         
         return json.dumps(schema_def, ensure_ascii=False, indent=2)
-
 
 __all__ = [
     "SchemaModule",

@@ -23,14 +23,13 @@ BaseRepository - 基于 LangGraph BaseStore 的 CRUD 抽象
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from langgraph.store.base import BaseStore
 
 from .store_factory import StoreFactory
 
 logger = logging.getLogger(__name__)
-
 
 class BaseRepository:
     """基于 BaseStore 的 CRUD 抽象层。
@@ -63,7 +62,7 @@ class BaseRepository:
             default_ttl_minutes: 默认 TTL（分钟），None 使用 store 默认值
         """
         self.namespace = namespace
-        self._namespace_tuple: Tuple[str, ...] = (namespace,)
+        self._namespace_tuple: tuple[str, ...] = (namespace,)
         self._default_ttl_minutes = default_ttl_minutes
 
         if store is not None:
@@ -78,7 +77,7 @@ class BaseRepository:
     # 同步 CRUD
     # ========================================
 
-    def save(self, entity_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    def save(self, entity_id: str, data: dict[str, Any]) -> dict[str, Any]:
         """保存实体（创建或更新）。
 
         自动添加 updated_at 时间戳。如果是新建，同时添加 created_at。
@@ -113,7 +112,7 @@ class BaseRepository:
 
         return data
 
-    def find_by_id(self, entity_id: str) -> Optional[Dict[str, Any]]:
+    def find_by_id(self, entity_id: str) -> Optional[dict[str, Any]]:
         """根据 ID 查找实体。
 
         Args:
@@ -136,9 +135,9 @@ class BaseRepository:
 
     def find_all(
         self,
-        filter_dict: Optional[Dict[str, Any]] = None,
+        filter_dict: Optional[dict[str, Any]] = None,
         limit: int = 1000,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """查找所有匹配的实体。
 
         Args:
@@ -196,7 +195,7 @@ class BaseRepository:
     # 异步 CRUD
     # ========================================
 
-    async def asave(self, entity_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    async def asave(self, entity_id: str, data: dict[str, Any]) -> dict[str, Any]:
         """异步保存实体（创建或更新）。
 
         Args:
@@ -226,7 +225,7 @@ class BaseRepository:
 
         return data
 
-    async def afind_by_id(self, entity_id: str) -> Optional[Dict[str, Any]]:
+    async def afind_by_id(self, entity_id: str) -> Optional[dict[str, Any]]:
         """异步根据 ID 查找实体。
 
         Args:
@@ -249,9 +248,9 @@ class BaseRepository:
 
     async def afind_all(
         self,
-        filter_dict: Optional[Dict[str, Any]] = None,
+        filter_dict: Optional[dict[str, Any]] = None,
         limit: int = 1000,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """异步查找所有匹配的实体。
 
         Args:
@@ -303,7 +302,6 @@ class BaseRepository:
                 f"id={entity_id}, error={e}"
             )
             return False
-
 
 __all__ = [
     "BaseRepository",

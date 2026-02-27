@@ -6,7 +6,7 @@
 从 inference.py 拆分而来。
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.core.schemas.enums import DimensionCategory, MeasureCategory
 from analytics_assistant.src.agents.field_semantic.schemas import (
@@ -21,7 +21,6 @@ from analytics_assistant.src.agents.field_semantic.utils import (
 
 logger = logging.getLogger(__name__)
 
-
 class SeedMatchMixin:
     """种子匹配 Mixin
 
@@ -33,7 +32,7 @@ class SeedMatchMixin:
     - self._seed_initialized
     """
 
-    def _match_seed(self, caption: str, role: str) -> Optional[Dict[str, Any]]:
+    def _match_seed(self, caption: str, role: str) -> Optional[dict[str, Any]]:
         """精确匹配种子数据"""
         caption_lower = caption.lower()
 
@@ -42,7 +41,7 @@ class SeedMatchMixin:
         else:
             return self._dimension_seed_index.get(caption_lower)
 
-    def _seed_to_attrs(self, seed: Dict[str, Any], role: str) -> FieldSemanticAttributes:
+    def _seed_to_attrs(self, seed: dict[str, Any], role: str) -> FieldSemanticAttributes:
         """将种子数据转换为 FieldSemanticAttributes"""
         if role == "measure":
             return FieldSemanticAttributes(
@@ -89,14 +88,14 @@ class SeedMatchMixin:
 
         self._seed_initialized = True
 
-    def _load_patterns(self) -> List[Dict[str, Any]]:
+    def _load_patterns(self) -> list[dict[str, Any]]:
         """加载已存储的 pattern"""
         if not self._pattern_store:
             return []
         pattern_index = self._pattern_store.get("_pattern_index") or []
         return [p for pid in pattern_index if (p := self._pattern_store.get(pid))]
 
-    def _init_seed_patterns(self) -> List[Dict[str, Any]]:
+    def _init_seed_patterns(self) -> list[dict[str, Any]]:
         """初始化种子数据到 pattern store"""
         if not self._pattern_store:
             return []

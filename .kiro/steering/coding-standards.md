@@ -24,7 +24,7 @@
 | ❌ 裸异常捕获 | 14.2 | `except Exception` 不记录日志、不包含上下文 |
 | ❌ 异步阻塞 | 16.3 | 在 async 函数中调用 `time.sleep` 等阻塞 IO |
 | ❌ 敏感信息泄露 | 18.1 | API key、token 出现在日志或代码中 |
-| ❌ 小写泛型 | 17.4 | 使用 `list[str]` 而非 `List[str]` |
+| ❌ 大写泛型 | 17.4 | 使用 `List[str]` 而非 `list[str]` |
 | ❌ 依赖方向错误 | 12A.2 | Agent 导入 orchestration，或 core 导入 infra |
 | ❌ 逐个调用外部 API | 23.2 | 未使用批处理调用 LLM/Embedding |
 | ❌ 重复创建索引 | 23.3 | 未检查索引是否已存在就创建 |
@@ -268,15 +268,23 @@ field_mapper/
 
 > 注意：`infra/` 模块（如 `infra/rag/`）也可以有自己的 `schemas/` 子目录，用于定义基础设施内部的验证模型。参见 11.4。
 
-### 4.2 禁止在 schemas 中定义静态配置类
+### 4.2 schemas 目录的内容边界
 
-**禁止**在 `schemas/` 目录中创建存放静态配置的 Pydantic 模型。
+`schemas/` 目录用于存放以下类型的模型：
+- Pydantic 数据模型（LLM 输出、中间数据、缓存模型等）
+- 运行时上下文模型（每次调用时的动态参数）
+- 枚举类型
+
+**禁止**在 `schemas/` 中存放静态配置值（阈值、超时、TTL 等），这些应放在 `app.yaml`。
+
+**配置类的位置**：定义配置参数结构的类（如 `FieldMappingConfig`）可以放在 `schemas/config.py` 中，因为它定义的是数据结构而非配置值本身。配置值从 `app.yaml` 读取。
 
 **区分"静态配置"和"运行时上下文"**：
 
 | 类型 | 特点 | 存放位置 |
 |------|------|----------|
-| 静态配置 | 阈值、超时、TTL 等固定参数 | `app.yaml` |
+| 静态配置值 | 阈值、超时、TTL 等固定参数 | `app.yaml` |
+| 配置类定义 | 定义有哪些配置参数、默认值、加载逻辑 | `schemas/config.py` 或模块根目录 `config.py` |
 | 运行时上下文 | 每次调用时的动态参数（如当前日期） | `schemas/` 中的数据模型 |
 
 **允许**（运行时上下文）：
@@ -481,11 +489,17 @@ from analytics_assistant.src.agents.field_semantic.schemas import FieldSemanticA
 
 ## 7. 导入规范 ⚠️⚠️ 最高频违规 ⚠️⚠️
 
-### 7.1 禁止使用 TYPE_CHECKING 解决循环依赖 🚨
+### 7.1 TYPE_CHECKING 使用规范 🚨
 
-如果出现循环依赖，应该重构代码结构，而不是使用 `TYPE_CHECKING`。
+优先通过重构代码结构解决循环依赖，而不是使用 `TYPE_CHECKING`。
 
-> 例外：当类型注解必须引用高层模块（如 `orchestration/` 中的类型），且该引用仅用于类型提示而非运行时逻辑时，可使用 `TYPE_CHECKING`。但必须添加注释说明原因，且优先考虑重构。
+**允许使用 `TYPE_CHECKING` 的场景**：
+- 类型注解必须引用高层模块（如 `orchestration/` 中的类型），且该引用仅用于类型提示而非运行时逻辑
+- 两个模块之间存在运行时单向依赖，但类型注解需要双向引用
+
+**使用时必须**：
+- 添加注释说明为什么不能通过重构解决
+- 确保 `TYPE_CHECKING` 块内的导入仅用于类型注解，不用于运行时逻辑
 
 ### 7.2 延迟导入规范 🚨🚨🚨 最高优先级 🚨🚨🚨
 
@@ -521,9 +535,11 @@ def _format_history(self, ...):
 - components/ → prompts/  ⚠️ 反向依赖，需要重构代码结构
 ```
 
-**例外情况**（仅以下两种，必须添加注释说明原因）：
+**例外情况**（以下场景允许延迟导入，必须添加注释说明原因）：
 1. 在 `__init__` 方法中获取全局单例时
 2. 可选依赖的条件导入（参见 19.1 可选依赖处理规范）
+3. 重量级可选依赖仅在特定代码路径使用时（如 `faiss`、`torch`）
+4. 启动性能敏感的入口文件，需要延迟加载非关键模块时
 
 > ⚠️ "避免循环导入"**不是**合法的延迟导入理由。实践证明所谓的"循环依赖"往往并不存在（如 `prompt_builder.py` 导入 `HistoryManager` 的案例）。遇到循环依赖时应重构代码结构。
 
@@ -606,6 +622,8 @@ from analytics_assistant.src.core.schemas.data_model import DataModel
 | 检索过滤条件 | 小写 | `filters={"role": "measure"}` |
 | 比较判断 | 小写 | `if role.lower() == "measure":` |
 | 显示给用户 | 保持原始 | 从数据源获取的原始值 |
+| Enum 成员定义 | UPPER_SNAKE_CASE | `DimensionCategory.TIME`（遵循规则 8 命名规范） |
+| Enum 成员的 value | 小写 | `TIME = "time"`（存储和比较时使用 `.value`） |
 
 **原因**：避免大小写不一致导致的检索失败。
 
@@ -863,7 +881,9 @@ infra/  → agents/           ❌ 基础设施不应该导入 Agent
 
 ### 12B.1 何时拆分
 
-当一个组件类超过 500 行时，应拆分为多个子模块，全部放在 `components/` 目录下：
+当一个组件类超过 500 行时，应评估是否需要拆分。判断标准是职责是否单一，而非单纯看行数。如果类职责单一、逻辑连贯，超过 500 行也可以接受；如果职责混杂，即使不到 500 行也应拆分。
+
+拆分后的子模块全部放在 `components/` 目录下：
 
 ```
 {agent_name}/
@@ -1259,29 +1279,30 @@ async def stream_llm_structured(
     ...
 ```
 
-### 17.4 使用 typing 模块的泛型类型 🚨
+### 17.4 泛型类型语法
 
-**禁止**使用 Python 3.9+ 的内置泛型语法（小写 `list`, `dict`, `tuple`），统一使用 `typing` 模块：
+统一使用 Python 3.9+ 的内置泛型语法（小写 `list`, `dict`, `tuple`），不再使用 `typing` 模块的大写版本：
 
 ```python
-# ❌ 错误：使用内置泛型（Python 3.9+ 语法）
-def process(items: list[str]) -> dict[str, int]:
-    ...
-
-# ✅ 正确：使用 typing 模块
+# ❌ 过时：使用 typing 模块的大写泛型
 from typing import Dict, List
 
 def process(items: List[str]) -> Dict[str, int]:
     ...
+
+# ✅ 正确：使用内置泛型（Python 3.9+ 语法）
+def process(items: list[str]) -> dict[str, int]:
+    ...
 ```
 
-| 禁止 | 正确 |
+| 过时 | 正确 |
 |------|------|
-| `list[str]` | `List[str]` |
-| `dict[str, int]` | `Dict[str, int]` |
-| `tuple[str, ...]` | `Tuple[str, ...]` |
-| `set[str]` | `Set[str]` |
-| `str \| None` | `Optional[str]` |
+| `List[str]` | `list[str]` |
+| `Dict[str, int]` | `dict[str, int]` |
+| `Tuple[str, ...]` | `tuple[str, ...]` |
+| `Set[str]` | `set[str]` |
+
+> 注意：`Optional[X]` 和 `X | None` 的选择见规则 17.2，保持使用 `Optional[X]`。
 
 ## 18. 安全规范
 
@@ -1393,12 +1414,15 @@ def search_fields(
 | 场景 | 要求 |
 |------|------|
 | 公开类 | 必须，说明类的职责和使用方式 |
-| 公开方法 | 必须，包含 Args / Returns / Raises |
-| 公开函数 | 必须，包含 Args / Returns / Raises |
+| 公开方法（非 trivial） | 必须，包含 Args / Returns / Raises |
+| 公开函数（非 trivial） | 必须，包含 Args / Returns / Raises |
+| 简单的 getter/setter/属性方法 | 可省略，如果函数名已经完全说明了意图（如 `get_stats`、`set_retriever`） |
 | 私有方法（复杂逻辑） | 建议，说明算法或关键决策 |
 | 模块文件 | 建议，在文件顶部说明模块职责 |
 
-### 20.3 禁止无意义的 Docstring
+### 20.3 Docstring 应提供额外信息
+
+Docstring 应补充函数签名无法表达的信息（如副作用、使用约束、算法说明），而不是简单重复函数名：
 
 ```python
 # ❌ 错误：重复函数名，没有额外信息
@@ -1410,6 +1434,11 @@ def get_config():
 def get_config():
     """加载并返回 app.yaml 配置，使用单例模式缓存。"""
     ...
+
+# ✅ 也正确：简单方法可以省略 Docstring
+@property
+def field_count(self) -> int:
+    return len(self._field_chunks)
 ```
 
 ## 21. 注释规范
@@ -1603,7 +1632,7 @@ rag_service.index.create_index(name=index_name, config=config, documents=documen
 ### 类型注解检查
 - [ ] 所有公开函数有完整类型注解（参数 + 返回值）
 - [ ] 使用 `Optional[X]` 而非 `X | None`
-- [ ] 使用 `List[X]` / `Dict[K, V]` 而非 `list[x]` / `dict[k, v]`
+- [ ] 使用 `list[x]` / `dict[k, v]` 而非 `List[X]` / `Dict[K, V]`（Python 3.9+ 内置泛型）
 
 ### 性能检查
 - [ ] 外部 API 调用使用批处理（Rule 23.2）

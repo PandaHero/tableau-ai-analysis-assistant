@@ -10,7 +10,6 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-
 class UserSettingsResponse(BaseModel):
     """用户设置响应模型。"""
 
@@ -22,7 +21,6 @@ class UserSettingsResponse(BaseModel):
     show_thinking_process: bool = True
     created_at: datetime
     updated_at: datetime
-
 
 class UpdateSettingsRequest(BaseModel):
     """更新设置请求（部分更新，只更新非 None 字段）。"""

@@ -12,7 +12,7 @@ Replanner Agent 执行逻辑
 """
 import json
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain.agents.middleware import ModelRetryMiddleware
@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MODEL_RETRY_MAX = 3
 _DEFAULT_MODEL_RETRY_BASE_DELAY = 1.0
 _DEFAULT_MODEL_RETRY_MAX_DELAY = 30.0
+_DEFAULT_MAX_REPLAN_ROUNDS = 10
 
-
-def _load_replanner_config() -> Dict[str, Any]:
+def _load_replanner_config() -> dict[str, Any]:
     """从 app.yaml 加载 Replanner Agent 配置。
 
     Returns:
@@ -45,8 +45,7 @@ def _load_replanner_config() -> Dict[str, Any]:
         logger.warning(f"加载 Replanner Agent 配置失败，使用默认值: {e}")
         return {}
 
-
-def _build_middleware_stack(agents_config: Dict[str, Any]) -> List[Any]:
+def _build_middleware_stack(agents_config: dict[str, Any]) -> list[Any]:
     """构建中间件栈（仅 ModelRetry）。
 
     Args:
@@ -66,13 +65,12 @@ def _build_middleware_stack(agents_config: Dict[str, Any]) -> List[Any]:
 
     return [model_retry_mw]
 
-
 async def run_replanner_agent(
-    insight_output_dict: Dict[str, Any],
-    semantic_output_dict: Dict[str, Any],
-    data_profile_dict: Dict[str, Any],
-    conversation_history: Optional[List[Dict[str, str]]] = None,
-    replan_history: Optional[List[Dict[str, Any]]] = None,
+    insight_output_dict: dict[str, Any],
+    semantic_output_dict: dict[str, Any],
+    data_profile_dict: dict[str, Any],
+    conversation_history: Optional[list[dict[str, str]]] = None,
+    replan_history: Optional[list[dict[str, Any]]] = None,
     analysis_depth: str = "detailed",
     on_token: Optional[Callable[[str], Awaitable[None]]] = None,
     on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
@@ -102,6 +100,20 @@ async def run_replanner_agent(
     # 加载配置
     agents_config = _load_replanner_config()
 
+    # 检查重规划轮数上限
+    replanner_config = agents_config.get("replanner", {})
+    max_rounds = replanner_config.get("max_replan_rounds", _DEFAULT_MAX_REPLAN_ROUNDS)
+    current_round = len(replan_history) if replan_history else 0
+
+    if current_round >= max_rounds:
+        logger.info(
+            f"已达到重规划轮数上限 ({current_round}/{max_rounds})，停止重规划"
+        )
+        return ReplanDecision(
+            should_replan=False,
+            reason=f"已达到最大重规划轮数上限 ({max_rounds} 轮)",
+        )
+
     # 获取 LLM
     llm = get_llm(agent_name="replanner", task_type=TaskType.REPLANNING)
 
@@ -124,7 +136,7 @@ async def run_replanner_agent(
         analysis_depth=analysis_depth,
     )
 
-    messages: List[BaseMessage] = [
+    messages: list[BaseMessage] = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_prompt),
     ]
@@ -151,8 +163,7 @@ async def run_replanner_agent(
 
     return result
 
-
-def _build_insight_summary(insight_output_dict: Dict[str, Any]) -> str:
+def _build_insight_summary(insight_output_dict: dict[str, Any]) -> str:
     """构建洞察输出摘要。
 
     Args:
@@ -181,8 +192,7 @@ def _build_insight_summary(insight_output_dict: Dict[str, Any]) -> str:
 
     return "\n".join(parts)
 
-
-def _build_semantic_output_summary(semantic_output_dict: Dict[str, Any]) -> str:
+def _build_semantic_output_summary(semantic_output_dict: dict[str, Any]) -> str:
     """构建语义解析输出摘要。
 
     Args:
@@ -203,8 +213,7 @@ def _build_semantic_output_summary(semantic_output_dict: Dict[str, Any]) -> str:
 
     return "\n".join(parts) if parts else "（无语义解析信息）"
 
-
-def _build_data_profile_summary(data_profile_dict: Dict[str, Any]) -> str:
+def _build_data_profile_summary(data_profile_dict: dict[str, Any]) -> str:
     """构建数据画像摘要。
 
     Args:
@@ -235,9 +244,8 @@ def _build_data_profile_summary(data_profile_dict: Dict[str, Any]) -> str:
 
     return "\n".join(parts)
 
-
 def _build_replan_history_summary(
-    replan_history: Optional[List[Dict[str, Any]]],
+    replan_history: Optional[list[dict[str, Any]]],
 ) -> str:
     """构建重规划历史摘要。
 

@@ -11,13 +11,12 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from analytics_assistant.src.core.schemas import (
     ExecuteResult,
     ValidationResult,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 工作流上下文协议
@@ -38,7 +37,7 @@ class WorkflowContextProtocol(Protocol):
     def data_model(self) -> Optional[Any]: ...
 
     @property
-    def field_semantic(self) -> Optional[Dict[str, Any]]: ...
+    def field_semantic(self) -> Optional[dict[str, Any]]: ...
 
     @property
     def platform_adapter(self) -> Optional[Any]: ...
@@ -47,16 +46,15 @@ class WorkflowContextProtocol(Protocol):
     def auth(self) -> Optional[Any]: ...
 
     @property
-    def field_values_cache(self) -> Dict[str, List[str]]: ...
+    def field_values_cache(self) -> dict[str, list[str]]: ...
 
     @property
     def schema_hash(self) -> str: ...
 
     def enrich_field_candidates_with_hierarchy(
         self,
-        field_candidates: List[Any],
-    ) -> List[Any]: ...
-
+        field_candidates: list[Any],
+    ) -> list[Any]: ...
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 平台适配器接口
@@ -151,7 +149,7 @@ class BasePlatformAdapter(ABC):
         field_name: str,
         datasource_id: str,
         **kwargs: Any,
-    ) -> List[str]:
+    ) -> list[str]:
         """获取字段的唯一值列表。
         
         用于筛选值验证，查询指定字段的所有唯一值。
@@ -168,7 +166,6 @@ class BasePlatformAdapter(ABC):
             RuntimeError: 查询失败
         """
         pass
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 查询构建器接口
@@ -221,7 +218,6 @@ class BaseQueryBuilder(ABC):
             包含 is_valid、errors、warnings、auto_fixed 的 ValidationResult
         """
         pass
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 字段映射器接口
@@ -281,7 +277,6 @@ class BaseFieldMapper(ABC):
             技术字段名（如"[Sales].[Amount]"）
         """
         pass
-
 
 __all__ = [
     "WorkflowContextProtocol",

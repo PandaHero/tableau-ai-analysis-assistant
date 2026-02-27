@@ -5,10 +5,9 @@
 跨模块共享的字段检索候选结果模型。
 用于 FieldRetriever、FieldMapper 等模块。
 """
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 class FieldCandidate(BaseModel):
     """字段检索候选结果
@@ -22,7 +21,7 @@ class FieldCandidate(BaseModel):
     示例：
     - field_name: "Sales"
     - field_caption: "销售额"
-    - field_type: "measure"
+    - role: "measure"
     - confidence: 0.95
     """
     model_config = ConfigDict(extra="ignore")
@@ -35,13 +34,9 @@ class FieldCandidate(BaseModel):
         default="",
         description="字段显示名称"
     )
-    field_type: str = Field(
-        default="",
-        description="字段类型：dimension / measure"
-    )
     role: str = Field(
         default="",
-        description="字段角色：dimension / measure（与 field_type 同义）"
+        description="字段角色：dimension / measure"
     )
     data_type: str = Field(
         default="",
@@ -51,7 +46,7 @@ class FieldCandidate(BaseModel):
         default=None,
         description="字段描述"
     )
-    sample_values: Optional[List[str]] = Field(
+    sample_values: Optional[list[str]] = Field(
         default=None,
         description="样例值列表（用于 Prompt）"
     )
@@ -61,10 +56,6 @@ class FieldCandidate(BaseModel):
         ge=0.0, le=1.0,
         default=1.0,
         description="检索置信度：精确匹配 > 语义匹配"
-    )
-    score: float = Field(
-        default=0.0,
-        description="RAG 检索分数（与 confidence 同义）"
     )
     
     # 检索来源信息
@@ -104,7 +95,7 @@ class FieldCandidate(BaseModel):
         default=None,
         description="逻辑表名称"
     )
-    drill_down_options: Optional[List[str]] = Field(
+    drill_down_options: Optional[list[str]] = Field(
         default=None,
         description="下钻选项列表"
     )
@@ -132,7 +123,7 @@ class FieldCandidate(BaseModel):
         default=None,
         description="业务描述，一句话说明字段的业务含义"
     )
-    aliases: Optional[List[str]] = Field(
+    aliases: Optional[list[str]] = Field(
         default=None,
         description="别名列表，用户可能使用的其他名称"
     )
@@ -140,7 +131,6 @@ class FieldCandidate(BaseModel):
         default=None,
         description="度量类别：revenue/cost/profit/quantity/ratio/count/average/other"
     )
-
 
 __all__ = [
     "FieldCandidate",

@@ -19,14 +19,13 @@
         get_dimension_few_shot_examples,
     )
 """
-from typing import Any, Dict, List
-
+from typing import Any
 
 # ══════════════════════════════════════════════════════════════
 # 维度模式种子数据
 # ══════════════════════════════════════════════════════════════
 
-DIMENSION_SEEDS: List[Dict[str, Any]] = [
+DIMENSION_SEEDS: list[dict[str, Any]] = [
     # ─────────────────────────────────────────────────────────
     # TIME 时间维度 - 中文
     # ─────────────────────────────────────────────────────────
@@ -2387,11 +2386,10 @@ DIMENSION_SEEDS: List[Dict[str, Any]] = [
     },
 ]
 
-
 def get_dimension_few_shot_examples(
-    categories: List[str] = None,
+    categories: list[str] = None,
     max_per_category: int = 1,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     获取维度种子数据作为 few-shot 示例
     
@@ -2425,7 +2423,6 @@ def get_dimension_few_shot_examples(
             category_counts[cat] += 1
     
     return examples
-
 
 __all__ = [
     "DIMENSION_SEEDS",

@@ -7,7 +7,7 @@ LLM 推断 Mixin
 """
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -28,7 +28,6 @@ from analytics_assistant.src.agents.field_semantic.utils import (
 
 logger = logging.getLogger(__name__)
 
-
 class LLMMixin:
     """LLM 推断 Mixin
 
@@ -39,15 +38,23 @@ class LLMMixin:
 
     async def _llm_infer_batch(
         self,
-        fields: List[Field],
+        fields: list[Field],
         role_filter: str,
         on_token: Optional[Callable[[str], Awaitable[None]]] = None,
         on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
-    ) -> Dict[str, FieldSemanticAttributes]:
+        field_samples: Optional[dict[str, dict[str, Any]]] = None,
+    ) -> dict[str, FieldSemanticAttributes]:
         """
         LLM 推断单个批次（维度或度量）
+
+        Args:
+            fields: 待推断字段列表
+            role_filter: 字段角色（dimension/measure）
+            on_token: Token 回调
+            on_thinking: Thinking 回调
+            field_samples: 字段样例数据 {field_caption: {sample_values: [...], unique_count: int}}
         """
-        batch_results: Dict[str, FieldSemanticAttributes] = {}
+        batch_results: dict[str, FieldSemanticAttributes] = {}
 
         if not fields:
             return batch_results
@@ -61,18 +68,25 @@ class LLMMixin:
 
         logger.info(f"LLM 推断 ({role_filter}): {len(fields)} 个字段，分 {len(field_batches)} 批处理，最大并行 {max_parallel}")
 
-        async def process_single_batch(batch_idx: int, field_batch: List[Field]) -> Dict[str, FieldSemanticAttributes]:
+        async def process_single_batch(batch_idx: int, field_batch: list[Field]) -> dict[str, FieldSemanticAttributes]:
             """处理单个批次"""
             result = {}
 
-            fields_input = [
-                {
-                    "field_caption": f.caption or f.name,
+            fields_input = []
+            for f in field_batch:
+                caption = f.caption or f.name
+                info: dict[str, Any] = {
+                    "field_caption": caption,
                     "data_type": f.data_type,
                     "role": role_filter,
                 }
-                for f in field_batch
-            ]
+                # 传入样例值，帮助 LLM 准确推断字段语义
+                if field_samples and caption in field_samples:
+                    sample_info = field_samples[caption]
+                    sv = sample_info.get("sample_values", [])
+                    if sv:
+                        info["sample_values"] = sv[:5]
+                fields_input.append(info)
 
             user_prompt = build_user_prompt(fields_input, include_few_shot=True)
             messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
@@ -103,7 +117,7 @@ class LLMMixin:
 
         semaphore = asyncio.Semaphore(max_parallel)
 
-        async def process_with_semaphore(batch_idx: int, field_batch: List[Field]) -> Dict[str, FieldSemanticAttributes]:
+        async def process_with_semaphore(batch_idx: int, field_batch: list[Field]) -> dict[str, FieldSemanticAttributes]:
             async with semaphore:
                 return await process_single_batch(batch_idx, field_batch)
 
@@ -130,15 +144,23 @@ class LLMMixin:
 
     async def _llm_infer(
         self,
-        fields: List[Field],
-        results: Dict[str, FieldSemanticAttributes],
+        fields: list[Field],
+        results: dict[str, FieldSemanticAttributes],
         on_token: Optional[Callable[[str], Awaitable[None]]] = None,
         on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
+        field_samples: Optional[dict[str, dict[str, Any]]] = None,
     ) -> None:
         """
         LLM 推断（维度和度量并行执行）
 
         将字段按角色分组，维度和度量分别调用 LLM，并行执行以提高效率。
+
+        Args:
+            fields: 待推断字段列表
+            results: 推断结果字典（会被原地更新）
+            on_token: Token 回调
+            on_thinking: Thinking 回调
+            field_samples: 字段样例数据 {field_caption: {sample_values: [...], unique_count: int}}
         """
         if not fields:
             return
@@ -150,9 +172,15 @@ class LLMMixin:
 
         tasks = []
         if dimension_fields:
-            tasks.append(self._llm_infer_batch(dimension_fields, "dimension", on_token, on_thinking))
+            tasks.append(self._llm_infer_batch(
+                dimension_fields, "dimension", on_token, on_thinking,
+                field_samples=field_samples,
+            ))
         if measure_fields:
-            tasks.append(self._llm_infer_batch(measure_fields, "measure", on_token, on_thinking))
+            tasks.append(self._llm_infer_batch(
+                measure_fields, "measure", on_token, on_thinking,
+                field_samples=field_samples,
+            ))
 
         if tasks:
             batch_results_list = await asyncio.gather(*tasks, return_exceptions=True)

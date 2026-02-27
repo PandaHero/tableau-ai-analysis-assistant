@@ -9,14 +9,13 @@ FieldMapper 数据模型
 - FieldMapping: 单字段映射结果
 - MappedQuery: 映射后的查询
 """
-from typing import List, Dict, Optional, Any
+from typing import Any, Optional
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field as PydanticField, ConfigDict, model_validator
 
-from analytics_assistant.src.agents.semantic_parser.schemas.output import SemanticOutput
+from analytics_assistant.src.core.schemas.semantic_output import SemanticOutput
 # 从 core 导入共享的 FieldCandidate
 from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LLM 输出模型
@@ -44,7 +43,6 @@ class SingleSelectionResult(BaseModel):
         description="选择理由，解释为什么选择此字段或为什么无匹配"
     )
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # 映射结果模型
 # ══════════════════════════════════════════════════════════════════════════════
@@ -54,7 +52,6 @@ class AlternativeMapping(TypedDict, total=False):
     technical_field: str
     confidence: float
     reason: str
-
 
 class FieldMapping(BaseModel):
     """单字段映射结果
@@ -88,7 +85,7 @@ class FieldMapping(BaseModel):
     confidence: float = PydanticField(ge=0.0, le=1.0, description="映射置信度(0-1)")
     mapping_source: str = PydanticField(description="映射来源")
     reasoning: Optional[str] = PydanticField(default=None, description="映射理由")
-    alternatives: Optional[List[AlternativeMapping]] = PydanticField(default=None, description="备选映射")
+    alternatives: Optional[list[AlternativeMapping]] = PydanticField(default=None, description="备选映射")
     data_type: Optional[str] = PydanticField(default=None, description="字段数据类型")
     date_format: Optional[str] = PydanticField(default=None, description="日期格式")
     category: Optional[str] = PydanticField(default=None, description="维度类别")
@@ -96,16 +93,15 @@ class FieldMapping(BaseModel):
     granularity: Optional[str] = PydanticField(default=None, description="粒度描述")
     latency_ms: int = PydanticField(default=0, description="映射耗时（毫秒）")
 
-
 class MappedQuery(BaseModel):
     """映射后的查询 - FieldMapper 节点输出"""
     
     model_config = ConfigDict(extra="forbid")
     
     semantic_output: SemanticOutput = PydanticField(description="原始语义输出")
-    field_mappings: Dict[str, FieldMapping] = PydanticField(description="字段映射字典")
+    field_mappings: dict[str, FieldMapping] = PydanticField(description="字段映射字典")
     overall_confidence: Optional[float] = PydanticField(default=None, ge=0.0, le=1.0, description="整体置信度")
-    low_confidence_fields: List[str] = PydanticField(default_factory=list, description="低置信度字段列表")
+    low_confidence_fields: list[str] = PydanticField(default_factory=list, description="低置信度字段列表")
     
     @model_validator(mode="after")
     def compute_overall_confidence(self) -> "MappedQuery":
@@ -131,7 +127,6 @@ class MappedQuery(BaseModel):
         """获取业务术语的映射置信度"""
         mapping = self.field_mappings.get(business_term)
         return mapping.confidence if mapping else None
-
 
 __all__ = [
     "FieldCandidate",

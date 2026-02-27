@@ -16,12 +16,14 @@
 
 import json
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import CacheManager
+from analytics_assistant.src.infra.storage.vector_store import _save_index_hash
 
 from .exceptions import IndexExistsError, IndexCreationError
 from .retriever import CascadeRetriever, RetrieverFactory
@@ -35,7 +37,6 @@ from .schemas import (
 )
 
 logger = logging.getLogger(__name__)
-
 
 class IndexManager:
     """索引管理器
@@ -66,10 +67,10 @@ class IndexManager:
             fields_namespace: 字段数据的 KV 存储命名空间
         """
         self._registry = CacheManager(registry_namespace, default_ttl=None)
-        self._indexes: Dict[str, CascadeRetriever] = {}
+        self._indexes: dict[str, CascadeRetriever] = {}
         # 文档哈希注册表（持久化到 KV 存储）
         # 格式: {index_name: {doc_id: {"content": hash, "metadata": hash}}}
-        self._doc_hashes: Dict[str, Dict[str, Dict[str, str]]] = {}
+        self._doc_hashes: dict[str, dict[str, dict[str, str]]] = {}
         self._doc_hash_namespace = doc_hash_namespace
         self._doc_hash_cache = CacheManager(self._doc_hash_namespace, default_ttl=None)
         self._load_doc_hashes()  # 启动时加载
@@ -104,7 +105,7 @@ class IndexManager:
         except Exception as e:
             logger.warning(f"保存文档哈希失败: {e}")
     
-    def _save_fields(self, index_name: str, fields: List[Dict]) -> None:
+    def _save_fields(self, index_name: str, fields: list[dict]) -> None:
         """将索引的字段数据保存到 KV 存储
         
         用于在加载索引时恢复 chunks 数据。
@@ -120,7 +121,7 @@ class IndexManager:
         except Exception as e:
             logger.warning(f"保存字段数据失败: {e}")
     
-    def _load_fields(self, index_name: str) -> List[Dict]:
+    def _load_fields(self, index_name: str) -> list[dict]:
         """从 KV 存储加载索引的字段数据
         
         Args:
@@ -140,7 +141,7 @@ class IndexManager:
             logger.warning(f"加载字段数据失败: {e}")
             return []
     
-    def _list_registered_indexes(self) -> List[str]:
+    def _list_registered_indexes(self) -> list[str]:
         """列出所有已注册的索引名称"""
         try:
             # 从注册表获取索引列表
@@ -229,7 +230,7 @@ class IndexManager:
             logger.warning(f"获取索引信息失败: {e}")
             return None
     
-    def _index_info_to_dict(self, info: IndexInfo) -> Dict[str, Any]:
+    def _index_info_to_dict(self, info: IndexInfo) -> dict[str, Any]:
         """将 IndexInfo 序列化为字典"""
         return {
             "name": info.name,
@@ -249,7 +250,7 @@ class IndexManager:
             "last_search_at": info.last_search_at.isoformat() if info.last_search_at else None,
         }
     
-    def _dict_to_index_info(self, data: Dict[str, Any]) -> IndexInfo:
+    def _dict_to_index_info(self, data: dict[str, Any]) -> IndexInfo:
         """从字典反序列化 IndexInfo"""
         config_data = data.get("config", {})
         config = IndexConfig(
@@ -276,7 +277,7 @@ class IndexManager:
         self,
         name: str,
         config: IndexConfig,
-        documents: Optional[List[IndexDocument]] = None,
+        documents: Optional[list[IndexDocument]] = None,
     ) -> IndexInfo:
         """创建索引
         
@@ -359,8 +360,8 @@ class IndexManager:
             raise IndexCreationError(f"创建索引 '{name}' 失败: {e}")
     
     def _convert_documents_to_fields(
-        self, documents: Optional[List[IndexDocument]]
-    ) -> List[Dict]:
+        self, documents: Optional[list[IndexDocument]]
+    ) -> list[dict]:
         """将 IndexDocument 转换为 RetrieverFactory 所需的 fields 格式"""
         if not documents:
             return []
@@ -410,42 +411,49 @@ class IndexManager:
             return 20
     
     def delete_index(self, name: str) -> bool:
-        """删除索引
-        
+        """删除索引，同时清理磁盘上的 FAISS 索引文件
+
         Args:
             name: 索引名称
-            
+
         Returns:
             是否删除成功
         """
-        # 从内存中移除
-        if name in self._indexes:
-            del self._indexes[name]
-        
-        # 从注册表中移除
+        # 获取索引信息（在删除前获取，用于清理磁盘文件）
         info = self._get_index_info_from_registry(name)
         if info is None:
             return False
-        
+
+        # 从内存中移除
+        if name in self._indexes:
+            del self._indexes[name]
+
         try:
             self._registry.delete(name)
             self._unregister_index_name(name)
-            
+
             # 删除文档哈希
             if name in self._doc_hashes:
                 del self._doc_hashes[name]
             self._doc_hash_cache.delete(f"doc_hashes:{name}")
-            
+
             # 删除字段数据
             self._fields_cache.delete(f"fields:{name}")
-            
+
+            # 清理磁盘上的 FAISS 索引文件
+            if info.config.persist_directory:
+                index_path = Path(info.config.persist_directory) / name
+                if index_path.exists():
+                    shutil.rmtree(index_path)
+                    logger.info(f"已清理索引目录: {index_path}")
+
             logger.info(f"删除索引成功: {name}")
             return True
         except Exception as e:
             logger.error(f"删除索引失败: {e}")
             return False
     
-    def list_indexes(self) -> List[IndexInfo]:
+    def list_indexes(self) -> list[IndexInfo]:
         """列出所有索引
         
         Returns:
@@ -469,11 +477,24 @@ class IndexManager:
         """
         return self._get_index_info_from_registry(name)
 
+    def get_index_fields(self, name: str) -> list[dict]:
+        """获取索引的字段数据列表。
+        
+        用于外部模块读取索引中存储的字段 metadata（如 queryable 标志）。
+        
+        Args:
+            name: 索引名称
+            
+        Returns:
+            字段数据列表，每个元素是包含 metadata 的字典。不存在时返回空列表。
+        """
+        return self._load_fields(name)
+
     
     def add_documents(
         self,
         index_name: str,
-        documents: List[IndexDocument],
+        documents: list[IndexDocument],
     ) -> int:
         """添加文档（增量，自动分批）
 
@@ -535,6 +556,7 @@ class IndexManager:
                 if info and info.config.persist_directory:
                     index_path = Path(info.config.persist_directory) / index_name
                     vector_store.save_local(str(index_path))
+                    _save_index_hash(index_path)
                     logger.debug(f"索引已持久化: {index_path}")
 
                 logger.info(f"增量添加文档成功: {index_name}, {len(new_docs)} 条")
@@ -566,7 +588,7 @@ class IndexManager:
     def update_documents(
         self,
         index_name: str,
-        documents: List[IndexDocument],
+        documents: list[IndexDocument],
     ) -> UpdateResult:
         """更新文档（增量）
         
@@ -644,7 +666,7 @@ class IndexManager:
         return result
     
     def _reindex_documents(
-        self, index_name: str, documents: List[IndexDocument]
+        self, index_name: str, documents: list[IndexDocument]
     ) -> None:
         """重新向量化并更新索引
         
@@ -674,8 +696,10 @@ class IndexManager:
                     for doc in documents
                 ]
                 
-                # FAISS 不支持原地更新，直接添加新向量
-                # 旧向量会保留，但通过 doc_id 去重可以在检索时过滤
+                # 先删除旧向量，再添加新向量，避免索引膨胀
+                old_doc_ids = [doc.id for doc in documents]
+                self._delete_vectors_from_index(index_name, old_doc_ids)
+
                 vector_store.add_texts(texts, metadatas=metadatas)
                 
                 # 持久化索引
@@ -683,6 +707,7 @@ class IndexManager:
                 if info and info.config.persist_directory:
                     index_path = Path(info.config.persist_directory) / index_name
                     vector_store.save_local(str(index_path))
+                    _save_index_hash(index_path)
                     logger.debug(f"索引已持久化: {index_path}")
                 
                 logger.info(f"重新向量化完成: {index_name}, {len(documents)} 条")
@@ -692,7 +717,7 @@ class IndexManager:
             logger.error(f"重新向量化失败: {index_name}, {e}")
     
     def _update_metadata_only(
-        self, index_name: str, documents: List[IndexDocument]
+        self, index_name: str, documents: list[IndexDocument]
     ) -> None:
         """仅更新元数据（不重新向量化）
         
@@ -725,44 +750,93 @@ class IndexManager:
                 logger.warning(f"无法获取 chunks 缓存，跳过元数据更新: {index_name}")
         except Exception as e:
             logger.error(f"元数据更新失败: {index_name}, {e}")
-    
-    def delete_documents(
-        self,
-        index_name: str,
-        doc_ids: List[str],
-    ) -> int:
-        """删除文档
-        
+
+    def _delete_vectors_from_index(
+        self, index_name: str, doc_ids: list[str]
+    ) -> None:
+        """从 FAISS 索引中移除指定文档的向量，并持久化索引。
+
+        通过 FAISS docstore 的 ID 映射查找并删除对应向量。
+
         Args:
             index_name: 索引名称
             doc_ids: 要删除的文档 ID 列表
-            
+        """
+        retriever = self.get_index(index_name)
+        if retriever is None:
+            return
+
+        try:
+            if hasattr(retriever, '_embedding') and hasattr(retriever._embedding, '_store'):
+                vector_store = retriever._embedding._store
+
+                # LangChain FAISS 的 delete 方法接受 docstore ID 列表
+                # 需要找到 field_name 匹配的 docstore ID
+                ids_to_delete = []
+                if hasattr(vector_store, 'docstore') and hasattr(vector_store, 'index_to_docstore_id'):
+                    for idx, docstore_id in vector_store.index_to_docstore_id.items():
+                        doc = vector_store.docstore.search(docstore_id)
+                        if doc and hasattr(doc, 'metadata'):
+                            if doc.metadata.get("field_name") in doc_ids:
+                                ids_to_delete.append(docstore_id)
+
+                if ids_to_delete:
+                    vector_store.delete(ids_to_delete)
+                    logger.debug(
+                        f"从 FAISS 索引中删除 {len(ids_to_delete)} 个向量: {index_name}"
+                    )
+
+                    # 持久化索引
+                    info = self._get_index_info_from_registry(index_name)
+                    if info and info.config.persist_directory:
+                        index_path = Path(info.config.persist_directory) / index_name
+                        vector_store.save_local(str(index_path))
+                        _save_index_hash(index_path)
+                        logger.debug(f"索引已持久化: {index_path}")
+        except Exception as e:
+            logger.error(f"从 FAISS 索引删除向量失败: {index_name}, {e}")
+
+    def delete_documents(
+        self,
+        index_name: str,
+        doc_ids: list[str],
+    ) -> int:
+        """删除文档，同时从 FAISS 索引中移除向量
+
+        Args:
+            index_name: 索引名称
+            doc_ids: 要删除的文档 ID 列表
+
         Returns:
             成功删除的文档数量
         """
         existing_hashes = self._doc_hashes.get(index_name, {})
         deleted_count = 0
-        
+
         for doc_id in doc_ids:
             if doc_id in existing_hashes:
                 del existing_hashes[doc_id]
                 deleted_count += 1
-        
+
         if deleted_count > 0:
             self._doc_hashes[index_name] = existing_hashes
             self._save_doc_hashes(index_name)
-            
+
+            # 从 FAISS 索引中移除向量
+            self._delete_vectors_from_index(index_name, doc_ids)
+
             # 更新索引信息
             info = self._get_index_info_from_registry(index_name)
             if info:
                 info.document_count = len(existing_hashes)
                 info.updated_at = datetime.now()
                 self._registry.set(index_name, self._index_info_to_dict(info))
-        
+
         logger.info(f"删除文档: {index_name}, 删除 {deleted_count} 条")
         return deleted_count
+
     
-    def get_document_hash(self, index_name: str, doc_id: str) -> Optional[Dict[str, str]]:
+    def get_document_hash(self, index_name: str, doc_id: str) -> Optional[dict[str, str]]:
         """获取文档哈希
         
         Args:

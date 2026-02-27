@@ -23,7 +23,7 @@ Requirements: 4.1-4.5 - FewShotManager 示例管理
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import get_kv_store
@@ -35,12 +35,11 @@ from ..schemas.intermediate import FewShotExample
 
 logger = logging.getLogger(__name__)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_config() -> Dict[str, Any]:
+def _get_config() -> dict[str, Any]:
     """获取 few_shot_manager 配置。"""
     try:
         config = get_config()
@@ -48,7 +47,6 @@ def _get_config() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FewShotManager 组件
@@ -190,7 +188,7 @@ class FewShotManager:
         question: str,
         datasource_luid: str,
         top_k: Optional[int] = None,
-    ) -> List[FewShotExample]:
+    ) -> list[FewShotExample]:
         """检索相关示例。
         
         检索策略：
@@ -227,7 +225,7 @@ class FewShotManager:
                 
                 if search_results:
                     # 从搜索结果中获取示例 ID，然后从存储中获取完整示例
-                    scored_examples: List[tuple] = []
+                    scored_examples: list[tuple] = []
                     for result in search_results:
                         example_id = result.doc_id
                         example = await self.get(example_id, datasource_luid)
@@ -263,7 +261,7 @@ class FewShotManager:
                 return []
             
             # 解析示例
-            examples: List[FewShotExample] = []
+            examples: list[FewShotExample] = []
             for item in items:
                 if item.value is None:
                     continue
@@ -287,7 +285,7 @@ class FewShotManager:
                 return examples[:top_k]
             
             # 计算相似度并排序
-            scored_examples: List[tuple] = []
+            scored_examples: list[tuple] = []
             for example in examples:
                 if example.question_embedding:
                     similarity = cosine_similarity(
@@ -514,7 +512,7 @@ class FewShotManager:
             logger.error(f"FewShotManager delete 失败: {e}")
             return False
     
-    async def list_all(self, datasource_luid: str) -> List[FewShotExample]:
+    async def list_all(self, datasource_luid: str) -> list[FewShotExample]:
         """列出数据源的所有示例。
         
         Args:
@@ -580,7 +578,7 @@ class FewShotManager:
                 return
             
             # 解析所有示例
-            examples_with_key: List[tuple] = []
+            examples_with_key: list[tuple] = []
             for item in items:
                 if item.value is None:
                     continue
@@ -611,7 +609,6 @@ class FewShotManager:
                 
         except Exception as e:
             logger.error(f"FewShotManager _evict_if_needed 失败: {e}")
-
 
 __all__ = [
     "FewShotManager",

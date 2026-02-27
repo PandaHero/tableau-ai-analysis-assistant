@@ -9,7 +9,7 @@ SemanticOutput 是语义解析器的输出，直接作为适配器的输入，
 """
 
 import logging
-from typing import Any, List
+from typing import Any
 
 from analytics_assistant.src.core.interfaces import BasePlatformAdapter
 from analytics_assistant.src.core.schemas import (
@@ -17,12 +17,10 @@ from analytics_assistant.src.core.schemas import (
     ExecuteResult,
     ValidationResult,
 )
-from analytics_assistant.src.agents.semantic_parser.schemas.output import SemanticOutput
+from analytics_assistant.src.core.schemas.semantic_output import SemanticOutput
 from analytics_assistant.src.platform.tableau.query_builder import TableauQueryBuilder
 
-
 logger = logging.getLogger(__name__)
-
 
 class TableauAdapter(BasePlatformAdapter):
     """Tableau 平台适配器。
@@ -55,7 +53,7 @@ class TableauAdapter(BasePlatformAdapter):
         Args:
             semantic_output: 语义解析器的输出
             datasource_id: Tableau 数据源 ID
-            **kwargs: 额外参数
+            **kwargs: 额外参数（data_model, api_key, site 等）
             
         Returns:
             包含列和数据的 ExecuteResult
@@ -73,7 +71,7 @@ class TableauAdapter(BasePlatformAdapter):
             error_msgs = [e.message for e in (validation.errors or [])]
             raise ValueError(f"查询验证失败: {'; '.join(error_msgs)}")
         
-        # 构建 VizQL 请求
+        # 构建 VizQL 请求（传递 data_model）
         vizql_request = self.build_query(
             semantic_output,
             datasource_id=datasource_id,
@@ -82,8 +80,10 @@ class TableauAdapter(BasePlatformAdapter):
         
         try:
             response = await self._vizql_client.query_datasource(
-                datasource_id=datasource_id,
-                request=vizql_request,
+                datasource_luid=datasource_id,
+                query=vizql_request,
+                api_key=kwargs.get("api_key", ""),
+                site=kwargs.get("site"),
             )
             
             return self._convert_response(response)
@@ -101,11 +101,28 @@ class TableauAdapter(BasePlatformAdapter):
         
         Args:
             semantic_output: 语义解析器的输出
-            **kwargs: 额外参数
+            **kwargs: 额外参数（data_model 等）
             
         Returns:
             VizQL API 请求字典
         """
+        # 从 data_model 构建 field_metadata
+        data_model = kwargs.get("data_model")
+        if data_model:
+            field_metadata = {}
+            fields = data_model.fields if hasattr(data_model, 'fields') else []
+            for field in fields:
+                field_name = field.name if hasattr(field, 'name') else str(field)
+                field_metadata[field_name] = {
+                    "dataType": field.data_type if hasattr(field, 'data_type') else "STRING",
+                    "caption": field.caption if hasattr(field, 'caption') else field_name,
+                }
+            kwargs["field_metadata"] = field_metadata
+            logger.debug(f"构建 field_metadata: {len(field_metadata)} 个字段")
+            # 调试：打印 dt 字段的元数据
+            if "dt" in field_metadata:
+                logger.info(f"dt 字段元数据: {field_metadata['dt']}")
+        
         return self._query_builder.build(semantic_output, **kwargs)
     
     def validate_query(
@@ -152,7 +169,7 @@ class TableauAdapter(BasePlatformAdapter):
         field_name: str,
         datasource_id: str,
         **kwargs: Any,
-    ) -> List[str]:
+    ) -> list[str]:
         """获取字段的唯一值列表。
         
         通过 VizQL API 查询单个维度字段，返回该字段的唯一值。

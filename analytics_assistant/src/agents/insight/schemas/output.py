@@ -6,15 +6,13 @@ Insight Agent 输出数据模型
 所有模型支持 JSON 序列化往返一致性。
 """
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 枚举类型
 # ═══════════════════════════════════════════════════════════════════════════
-
 
 class FindingType(str, Enum):
     """洞察发现类型。"""
@@ -24,7 +22,6 @@ class FindingType(str, Enum):
     COMPARISON = "comparison"
     DISTRIBUTION = "distribution"
     CORRELATION = "correlation"
-
 
 class AnalysisLevel(str, Enum):
     """分析层级（参考 Fabric Copilot 分层洞察策略）。
@@ -36,11 +33,9 @@ class AnalysisLevel(str, Enum):
     DESCRIPTIVE = "descriptive"
     DIAGNOSTIC = "diagnostic"
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 洞察输出模型
 # ═══════════════════════════════════════════════════════════════════════════
-
 
 class Finding(BaseModel):
     """单条洞察发现。"""
@@ -53,18 +48,17 @@ class Finding(BaseModel):
         description="分析层级：descriptive（描述性）或 diagnostic（诊断性）",
     )
     description: str = Field(description="发现描述")
-    supporting_data: Dict[str, Any] = Field(
+    supporting_data: dict[str, Any] = Field(
         default_factory=dict, description="支撑数据"
     )
     confidence: float = Field(ge=0.0, le=1.0, description="置信度")
-
 
 class InsightOutput(BaseModel):
     """洞察输出。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    findings: List[Finding] = Field(
+    findings: list[Finding] = Field(
         min_length=1, description="发现列表（至少一条）"
     )
     summary: str = Field(description="洞察摘要")
@@ -72,11 +66,9 @@ class InsightOutput(BaseModel):
         ge=0.0, le=1.0, description="整体置信度"
     )
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 数据画像模型
 # ═══════════════════════════════════════════════════════════════════════════
-
 
 class NumericStats(BaseModel):
     """数值列统计信息。"""
@@ -89,18 +81,16 @@ class NumericStats(BaseModel):
     median: Optional[float] = None
     std: Optional[float] = None
 
-
 class CategoricalStats(BaseModel):
     """分类列统计信息。"""
 
     model_config = ConfigDict(extra="forbid")
 
     unique_count: int = 0
-    top_values: List[Dict[str, Any]] = Field(
+    top_values: list[dict[str, Any]] = Field(
         default_factory=list,
         description="按频率排序的 top 值，格式: [{'value': x, 'count': n}]",
     )
-
 
 class ColumnProfile(BaseModel):
     """单列画像。"""
@@ -117,7 +107,6 @@ class ColumnProfile(BaseModel):
         default=None, description="计算失败时的错误信息"
     )
 
-
 class DataProfile(BaseModel):
     """数据画像。"""
 
@@ -125,6 +114,6 @@ class DataProfile(BaseModel):
 
     row_count: int = Field(ge=0, description="总行数")
     column_count: int = Field(ge=0, description="总列数")
-    columns_profile: List[ColumnProfile] = Field(
+    columns_profile: list[ColumnProfile] = Field(
         default_factory=list, description="各列画像"
     )

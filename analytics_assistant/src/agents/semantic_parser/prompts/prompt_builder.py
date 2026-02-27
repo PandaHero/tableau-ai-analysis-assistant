@@ -11,7 +11,7 @@ Requirements: 12.1 - 动态 Prompt 生成, 7.1-7.5 - 模块化 Prompt 构建
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from .time_hint_generator import TimeHintGenerator
 from ..schemas.intermediate import FieldCandidate, FewShotExample
@@ -21,9 +21,7 @@ from ..components.history_manager import HistoryManager
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.seeds import COMPUTATION_SEEDS, ComputationSeed
 
-
 logger = logging.getLogger(__name__)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
@@ -37,7 +35,6 @@ def get_low_confidence_threshold() -> float:
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return 0.7
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 计算种子模块模板
@@ -53,13 +50,18 @@ Detected computation types (refer to the following formulas):
 {seeds_content}
 </computation_hints>"""
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Prompt 模板
 # ═══════════════════════════════════════════════════════════════════════════
 
 # 基础模板头部
 BASE_PROMPT_HEADER = '''你是一个数据分析助手，负责理解用户的数据查询需求。
+
+<rules>
+- field_name 必须从 <available_fields> 中选择，禁止编造不存在的字段名
+- 如果找不到完全匹配的字段，选择语义最接近的候选字段
+- 如果没有任何候选字段能匹配用户意图，设置 needs_clarification=True 并说明原因
+</rules>
 
 <context>
 当前日期: {current_date}
@@ -121,7 +123,6 @@ COMPLEXITY_NAMES = {
     ComplexityType.SUBQUERY: "子查询",
 }
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # DynamicPromptBuilder 类
 # ═══════════════════════════════════════════════════════════════════════════
@@ -164,12 +165,12 @@ class DynamicPromptBuilder:
         self,
         question: str,
         config: SemanticConfig,
-        field_candidates: List[FieldCandidate],
+        field_candidates: list[FieldCandidate],
         schema_json: str = "",
-        detected_complexity: Optional[List[ComplexityType]] = None,
-        allowed_calc_types: Optional[List[str]] = None,
-        history: Optional[List[Dict[str, str]]] = None,
-        few_shot_examples: Optional[List[FewShotExample]] = None,
+        detected_complexity: Optional[list[ComplexityType]] = None,
+        allowed_calc_types: Optional[list[str]] = None,
+        history: Optional[list[dict[str, str]]] = None,
+        few_shot_examples: Optional[list[FewShotExample]] = None,
         prefilter_result: Optional[Any] = None,
         feature_output: Optional[Any] = None,
     ) -> str:
@@ -246,7 +247,7 @@ class DynamicPromptBuilder:
         
         return base_prompt
     
-    def _get_primary_complexity(self, complexity_list: List[ComplexityType]) -> ComplexityType:
+    def _get_primary_complexity(self, complexity_list: list[ComplexityType]) -> ComplexityType:
         """获取主要复杂度类型（按优先级）"""
         if not complexity_list:
             return ComplexityType.SIMPLE
@@ -274,7 +275,7 @@ class DynamicPromptBuilder:
         )
         return generator.format_for_prompt(question)
     
-    def _format_field_list(self, field_candidates: List[FieldCandidate], max_tokens: int) -> str:
+    def _format_field_list(self, field_candidates: list[FieldCandidate], max_tokens: int) -> str:
         """格式化字段列表
         
         显示字段信息、语义信息和检索置信度，帮助 LLM 理解字段匹配质量。
@@ -294,7 +295,7 @@ class DynamicPromptBuilder:
             line = f"- {field.field_name}"
             if field.field_caption and field.field_caption != field.field_name:
                 line += f" ({field.field_caption})"
-            line += f" [{field.field_type}, {field.data_type}]"
+            line += f" [{field.role}, {field.data_type}]"
             
             # 显示置信度（非精确匹配时）
             if field.confidence < 0.95:
@@ -318,6 +319,14 @@ class DynamicPromptBuilder:
             if field.sample_values:
                 samples = ", ".join(field.sample_values[:3])
                 line += f" 示例值: {samples}"
+            
+            # 计算字段公式（帮助 LLM 理解字段的计算逻辑）
+            if field.formula:
+                # 截断过长的公式，避免占用过多 token
+                formula_display = field.formula.strip().replace("\n", " ")
+                if len(formula_display) > 80:
+                    formula_display = formula_display[:77] + "..."
+                line += f" 公式: {formula_display}"
             
             line_tokens = len(line) // 2
             if estimated_tokens + line_tokens > max_tokens:
@@ -353,7 +362,7 @@ class DynamicPromptBuilder:
         return f"[{', '.join(parts)}]" if parts else ""
     
     def _format_few_shot_examples(
-        self, examples: Optional[List[FewShotExample]], max_examples: int
+        self, examples: Optional[list[FewShotExample]], max_examples: int
     ) -> str:
         """格式化 Few-shot 示例"""
         if not examples:
@@ -375,7 +384,7 @@ class DynamicPromptBuilder:
         
         return "\n".join(lines)
     
-    def _format_history(self, history: Optional[List[Dict[str, str]]]) -> str:
+    def _format_history(self, history: Optional[list[dict[str, str]]]) -> str:
         """格式化对话历史
         
         使用 HistoryManager 进行历史截断和格式化。
@@ -419,7 +428,7 @@ class DynamicPromptBuilder:
     
     def _collect_computation_seeds(
         self, prefilter_result: Optional[Any], feature_output: Optional[Any]
-    ) -> List[ComputationSeed]:
+    ) -> list[ComputationSeed]:
         """收集计算种子"""
         seed_names = set()
         
@@ -441,7 +450,7 @@ class DynamicPromptBuilder:
         
         return [seed for seed in COMPUTATION_SEEDS if seed.name in seed_names]
     
-    def _build_computation_seeds_module(self, seeds: List[ComputationSeed], language: str) -> str:
+    def _build_computation_seeds_module(self, seeds: list[ComputationSeed], language: str) -> str:
         """构建计算种子模块"""
         type_label = "类型" if language == "zh" else "Type"
         formula_label = "公式" if language == "zh" else "Formula"
@@ -463,7 +472,6 @@ class DynamicPromptBuilder:
         if task_pos == -1:
             return base_prompt + "\n\n" + seeds_module
         return base_prompt[:task_pos] + seeds_module + "\n\n" + base_prompt[task_pos:]
-
 
 __all__ = [
     "DynamicPromptBuilder",

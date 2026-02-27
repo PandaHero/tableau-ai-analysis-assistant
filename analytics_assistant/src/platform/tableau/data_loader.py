@@ -22,28 +22,26 @@ Tableau 数据模型加载器
 """
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Optional
 
 from analytics_assistant.src.core.schemas import DataModel, Field, LogicalTable, TableRelationship
 from analytics_assistant.src.core.exceptions import VizQLServerError, VizQLError
 from analytics_assistant.src.platform.tableau.auth import get_tableau_auth_async, TableauAuthContext
 from analytics_assistant.src.platform.tableau.client import VizQLClient
 from analytics_assistant.src.agents.field_semantic import (
-    FieldSemanticInference,
+    infer_field_semantic,
     build_enhanced_index_text,
 )
 from analytics_assistant.src.infra.rag import get_rag_service, IndexConfig, IndexDocument, IndexBackend
 from analytics_assistant.src.infra.config import get_config
 
-
 # 字段样例数据类型
-FieldSamples = Dict[str, Dict[str, Any]]  # {field_caption: {sample_values: [...], unique_count: int}}
+FieldSamples = dict[str, dict[str, Any]]  # {field_caption: {sample_values: [...], unique_count: int}}
 
 # 字段索引名称前缀
 FIELD_INDEX_PREFIX = "fields_"
 
 logger = logging.getLogger(__name__)
-
 
 class TableauDataLoader:
     """
@@ -218,8 +216,9 @@ class TableauDataLoader:
         
         流程：
         1. 检查索引是否已存在
-        2. 如果不存在，调用 FieldSemanticInference 进行推断
-        3. 使用推断结果创建字段索引（包含语义属性）
+        2. 获取字段样例数据（sample_values）
+        3. 调用 FieldSemanticInference 进行推断（传入样例值提升准确性）
+        4. 使用推断结果创建字段索引（包含语义属性和样例值）
         
         索引文本格式：
         {caption}: {business_description}。别名: {aliases}。类型: {role}, {data_type}
@@ -237,24 +236,48 @@ class TableauDataLoader:
             existing_index = rag_service.index.get_index(index_name)
             if existing_index is not None:
                 logger.debug(f"字段索引已存在: {index_name}")
+                # 从索引 metadata 恢复 queryable 标志到 DataModel
+                self._restore_queryable_flags(rag_service, index_name, data_model)
                 return
             
             logger.info(f"创建字段索引: {index_name}")
             
-            # 调用字段语义推断
-            inference = FieldSemanticInference(
-                enable_rag=True,
-                enable_cache=True,
-                enable_self_learning=True,
-            )
+            # 先获取字段样例数据，再进行语义推断（样例值能显著提升推断准确性）
+            field_samples: FieldSamples = {}
+            unqueryable_captions: set[str] = set()
+            try:
+                measure_field = next(
+                    (f.caption or f.name for f in data_model.fields
+                     if f.role and f.role.upper() == "MEASURE" and not f.hidden),
+                    None,
+                )
+                if measure_field:
+                    field_samples, unqueryable_captions = await self.fetch_field_samples(
+                        datasource_id=datasource_id,
+                        fields=data_model.fields,
+                        measure_field=measure_field,
+                    )
+                    logger.info(f"字段样例获取完成: {len(field_samples)} 个字段有样例")
+                else:
+                    logger.warning("无可用度量字段，跳过字段样例获取")
+            except Exception as e:
+                logger.warning(f"获取字段样例失败，语义推断将不使用样例值: {e}")
             
+            # 调用字段语义推断（传入样例值提升准确性）
             logger.info(f"开始语义推断，字段数: {len(data_model.fields)}")
-            semantic_result = await inference.infer(
+            semantic_result = await infer_field_semantic(
                 datasource_luid=datasource_id,
                 fields=data_model.fields,
+                field_samples=field_samples,
             )
             logger.info("语义推断完成")
             logger.debug(f"语义结果字段数: {len(semantic_result.field_semantic)}")
+            
+            # 将推断结果缓存到 DataModel 扩展属性，供后续复用
+            try:
+                data_model._field_semantic_cache = semantic_result.field_semantic
+            except AttributeError:
+                pass  # DataModel 不支持动态属性，忽略
             
             # 构建 IndexDocument 列表
             documents = []
@@ -270,12 +293,28 @@ class TableauDataLoader:
                 # 构建增强索引文本
                 if semantic_attrs:
                     semantic_hit_count += 1
+                    # 获取该字段的样例值
+                    field_sample_values = None
+                    if field_caption in field_samples:
+                        field_sample_values = field_samples[field_caption].get("sample_values")
+                    
+                    # 提取语义类别
+                    sem_category = None
+                    sem_measure_category = None
+                    if semantic_attrs.role == "dimension" and semantic_attrs.category:
+                        sem_category = semantic_attrs.category.value
+                    elif semantic_attrs.role == "measure" and semantic_attrs.measure_category:
+                        sem_measure_category = semantic_attrs.measure_category.value
+                    
                     index_text = build_enhanced_index_text(
                         caption=field_caption,
                         business_description=semantic_attrs.business_description,
                         aliases=semantic_attrs.aliases,
                         role=role_str,
                         data_type=data_type_str,
+                        category=sem_category,
+                        measure_category=sem_measure_category,
+                        sample_values=field_sample_values,
                     )
                 else:
                     # 无语义信息时使用基本格式
@@ -322,30 +361,26 @@ class TableauDataLoader:
             
             logger.info(f"语义信息命中: {semantic_hit_count}/{len(data_model.fields)}")
             
-            # 获取字段样例数据（维度字段的 sample_values）
-            field_samples: FieldSamples = {}
-            try:
-                # 找一个度量字段用于 TOP 排序
-                measure_field = next(
-                    (f.caption or f.name for f in data_model.fields
-                     if f.role and f.role.upper() == "MEASURE" and not f.hidden),
-                    None,
+            # 标记不可查询的幽灵字段（在 DataModel 和索引 metadata 中同步标记）
+            if unqueryable_captions:
+                for field in data_model.fields:
+                    field_caption = field.caption or field.name
+                    if field_caption in unqueryable_captions:
+                        field.queryable = False
+                logger.info(
+                    f"已标记 {len(unqueryable_captions)} 个幽灵字段为不可查询: "
+                    f"{sorted(unqueryable_captions)}"
                 )
-                if measure_field:
-                    field_samples = await self.fetch_field_samples(
-                        datasource_id=datasource_id,
-                        fields=data_model.fields,
-                        measure_field=measure_field,
-                    )
-                    logger.info(f"字段样例获取完成: {len(field_samples)} 个字段有样例")
-                else:
-                    logger.warning("无可用度量字段，跳过字段样例获取")
-            except Exception as e:
-                logger.warning(f"获取字段样例失败，继续创建索引: {e}")
             
-            # 将 sample_values 写入对应字段的 metadata
+            # 将 sample_values 和 queryable 标志写入对应字段的 metadata
             for doc in documents:
                 field_caption = doc.metadata.get("field_caption", "")
+                # 标记不可查询字段
+                if field_caption in unqueryable_captions:
+                    doc.metadata["queryable"] = False
+                else:
+                    doc.metadata["queryable"] = True
+                # 写入样例值
                 if field_caption in field_samples:
                     sample_info = field_samples[field_caption]
                     sample_values = sample_info.get("sample_values", [])
@@ -379,10 +414,57 @@ class TableauDataLoader:
             # 索引创建失败不应阻塞数据模型加载
             logger.warning(f"创建字段索引失败: {e}")
     
+    def _restore_queryable_flags(
+        self,
+        rag_service: Any,
+        index_name: str,
+        data_model: DataModel,
+    ) -> None:
+        """从已有索引的 metadata 恢复 queryable 标志到 DataModel。
+        
+        当索引已存在时，幽灵字段信息已经记录在索引 metadata 中。
+        需要将这些信息同步回 DataModel，确保 FieldRetriever 能正确过滤。
+        
+        Args:
+            rag_service: RAG 服务实例
+            index_name: 索引名称
+            data_model: 数据模型
+        """
+        try:
+            index_fields = rag_service.index.get_index_fields(index_name)
+            if not index_fields:
+                return
+            
+            # 收集不可查询的字段标题
+            unqueryable_captions: set[str] = set()
+            for field_info in index_fields:
+                if not isinstance(field_info, dict):
+                    continue
+                if field_info.get("queryable") is False:
+                    caption = field_info.get("field_caption", "")
+                    if caption:
+                        unqueryable_captions.add(caption)
+            
+            if not unqueryable_captions:
+                return
+            
+            # 在 DataModel 中标记对应字段
+            for field in data_model.fields:
+                field_caption = field.caption or field.name
+                if field_caption in unqueryable_captions:
+                    field.queryable = False
+            
+            logger.info(
+                f"从索引恢复 {len(unqueryable_captions)} 个幽灵字段的 queryable=False 标志: "
+                f"{sorted(unqueryable_captions)}"
+            )
+        except Exception as e:
+            logger.debug(f"恢复 queryable 标志失败（索引可能不含此信息）: {e}")
+    
     def _convert_graphql_fields(
         self,
-        raw_fields: List[Dict[str, Any]],
-    ) -> Tuple[List[Field], List[LogicalTable]]:
+        raw_fields: list[dict[str, Any]],
+    ) -> tuple[list[Field], list[LogicalTable]]:
         """
         从 GraphQL 字段数据转换为 Field 对象，并提取逻辑表信息
         
@@ -399,7 +481,7 @@ class TableauDataLoader:
             (Field 对象列表, LogicalTable 对象列表)
         """
         fields = []
-        table_field_count: Dict[str, Dict[str, Any]] = {}  # table_id -> {name, count}
+        table_field_count: dict[str, dict[str, Any]] = {}  # table_id -> {name, count}
         
         for raw in raw_fields:
             # GraphQL 的 name 就是显示名（等于 VizQL 的 fieldCaption）
@@ -489,7 +571,7 @@ class TableauDataLoader:
         )
         
         # 获取 GraphQL 字段元数据（包含 role 等信息）
-        graphql_fields_map: Dict[str, Dict[str, Any]] = {}
+        graphql_fields_map: dict[str, dict[str, Any]] = {}
         try:
             graphql_data = await client.get_datasource_fields_metadata(
                 datasource_luid=datasource_id,
@@ -518,9 +600,9 @@ class TableauDataLoader:
     
     def _convert_vizql_fields(
         self,
-        raw_fields: List[Dict[str, Any]],
-        graphql_fields_map: Optional[Dict[str, Dict[str, Any]]] = None,
-    ) -> List[Field]:
+        raw_fields: list[dict[str, Any]],
+        graphql_fields_map: Optional[dict[str, dict[str, Any]]] = None,
+    ) -> list[Field]:
         """
         从 VizQL 字段数据转换为 Field 对象，合并 GraphQL 信息
         
@@ -573,7 +655,7 @@ class TableauDataLoader:
         self,
         datasource_id: str,
         auth: Optional[TableauAuthContext] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         加载 VizQL 原始元数据（不转换）
         
@@ -598,7 +680,7 @@ class TableauDataLoader:
         self,
         datasource_id: str,
         auth: Optional[TableauAuthContext] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         加载数据源模型（逻辑表和关系）
         
@@ -644,9 +726,9 @@ class TableauDataLoader:
     async def _load_table_relationships(
         self,
         datasource_id: str,
-        tables: List[LogicalTable],
+        tables: list[LogicalTable],
         auth: TableauAuthContext,
-    ) -> List[TableRelationship]:
+    ) -> list[TableRelationship]:
         """
         加载表关系信息
         
@@ -691,7 +773,7 @@ class TableauDataLoader:
         # 构建表 ID 到名称的映射
         # VizQL 返回的 logicalTableId 格式: TableName_HEXID
         # 需要从 logicalTables 中获取 caption 作为表名
-        table_id_to_name: Dict[str, str] = {}
+        table_id_to_name: dict[str, str] = {}
         for lt in model.get("logicalTables", []):
             table_id = lt.get("logicalTableId", "")
             caption = lt.get("caption", "")
@@ -736,16 +818,17 @@ class TableauDataLoader:
     async def fetch_field_samples(
         self,
         datasource_id: str,
-        fields: List[Field],
+        fields: list[Field],
         measure_field: str,
         auth: Optional[TableauAuthContext] = None,
         top_n: int = 20,
         sample_size: int = 5,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> tuple[dict[str, dict[str, Any]], set[str]]:
         """
         获取字段样例数据（一次查询所有字段）
         
         一次查询所有维度字段，用 TOP N 过滤，然后在内存中统计每个字段的唯一值。
+        同时跟踪 VizQL 查询失败的"幽灵字段"。
         
         Args:
             datasource_id: 数据源 LUID
@@ -756,7 +839,9 @@ class TableauDataLoader:
             sample_size: 每个字段保留的样例数量（默认 10）
         
         Returns:
-            {field_caption: {sample_values: [...], unique_count: int}}
+            (results, unqueryable_captions) 元组：
+            - results: {field_caption: {sample_values: [...], unique_count: int}}
+            - unqueryable_captions: VizQL 查询失败的字段标题集合
         """
         if auth is None:
             auth = await get_tableau_auth_async()
@@ -772,12 +857,19 @@ class TableauDataLoader:
         ]
         if not dimension_fields:
             logger.warning("没有可查询的维度字段")
-            return {}
+            return {}, set()
         
         # 分批查询，每批最多 batch_size 个字段，避免 VizQL 超时
-        batch_size = 5
+        _DEFAULT_BATCH_SIZE = 5
+        try:
+            config = get_config()
+            platform_config = config.get("platform", {}).get("tableau", {}).get("data_loader", {})
+            batch_size = platform_config.get("batch_size", _DEFAULT_BATCH_SIZE)
+        except Exception:
+            batch_size = _DEFAULT_BATCH_SIZE
         field_captions = [f.caption or f.name for f in dimension_fields]
-        all_results: Dict[str, Dict[str, Any]] = {}
+        all_results: dict[str, dict[str, Any]] = {}
+        all_unqueryable: set[str] = set()
         
         for batch_start in range(0, len(field_captions), batch_size):
             batch_captions = field_captions[batch_start:batch_start + batch_size]
@@ -786,7 +878,7 @@ class TableauDataLoader:
                 f"{len(batch_captions)} 个维度字段 (TOP {top_n})"
             )
             
-            batch_results = await self._query_field_samples_batch(
+            batch_results, batch_unqueryable = await self._query_field_samples_batch(
                 client=client,
                 datasource_id=datasource_id,
                 batch_captions=batch_captions,
@@ -796,22 +888,28 @@ class TableauDataLoader:
                 sample_size=sample_size,
             )
             all_results.update(batch_results)
+            all_unqueryable.update(batch_unqueryable)
         
         success_count = sum(1 for r in all_results.values() if r.get("sample_values"))
         logger.info(f"字段样例统计完成: {success_count}/{len(field_captions)} 有样例值")
+        if all_unqueryable:
+            logger.warning(
+                f"发现 {len(all_unqueryable)} 个幽灵字段（GraphQL 存在但 VizQL 不可查询）: "
+                f"{sorted(all_unqueryable)}"
+            )
         
-        return all_results
+        return all_results, all_unqueryable
     
     async def _query_field_samples_batch(
         self,
         client: VizQLClient,
         datasource_id: str,
-        batch_captions: List[str],
+        batch_captions: list[str],
         measure_field: str,
         auth: TableauAuthContext,
         top_n: int,
         sample_size: int,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> tuple[dict[str, dict[str, Any]], list[str]]:
         """查询一批字段的样例数据。
         
         如果批次查询失败（可能包含不可查询的计算字段），
@@ -827,9 +925,12 @@ class TableauDataLoader:
             sample_size: 每个字段保留的样例数量
         
         Returns:
-            {field_caption: {sample_values: [...], unique_count: int}}
+            (results, unqueryable_captions) 元组：
+            - results: {field_caption: {sample_values: [...], unique_count: int}}
+            - unqueryable_captions: VizQL 查询失败的字段标题列表
         """
-        results: Dict[str, Dict[str, Any]] = {}
+        results: dict[str, dict[str, Any]] = {}
+        unqueryable: list[str] = []
         
         # 先尝试批量查询
         query_fields = [{"fieldCaption": fc} for fc in batch_captions]
@@ -857,7 +958,7 @@ class TableauDataLoader:
             )
             rows = data.get("data", [])
             results = self._parse_sample_rows(rows, batch_captions, sample_size)
-            return results
+            return results, unqueryable
         except Exception as e:
             logger.warning(
                 f"批次查询失败（{len(batch_captions)} 个字段），降级为逐个查询: {e}"
@@ -889,16 +990,17 @@ class TableauDataLoader:
                 single_result = self._parse_sample_rows(rows, [fc], sample_size)
                 results.update(single_result)
             except Exception as e:
-                logger.debug(f"字段 '{fc}' 不可查询，跳过: {e}")
+                logger.warning(f"字段 '{fc}' 不可查询（幽灵字段），已标记: {e}")
+                unqueryable.append(fc)
         
-        return results
+        return results, unqueryable
     
     @staticmethod
     def _parse_sample_rows(
-        rows: List[Dict[str, Any]],
-        field_captions: List[str],
+        rows: list[dict[str, Any]],
+        field_captions: list[str],
         sample_size: int,
-    ) -> Dict[str, Dict[str, Any]]:
+    ) -> dict[str, dict[str, Any]]:
         """从查询结果行中解析每个字段的唯一值。
         
         Args:
@@ -909,9 +1011,9 @@ class TableauDataLoader:
         Returns:
             {field_caption: {sample_values: [...], unique_count: int}}
         """
-        results: Dict[str, Dict[str, Any]] = {}
+        results: dict[str, dict[str, Any]] = {}
         for fc in field_captions:
-            unique_values: Dict[str, int] = {}
+            unique_values: dict[str, int] = {}
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -929,7 +1031,6 @@ class TableauDataLoader:
                 "unique_count": len(unique_values),
             }
         return results
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 导出

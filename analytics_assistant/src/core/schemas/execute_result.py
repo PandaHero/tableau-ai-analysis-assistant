@@ -6,15 +6,13 @@
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # 类型别名
 RowValue = Union[str, int, float, bool, None]
-RowData = Dict[str, RowValue]
-
+RowData = dict[str, RowValue]
 
 class ColumnInfo(BaseModel):
     """查询结果中的列信息。
@@ -28,7 +26,6 @@ class ColumnInfo(BaseModel):
     is_dimension: bool = Field(default=False, description="是否为维度列")
     is_measure: bool = Field(default=False, description="是否为度量列")
     is_computation: bool = Field(default=False, description="是否为计算列")
-
 
 class ExecuteResult(BaseModel):
     """执行结果 - 平台无关的 Pydantic 模型。
@@ -46,11 +43,11 @@ class ExecuteResult(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     
-    data: List[RowData] = Field(
+    data: list[RowData] = Field(
         default_factory=list,
         description="查询结果数据（行字典列表）"
     )
-    columns: List[ColumnInfo] = Field(
+    columns: list[ColumnInfo] = Field(
         default_factory=list,
         description="带语义元数据的列信息"
     )
@@ -85,15 +82,10 @@ class ExecuteResult(BaseModel):
         """检查结果是否为空。"""
         return self.row_count == 0 or not self.data
     
-    def get_column_names(self) -> List[str]:
+    def get_column_names(self) -> list[str]:
         """提取列名列表。"""
         return [col.name for col in self.columns]
     
-    @property
-    def rows(self) -> List[Dict[str, Any]]:
-        """data 的别名（向后兼容）。"""
-        return self.data
-
 
 __all__ = [
     "ExecuteResult",

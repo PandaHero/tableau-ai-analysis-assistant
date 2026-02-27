@@ -21,8 +21,7 @@
     )
 """
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-
+from typing import Any, Optional
 
 @dataclass
 class ComputationSeed:
@@ -42,19 +41,19 @@ class ComputationSeed:
     """
     name: str
     display_name: str
-    keywords: List[str]
+    keywords: list[str]
     calc_type: str
     formula: Optional[str] = None
-    base_measures: List[str] = field(default_factory=list)
+    base_measures: list[str] = field(default_factory=list)
     description: str = ""
-    examples: List[str] = field(default_factory=list)
-    partition_by: Optional[List[str]] = None
+    examples: list[str] = field(default_factory=list)
+    partition_by: Optional[list[str]] = None
     relative_to: Optional[str] = None
     
     def to_computation_dict(
         self,
-        measure_mapping: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        measure_mapping: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
         """转换为 DerivedComputation 格式的字典
         
         Args:
@@ -89,12 +88,11 @@ class ComputationSeed:
         
         return result
 
-
 # ══════════════════════════════════════════════════════════════
 # 通用计算表达式种子数据
 # ══════════════════════════════════════════════════════════════
 
-COMPUTATION_SEEDS: List[ComputationSeed] = [
+COMPUTATION_SEEDS: list[ComputationSeed] = [
     # ─────────────────────────────────────────────────────────
     # 比率类计算（RATIO）
     # ─────────────────────────────────────────────────────────
@@ -331,7 +329,6 @@ COMPUTATION_SEEDS: List[ComputationSeed] = [
         examples=["订单总金额"],
     ),
 ]
-
 
 __all__ = [
     "ComputationSeed",

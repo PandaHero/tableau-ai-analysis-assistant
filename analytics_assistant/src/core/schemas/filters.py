@@ -2,7 +2,7 @@
 """语义层筛选器模型。平台无关的筛选器定义。"""
 
 from datetime import date
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,7 +12,6 @@ from analytics_assistant.src.core.schemas.enums import (
     TextMatchType,
 )
 
-
 class Filter(BaseModel):
     """筛选器基类。"""
     model_config = ConfigDict(extra="forbid")
@@ -20,12 +19,11 @@ class Filter(BaseModel):
     field_name: str = Field(description="要筛选的字段名称")
     filter_type: FilterType = Field(description="筛选器类型")
 
-
 class SetFilter(Filter):
     """集合筛选器 - 按特定值筛选。"""
     filter_type: FilterType = Field(default=FilterType.SET)
     
-    values: List[Any] = Field(
+    values: list[Any] = Field(
         default_factory=list,
         description="要包含/排除的值列表"
     )
@@ -45,7 +43,6 @@ class SetFilter(Filter):
         if self.exclude:
             object.__setattr__(self, 'include', False)
 
-
 class DateRangeFilter(Filter):
     """日期范围筛选器。"""
     filter_type: FilterType = Field(default=FilterType.DATE_RANGE)
@@ -59,7 +56,6 @@ class DateRangeFilter(Filter):
         description="结束日期（YYYY-MM-DD）"
     )
 
-
 class NumericRangeFilter(Filter):
     """数值范围筛选器。"""
     filter_type: FilterType = Field(default=FilterType.NUMERIC_RANGE)
@@ -68,7 +64,6 @@ class NumericRangeFilter(Filter):
     max_value: Optional[float] = Field(default=None, description="最大值")
     include_min: bool = Field(default=True, description="是否包含最小值（>=）")
     include_max: bool = Field(default=True, description="是否包含最大值（<=）")
-
 
 class TextMatchFilter(Filter):
     """文本匹配筛选器。"""
@@ -79,7 +74,6 @@ class TextMatchFilter(Filter):
         default=TextMatchType.CONTAINS,
         description="匹配类型"
     )
-
 
 class TopNFilter(Filter):
     """Top N 筛选器 - 筛选前/后 N 条记录。"""

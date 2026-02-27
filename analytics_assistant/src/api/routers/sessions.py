@@ -18,8 +18,9 @@
 import logging
 import uuid
 from datetime import datetime
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from analytics_assistant.src.api.dependencies import (
     get_session_repository,
@@ -37,7 +38,6 @@ from analytics_assistant.src.infra.storage import BaseRepository
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
-
 
 @router.post("", response_model=CreateSessionResponse)
 def create_session(
@@ -71,20 +71,23 @@ def create_session(
         created_at=datetime.fromisoformat(saved["created_at"]),
     )
 
-
 @router.get("", response_model=GetSessionsResponse)
 def get_sessions(
+    offset: int = Query(0, ge=0, description="分页偏移量"),
+    limit: int = Query(20, ge=1, le=100, description="每页数量"),
     tableau_username: str = Depends(get_tableau_username),
     repo: BaseRepository = Depends(get_session_repository),
 ) -> GetSessionsResponse:
-    """获取当前用户的所有会话（按 updated_at 倒序）。
+    """获取当前用户的所有会话（按 updated_at 倒序，支持分页）。
 
     Args:
+        offset: 分页偏移量，从 0 开始
+        limit: 每页返回数量，默认 20，最大 100
         tableau_username: Tableau 用户名
         repo: 会话 Repository
 
     Returns:
-        会话列表和总数
+        会话列表、总数
     """
     results = repo.find_all(
         filter_dict={"tableau_username": tableau_username},
@@ -92,6 +95,11 @@ def get_sessions(
 
     # 按 updated_at 倒序排序
     results.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    total = len(results)
+
+    # 分页切片
+    paginated = results[offset:offset + limit]
 
     sessions = [
         SessionResponse(
@@ -102,22 +110,21 @@ def get_sessions(
             created_at=r["created_at"],
             updated_at=r["updated_at"],
         )
-        for r in results
+        for r in paginated
     ]
 
-    return GetSessionsResponse(sessions=sessions, total=len(sessions))
-
+    return GetSessionsResponse(sessions=sessions, total=total)
 
 @router.get("/{session_id}", response_model=SessionResponse)
 def get_session(
-    session_id: str,
+    session_id: UUID = Path(..., description="会话 ID（UUID 格式）"),
     tableau_username: str = Depends(get_tableau_username),
     repo: BaseRepository = Depends(get_session_repository),
 ) -> SessionResponse:
     """获取会话详情。
 
     Args:
-        session_id: 会话 ID
+        session_id: 会话 ID（UUID 格式）
         tableau_username: Tableau 用户名
         repo: 会话 Repository
 
@@ -127,7 +134,8 @@ def get_session(
     Raises:
         HTTPException: 404 会话不存在，403 无权访问
     """
-    data = repo.find_by_id(session_id)
+    sid = str(session_id)
+    data = repo.find_by_id(sid)
     if data is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
@@ -135,7 +143,7 @@ def get_session(
         raise HTTPException(status_code=403, detail="无权访问此会话")
 
     return SessionResponse(
-        id=data.get("id", session_id),
+        id=data.get("id", sid),
         tableau_username=data["tableau_username"],
         title=data.get("title", ""),
         messages=data.get("messages", []),
@@ -143,18 +151,17 @@ def get_session(
         updated_at=data["updated_at"],
     )
 
-
 @router.put("/{session_id}", response_model=SessionResponse)
 def update_session(
-    session_id: str,
     request: UpdateSessionRequest,
+    session_id: UUID = Path(..., description="会话 ID（UUID 格式）"),
     tableau_username: str = Depends(get_tableau_username),
     repo: BaseRepository = Depends(get_session_repository),
 ) -> SessionResponse:
     """更新会话（标题和/或消息列表）。
 
     Args:
-        session_id: 会话 ID
+        session_id: 会话 ID（UUID 格式）
         request: 更新请求
         tableau_username: Tableau 用户名
         repo: 会话 Repository
@@ -165,7 +172,8 @@ def update_session(
     Raises:
         HTTPException: 404 会话不存在，403 无权访问
     """
-    data = repo.find_by_id(session_id)
+    sid = str(session_id)
+    data = repo.find_by_id(sid)
     if data is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
@@ -188,12 +196,12 @@ def update_session(
             for msg in request.messages
         ]
 
-    saved = repo.save(session_id, update_data)
+    saved = repo.save(sid, update_data)
 
-    logger.info(f"更新会话: id={session_id}, user={tableau_username}")
+    logger.info(f"更新会话: id={sid}, user={tableau_username}")
 
     return SessionResponse(
-        id=saved.get("id", session_id),
+        id=saved.get("id", sid),
         tableau_username=saved["tableau_username"],
         title=saved.get("title", ""),
         messages=saved.get("messages", []),
@@ -201,17 +209,16 @@ def update_session(
         updated_at=saved["updated_at"],
     )
 
-
 @router.delete("/{session_id}")
 def delete_session(
-    session_id: str,
+    session_id: UUID = Path(..., description="会话 ID（UUID 格式）"),
     tableau_username: str = Depends(get_tableau_username),
     repo: BaseRepository = Depends(get_session_repository),
 ) -> dict:
     """删除会话。
 
     Args:
-        session_id: 会话 ID
+        session_id: 会话 ID（UUID 格式）
         tableau_username: Tableau 用户名
         repo: 会话 Repository
 
@@ -221,15 +228,16 @@ def delete_session(
     Raises:
         HTTPException: 404 会话不存在，403 无权访问
     """
-    data = repo.find_by_id(session_id)
+    sid = str(session_id)
+    data = repo.find_by_id(sid)
     if data is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
     if data.get("tableau_username") != tableau_username:
         raise HTTPException(status_code=403, detail="无权访问此会话")
 
-    repo.remove(session_id)
+    repo.remove(sid)
 
-    logger.info(f"删除会话: id={session_id}, user={tableau_username}")
+    logger.info(f"删除会话: id={sid}, user={tableau_username}")
 
     return {"message": "会话已删除"}

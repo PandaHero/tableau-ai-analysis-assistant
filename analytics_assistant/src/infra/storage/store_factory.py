@@ -16,7 +16,7 @@ import logging
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from langgraph.store.base import BaseStore, TTLConfig
 from langgraph.store.memory import InMemoryStore
@@ -41,12 +41,11 @@ except ImportError:
     _REDIS_AVAILABLE = False
     logger.info("langgraph-checkpoint-redis 未安装，Redis 后端不可用")
 
-
 # 默认配置常量
 _DEFAULT_BACKEND = "sqlite"
 _DEFAULT_CONNECTION_STRING = "analytics_assistant/data/storage.db"
 _DEFAULT_TTL_MINUTES = 1440  # 24 小时
-
+_DEFAULT_SWEEP_INTERVAL_MINUTES = 60
 
 class StoreFactory:
     """存储工厂
@@ -67,7 +66,7 @@ class StoreFactory:
     _default_store_lock = threading.Lock()
 
     # 命名空间存储缓存
-    _namespace_stores: Dict[str, BaseStore] = {}
+    _namespace_stores: dict[str, BaseStore] = {}
     _namespace_stores_lock = threading.Lock()
 
     @classmethod
@@ -208,7 +207,7 @@ class StoreFactory:
     # ========================================
 
     @classmethod
-    def _get_storage_config(cls) -> Dict[str, Any]:
+    def _get_storage_config(cls) -> dict[str, Any]:
         """从 app.yaml 获取存储配置。"""
         try:
             config = get_config()
@@ -216,6 +215,18 @@ class StoreFactory:
         except Exception as e:
             logger.warning(f"获取存储配置失败，使用默认值: {e}")
             return {}
+
+    @classmethod
+    def _get_sweep_interval(cls) -> int:
+        """从 app.yaml 获取 sweep_interval_minutes 配置。"""
+        try:
+            config = get_config()
+            sqlite_config = config.get("storage", {}).get("sqlite", {})
+            return sqlite_config.get(
+                "sweep_interval_minutes", _DEFAULT_SWEEP_INTERVAL_MINUTES
+            )
+        except Exception:
+            return _DEFAULT_SWEEP_INTERVAL_MINUTES
 
     @classmethod
     def _create_sqlite_store(
@@ -231,10 +242,11 @@ class StoreFactory:
 
         ttl_config: Optional[TTLConfig] = None
         if ttl_minutes is not None:
+            sweep_interval = cls._get_sweep_interval()
             ttl_config = {
                 "default_ttl": ttl_minutes,
                 "refresh_on_read": True,
-                "sweep_interval_minutes": 60,
+                "sweep_interval_minutes": sweep_interval,
             }
 
         store = SqliteStore(conn, ttl=ttl_config)
@@ -268,10 +280,11 @@ class StoreFactory:
 
         ttl_config: Optional[TTLConfig] = None
         if ttl_minutes is not None:
+            sweep_interval = cls._get_sweep_interval()
             ttl_config = {
                 "default_ttl": ttl_minutes,
                 "refresh_on_read": True,
-                "sweep_interval_minutes": 60,
+                "sweep_interval_minutes": sweep_interval,
             }
 
         store = AsyncPostgresStore(conn_string=connection_string, ttl=ttl_config)
@@ -296,10 +309,11 @@ class StoreFactory:
 
         ttl_config: Optional[TTLConfig] = None
         if ttl_minutes is not None:
+            sweep_interval = cls._get_sweep_interval()
             ttl_config = {
                 "default_ttl": ttl_minutes,
                 "refresh_on_read": True,
-                "sweep_interval_minutes": 60,
+                "sweep_interval_minutes": sweep_interval,
             }
 
         store = RedisStore(url=connection_string, ttl=ttl_config)

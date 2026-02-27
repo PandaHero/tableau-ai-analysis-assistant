@@ -28,7 +28,6 @@ _kv_store_lock = threading.Lock()
 DEFAULT_DB_PATH = "analytics_assistant/data/storage.db"
 DEFAULT_TTL_MINUTES = 1440  # 24 小时
 
-
 def get_kv_store(db_path: Optional[str] = None) -> BaseStore:
     """获取全局 KV 存储实例（单例）。
 
@@ -60,7 +59,6 @@ def get_kv_store(db_path: Optional[str] = None) -> BaseStore:
 
     return _kv_store
 
-
 def reset_kv_store() -> None:
     """重置 KV 存储（主要用于测试）。"""
     global _kv_store
@@ -73,7 +71,6 @@ def reset_kv_store() -> None:
             StoreFactory._close_store(_kv_store)
             _kv_store = None
             logger.info("KV 存储已重置")
-
 
 __all__ = [
     "get_kv_store",

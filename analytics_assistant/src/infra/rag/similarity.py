@@ -10,12 +10,11 @@
 
 import logging
 from enum import Enum
-from typing import Callable, Dict, List
+from typing import Callable
 
 from analytics_assistant.src.infra.config import get_config
 
 logger = logging.getLogger(__name__)
-
 
 class ScoreType(str, Enum):
     """相似度计算类型"""
@@ -23,8 +22,7 @@ class ScoreType(str, Enum):
     COSINE = "cosine"
     INNER_PRODUCT = "inner_product"
 
-
-def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     """计算两个向量的余弦相似度。
     
     余弦相似度 = (A · B) / (||A|| * ||B||)
@@ -57,7 +55,6 @@ def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
     
     return dot_product / (norm1 * norm2)
 
-
 def l2_similarity(distance: float) -> float:
     """将 L2 距离转换为相似度。
     
@@ -79,7 +76,6 @@ def l2_similarity(distance: float) -> float:
         0.1
     """
     return 1.0 / (1.0 + distance)
-
 
 def inner_product_similarity(score: float) -> float:
     """将内积分数转换为相似度。
@@ -103,7 +99,6 @@ def inner_product_similarity(score: float) -> float:
         0.0
     """
     return (score + 1.0) / 2.0
-
 
 class SimilarityCalculator:
     """相似度计算器
@@ -129,7 +124,7 @@ class SimilarityCalculator:
     """
     
     # 各类型的归一化公式
-    FORMULAS: Dict[ScoreType, Callable[[float], float]] = {
+    FORMULAS: dict[ScoreType, Callable[[float], float]] = {
         ScoreType.L2: l2_similarity,
         ScoreType.COSINE: inner_product_similarity,  # 余弦和内积使用相同公式
         ScoreType.INNER_PRODUCT: inner_product_similarity,
@@ -165,7 +160,7 @@ class SimilarityCalculator:
         # 确保结果在 [0, 1] 范围内
         return max(0.0, min(1.0, result))
     
-    def compute_cosine(self, vec1: List[float], vec2: List[float]) -> float:
+    def compute_cosine(self, vec1: list[float], vec2: list[float]) -> float:
         """计算两个向量的余弦相似度。
         
         这是一个便捷方法，直接计算向量间的余弦相似度，
@@ -180,7 +175,7 @@ class SimilarityCalculator:
         """
         return cosine_similarity(vec1, vec2)
     
-    def compute_normalized_cosine(self, vec1: List[float], vec2: List[float]) -> float:
+    def compute_normalized_cosine(self, vec1: list[float], vec2: list[float]) -> float:
         """计算归一化的余弦相似度。
         
         将余弦相似度从 [-1, 1] 映射到 [0, 1]。
@@ -224,7 +219,6 @@ class SimilarityCalculator:
         except Exception as e:
             logger.warning(f"加载相似度配置失败，使用默认值 l2: {e}")
             return cls(cls._DEFAULT_SCORE_TYPE)
-
 
 __all__ = [
     "ScoreType",

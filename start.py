@@ -69,17 +69,17 @@ def print_header(message):
 
 def print_success(message):
     """Print a success message."""
-    print(f"✓ {message}")
+    print(f"�?{message}")
 
 
 def print_error(message):
     """Print an error message."""
-    print(f"✗ {message}")
+    print(f"�?{message}")
 
 
 def print_info(message):
     """Print an info message."""
-    print(f"ℹ {message}")
+    print(f"�?{message}")
 
 
 def check_python_version():
@@ -197,7 +197,7 @@ def install_dependencies():
     print_header("Checking Dependencies")
     
     pip_path = get_venv_pip()
-    requirements_path = Path("tableau_assistant") / "requirements.txt"
+    requirements_path = Path("analytics_assistant") / "requirements.txt"
     
     if not pip_path.exists():
         print_error(f"Pip not found at {pip_path}")
@@ -349,19 +349,19 @@ def verify_env_config():
     
     # 使用证书管理器初始化证书
     try:
-        # 添加项目路径到 sys.path
+        # 添加项目路径�?sys.path
         import sys
         project_root = Path(__file__).parent
         if str(project_root) not in sys.path:
             sys.path.insert(0, str(project_root))
         
-        from tableau_assistant.src.infra.certs import get_certificate_manager
+        from analytics_assistant.src.infra.certs import get_certificate_manager
         
         print_info("初始化证书管理器...")
         manager = get_certificate_manager()
         
         if not manager.initialize():
-            print_error("❌ 证书初始化失败!")
+            print_error("�?证书初始化失�?")
             return False
         
         # 获取 SSL 配置
@@ -369,13 +369,13 @@ def verify_env_config():
         ssl_cert = ssl_config.get("ssl_certfile", "")
         ssl_key = ssl_config.get("ssl_keyfile", "")
         
-        # 获取证书状态
+        # 获取证书状�?
         status = manager.get_status()
         source = status.get("source", "unknown")
         
-        print_success(f"✓ 证书来源: {source}")
-        print_success(f"✓ 证书文件: {ssl_cert}")
-        print_success(f"✓ 私钥文件: {ssl_key}")
+        print_success(f"�?证书来源: {source}")
+        print_success(f"�?证书文件: {ssl_cert}")
+        print_success(f"�?私钥文件: {ssl_key}")
         
         # 显示过期信息
         app_status = status.get("application", {})
@@ -383,11 +383,11 @@ def verify_env_config():
             days_left = app_status.get("days_until_expiry", 0)
             expires = app_status.get("expires", "")
             if app_status.get("warning"):
-                print_error(f"⚠️ 证书即将过期! 剩余 {days_left} 天")
+                print_error(f"⚠️ 证书即将过期! 剩余 {days_left} �?)
             else:
-                print_info(f"证书有效期: 剩余 {days_left} 天")
+                print_info(f"证书有效�? 剩余 {days_left} �?)
         
-        # 导出环境变量供后续使用
+        # 导出环境变量供后续使�?
         env_exports = manager.export_to_env()
         for key, value in env_exports.items():
             os.environ[key] = value
@@ -398,16 +398,16 @@ def verify_env_config():
         port = env_vars.get('PORT', '8000')
         api_base_url = f"https://{host}:{port}"
         print_info(f"API URL: {api_base_url}")
-        print_success("🔒 HTTPS 已启用")
+        print_success("🔒 HTTPS 已启�?)
         
         return True
         
     except ImportError as e:
-        print_error(f"❌ 无法导入证书管理器: {e}")
-        print_info("请确保已安装所有依赖: pip install -r tableau_assistant/requirements.txt")
+        print_error(f"�?无法导入证书管理�? {e}")
+        print_info("请确保已安装所有依�? pip install -r analytics_assistant/requirements.txt")
         return False
     except Exception as e:
-        print_error(f"❌ 证书验证失败: {e}")
+        print_error(f"�?证书验证失败: {e}")
         return False
 
 
@@ -439,7 +439,7 @@ def generate_service_file():
     current_user = getpass.getuser()
     
     # Build ExecStart command
-    exec_start = f"{project_dir}/venv/bin/uvicorn tableau_assistant.src.main:app --host {host} --port {port} --workers {WORKERS}"
+    exec_start = f"{project_dir}/venv/bin/uvicorn analytics_assistant.src.main:app --host {host} --port {port} --workers {WORKERS}"
     
     if ssl_cert and ssl_key:
         exec_start += f" --ssl-certfile {ssl_cert} --ssl-keyfile {ssl_key}"
@@ -650,7 +650,7 @@ def check_frontend_deps():
     """Check if frontend dependencies are installed."""
     print_header("Checking Frontend Dependencies")
     
-    node_modules = Path("tableau_assistant") / "frontend" / "node_modules"
+    node_modules = Path("analytics_assistant") / "frontend" / "node_modules"
     
     if node_modules.exists():
         print_success("Frontend dependencies found")
@@ -664,7 +664,7 @@ def install_frontend_deps():
     """Install frontend dependencies."""
     print_header("Installing Frontend Dependencies")
     
-    frontend_path = Path("tableau_assistant") / "frontend"
+    frontend_path = Path("analytics_assistant") / "frontend"
     npm_cmd = get_npm_command()
     
     if not frontend_path.exists():
@@ -694,7 +694,7 @@ def install_frontend_deps():
         if e.stderr:
             print_error(f"Error: {e.stderr[:500]}")
         print_info("\nPlease try manually:")
-        print_info(f"  cd tableau_assistant/frontend")
+        print_info(f"  cd analytics_assistant/frontend")
         print_info(f"  npm install")
         return False
 
@@ -703,7 +703,7 @@ def build_frontend():
     """Build frontend for production."""
     print_header("Building Frontend for Production")
     
-    frontend_path = Path("tableau_assistant") / "frontend"
+    frontend_path = Path("analytics_assistant") / "frontend"
     npm_cmd = get_npm_command()
     
     if not frontend_path.exists():
@@ -746,7 +746,7 @@ def build_frontend():
 
 def check_frontend_build():
     """Check if frontend is already built."""
-    dist_path = Path("tableau_assistant") / "frontend" / "dist" / "index.html"
+    dist_path = Path("analytics_assistant") / "frontend" / "dist" / "index.html"
     return dist_path.exists()
 
 
@@ -773,7 +773,7 @@ def start_backend():
     host = env_vars.get('HOST', '127.0.0.1')
     port = env_vars.get('PORT', '8000')
     
-    # 从环境变量获取 SSL 配置（由证书管理器设置）
+    # 从环境变量获�?SSL 配置（由证书管理器设置）
     ssl_cert = os.environ.get('SSL_CERT_FILE', '')
     ssl_key = os.environ.get('SSL_KEY_FILE', '')
     
@@ -814,7 +814,7 @@ def start_backend():
     
     # Build uvicorn command
     cmd = uvicorn_cmd + [
-        "tableau_assistant.src.main:app",
+        "analytics_assistant.src.main:app",
         "--host", host,
         "--port", port,
     ]
@@ -844,7 +844,7 @@ def start_backend():
             errors='replace'  # Replace invalid characters
         )
         
-        print_success("✓ Backend server started")
+        print_success("�?Backend server started")
         return backend_process
     except Exception as e:
         print_error(f"Failed to start backend: {e}")
@@ -857,7 +857,7 @@ def start_frontend():
     
     print_header("Starting Frontend Server")
     
-    frontend_path = Path("tableau_assistant") / "frontend"
+    frontend_path = Path("analytics_assistant") / "frontend"
     npm_cmd = get_npm_command()
     
     if not frontend_path.exists():
@@ -881,7 +881,7 @@ def start_frontend():
         
         # Determine frontend protocol based on SSL configuration
         env_vars = load_env_vars()
-        # 前端使用与后端相同的证书（从环境变量或 .env 获取）
+        # 前端使用与后端相同的证书（从环境变量�?.env 获取�?
         frontend_ssl_cert = os.environ.get('SSL_CERT_FILE', '') or env_vars.get('SSL_CERT_FILE', '')
         frontend_ssl_key = os.environ.get('SSL_KEY_FILE', '') or env_vars.get('SSL_KEY_FILE', '')
         frontend_host = env_vars.get('VITE_APP_HOST', '127.0.0.1')
@@ -890,10 +890,10 @@ def start_frontend():
         # Check if frontend SSL is configured (Vite requires HTTPS)
         if frontend_ssl_cert and frontend_ssl_key:
             frontend_protocol = "https"
-            print_success("✓ Frontend server started (HTTPS enabled)")
+            print_success("�?Frontend server started (HTTPS enabled)")
         else:
             frontend_protocol = "https"  # Vite 配置要求 HTTPS
-            print_success("✓ Frontend server started")
+            print_success("�?Frontend server started")
         
         print(f"  Local:    {frontend_protocol}://{frontend_host}:{frontend_port}")
         print(f"  Demo:     {frontend_protocol}://{frontend_host}:{frontend_port}/streaming-demo")
@@ -914,7 +914,7 @@ def cleanup_processes():
         try:
             backend_process.terminate()
             backend_process.wait(timeout=5)
-            print_success("✓ Backend stopped")
+            print_success("�?Backend stopped")
         except Exception as e:
             print_error(f"Error stopping backend: {e}")
             try:
@@ -926,7 +926,7 @@ def cleanup_processes():
         try:
             frontend_process.terminate()
             frontend_process.wait(timeout=5)
-            print_success("✓ Frontend stopped")
+            print_success("�?Frontend stopped")
         except Exception as e:
             print_error(f"Error stopping frontend: {e}")
             try:
@@ -955,7 +955,7 @@ def monitor_processes():
     # Determine protocols
     env_vars = load_env_vars()
     
-    # Backend protocol - 从 os.environ 获取（证书管理器设置的）
+    # Backend protocol - �?os.environ 获取（证书管理器设置的）
     ssl_cert = os.environ.get('SSL_CERT_FILE', '') or env_vars.get('SSL_CERT_FILE', '')
     ssl_key = os.environ.get('SSL_KEY_FILE', '') or env_vars.get('SSL_KEY_FILE', '')
     backend_protocol = "https" if (ssl_cert and ssl_key and Path(ssl_cert).exists() and Path(ssl_key).exists()) else "http"
@@ -977,7 +977,7 @@ def monitor_processes():
             print_info("\n📦 Production mode: Frontend served from backend")
     else:
         # Development mode - separate frontend server
-        # 前端使用与后端相同的证书（Vite 配置要求 HTTPS）
+        # 前端使用与后端相同的证书（Vite 配置要求 HTTPS�?
         frontend_protocol = "https"
         frontend_host = env_vars.get('VITE_APP_HOST', '127.0.0.1')
         frontend_port = env_vars.get('VITE_APP_PORT', '5173')

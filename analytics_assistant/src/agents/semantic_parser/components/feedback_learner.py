@@ -17,7 +17,7 @@ Requirements: 15.1-15.6 - FeedbackLearner 反馈学习
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.storage import get_kv_store
@@ -28,12 +28,11 @@ from .few_shot_manager import FewShotManager
 
 logger = logging.getLogger(__name__)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_config() -> Dict[str, Any]:
+def _get_config() -> dict[str, Any]:
     """获取 feedback_learner 配置。"""
     try:
         config = get_config()
@@ -41,7 +40,6 @@ def _get_config() -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FeedbackLearner 组件
@@ -427,7 +425,7 @@ class FeedbackLearner:
         self,
         datasource_luid: str,
         min_count: Optional[int] = None,
-    ) -> List[SynonymMapping]:
+    ) -> list[SynonymMapping]:
         """获取已学习的同义词映射列表。
         
         Args:
@@ -467,7 +465,7 @@ class FeedbackLearner:
             logger.error(f"FeedbackLearner get_learned_synonyms 失败: {e}")
             return []
     
-    async def get_confirmed_synonyms(self, datasource_luid: str) -> List[SynonymMapping]:
+    async def get_confirmed_synonyms(self, datasource_luid: str) -> list[SynonymMapping]:
         """获取已确认的同义词（达到阈值的映射）。
         
         Args:
@@ -486,7 +484,7 @@ class FeedbackLearner:
         datasource_luid: str,
         feedback_type: Optional[FeedbackType] = None,
         limit: int = 100,
-    ) -> List[FeedbackRecord]:
+    ) -> list[FeedbackRecord]:
         """列出反馈记录。
         
         Args:
@@ -581,7 +579,7 @@ class FeedbackLearner:
                 return
             
             # 解析所有反馈
-            records_with_key: List[tuple] = []
+            records_with_key: list[tuple] = []
             for item in items:
                 if item.value is None:
                     continue
@@ -610,7 +608,6 @@ class FeedbackLearner:
                 
         except Exception as e:
             logger.error(f"FeedbackLearner _evict_if_needed 失败: {e}")
-
 
 __all__ = [
     "FeedbackLearner",

@@ -12,7 +12,6 @@
 
 from enum import Enum
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 通用枚举（跨 Agent 共享）
 # ═══════════════════════════════════════════════════════════════════════════
@@ -29,7 +28,6 @@ class AggregationType(str, Enum):
     STDEV = "STDEV"
     VAR = "VAR"
 
-
 class DateGranularity(str, Enum):
     """日期粒度：年 | 季度 | 月 | 周 | 日 | 小时 | 分钟"""
     YEAR = "YEAR"
@@ -40,12 +38,10 @@ class DateGranularity(str, Enum):
     HOUR = "HOUR"
     MINUTE = "MINUTE"
 
-
 class SortDirection(str, Enum):
     """排序方向：DESC=降序（从高到低）| ASC=升序（从低到高）"""
     ASC = "ASC"
     DESC = "DESC"
-
 
 class FilterType(str, Enum):
     """筛选器类型：集合 | 日期范围 | 数值范围 | 文本匹配 | Top N"""
@@ -54,7 +50,6 @@ class FilterType(str, Enum):
     NUMERIC_RANGE = "NUMERIC_RANGE"
     TEXT_MATCH = "TEXT_MATCH"
     TOP_N = "TOP_N"
-
 
 class DateRangeType(str, Enum):
     """日期范围类型。"""
@@ -68,7 +63,6 @@ class DateRangeType(str, Enum):
     LAST_N_MONTHS = "LAST_N_MONTHS"  # 最近 N 月
     LAST_N_YEARS = "LAST_N_YEARS"    # 最近 N 年
 
-
 class TextMatchType(str, Enum):
     """文本匹配类型：包含 | 开头 | 结尾 | 精确 | 正则"""
     CONTAINS = "CONTAINS"
@@ -76,7 +70,6 @@ class TextMatchType(str, Enum):
     ENDS_WITH = "ENDS_WITH"
     EXACT = "EXACT"
     REGEX = "REGEX"
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 计算参数枚举（按计算类型分组）
@@ -88,7 +81,6 @@ class RankStyle(str, Enum):
     DENSE = "DENSE"
     UNIQUE = "UNIQUE"
 
-
 class RelativeTo(str, Enum):
     """差异参考点：上一个 | 下一个 | 第一个 | 最后一个"""
     PREVIOUS = "PREVIOUS"
@@ -96,10 +88,8 @@ class RelativeTo(str, Enum):
     FIRST = "FIRST"
     LAST = "LAST"
 
-
 # 注意：WindowAggregation 已移除，直接使用 AggregationType
 # 窗口函数支持的聚合类型是 AggregationType 的子集
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 语义解析器枚举
@@ -110,7 +100,6 @@ class HowType(str, Enum):
     SIMPLE = "SIMPLE"
     COMPLEX = "COMPLEX"
 
-
 class IntentType(str, Enum):
     """意图分类：数据查询 | 澄清 | 通用问题 | 无关"""
     DATA_QUERY = "data_query"
@@ -118,14 +107,12 @@ class IntentType(str, Enum):
     GENERAL = "general"
     IRRELEVANT = "irrelevant"
 
-
 class ObserverDecision(str, Enum):
     """Observer 决策：接受 | 修正 | 重试 | 澄清"""
     ACCEPT = "ACCEPT"
     CORRECT = "CORRECT"
     RETRY = "RETRY"
     CLARIFY = "CLARIFY"
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 字段映射器枚举
@@ -140,7 +127,6 @@ class MappingSource(str, Enum):
     EXACT_MATCH = "exact_match"
     LLM_ONLY = "llm_only"
 
-
 class DimensionCategory(str, Enum):
     """维度类别：时间 | 地理 | 产品 | 客户 | 组织 | 财务 | 渠道 | 其他"""
     TIME = "time"
@@ -152,7 +138,6 @@ class DimensionCategory(str, Enum):
     CHANNEL = "channel"
     OTHER = "other"
 
-
 class DimensionLevel(str, Enum):
     """维度层级：顶层 | 高层 | 中层 | 低层 | 明细"""
     TOP = "top"
@@ -160,7 +145,6 @@ class DimensionLevel(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     DETAIL = "detail"
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 字段语义枚举

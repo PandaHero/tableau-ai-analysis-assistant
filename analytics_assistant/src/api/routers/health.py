@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
-
 @router.get("/health", response_model=HealthResponse)
 async def health_check() -> HealthResponse:
     """健康检查端点。
