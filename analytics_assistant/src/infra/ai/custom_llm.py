@@ -12,7 +12,7 @@
 """
 import json
 import logging
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Iterator, Optional
 
 import httpx
 from langchain_core.callbacks import CallbackManagerForLLMRun
@@ -27,7 +27,6 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 
 logger = logging.getLogger(__name__)
-
 
 class CustomChatLLM(BaseChatModel):
     """
@@ -69,8 +68,8 @@ class CustomChatLLM(BaseChatModel):
     timeout: float = 120.0
     """请求超时时间（秒）"""
     
-    verify_ssl: bool = False
-    """是否验证 SSL 证书"""
+    verify_ssl: bool = True
+    """是否验证 SSL 证书（默认启用，与 ModelConfig.verify_ssl 一致）"""
     
     is_reasoning_model: bool = False
     """是否是推理模型（输出包含思考过程）"""
@@ -78,7 +77,7 @@ class CustomChatLLM(BaseChatModel):
     streaming: bool = True
     """是否启用流式输出（默认 True）"""
     
-    response_format: Optional[Dict[str, Any]] = None
+    response_format: Optional[dict[str, Any]] = None
     """响应格式配置（如 {"type": "json_object"} 或 {"type": "json_schema", "json_schema": {...}}）"""
     
     @property
@@ -86,7 +85,7 @@ class CustomChatLLM(BaseChatModel):
         return "custom_chat_llm"
     
     @property
-    def _identifying_params(self) -> Dict[str, Any]:
+    def _identifying_params(self) -> dict[str, Any]:
         return {
             "api_base": self.api_base,
             "model_name": self.model_name,
@@ -94,7 +93,30 @@ class CustomChatLLM(BaseChatModel):
             "max_tokens": self.max_tokens,
         }
     
-    def _convert_messages(self, messages: List[BaseMessage]) -> List[Dict[str, str]]:
+    def bind_tools(
+        self,
+        tools: list[Any],
+        **kwargs: Any,
+    ) -> "CustomChatLLM":
+        """绑定工具（占位实现）
+        
+        CustomChatLLM 当前不支持原生工具调用（function calling）。
+        返回自身以避免 NotImplementedError，上层代码会通过 Prompt 方式模拟工具调用。
+        
+        Args:
+            tools: 工具列表
+            **kwargs: 其他参数
+            
+        Returns:
+            返回自身实例
+        """
+        logger.warning(
+            f"CustomChatLLM 不支持原生工具调用，将通过 Prompt 方式模拟。"
+            f"model={self.model_name}, tools_count={len(tools)}"
+        )
+        return self
+    
+    def _convert_messages(self, messages: list[BaseMessage]) -> list[dict[str, str]]:
         """将 LangChain 消息转换为 API 格式"""
         result = []
         for msg in messages:
@@ -110,10 +132,10 @@ class CustomChatLLM(BaseChatModel):
     
     def _build_request(
         self,
-        messages: List[BaseMessage],
+        messages: list[BaseMessage],
         stream: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """构建请求体"""
         request = {
             "model": self.model_name,
@@ -129,14 +151,14 @@ class CustomChatLLM(BaseChatModel):
         
         return request
     
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_headers(self) -> dict[str, str]:
         """获取请求头"""
         return {
             "Content-Type": "application/json",
             self.auth_header: self.api_key,
         }
     
-    def _parse_sse_line(self, line: str) -> Optional[Dict[str, Any]]:
+    def _parse_sse_line(self, line: str) -> Optional[dict[str, Any]]:
         """解析 SSE 行"""
         line = line.strip()
         if not line or line == "data: [DONE]":
@@ -150,8 +172,8 @@ class CustomChatLLM(BaseChatModel):
 
     def _generate(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
@@ -175,8 +197,8 @@ class CustomChatLLM(BaseChatModel):
     
     def _stream(
         self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
@@ -241,6 +263,5 @@ class CustomChatLLM(BaseChatModel):
                             
                     except (KeyError, IndexError):
                         continue
-
 
 __all__ = ["CustomChatLLM"]

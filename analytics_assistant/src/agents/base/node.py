@@ -42,10 +42,7 @@ from typing import (
     AsyncIterator,
     Awaitable,
     Callable,
-    Dict,
-    List,
     Optional,
-    Tuple,
     Type,
     TypeVar,
     Union,
@@ -69,12 +66,11 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # LLM 获取
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _get_agent_temperature_config() -> Dict[str, float]:
+def _get_agent_temperature_config() -> dict[str, float]:
     """从 YAML 配置读取 Agent temperature 配置"""
     config = get_config()
     agents_config = config.get("agents", {})
@@ -87,12 +83,10 @@ def _get_agent_temperature_config() -> Dict[str, float]:
         "default": 0.2,
     })
 
-
 def get_agent_temperature(agent_name: str) -> float:
     """获取指定 Agent 的默认 temperature"""
     temp_config = _get_agent_temperature_config()
     return temp_config.get(agent_name.lower(), temp_config.get("default", 0.2))
-
 
 def get_llm(
     agent_name: Optional[str] = None,
@@ -131,7 +125,6 @@ def get_llm(
         **kwargs
     )
 
-
 # ═══════════════════════════════════════════════════════════════════════════
 # 流式结构化输出（统一方案）⭐推荐
 # ═══════════════════════════════════════════════════════════════════════════
@@ -152,59 +145,161 @@ def _parse_json_to_model(content: str, output_model: Type[T]) -> T:
     
     return output_model.model_validate(parsed)
 
+def _inject_schema_instruction(
+    messages: list[BaseMessage],
+    output_model: Type[T],
+) -> list[BaseMessage]:
+    """在最后一条 HumanMessage 后追加 JSON Schema 指令。
+
+    LLM 在 json_mode 下只知道要输出 JSON，但不知道具体格式。
+    此函数将目标 Pydantic 模型的 JSON Schema 注入到 prompt 中，
+    告诉 LLM 期望的输出结构。
+
+    Args:
+        messages: 原始消息列表（不会被修改）。
+        output_model: 目标 Pydantic 模型类。
+
+    Returns:
+        追加了 schema 指令的新消息列表。
+    """
+    schema = output_model.model_json_schema()
+    schema_instruction = (
+        "\n\n请严格按照以下 JSON Schema 格式输出，不要添加任何其他内容：\n"
+        f"```json\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n```"
+    )
+    augmented = list(messages)
+    for i in range(len(augmented) - 1, -1, -1):
+        if isinstance(augmented[i], HumanMessage):
+            augmented[i] = HumanMessage(
+                content=str(augmented[i].content) + schema_instruction
+            )
+            break
+    return augmented
+
+async def _collect_stream_chunks(
+    astream,
+    on_token: Optional[Callable[[str], Awaitable[None]]] = None,
+    on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
+    on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
+    collected_thinking: Optional[list[str]] = None,
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    """公共流式 chunk 收集逻辑。
+
+    从 LLM astream 中收集 content、tool_calls、thinking 和 additional_kwargs，
+    同时触发相应的回调。
+
+    Args:
+        astream: LLM 的异步流式迭代器。
+        on_token: Token 回调。
+        on_partial: 部分 JSON 回调。
+        on_thinking: Thinking 回调（R1 模型思考过程）。
+        collected_thinking: 外部传入的 thinking 收集列表（可选）。
+
+    Returns:
+        (content, tool_calls, additional_kwargs) 三元组。
+    """
+    collected_content: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    additional_kwargs: dict[str, Any] = {}
+    prev_partial: Optional[dict[str, Any]] = None
+
+    async for chunk in astream:
+        # content 收集
+        if hasattr(chunk, "content") and chunk.content:
+            token = chunk.content
+            collected_content.append(token)
+            if on_token:
+                await on_token(token)
+            if on_partial:
+                full_content = "".join(collected_content)
+                try:
+                    partial = parse_partial_json(full_content)
+                    if partial is not None and partial != prev_partial:
+                        await on_partial(partial)
+                        prev_partial = partial
+                except Exception:
+                    # 流式热路径：部分 JSON 解析失败是预期行为，无需记录日志
+                    pass
+
+        # tool_call 收集
+        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+            for tc_chunk in chunk.tool_call_chunks:
+                idx = tc_chunk.get("index", 0)
+                while len(tool_calls) <= idx:
+                    tool_calls.append({"name": "", "args": "", "id": ""})
+                if tc_chunk.get("name"):
+                    tool_calls[idx]["name"] = tc_chunk["name"]
+                if tc_chunk.get("args"):
+                    tool_calls[idx]["args"] += tc_chunk["args"]
+                if tc_chunk.get("id"):
+                    tool_calls[idx]["id"] = tc_chunk["id"]
+
+        # thinking 和 additional_kwargs 收集
+        if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
+            if "thinking" in chunk.additional_kwargs:
+                thinking_chunk = chunk.additional_kwargs["thinking"]
+                if collected_thinking is not None:
+                    collected_thinking.append(thinking_chunk)
+                if on_thinking:
+                    await on_thinking(thinking_chunk)
+            for k, v in chunk.additional_kwargs.items():
+                if k != "thinking":
+                    additional_kwargs[k] = v
+
+    content = "".join(collected_content)
+    return content, tool_calls, additional_kwargs
 
 # 类型重载：return_thinking=False 时返回 T
 @overload
 async def stream_llm_structured(
     llm: BaseChatModel,
-    messages: List[BaseMessage],
+    messages: list[BaseMessage],
     output_model: Type[T],
     *,
-    config: Optional[Dict[str, Any]] = None,
-    tools: Optional[List[Any]] = None,
-    middleware: Optional[List[Any]] = None,
-    state: Optional[Dict[str, Any]] = None,
+    config: Optional[dict[str, Any]] = None,
+    tools: Optional[list[Any]] = None,
+    middleware: Optional[list[Any]] = None,
+    state: Optional[dict[str, Any]] = None,
     max_iterations: int = 5,
     on_token: Optional[Callable[[str], Awaitable[None]]] = None,
-    on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
     on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
     return_thinking: bool = False,
 ) -> T: ...
 
-# 类型重载：return_thinking=True 时返回 Tuple[T, str]
+# 类型重载：return_thinking=True 时返回 tuple[T, str]
 @overload
 async def stream_llm_structured(
     llm: BaseChatModel,
-    messages: List[BaseMessage],
+    messages: list[BaseMessage],
     output_model: Type[T],
     *,
-    config: Optional[Dict[str, Any]] = None,
-    tools: Optional[List[Any]] = None,
-    middleware: Optional[List[Any]] = None,
-    state: Optional[Dict[str, Any]] = None,
+    config: Optional[dict[str, Any]] = None,
+    tools: Optional[list[Any]] = None,
+    middleware: Optional[list[Any]] = None,
+    state: Optional[dict[str, Any]] = None,
     max_iterations: int = 5,
     on_token: Optional[Callable[[str], Awaitable[None]]] = None,
-    on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
     on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
     return_thinking: bool = True,
-) -> Tuple[T, str]: ...
-
+) -> tuple[T, str]: ...
 
 async def stream_llm_structured(
     llm: BaseChatModel,
-    messages: List[BaseMessage],
+    messages: list[BaseMessage],
     output_model: Type[T],
     *,
-    config: Optional[Dict[str, Any]] = None,
-    tools: Optional[List[Any]] = None,
-    middleware: Optional[List[Any]] = None,
-    state: Optional[Dict[str, Any]] = None,
+    config: Optional[dict[str, Any]] = None,
+    tools: Optional[list[Any]] = None,
+    middleware: Optional[list[Any]] = None,
+    state: Optional[dict[str, Any]] = None,
     max_iterations: int = 5,
     on_token: Optional[Callable[[str], Awaitable[None]]] = None,
-    on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+    on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
     on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
     return_thinking: bool = False,
-) -> Union[T, Tuple[T, str]]:
+) -> Union[T, tuple[T, str]]:
     """
     流式调用 LLM 并返回结构化输出（统一方案）⭐推荐
     
@@ -270,168 +365,98 @@ async def stream_llm_structured(
         llm, messages, output_model, config, on_token, on_partial, on_thinking, return_thinking
     )
 
-
 async def _stream_structured_internal(
     llm: BaseChatModel,
-    messages: List[BaseMessage],
+    messages: list[BaseMessage],
     output_model: Type[T],
-    config: Optional[Dict[str, Any]],
+    config: Optional[dict[str, Any]],
     on_token: Optional[Callable[[str], Awaitable[None]]],
-    on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]],
+    on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]],
     on_thinking: Optional[Callable[[str], Awaitable[None]]],
     return_thinking: bool,
-) -> Union[T, Tuple[T, str]]:
+) -> Union[T, tuple[T, str]]:
     """内部：基础流式结构化输出
-    
+
     使用 json_mode 时，LLM 只知道要输出 JSON，但不知道具体格式。
     因此需要在 prompt 中注入 JSON Schema，告诉 LLM 期望的输出结构。
-    
-    这是 LangChain json_mode 的标准用法，参考：
-    https://python.langchain.com/docs/how_to/structured_output/
-    "Note that if using JSON mode then you must include instructions for 
-    formatting the output into the desired schema into the model call."
     """
-    # 构建 schema 指令，追加到最后一条消息
-    schema = output_model.model_json_schema()
-    schema_instruction = f"""
+    augmented_messages = _inject_schema_instruction(messages, output_model)
+    collected_thinking: list[str] = []
 
-请严格按照以下 JSON Schema 格式输出，不要添加任何其他内容：
-```json
-{json.dumps(schema, ensure_ascii=False, indent=2)}
-```"""
-    
-    # 复制消息列表，在最后一条 HumanMessage 后追加 schema 指令
-    augmented_messages = list(messages)
-    if augmented_messages:
-        # 找到最后一条 HumanMessage 并追加 schema
-        for i in range(len(augmented_messages) - 1, -1, -1):
-            if isinstance(augmented_messages[i], HumanMessage):
-                original = augmented_messages[i]
-                augmented_messages[i] = HumanMessage(
-                    content=str(original.content) + schema_instruction
-                )
-                break
-    
-    collected_content: List[str] = []
-    collected_thinking: List[str] = []
-    additional_kwargs: Dict[str, Any] = {}
-    prev_partial: Optional[Dict[str, Any]] = None
-    
-    async for chunk in llm.astream(augmented_messages, config=config):
-        if hasattr(chunk, "content") and chunk.content:
-            token = chunk.content
-            collected_content.append(token)
-            if on_token:
-                await on_token(token)
-            if on_partial:
-                full_content = "".join(collected_content)
-                try:
-                    partial = parse_partial_json(full_content)
-                    if partial is not None and partial != prev_partial:
-                        await on_partial(partial)
-                        prev_partial = partial
-                except Exception:
-                    # 流式热路径：部分 JSON 解析失败是预期行为，无需记录日志
-                    pass
-        if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
-            if "thinking" in chunk.additional_kwargs:
-                thinking_chunk = chunk.additional_kwargs["thinking"]
-                collected_thinking.append(thinking_chunk)
-                if on_thinking:
-                    await on_thinking(thinking_chunk)
-            # 更新其他 kwargs（如 answer），但 thinking 单独累积
-            for k, v in chunk.additional_kwargs.items():
-                if k != "thinking":
-                    additional_kwargs[k] = v
-    
-    full_content = "".join(collected_content)
-    full_thinking = "".join(collected_thinking)
-    final_content = additional_kwargs.get("answer", full_content)
+    content, _, additional_kwargs = await _collect_stream_chunks(
+        llm.astream(augmented_messages, config=config),
+        on_token=on_token,
+        on_partial=on_partial,
+        on_thinking=on_thinking,
+        collected_thinking=collected_thinking,
+    )
+
+    final_content = additional_kwargs.get("answer", content)
     parsed = _parse_json_to_model(final_content, output_model)
-    
-    if return_thinking:
-        return parsed, full_thinking
-    return parsed
 
+    if return_thinking:
+        return parsed, "".join(collected_thinking)
+    return parsed
 
 async def _stream_structured_with_tools(
     llm: BaseChatModel,
-    messages: List[BaseMessage],
+    messages: list[BaseMessage],
     output_model: Type[T],
-    config: Optional[Dict[str, Any]],
-    tools: List[Any],
+    config: Optional[dict[str, Any]],
+    tools: list[Any],
     max_iterations: int,
     on_token: Optional[Callable[[str], Awaitable[None]]],
-    on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]],
+    on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]],
     on_thinking: Optional[Callable[[str], Awaitable[None]]],
     return_thinking: bool,
-) -> Union[T, Tuple[T, str]]:
-    """内部：带工具调用的流式结构化输出"""
-    llm_with_tools = llm.bind_tools(tools)
-    current_messages = list(messages)
-    collected_thinking: List[str] = []
+) -> Union[T, tuple[T, str]]:
+    """内部：带工具调用的流式结构化输出
     
+    注意：如果 LLM 不支持原生工具调用（如 CustomChatLLM），
+    bind_tools 会返回原始 LLM 实例，此时降级为无工具模式。
+    """
+    llm_with_tools = llm.bind_tools(tools)
+    
+    # 检测是否真正支持工具调用
+    # 如果 bind_tools 返回的是同一个实例（CustomChatLLM 的行为），说明不支持
+    if llm_with_tools is llm:
+        logger.warning(
+            f"LLM {llm.__class__.__name__} 不支持原生工具调用，"
+            f"降级为无工具模式。如需工具调用，请使用支持 function calling 的模型。"
+        )
+        # 降级为无工具模式
+        return await _stream_structured_internal(
+            llm, messages, output_model, config,
+            on_token, on_partial, on_thinking, return_thinking
+        )
+    
+    current_messages = list(messages)
+    collected_thinking: list[str] = []
+
     for iteration in range(max_iterations):
-        collected_content: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
-        additional_kwargs: Dict[str, Any] = {}
-        prev_partial: Optional[Dict[str, Any]] = None
-        
-        async for chunk in llm_with_tools.astream(current_messages, config=config):
-            if hasattr(chunk, "content") and chunk.content:
-                token = chunk.content
-                collected_content.append(token)
-                if on_token:
-                    await on_token(token)
-                if on_partial:
-                    full_content = "".join(collected_content)
-                    try:
-                        partial = parse_partial_json(full_content)
-                        if partial is not None and partial != prev_partial:
-                            await on_partial(partial)
-                            prev_partial = partial
-                    except Exception:
-                        # 流式热路径：部分 JSON 解析失败是预期行为，无需记录日志
-                        pass
-            
-            if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                for tc_chunk in chunk.tool_call_chunks:
-                    idx = tc_chunk.get("index", 0)
-                    while len(tool_calls) <= idx:
-                        tool_calls.append({"name": "", "args": "", "id": ""})
-                    if tc_chunk.get("name"):
-                        tool_calls[idx]["name"] = tc_chunk["name"]
-                    if tc_chunk.get("args"):
-                        tool_calls[idx]["args"] += tc_chunk["args"]
-                    if tc_chunk.get("id"):
-                        tool_calls[idx]["id"] = tc_chunk["id"]
-            
-            if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
-                if "thinking" in chunk.additional_kwargs:
-                    thinking_chunk = chunk.additional_kwargs["thinking"]
-                    collected_thinking.append(thinking_chunk)
-                    if on_thinking:
-                        await on_thinking(thinking_chunk)
-                for k, v in chunk.additional_kwargs.items():
-                    if k != "thinking":
-                        additional_kwargs[k] = v
-        
+        content, tool_calls, additional_kwargs = await _collect_stream_chunks(
+            llm_with_tools.astream(current_messages, config=config),
+            on_token=on_token,
+            on_partial=on_partial,
+            on_thinking=on_thinking,
+            collected_thinking=collected_thinking,
+        )
+
         # 检查是否有工具调用
         valid_tool_calls = [tc for tc in tool_calls if tc.get("name") and tc.get("id")]
-        
+
         if not valid_tool_calls:
             # 没有工具调用，解析最终结果
-            full_content = "".join(collected_content)
-            final_content = additional_kwargs.get("answer", full_content)
+            final_content = additional_kwargs.get("answer", content)
             parsed = _parse_json_to_model(final_content, output_model)
-            
+
             if return_thinking:
                 return parsed, "".join(collected_thinking)
             return parsed
-        
+
         # 执行工具调用
         ai_message = AIMessage(
-            content="".join(collected_content),
+            content=content,
             tool_calls=[
                 {
                     "name": tc["name"],
@@ -442,7 +467,7 @@ async def _stream_structured_with_tools(
             ]
         )
         current_messages.append(ai_message)
-        
+
         # 查找并执行工具
         tools_by_name = {t.name: t for t in tools}
         for tc in valid_tool_calls:
@@ -463,24 +488,23 @@ async def _stream_structured_with_tools(
                 current_messages.append(
                     ToolMessage(content=f"Unknown tool: {tc['name']}", tool_call_id=tc["id"])
                 )
-    
-    raise RuntimeError(f"Max iterations ({max_iterations}) reached without final response")
 
+    raise RuntimeError(f"Max iterations ({max_iterations}) reached without final response")
 
 async def _stream_structured_with_middleware(
     llm: BaseChatModel,
-    messages: List[BaseMessage],
+    messages: list[BaseMessage],
     output_model: Type[T],
-    config: Optional[Dict[str, Any]],
-    tools: Optional[List[Any]],
-    middleware: List[Any],
-    state: Optional[Dict[str, Any]],
+    config: Optional[dict[str, Any]],
+    tools: Optional[list[Any]],
+    middleware: list[Any],
+    state: Optional[dict[str, Any]],
     max_iterations: int,
     on_token: Optional[Callable[[str], Awaitable[None]]],
-    on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]],
+    on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]],
     on_thinking: Optional[Callable[[str], Awaitable[None]]],
     return_thinking: bool,
-) -> Union[T, Tuple[T, str]]:
+) -> Union[T, tuple[T, str]]:
     """内部：带 Middleware 的流式结构化输出
 
     内联 ReAct 循环，在每轮迭代中通过 MiddlewareRunner 执行中间件钩子：
@@ -495,7 +519,7 @@ async def _stream_structured_with_middleware(
     runtime = runner.build_runtime(config)
     current_messages = list(messages)
     current_state = dict(state) if state else {}
-    collected_thinking: List[str] = []
+    collected_thinking: list[str] = []
 
     # before_agent（整个 Agent 执行前，执行一次）
     current_state = await runner.run_before_agent(current_state, runtime)
@@ -513,8 +537,25 @@ async def _stream_structured_with_middleware(
             return result, "".join(collected_thinking)
         return result
 
-    # 有工具场景：内联 ReAct 循环 + 中间件钩子
+    # 检测 LLM 是否支持工具调用
     llm_with_tools = llm.bind_tools(tools)
+    if llm_with_tools is llm:
+        logger.warning(
+            f"LLM {llm.__class__.__name__} 不支持原生工具调用，"
+            f"降级为无工具模式。如需工具调用，请使用支持 function calling 的模型。"
+        )
+        # 降级为无工具模式
+        result = await _middleware_single_call(
+            runner, runtime, llm, current_messages, output_model,
+            config, current_state, on_token, on_partial, on_thinking,
+            collected_thinking,
+        )
+        current_state = await runner.run_after_agent(current_state, runtime)
+        if return_thinking:
+            return result, "".join(collected_thinking)
+        return result
+
+    # 有工具场景：内联 ReAct 循环 + 中间件钩子
     tools_by_name = {t.name: t for t in tools}
 
     for iteration in range(max_iterations):
@@ -527,52 +568,22 @@ async def _stream_structured_with_middleware(
         )
 
         # wrap_model_call（包装 LLM 调用，支持重试）
-        collected_content: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
-        additional_kwargs: Dict[str, Any] = {}
-        prev_partial: Optional[Dict[str, Any]] = None
+        # 使用闭包变量捕获每轮迭代的结果
+        iter_content = ""
+        iter_tool_calls: list[dict[str, Any]] = []
+        iter_additional_kwargs: dict[str, Any] = {}
 
         async def _base_model_handler(req: Any) -> ModelResponse:
+            nonlocal iter_content, iter_tool_calls, iter_additional_kwargs
             """实际的流式 LLM 调用"""
-            async for chunk in req.model.astream(req.messages, config=config):
-                if hasattr(chunk, "content") and chunk.content:
-                    token = chunk.content
-                    collected_content.append(token)
-                    if on_token:
-                        await on_token(token)
-                    if on_partial:
-                        full_content = "".join(collected_content)
-                        try:
-                            partial = parse_partial_json(full_content)
-                            if partial is not None and partial != prev_partial:
-                                await on_partial(partial)
-                        except Exception:
-                            pass
-
-                if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                    for tc_chunk in chunk.tool_call_chunks:
-                        idx = tc_chunk.get("index", 0)
-                        while len(tool_calls) <= idx:
-                            tool_calls.append({"name": "", "args": "", "id": ""})
-                        if tc_chunk.get("name"):
-                            tool_calls[idx]["name"] = tc_chunk["name"]
-                        if tc_chunk.get("args"):
-                            tool_calls[idx]["args"] += tc_chunk["args"]
-                        if tc_chunk.get("id"):
-                            tool_calls[idx]["id"] = tc_chunk["id"]
-
-                if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
-                    if "thinking" in chunk.additional_kwargs:
-                        thinking_chunk = chunk.additional_kwargs["thinking"]
-                        collected_thinking.append(thinking_chunk)
-                        if on_thinking:
-                            await on_thinking(thinking_chunk)
-                    for k, v in chunk.additional_kwargs.items():
-                        if k != "thinking":
-                            additional_kwargs[k] = v
-
-            ai_content = "".join(collected_content)
-            ai_msg = AIMessage(content=ai_content)
+            iter_content, iter_tool_calls, iter_additional_kwargs = await _collect_stream_chunks(
+                req.model.astream(req.messages, config=config),
+                on_token=on_token,
+                on_partial=on_partial,
+                on_thinking=on_thinking,
+                collected_thinking=collected_thinking,
+            )
+            ai_msg = AIMessage(content=iter_content)
             return runner.build_model_response(result=[ai_msg])
 
         response = await runner.wrap_model_call(model_request, _base_model_handler)
@@ -583,12 +594,11 @@ async def _stream_structured_with_middleware(
         )
 
         # 检查是否有工具调用
-        valid_tool_calls = [tc for tc in tool_calls if tc.get("name") and tc.get("id")]
+        valid_tool_calls = [tc for tc in iter_tool_calls if tc.get("name") and tc.get("id")]
 
         if not valid_tool_calls:
             # 无工具调用，解析最终结果
-            full_content = "".join(collected_content)
-            final_content = additional_kwargs.get("answer", full_content)
+            final_content = iter_additional_kwargs.get("answer", iter_content)
             parsed = _parse_json_to_model(final_content, output_model)
 
             # after_agent
@@ -600,7 +610,7 @@ async def _stream_structured_with_middleware(
 
         # 有工具调用：构建 AIMessage 并执行工具
         ai_message = AIMessage(
-            content="".join(collected_content),
+            content=iter_content,
             tool_calls=[
                 {
                     "name": tc["name"],
@@ -636,19 +646,18 @@ async def _stream_structured_with_middleware(
     # 达到最大迭代次数
     raise RuntimeError(f"最大迭代次数 ({max_iterations}) 已达到，未获得最终响应")
 
-
 async def _middleware_single_call(
     runner: MiddlewareRunner,
     runtime: Runtime,
     llm: BaseChatModel,
-    messages: List[BaseMessage],
+    messages: list[BaseMessage],
     output_model: Type[T],
-    config: Optional[Dict[str, Any]],
-    state: Dict[str, Any],
+    config: Optional[dict[str, Any]],
+    state: dict[str, Any],
     on_token: Optional[Callable[[str], Awaitable[None]]],
-    on_partial: Optional[Callable[[Dict[str, Any]], Awaitable[None]]],
+    on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]],
     on_thinking: Optional[Callable[[str], Awaitable[None]]],
-    collected_thinking: List[str],
+    collected_thinking: list[str],
 ) -> T:
     """无工具场景的单次 LLM 调用 + 中间件钩子。
 
@@ -672,63 +681,32 @@ async def _middleware_single_call(
     model_request = runner.build_model_request(llm, messages, state=state, runtime=runtime)
     state = await runner.run_before_model(state, runtime, request=model_request)
 
-    # 构建 schema 指令
-    schema = output_model.model_json_schema()
-    schema_instruction = (
-        "\n\n请严格按照以下 JSON Schema 格式输出，不要添加任何其他内容：\n"
-        f"```json\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n```"
-    )
-    augmented_messages = list(messages)
-    for i in range(len(augmented_messages) - 1, -1, -1):
-        if isinstance(augmented_messages[i], HumanMessage):
-            original = augmented_messages[i]
-            augmented_messages[i] = HumanMessage(
-                content=str(original.content) + schema_instruction
-            )
-            break
+    # 注入 JSON Schema 指令
+    augmented_messages = _inject_schema_instruction(messages, output_model)
 
-    collected_content: List[str] = []
-    additional_kwargs: Dict[str, Any] = {}
-    prev_partial: Optional[Dict[str, Any]] = None
+    # 使用闭包变量捕获流式结果
+    call_content = ""
+    call_additional_kwargs: dict[str, Any] = {}
 
     # wrap_model_call
     async def _base_handler(req: Any) -> ModelResponse:
-        async for chunk in llm.astream(augmented_messages, config=config):
-            if hasattr(chunk, "content") and chunk.content:
-                token = chunk.content
-                collected_content.append(token)
-                if on_token:
-                    await on_token(token)
-                if on_partial:
-                    full_content = "".join(collected_content)
-                    try:
-                        partial = parse_partial_json(full_content)
-                        if partial is not None and partial != prev_partial:
-                            await on_partial(partial)
-                    except Exception:
-                        pass
-            if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
-                if "thinking" in chunk.additional_kwargs:
-                    thinking_chunk = chunk.additional_kwargs["thinking"]
-                    collected_thinking.append(thinking_chunk)
-                    if on_thinking:
-                        await on_thinking(thinking_chunk)
-                for k, v in chunk.additional_kwargs.items():
-                    if k != "thinking":
-                        additional_kwargs[k] = v
-
-        ai_content = "".join(collected_content)
-        return runner.build_model_response(result=[AIMessage(content=ai_content)])
+        nonlocal call_content, call_additional_kwargs
+        call_content, _, call_additional_kwargs = await _collect_stream_chunks(
+            llm.astream(augmented_messages, config=config),
+            on_token=on_token,
+            on_partial=on_partial,
+            on_thinking=on_thinking,
+            collected_thinking=collected_thinking,
+        )
+        return runner.build_model_response(result=[AIMessage(content=call_content)])
 
     response = await runner.wrap_model_call(model_request, _base_handler)
 
     # after_model
     await runner.run_after_model(state, runtime, response=response, request=model_request)
 
-    full_content = "".join(collected_content)
-    final_content = additional_kwargs.get("answer", full_content)
+    final_content = call_additional_kwargs.get("answer", call_content)
     return _parse_json_to_model(final_content, output_model)
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 简单流式输出（用于不需要结构化的场景）
@@ -736,8 +714,8 @@ async def _middleware_single_call(
 
 async def stream_llm(
     llm: BaseChatModel,
-    messages: List[BaseMessage],
-    config: Optional[Dict[str, Any]] = None,
+    messages: list[BaseMessage],
+    config: Optional[dict[str, Any]] = None,
 ) -> AsyncIterator[str]:
     """
     简单流式输出（仅返回 token 流）
@@ -756,7 +734,6 @@ async def stream_llm(
     async for chunk in llm.astream(messages, config=config):
         if hasattr(chunk, "content") and chunk.content:
             yield chunk.content
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 导出
