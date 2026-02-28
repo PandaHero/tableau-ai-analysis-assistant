@@ -9,7 +9,7 @@ SemanticOutput 是语义解析器的输出，直接作为适配器的输入，
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from analytics_assistant.src.core.interfaces import BasePlatformAdapter
 from analytics_assistant.src.core.schemas import (
@@ -86,7 +86,7 @@ class TableauAdapter(BasePlatformAdapter):
                 site=kwargs.get("site"),
             )
             
-            return self._convert_response(response)
+            return self._convert_response(response, vizql_request)
             
         except Exception as e:
             logger.error(f"查询执行失败: {e}")
@@ -108,20 +108,31 @@ class TableauAdapter(BasePlatformAdapter):
         """
         # 从 data_model 构建 field_metadata
         data_model = kwargs.get("data_model")
+        field_samples = kwargs.get("field_samples") or {}
+        # 兜底：从 data_model._field_samples_cache 读取（data_loader 挂载的）
+        if not field_samples and data_model and hasattr(data_model, '_field_samples_cache'):
+            field_samples = data_model._field_samples_cache or {}
         if data_model:
             field_metadata = {}
             fields = data_model.fields if hasattr(data_model, 'fields') else []
             for field in fields:
                 field_name = field.name if hasattr(field, 'name') else str(field)
-                field_metadata[field_name] = {
+                meta = {
                     "dataType": field.data_type if hasattr(field, 'data_type') else "STRING",
                     "caption": field.caption if hasattr(field, 'caption') else field_name,
                 }
+                # 从 field_samples 获取样本值（如果有）
+                samples = field_samples.get(field_name, {})
+                if not samples:
+                    # 也尝试用 caption 查找
+                    caption = meta["caption"]
+                    samples = field_samples.get(caption, {})
+                sample_values = samples.get("sample_values", []) if isinstance(samples, dict) else []
+                if sample_values:
+                    meta["sample_values"] = sample_values
+                field_metadata[field_name] = meta
             kwargs["field_metadata"] = field_metadata
             logger.debug(f"构建 field_metadata: {len(field_metadata)} 个字段")
-            # 调试：打印 dt 字段的元数据
-            if "dt" in field_metadata:
-                logger.info(f"dt 字段元数据: {field_metadata['dt']}")
         
         return self._query_builder.build(semantic_output, **kwargs)
     
@@ -141,22 +152,82 @@ class TableauAdapter(BasePlatformAdapter):
         """
         return self._query_builder.validate(semantic_output, **kwargs)
     
-    def _convert_response(self, response: dict) -> ExecuteResult:
-        """将 VizQL 响应转换为 ExecuteResult。"""
-        columns = []
-        for col in response.get("columns", []):
-            columns.append(ColumnInfo(
-                name=col.get("fieldCaption", col.get("name", "")),
-                data_type=col.get("dataType", "STRING"),
-                is_dimension=col.get("fieldRole") == "DIMENSION",
-                is_measure=col.get("fieldRole") == "MEASURE",
-                is_computation=col.get("columnClass") == "TABLE_CALCULATION",
-            ))
-        
+    def _convert_response(
+        self,
+        response: dict,
+        vizql_request: Optional[dict] = None,
+    ) -> ExecuteResult:
+        """将 VizQL 响应转换为 ExecuteResult。
+
+        VizQL API 响应只包含 data 数组，不包含列元数据。
+        列信息从数据行的 key 推断，角色从原始查询请求中匹配。
+
+        Args:
+            response: VizQL API 原始响应
+            vizql_request: 发送的 VizQL 查询请求，用于推断列角色
+        """
         rows = response.get("data", [])
         row_count = response.get("rowCount", len(rows))
         execution_time = response.get("executionTimeMs", 0)
-        
+
+        # 从数据行推断列名
+        col_names: list[str] = []
+        if rows:
+            col_names = list(rows[0].keys())
+
+        # 从查询请求构建列角色索引
+        dimension_cols: set[str] = set()
+        measure_cols: set[str] = set()
+        computation_cols: set[str] = set()
+
+        if vizql_request:
+            for field_def in vizql_request.get("fields", []):
+                caption = field_def.get("fieldCaption", "")
+                alias = field_def.get("fieldAlias", "")
+                func = field_def.get("function", "")
+                has_calc = "calculation" in field_def
+                has_table_calc = "tableCalculation" in field_def
+
+                if has_table_calc:
+                    # 表计算字段 — 响应中的 key 通常是 alias
+                    computation_cols.add(alias or caption)
+                    computation_cols.add(caption)
+                elif has_calc:
+                    # 内联计算字段（DATEPARSE 等）— 视为维度
+                    dimension_cols.add(caption)
+                elif func and func not in ("TRUNC_YEAR", "TRUNC_QUARTER",
+                                           "TRUNC_MONTH", "TRUNC_WEEK",
+                                           "TRUNC_DAY"):
+                    # 有聚合函数（SUM/AVG/COUNT 等）→ 度量
+                    # 响应中的 key 格式为 "FUNC(caption)"
+                    measure_cols.add(caption)
+                    measure_cols.add(f"{func}({caption})")
+                else:
+                    # 无聚合函数 → 维度
+                    dimension_cols.add(caption)
+
+        columns = []
+        for col_name in col_names:
+            is_dim = col_name in dimension_cols
+            is_meas = col_name in measure_cols
+            is_comp = col_name in computation_cols
+
+            # 如果都没匹配到，通过命名模式推断
+            if not (is_dim or is_meas or is_comp):
+                # "SUM(xxx)"、"AVG(xxx)" 等模式 → 度量
+                if "(" in col_name and col_name.endswith(")"):
+                    is_meas = True
+                else:
+                    is_dim = True
+
+            columns.append(ColumnInfo(
+                name=col_name,
+                data_type="REAL" if is_meas else "STRING",
+                is_dimension=is_dim,
+                is_measure=is_meas,
+                is_computation=is_comp,
+            ))
+
         return ExecuteResult(
             columns=columns,
             data=rows,

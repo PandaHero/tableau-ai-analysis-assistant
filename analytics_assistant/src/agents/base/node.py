@@ -519,6 +519,9 @@ async def _stream_structured_with_middleware(
     runtime = runner.build_runtime(config)
     current_messages = list(messages)
     current_state = dict(state) if state else {}
+    # SummarizationMiddleware 等中间件期望 state 中有 "messages" 键
+    if "messages" not in current_state:
+        current_state["messages"] = current_messages
     collected_thinking: list[str] = []
 
     # before_agent（整个 Agent 执行前，执行一次）
@@ -643,6 +646,8 @@ async def _stream_structured_with_middleware(
                     ToolMessage(content=f"未知工具: {tc['name']}", tool_call_id=tc["id"])
                 )
 
+        # 同步消息历史到 state，供 SummarizationMiddleware 等中间件使用
+        current_state["messages"] = current_messages
     # 达到最大迭代次数
     raise RuntimeError(f"最大迭代次数 ({max_iterations}) 已达到，未获得最终响应")
 

@@ -183,49 +183,63 @@ class TableauDataLoader:
         )
         
         # 创建字段索引（等待完成，确保后续 FieldRetriever 能使用 RAG 检索）
+        field_samples = {}
         if not skip_index_creation:
-            await self._ensure_field_index_async(datasource_id, data_model)
+            field_samples = await self._ensure_field_index_async(datasource_id, data_model)
             logger.info("字段索引创建完成")
-        
+
+        # 将 field_samples 挂到 data_model 上，供下游 query_builder 使用
+        try:
+            data_model._field_samples_cache = field_samples
+        except AttributeError:
+            pass
+
         return data_model
     
     async def _ensure_field_index_async(
         self,
         datasource_id: str,
         data_model: DataModel,
-    ) -> None:
+    ) -> dict:
         """
         异步创建字段索引（后台执行，不阻塞主流程）
-        
+
         Args:
             datasource_id: 数据源 LUID
             data_model: 数据模型
+
+        Returns:
+            field_samples 字典
         """
         try:
-            await self._ensure_field_index(datasource_id, data_model)
+            return await self._ensure_field_index(datasource_id, data_model)
         except Exception as e:
             logger.warning(f"后台创建字段索引失败: {e}")
+            return {}
     
     async def _ensure_field_index(
         self,
         datasource_id: str,
         data_model: DataModel,
-    ) -> None:
+    ) -> dict:
         """
         确保字段索引存在（使用字段语义推断结果）
-        
+
         流程：
         1. 检查索引是否已存在
         2. 获取字段样例数据（sample_values）
         3. 调用 FieldSemanticInference 进行推断（传入样例值提升准确性）
         4. 使用推断结果创建字段索引（包含语义属性和样例值）
-        
+
         索引文本格式：
         {caption}: {business_description}。别名: {aliases}。类型: {role}, {data_type}
-        
+
         Args:
             datasource_id: 数据源 LUID
             data_model: 数据模型
+
+        Returns:
+            field_samples 字典（字段名 → 样例信息），索引已存在时从 metadata 恢复
         """
         index_name = f"{FIELD_INDEX_PREFIX}{datasource_id}"
         
@@ -238,7 +252,8 @@ class TableauDataLoader:
                 logger.debug(f"字段索引已存在: {index_name}")
                 # 从索引 metadata 恢复 queryable 标志到 DataModel
                 self._restore_queryable_flags(rag_service, index_name, data_model)
-                return
+                # 从索引 metadata 恢复 sample_values
+                return self._restore_field_samples(rag_service, index_name)
             
             logger.info(f"创建字段索引: {index_name}")
             
@@ -409,10 +424,12 @@ class TableauDataLoader:
             )
             
             logger.info(f"字段索引创建完成: {index_name}, {len(documents)} 个字段")
-            
+            return field_samples
+
         except Exception as e:
             # 索引创建失败不应阻塞数据模型加载
             logger.warning(f"创建字段索引失败: {e}")
+            return {}
     
     def _restore_queryable_flags(
         self,
@@ -460,6 +477,38 @@ class TableauDataLoader:
             )
         except Exception as e:
             logger.debug(f"恢复 queryable 标志失败（索引可能不含此信息）: {e}")
+
+    def _restore_field_samples(
+        self,
+        rag_service: Any,
+        index_name: str,
+    ) -> dict:
+        """从已有索引的 metadata 恢复 field_samples。
+
+        Args:
+            rag_service: RAG 服务实例
+            index_name: 索引名称
+
+        Returns:
+            field_samples 字典（字段名 → {"sample_values": [...]})
+        """
+        field_samples: dict = {}
+        try:
+            index_fields = rag_service.index.get_index_fields(index_name)
+            if not index_fields:
+                return field_samples
+            for field_info in index_fields:
+                if not isinstance(field_info, dict):
+                    continue
+                caption = field_info.get("field_caption", "")
+                samples = field_info.get("sample_values")
+                if caption and samples:
+                    field_samples[caption] = {"sample_values": samples}
+            if field_samples:
+                logger.info(f"从索引恢复 {len(field_samples)} 个字段的 sample_values")
+        except Exception as e:
+            logger.debug(f"恢复 field_samples 失败: {e}")
+        return field_samples
     
     def _convert_graphql_fields(
         self,

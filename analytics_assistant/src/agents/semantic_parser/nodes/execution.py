@@ -74,6 +74,8 @@ async def query_adapter_node(
         vizql_query = platform_adapter.build_query(
             semantic_output,
             datasource_id=datasource_id,
+            data_model=ctx.data_model,
+            field_samples=ctx.field_samples,
         )
 
         logger.info("query_adapter_node: 成功构建 VizQL 查询")

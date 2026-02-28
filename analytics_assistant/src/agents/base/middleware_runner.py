@@ -266,7 +266,7 @@ class MiddlewareRunner:
         return ModelRequest(
             model=model,
             messages=messages,
-            tools=tools,
+            tools=tools or [],
             state=state,
             runtime=runtime,
             system_prompt=system_prompt,
