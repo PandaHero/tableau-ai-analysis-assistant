@@ -12,6 +12,8 @@ from .optimization import (
     dynamic_schema_builder_node,
     modular_prompt_builder_node,
 )
+from .global_understanding import global_understanding_node
+from .planner import analysis_planner_node
 from .retrieval import field_retriever_node, few_shot_manager_node
 from .understanding import semantic_understanding_node
 from .validation import output_validator_node, filter_validator_node
@@ -25,6 +27,8 @@ __all__ = [
     "feature_extractor_node",
     "dynamic_schema_builder_node",
     "modular_prompt_builder_node",
+    "global_understanding_node",
+    "analysis_planner_node",
     "field_retriever_node",
     "few_shot_manager_node",
     "semantic_understanding_node",

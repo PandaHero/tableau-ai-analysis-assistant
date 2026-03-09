@@ -214,9 +214,32 @@ class RulePrefilter:
             if complexity and complexity not in detected:
                 detected.append(complexity)
         
+        question_lower = question.lower()
+        
+        # 补充：检测排名/Top N（ranking 通常不会命中 computation_seeds）
+        table_calc_keywords = COMPLEXITY_KEYWORDS.get("table_calc", [])
+        if (
+            any(kw.lower() in question_lower for kw in table_calc_keywords)
+            or re.search(r"(?:前|后)\s*\d+", question)
+            or re.search(r"(?:top|bottom)\s*\d+", question_lower)
+        ):
+            if ComplexityType.RANK not in detected:
+                detected.append(ComplexityType.RANK)
+        
+        # 补充：检测同比/环比等时间比较表达
+        time_calc_keywords = COMPLEXITY_KEYWORDS.get("time_calc", [])
+        if any(kw in question_lower for kw in time_calc_keywords):
+            if ComplexityType.TIME_COMPARE not in detected:
+                detected.append(ComplexityType.TIME_COMPARE)
+        
+        # 补充：检测显式比率/占比类表达
+        derived_metric_keywords = COMPLEXITY_KEYWORDS.get("derived_metric", [])
+        if any(kw in question_lower for kw in derived_metric_keywords):
+            if ComplexityType.RATIO not in detected:
+                detected.append(ComplexityType.RATIO)
+        
         # 补充：检测子查询（这个在 computation_seeds 中没有覆盖）
         subquery_keywords = COMPLEXITY_KEYWORDS.get("subquery", [])
-        question_lower = question.lower()
         if any(kw in question_lower for kw in subquery_keywords):
             if ComplexityType.SUBQUERY not in detected:
                 detected.append(ComplexityType.SUBQUERY)

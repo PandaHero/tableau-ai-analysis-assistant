@@ -87,9 +87,11 @@ def _get_field_attr(obj: Any, *names, default=None) -> Any:
     return default
 
 def _create_llm_reranker(top_k: int) -> Optional[LLMReranker]:
-    """创建 LLMReranker 实例。
+    """创建 LLMReranker 实例（使用异步 LLM 调用，避免阻塞 event loop）。
 
-    使用 ModelManager 获取默认 LLM（统一走公司内部部署模型）。
+    使用 ModelManager 获取默认 LLM，同时提供：
+    - allm_call_fn：异步调用（arerank 优先使用，不阻塞 event loop）
+    - llm_call_fn：同步调用（作为 fallback）
     失败时返回 None（降级为无 rerank）。
 
     Args:
@@ -100,14 +102,17 @@ def _create_llm_reranker(top_k: int) -> Optional[LLMReranker]:
     """
     try:
         manager = get_model_manager()
-        # 使用默认模型（统一走公司内部部署），不再硬编码 deepseek-chat
         llm = manager.create_llm()
 
         def llm_call_fn(prompt: str) -> str:
             response = llm.invoke(prompt)
             return response.content if hasattr(response, 'content') else str(response)
 
-        return LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn)
+        async def allm_call_fn(prompt: str) -> str:
+            response = await llm.ainvoke(prompt)
+            return response.content if hasattr(response, 'content') else str(response)
+
+        return LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn, allm_call_fn=allm_call_fn)
     except Exception as e:
         logger.warning(f"创建 LLMReranker 失败，将跳过重排序: {e}")
         return None
@@ -150,12 +155,14 @@ class FieldRetriever:
         self,
         top_k: Optional[int] = None,
         fallback_multiplier: Optional[float] = None,
+        enable_rerank: Optional[bool] = None,
     ):
         """初始化 FieldRetriever。
 
         Args:
             top_k: 每类字段返回的候选数（None 从配置读取）
             fallback_multiplier: 降级时的倍数（None 从配置读取）
+            enable_rerank: 是否启用 LLM rerank（None 从配置读取）
         """
         self._load_config()
 
@@ -164,6 +171,8 @@ class FieldRetriever:
             self.top_k = top_k
         if fallback_multiplier is not None:
             self.fallback_multiplier = fallback_multiplier
+        if enable_rerank is not None:
+            self._rerank_enabled = enable_rerank
 
         # 延迟初始化：获取 RAGService 单例
         # 注意：在 __init__ 中获取全局单例，避免模块加载时初始化
@@ -177,6 +186,8 @@ class FieldRetriever:
                 logger.info("FieldRetriever: LLMReranker 已启用")
             else:
                 logger.warning("FieldRetriever: LLMReranker 创建失败，将跳过重排序")
+        else:
+            logger.info("FieldRetriever: 当前请求跳过 LLMReranker")
 
     def _load_config(self) -> None:
         """从配置文件加载参数。"""

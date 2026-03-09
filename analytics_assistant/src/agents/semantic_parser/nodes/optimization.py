@@ -6,19 +6,27 @@ from datetime import datetime
 from typing import Any
 
 from ..state import SemanticParserState
-from ..components import RulePrefilter, FeatureExtractor, DynamicSchemaBuilder
+from ..components import (
+    RulePrefilter,
+    FeatureExtractor,
+    DynamicSchemaBuilder,
+    get_feature_cache,
+)
 from ..schemas.prefilter import (
     FeatureExtractionOutput,
     PrefilterResult,
     FieldRAGResult,
     ComplexityType,
 )
+from ..schemas.planner import EvidenceContext, parse_analysis_plan, parse_step_intent
 from ..schemas.config import SemanticConfig
 from ..schemas.intermediate import FewShotExample
 from ..prompts import DynamicPromptBuilder
 from ..node_utils import parse_field_candidates, classify_fields, merge_metrics
 
 logger = logging.getLogger(__name__)
+
+_FEATURE_CONFIDENCE_FOR_EMBEDDING_WRITE = 0.75
 
 async def rule_prefilter_node(state: SemanticParserState) -> dict[str, Any]:
     """规则预处理节点
@@ -87,7 +95,10 @@ async def feature_extractor_node(state: SemanticParserState) -> dict[str, Any]:
     start_time = time.time()
 
     question = state.get("question", "")
+    datasource_luid = state.get("datasource_luid", "")
     prefilter_result_raw = state.get("prefilter_result")
+    current_step_intent_raw = state.get("current_step_intent")
+    evidence_context_raw = state.get("evidence_context")
 
     if not question:
         logger.warning("feature_extractor_node: 问题为空")
@@ -100,9 +111,41 @@ async def feature_extractor_node(state: SemanticParserState) -> dict[str, Any]:
         prefilter_result = PrefilterResult.model_validate(prefilter_result_raw)
     else:
         prefilter_result = PrefilterResult()
+    current_step_intent = parse_step_intent(current_step_intent_raw)
+    evidence_context = None
+    if evidence_context_raw:
+        evidence_context = EvidenceContext.model_validate(evidence_context_raw)
 
     extractor = FeatureExtractor()
-    result = await extractor.extract(question, prefilter_result)
+    result = await extractor.extract(
+        question,
+        prefilter_result,
+        current_step_intent=current_step_intent,
+        evidence_context=evidence_context,
+    )
+
+    feature_cache_written = False
+    feature_confident = (
+        not result.is_degraded
+        and (
+            bool(result.required_measures)
+            or bool(result.required_dimensions)
+            or bool(result.confirmed_time_hints)
+        )
+        and result.confirmation_confidence >= _FEATURE_CONFIDENCE_FOR_EMBEDDING_WRITE
+    )
+    include_cache_embedding = (
+        result.is_degraded
+        or (prefilter_result.low_confidence and not feature_confident)
+        or prefilter_result.detected_complexity != [ComplexityType.SIMPLE]
+    )
+    if question and datasource_luid and not result.is_degraded and current_step_intent is None:
+        feature_cache_written = get_feature_cache().set(
+            question=question,
+            datasource_luid=datasource_luid,
+            feature_output=result,
+            include_embedding=include_cache_embedding,
+        )
 
     elapsed_ms = (time.time() - start_time) * 1000
     logger.info(
@@ -116,7 +159,15 @@ async def feature_extractor_node(state: SemanticParserState) -> dict[str, Any]:
     return {
         "feature_extraction_output": result.model_dump(),
         "is_degraded": result.is_degraded,
-        "optimization_metrics": merge_metrics(state, feature_extractor_ms=elapsed_ms),
+        "optimization_metrics": merge_metrics(
+            state,
+            feature_extractor_ms=elapsed_ms,
+            feature_cache_written=feature_cache_written,
+            feature_cache_embedding_written=include_cache_embedding and feature_cache_written,
+            feature_extractor_confident=feature_confident,
+            feature_extractor_step_intent=bool(current_step_intent),
+            feature_cache_context_bypass=bool(current_step_intent),
+        ),
     }
 
 async def dynamic_schema_builder_node(state: SemanticParserState) -> dict[str, Any]:
@@ -210,6 +261,10 @@ async def modular_prompt_builder_node(state: SemanticParserState) -> dict[str, A
     field_candidates_raw = state.get("field_candidates", [])
     prefilter_result_raw = state.get("prefilter_result")
     feature_output_raw = state.get("feature_extraction_output")
+    analysis_plan_raw = state.get("analysis_plan")
+    current_step_intent_raw = state.get("current_step_intent")
+    evidence_context_raw = state.get("evidence_context")
+    global_understanding_raw = state.get("global_understanding")
     few_shot_examples_raw = state.get("few_shot_examples", [])
     current_time_str = state.get("current_time")
     chat_history = state.get("chat_history")
@@ -239,6 +294,15 @@ async def modular_prompt_builder_node(state: SemanticParserState) -> dict[str, A
     if feature_output_raw:
         feature_output = FeatureExtractionOutput.model_validate(feature_output_raw)
 
+    analysis_plan = parse_analysis_plan(
+        raw_analysis_plan=analysis_plan_raw,
+        raw_global_understanding=global_understanding_raw,
+    )
+    current_step_intent = parse_step_intent(current_step_intent_raw)
+    evidence_context = None
+    if evidence_context_raw:
+        evidence_context = EvidenceContext.model_validate(evidence_context_raw)
+
     schema_text = ""
     detected_complexity = [ComplexityType.SIMPLE]
     allowed_calc_types = []
@@ -262,6 +326,9 @@ async def modular_prompt_builder_node(state: SemanticParserState) -> dict[str, A
         few_shot_examples=few_shot_examples,
         prefilter_result=prefilter_result,
         feature_output=feature_output,
+        analysis_plan=analysis_plan,
+        current_step_intent=current_step_intent,
+        evidence_context=evidence_context,
     )
 
     elapsed_ms = (time.time() - start_time) * 1000

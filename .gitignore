@@ -134,6 +134,13 @@ desktop.ini
 # Sensitive files
 accounts.txt
 
+# SSL Certificates (私钥和 PFX 文件不提交)
+*.key
+*.pfx
+*.p12
+# 但允许提交证书文件（.crt）用于开发环境
+# !analytics_assistant/data/certs/*.crt
+
 # Test outputs
 test_outputs/
 analytics_assistant/tests/test_outputs/

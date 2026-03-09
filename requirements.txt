@@ -10,6 +10,7 @@ langchain-community>=0.4.1
 langchain-openai>=1.1.0
 langgraph>=1.0.9
 langgraph-checkpoint>=2.0.0
+langgraph-checkpoint-sqlite>=3.0.3
 langsmith>=0.4.0
 
 # ============================================
@@ -67,3 +68,4 @@ python-dateutil>=2.9.0
 # ============================================
 hypothesis>=6.100.0
 pytest>=8.0.0
+pytest-asyncio>=0.24.0

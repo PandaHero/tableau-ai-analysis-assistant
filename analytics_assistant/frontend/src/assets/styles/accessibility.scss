@@ -1,0 +1,402 @@
+/**
+ * 可访问性样式
+ * 包含焦点指示器、屏幕阅读器专用样式等
+ */
+
+// ── 屏幕阅读器专用类 ──
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+// 可聚焦时显示
+.sr-only-focusable:focus,
+.sr-only-focusable:active {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  white-space: normal;
+}
+
+// ── 跳过链接 ──
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 9999;
+  padding: var(--spacing-sm) var(--spacing-md);
+  background: var(--color-primary);
+  color: white;
+  text-decoration: none;
+  font-weight: var(--font-weight-semibold);
+  
+  &:focus {
+    left: 0;
+  }
+}
+
+// ── 焦点指示器 ──
+// 默认情况下隐藏焦点指示器(鼠标用户)
+*:focus {
+  outline: none;
+}
+
+// 键盘用户显示焦点指示器
+body.keyboard-user {
+  *:focus {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  
+  // 按钮焦点
+  button:focus,
+  a:focus {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  
+  // 输入框焦点
+  input:focus,
+  textarea:focus,
+  select:focus {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 0;
+    border-color: var(--color-primary);
+  }
+}
+
+// 使用 :focus-visible 伪类(现代浏览器)
+*:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+// ── 高对比度模式支持 ──
+@media (prefers-contrast: high) {
+  *:focus-visible {
+    outline-width: 3px;
+    outline-offset: 3px;
+  }
+  
+  button,
+  a {
+    border: 2px solid currentColor;
+  }
+}
+
+// ── 减少动画偏好 ──
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+// ── 触摸目标最小尺寸 ──
+// WCAG 2.1 要求触摸目标至少 44x44px
+@media (pointer: coarse) {
+  button,
+  a,
+  input[type="button"],
+  input[type="submit"],
+  input[type="reset"] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+// ── ARIA 实时区域 ──
+[aria-live="polite"],
+[aria-live="assertive"] {
+  position: relative;
+}
+
+// ── 禁用状态 ──
+[aria-disabled="true"],
+[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+// ── 隐藏元素 ──
+// 注意: aria-hidden 仅用于辅助技术，不应影响视觉显示。
+// 否则会把用于装饰的 SVG 图标也全部隐藏。
+
+// ── 展开/折叠状态 ──
+[aria-expanded="false"] + * {
+  display: none;
+}
+
+[aria-expanded="true"] + * {
+  display: block;
+}
+
+// ── 选中状态 ──
+[aria-selected="true"] {
+  background-color: var(--color-primary-50);
+  color: var(--color-primary);
+}
+
+// ── 无效状态 ──
+[aria-invalid="true"] {
+  border-color: var(--color-error);
+  
+  &:focus {
+    outline-color: var(--color-error);
+  }
+}
+
+// ── 必填字段 ──
+[aria-required="true"]::after {
+  content: " *";
+  color: var(--color-error);
+}
+
+// ── 加载状态 ──
+[aria-busy="true"] {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+// ── 模态框 ──
+[role="dialog"],
+[role="alertdialog"] {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1000;
+  background: var(--bg-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--spacing-lg);
+  max-width: 90vw;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+// 模态框遮罩
+[role="dialog"] + .modal-overlay,
+[role="alertdialog"] + .modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 999;
+}
+
+// ── 工具提示 ──
+[role="tooltip"] {
+  position: absolute;
+  z-index: 1000;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+// ── 进度条 ──
+[role="progressbar"] {
+  position: relative;
+  height: 8px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  
+  &::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: var(--color-primary);
+    width: var(--progress-value, 0%);
+    transition: width 0.3s ease;
+  }
+}
+
+// ── 标签页 ──
+[role="tablist"] {
+  display: flex;
+  border-bottom: 1px solid var(--border-color);
+}
+
+[role="tab"] {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  
+  &[aria-selected="true"] {
+    color: var(--color-primary);
+    
+    &::after {
+      content: "";
+      position: absolute;
+      bottom: -1px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--color-primary);
+    }
+  }
+}
+
+[role="tabpanel"] {
+  padding: var(--spacing-md);
+  
+  &[aria-hidden="true"] {
+    display: none;
+  }
+}
+
+// ── 列表 ──
+[role="list"] {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+[role="listitem"] {
+  padding: var(--spacing-sm);
+  
+  &[aria-selected="true"] {
+    background: var(--color-primary-50);
+  }
+}
+
+// ── 菜单 ──
+[role="menu"],
+[role="menubar"] {
+  list-style: none;
+  padding: var(--spacing-xs);
+  margin: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+
+[role="menuitem"] {
+  padding: var(--spacing-sm) var(--spacing-md);
+  cursor: pointer;
+  
+  &:hover,
+  &:focus {
+    background: var(--bg-hover);
+  }
+  
+  &[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+// ── 警告框 ──
+[role="alert"] {
+  padding: var(--spacing-md);
+  border-radius: var(--radius-sm);
+  border-left: 4px solid var(--color-error);
+  background: var(--color-error-50);
+  color: var(--color-error);
+}
+
+[role="status"] {
+  padding: var(--spacing-md);
+  border-radius: var(--radius-sm);
+  border-left: 4px solid var(--color-info);
+  background: var(--color-info-50);
+  color: var(--color-info);
+}
+
+// ── 搜索框 ──
+[role="searchbox"] {
+  padding: var(--spacing-sm) var(--spacing-md);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  
+  &:focus {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 0;
+    border-color: var(--color-primary);
+  }
+}
+
+// ── 开关 ──
+[role="switch"] {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background 0.2s;
+  
+  &::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  
+  &[aria-checked="true"] {
+    background: var(--color-primary);
+    
+    &::after {
+      transform: translateX(20px);
+    }
+  }
+}
+
+// ── 滑块 ──
+[role="slider"] {
+  position: relative;
+  height: 4px;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  
+  &::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: var(--slider-value, 0%);
+    transform: translate(-50%, -50%);
+    width: 16px;
+    height: 16px;
+    background: var(--color-primary);
+    border-radius: 50%;
+    box-shadow: var(--shadow-sm);
+  }
+  
+  &:focus::after {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}

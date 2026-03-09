@@ -1,0 +1,72 @@
+# 集成测试配置文件
+#
+# 定义集成测试的各项配置参数。
+# 支持通过环境变量覆盖配置值（使用 ${VAR_NAME} 语法）。
+
+# 测试模式
+mode: integration  # integration, quick, full
+
+# 超时配置（秒）
+timeouts:
+  default: 60.0
+  semantic_parsing: 90.0  # 调整为 90秒（集成测试使用真实 LLM，耗时较长）
+  field_mapping: 20.0
+  query_execution: 30.0
+  insight_generation: 120.0
+
+# 数据库配置
+database:
+  test_storage: analytics_assistant/data/test_storage.db
+  test_data_model: analytics_assistant/data/test_data_model.db
+  test_field_semantic: analytics_assistant/data/test_field_semantic.db
+
+# 日志配置
+logging:
+  level: DEBUG
+  file: analytics_assistant/tests/test_outputs/integration_tests.log
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# 性能配置
+performance:
+  enable_monitoring: true
+  regression_threshold: 1.2  # 慢 20% 视为退化
+  baseline_file: analytics_assistant/tests/test_outputs/performance_baseline.json
+
+# 并发配置
+concurrency:
+  max_concurrent_tests: 5
+  max_concurrent_queries: 3
+
+# 重试配置
+retry:
+  max_retries: 3
+  retry_delay: 1.0
+  exponential_backoff: true
+
+# 测试数据配置
+test_data:
+  dir: analytics_assistant/tests/integration/test_data
+  questions_file: questions.yaml
+  expected_outputs_file: expected_outputs.yaml
+  edge_cases_file: edge_cases.yaml
+
+# Tableau 配置
+tableau:
+  test_datasource_name: "销售分析"
+  test_datasource_luid: ""
+  domain: "https://cpse.cpgroup.cn:11080"
+  site: "ZF"
+
+# 报告配置
+reporting:
+  output_dir: analytics_assistant/tests/test_outputs
+  generate_html: true
+  generate_junit_xml: true
+  generate_coverage: true
+
+# PBT 配置（Property-Based Testing）
+hypothesis:
+  max_examples: 100
+  deadline: 60000  # 毫秒
+  verbosity: normal
+  database_file: analytics_assistant/tests/.hypothesis/examples

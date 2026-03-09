@@ -35,8 +35,8 @@ Agent 基础工具模块
     )
 """
 import logging
-import re
 import json
+import re
 from typing import (
     Any,
     AsyncIterator,
@@ -65,6 +65,7 @@ from .middleware_runner import (
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T', bound=BaseModel)
+_SCHEMA_INSTRUCTION_PREFIX = "\n\n请严格按照以下 JSON Schema 格式输出，不要添加任何其他内容：\n"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LLM 获取
@@ -164,17 +165,44 @@ def _inject_schema_instruction(
     """
     schema = output_model.model_json_schema()
     schema_instruction = (
-        "\n\n请严格按照以下 JSON Schema 格式输出，不要添加任何其他内容：\n"
+        f"{_SCHEMA_INSTRUCTION_PREFIX}"
         f"```json\n{json.dumps(schema, ensure_ascii=False, indent=2)}\n```"
     )
     augmented = list(messages)
     for i in range(len(augmented) - 1, -1, -1):
         if isinstance(augmented[i], HumanMessage):
+            content = str(augmented[i].content)
+            if _SCHEMA_INSTRUCTION_PREFIX in content:
+                break
             augmented[i] = HumanMessage(
-                content=str(augmented[i].content) + schema_instruction
+                content=content + schema_instruction
             )
             break
     return augmented
+
+
+def _parse_tool_call_args(
+    raw_args: str,
+    tool_name: str,
+    tool_call_id: str,
+) -> dict[str, Any]:
+    """解析工具调用参数并提供带上下文的错误。"""
+    if not raw_args:
+        return {}
+
+    try:
+        parsed_args = json.loads(raw_args)
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"工具参数不是有效 JSON: tool={tool_name}, tool_call_id={tool_call_id}"
+        ) from e
+
+    if not isinstance(parsed_args, dict):
+        raise ValueError(
+            f"工具参数必须是 JSON object: tool={tool_name}, tool_call_id={tool_call_id}"
+        )
+
+    return parsed_args
 
 async def _collect_stream_chunks(
     astream,
@@ -209,6 +237,7 @@ async def _collect_stream_chunks(
             token = chunk.content
             collected_content.append(token)
             if on_token:
+                logger.debug(f"[_collect_stream_chunks] 调用 on_token: {token[:20]}...")
                 await on_token(token)
             if on_partial:
                 full_content = "".join(collected_content)
@@ -434,8 +463,9 @@ async def _stream_structured_with_tools(
     collected_thinking: list[str] = []
 
     for iteration in range(max_iterations):
+        request_messages = _inject_schema_instruction(current_messages, output_model)
         content, tool_calls, additional_kwargs = await _collect_stream_chunks(
-            llm_with_tools.astream(current_messages, config=config),
+            llm_with_tools.astream(request_messages, config=config),
             on_token=on_token,
             on_partial=on_partial,
             on_thinking=on_thinking,
@@ -455,27 +485,42 @@ async def _stream_structured_with_tools(
             return parsed
 
         # 执行工具调用
+        parsed_tool_calls: list[tuple[dict[str, Any], Optional[dict[str, Any]], Optional[str]]] = []
+        ai_message_tool_calls: list[dict[str, Any]] = []
+        for tc in valid_tool_calls:
+            try:
+                args = _parse_tool_call_args(tc.get("args", ""), tc["name"], tc["id"])
+                parsed_tool_calls.append((tc, args, None))
+                ai_message_tool_calls.append(
+                    {"name": tc["name"], "args": args, "id": tc["id"]}
+                )
+            except ValueError as e:
+                error_message = str(e)
+                logger.warning(error_message)
+                parsed_tool_calls.append((tc, None, error_message))
+                ai_message_tool_calls.append(
+                    {"name": tc["name"], "args": {}, "id": tc["id"]}
+                )
+
         ai_message = AIMessage(
             content=content,
-            tool_calls=[
-                {
-                    "name": tc["name"],
-                    "args": json.loads(tc["args"]) if tc["args"] else {},
-                    "id": tc["id"],
-                }
-                for tc in valid_tool_calls
-            ]
+            tool_calls=ai_message_tool_calls,
         )
         current_messages.append(ai_message)
 
         # 查找并执行工具
         tools_by_name = {t.name: t for t in tools}
-        for tc in valid_tool_calls:
+        for tc, args, parse_error in parsed_tool_calls:
+            if parse_error:
+                current_messages.append(
+                    ToolMessage(content=f"Error: {parse_error}", tool_call_id=tc["id"])
+                )
+                continue
+
             tool = tools_by_name.get(tc["name"])
             if tool:
                 try:
-                    args = json.loads(tc["args"]) if tc["args"] else {}
-                    result = await tool.ainvoke(args)
+                    result = await tool.ainvoke(args or {})
                     current_messages.append(
                         ToolMessage(content=str(result), tool_call_id=tc["id"])
                     )
@@ -579,8 +624,9 @@ async def _stream_structured_with_middleware(
         async def _base_model_handler(req: Any) -> ModelResponse:
             nonlocal iter_content, iter_tool_calls, iter_additional_kwargs
             """实际的流式 LLM 调用"""
+            request_messages = _inject_schema_instruction(req.messages, output_model)
             iter_content, iter_tool_calls, iter_additional_kwargs = await _collect_stream_chunks(
-                req.model.astream(req.messages, config=config),
+                req.model.astream(request_messages, config=config),
                 on_token=on_token,
                 on_partial=on_partial,
                 on_thinking=on_thinking,
@@ -612,26 +658,42 @@ async def _stream_structured_with_middleware(
             return parsed
 
         # 有工具调用：构建 AIMessage 并执行工具
+        parsed_tool_calls: list[tuple[dict[str, Any], Optional[dict[str, Any]], Optional[str]]] = []
+        ai_message_tool_calls: list[dict[str, Any]] = []
+        for tc in valid_tool_calls:
+            try:
+                args = _parse_tool_call_args(tc.get("args", ""), tc["name"], tc["id"])
+                parsed_tool_calls.append((tc, args, None))
+                ai_message_tool_calls.append(
+                    {"name": tc["name"], "args": args, "id": tc["id"]}
+                )
+            except ValueError as e:
+                error_message = str(e)
+                logger.warning(error_message)
+                parsed_tool_calls.append((tc, None, error_message))
+                ai_message_tool_calls.append(
+                    {"name": tc["name"], "args": {}, "id": tc["id"]}
+                )
+
         ai_message = AIMessage(
             content=iter_content,
-            tool_calls=[
-                {
-                    "name": tc["name"],
-                    "args": json.loads(tc["args"]) if tc["args"] else {},
-                    "id": tc["id"],
-                }
-                for tc in valid_tool_calls
-            ],
+            tool_calls=ai_message_tool_calls,
         )
         current_messages.append(ai_message)
 
-        for tc in valid_tool_calls:
+        for tc, args, parse_error in parsed_tool_calls:
+            if parse_error:
+                current_messages.append(
+                    ToolMessage(content=f"Error: {parse_error}", tool_call_id=tc["id"])
+                )
+                continue
+
             tool = tools_by_name.get(tc["name"])
             if tool:
                 # wrap_tool_call（包装工具调用，支持重试和结果截断）
                 tool_call_dict = {
                     "name": tc["name"],
-                    "args": json.loads(tc["args"]) if tc["args"] else {},
+                    "args": args or {},
                     "id": tc["id"],
                 }
                 tool_msg = await runner.call_tool_with_middleware(
@@ -686,9 +748,6 @@ async def _middleware_single_call(
     model_request = runner.build_model_request(llm, messages, state=state, runtime=runtime)
     state = await runner.run_before_model(state, runtime, request=model_request)
 
-    # 注入 JSON Schema 指令
-    augmented_messages = _inject_schema_instruction(messages, output_model)
-
     # 使用闭包变量捕获流式结果
     call_content = ""
     call_additional_kwargs: dict[str, Any] = {}
@@ -696,8 +755,9 @@ async def _middleware_single_call(
     # wrap_model_call
     async def _base_handler(req: Any) -> ModelResponse:
         nonlocal call_content, call_additional_kwargs
+        request_messages = _inject_schema_instruction(req.messages, output_model)
         call_content, _, call_additional_kwargs = await _collect_stream_chunks(
-            llm.astream(augmented_messages, config=config),
+            req.model.astream(request_messages, config=config),
             on_token=on_token,
             on_partial=on_partial,
             on_thinking=on_thinking,

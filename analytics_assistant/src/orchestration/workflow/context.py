@@ -287,6 +287,7 @@ class WorkflowContext(BaseModel):
     async def load_field_semantic(
         self,
         force_refresh: bool = False,
+        allow_online_inference: bool = True,
     ) -> "WorkflowContext":
         """加载字段语义信息
         
@@ -295,6 +296,7 @@ class WorkflowContext(BaseModel):
         
         Args:
             force_refresh: 是否强制刷新（跳过缓存）
+            allow_online_inference: 是否允许在当前请求中触发在线推断
         
         Returns:
             更新了 field_semantic 的新 WorkflowContext
@@ -302,9 +304,15 @@ class WorkflowContext(BaseModel):
         if self.data_model is None:
             logger.warning("无法加载字段语义：data_model 为空")
             return self
+
+        cached_samples = None
+        if hasattr(self.data_model, "_field_samples_cache"):
+            cached_samples = self.data_model._field_samples_cache or None
         
         # 如果已有语义信息且不强制刷新，直接返回
         if self.field_semantic is not None and not force_refresh:
+            if cached_samples and self.field_samples is None:
+                return self.model_copy(update={"field_samples": cached_samples})
             return self
         
         # 检查 data_model 中是否已有缓存的语义结果
@@ -312,7 +320,16 @@ class WorkflowContext(BaseModel):
             cached = self.data_model._field_semantic_cache
             if cached:
                 logger.info(f"复用 data_model 中缓存的语义结果: {len(cached)} 个字段")
-                return self.model_copy(update={"field_semantic": cached})
+                update_fields = {"field_semantic": cached}
+                if cached_samples and self.field_samples is None:
+                    update_fields["field_samples"] = cached_samples
+                return self.model_copy(update=update_fields)
+
+        if not allow_online_inference:
+            logger.info("跳过在线字段语义推断，当前请求仅复用已有缓存/索引产物")
+            if cached_samples and self.field_samples is None:
+                return self.model_copy(update={"field_samples": cached_samples})
+            return self
         
         try:
             # 获取字段列表
@@ -328,6 +345,7 @@ class WorkflowContext(BaseModel):
             result = await infer_field_semantic(
                 datasource_luid=self.datasource_luid,
                 fields=fields,
+                field_samples=self.field_samples or cached_samples,
             )
             
             # 直接使用 FieldSemanticAttributes 对象，不转换为字典
@@ -345,7 +363,10 @@ class WorkflowContext(BaseModel):
                     pass  # data_model 不支持动态属性，忽略
             
             # 返回更新后的上下文
-            return self.model_copy(update={"field_semantic": semantic_dict})
+            update_fields = {"field_semantic": semantic_dict}
+            if cached_samples and self.field_samples is None:
+                update_fields["field_samples"] = cached_samples
+            return self.model_copy(update=update_fields)
             
         except Exception as e:
             logger.error(f"字段语义推断失败: {e}")
@@ -370,6 +391,15 @@ class WorkflowContext(BaseModel):
         """
         if not self.field_semantic or not field_candidates:
             return field_candidates
+
+        def _semantic_get(info: Any, key: str, default: Any = None) -> Any:
+            if isinstance(info, dict):
+                value = info.get(key, default)
+            else:
+                value = getattr(info, key, default)
+            if hasattr(value, "value"):
+                return value.value
+            return value
         
         for candidate in field_candidates:
             field_name = getattr(candidate, 'field_name', None)
@@ -379,23 +409,82 @@ class WorkflowContext(BaseModel):
             semantic_info = self.field_semantic.get(field_name)
             if not semantic_info:
                 continue
-            
-            # 设置语义属性（semantic_info 可能是 FieldSemanticAttributes 或 dict）
-            if hasattr(candidate, 'hierarchy_category'):
-                candidate.hierarchy_category = getattr(semantic_info, 'category', None)
-            if hasattr(candidate, 'hierarchy_level'):
-                candidate.hierarchy_level = getattr(semantic_info, 'level', None)
-            if hasattr(candidate, 'granularity'):
-                candidate.granularity = getattr(semantic_info, 'granularity', None)
-            if hasattr(candidate, 'parent_dimension'):
-                candidate.parent_dimension = getattr(semantic_info, 'parent_dimension', None)
-            if hasattr(candidate, 'child_dimension'):
-                candidate.child_dimension = getattr(semantic_info, 'child_dimension', None)
+
+            semantic_role = _semantic_get(semantic_info, "role")
+            semantic_category = _semantic_get(semantic_info, "category")
+            semantic_level = _semantic_get(semantic_info, "level")
+            semantic_granularity = _semantic_get(semantic_info, "granularity")
+            semantic_parent = _semantic_get(semantic_info, "parent_dimension")
+            semantic_child = _semantic_get(semantic_info, "child_dimension")
+            semantic_description = _semantic_get(semantic_info, "business_description")
+            semantic_measure_category = _semantic_get(semantic_info, "measure_category")
+            semantic_aliases = [
+                str(alias).strip()
+                for alias in (_semantic_get(semantic_info, "aliases", []) or [])
+                if str(alias).strip()
+            ]
+
+            # 回填字段语义信息，便于 prompt 构建和简单查询 shortcut 更充分利用字段语义。
+            current_description = getattr(candidate, "business_description", None)
+            if (
+                hasattr(candidate, "business_description")
+                and semantic_description
+                and (
+                    not current_description
+                    or current_description in {
+                        getattr(candidate, "field_name", ""),
+                        getattr(candidate, "field_caption", ""),
+                    }
+                )
+            ):
+                candidate.business_description = semantic_description
+
+            if hasattr(candidate, "description") and semantic_description and not getattr(candidate, "description", None):
+                candidate.description = semantic_description
+
+            if hasattr(candidate, "aliases"):
+                existing_aliases = [
+                    str(alias).strip()
+                    for alias in (getattr(candidate, "aliases", None) or [])
+                    if str(alias).strip()
+                ]
+                merged_aliases: list[str] = []
+                seen_aliases: set[str] = set()
+                for alias in [*existing_aliases, *semantic_aliases]:
+                    key = alias.lower()
+                    if key in seen_aliases:
+                        continue
+                    seen_aliases.add(key)
+                    merged_aliases.append(alias)
+                if merged_aliases:
+                    candidate.aliases = merged_aliases
+
+            if hasattr(candidate, "role") and semantic_role and not getattr(candidate, "role", None):
+                candidate.role = semantic_role
+
+            if hasattr(candidate, "category") and semantic_category and not getattr(candidate, "category", None):
+                candidate.category = semantic_category
+            if hasattr(candidate, "level") and semantic_level and not getattr(candidate, "level", None):
+                candidate.level = semantic_level
+            if hasattr(candidate, "granularity") and semantic_granularity:
+                candidate.granularity = semantic_granularity
+            if hasattr(candidate, "measure_category") and semantic_measure_category and not getattr(candidate, "measure_category", None):
+                candidate.measure_category = semantic_measure_category
+
+            if hasattr(candidate, 'hierarchy_category') and semantic_category:
+                candidate.hierarchy_category = semantic_category
+            if hasattr(candidate, 'hierarchy_level') and semantic_level:
+                candidate.hierarchy_level = semantic_level
+            if hasattr(candidate, 'parent_dimension') and semantic_parent:
+                candidate.parent_dimension = semantic_parent
+            if hasattr(candidate, 'child_dimension') and semantic_child:
+                candidate.child_dimension = semantic_child
             
             # 构建下钻选项
-            child_dim = getattr(semantic_info, 'child_dimension', None)
-            if hasattr(candidate, 'drill_down_options') and child_dim:
-                candidate.drill_down_options = [child_dim]
+            if hasattr(candidate, 'drill_down_options') and semantic_child:
+                existing_options = list(getattr(candidate, "drill_down_options", None) or [])
+                if semantic_child not in existing_options:
+                    candidate.drill_down_options = [*existing_options, semantic_child]
         
         return field_candidates
 

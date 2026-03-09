@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tableau Extension Debug</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .status {
+            background: white;
+            padding: 20px;
+            margin: 10px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .success { color: #2CA02C; }
+        .error { color: #D62728; }
+        .warning { color: #FF7F0E; }
+        pre {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Tableau Extension 诊断工具</h1>
+    
+    <div class="status">
+        <h2>1. 环境检测</h2>
+        <div id="env-check">检测中...</div>
+    </div>
+    
+    <div class="status">
+        <h2>2. Tableau API 加载</h2>
+        <div id="api-check">检测中...</div>
+    </div>
+    
+    <div class="status">
+        <h2>3. 初始化测试</h2>
+        <div id="init-check">检测中...</div>
+    </div>
+    
+    <div class="status">
+        <h2>4. 详细日志</h2>
+        <pre id="logs"></pre>
+    </div>
+
+    <!-- Tableau Extensions API -->
+    <script src="/tableau.extensions.1.latest.min.js"></script>
+    
+    <script>
+        const logs = [];
+        function log(msg, type = 'info') {
+            const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+            logs.push(`[${timestamp}] [${type.toUpperCase()}] ${msg}`);
+            document.getElementById('logs').textContent = logs.join('\n');
+            console.log(`[${type}]`, msg);
+        }
+
+        // 1. 环境检测
+        function checkEnvironment() {
+            const envDiv = document.getElementById('env-check');
+            const checks = [];
+            
+            // User Agent
+            checks.push(`User Agent: ${navigator.userAgent}`);
+            log(`User Agent: ${navigator.userAgent}`);
+            
+            // URL
+            checks.push(`URL: ${window.location.href}`);
+            log(`URL: ${window.location.href}`);
+            
+            // Protocol
+            checks.push(`Protocol: ${window.location.protocol}`);
+            log(`Protocol: ${window.location.protocol}`);
+            
+            // Parent window
+            const hasParent = window.parent !== window;
+            checks.push(`Has Parent: ${hasParent ? 'Yes' : 'No'}`);
+            log(`Has Parent: ${hasParent}`);
+            
+            envDiv.innerHTML = checks.map(c => `<div>${c}</div>`).join('');
+        }
+
+        // 2. Tableau API 检测
+        function checkTableauAPI() {
+            const apiDiv = document.getElementById('api-check');
+            const checks = [];
+            
+            if (typeof tableau === 'undefined') {
+                checks.push('<span class="error">❌ tableau 对象未定义</span>');
+                log('tableau 对象未定义', 'error');
+            } else {
+                checks.push('<span class="success">✅ tableau 对象已加载</span>');
+                log('tableau 对象已加载', 'success');
+                
+                if (tableau.extensions) {
+                    checks.push('<span class="success">✅ tableau.extensions 存在</span>');
+                    log('tableau.extensions 存在', 'success');
+                    
+                    if (typeof tableau.extensions.initializeAsync === 'function') {
+                        checks.push('<span class="success">✅ initializeAsync 方法存在</span>');
+                        log('initializeAsync 方法存在', 'success');
+                    } else {
+                        checks.push('<span class="error">❌ initializeAsync 方法不存在</span>');
+                        log('initializeAsync 方法不存在', 'error');
+                    }
+                    
+                    if (tableau.extensions.dashboardContent) {
+                        checks.push('<span class="success">✅ dashboardContent 已就绪</span>');
+                        log('dashboardContent 已就绪', 'success');
+                    } else {
+                        checks.push('<span class="warning">⚠️ dashboardContent 未就绪</span>');
+                        log('dashboardContent 未就绪', 'warning');
+                    }
+                } else {
+                    checks.push('<span class="error">❌ tableau.extensions 不存在</span>');
+                    log('tableau.extensions 不存在', 'error');
+                }
+            }
+            
+            apiDiv.innerHTML = checks.join('<br>');
+        }
+
+        // 3. 初始化测试
+        async function testInitialization() {
+            const initDiv = document.getElementById('init-check');
+            
+            if (typeof tableau === 'undefined' || !tableau.extensions) {
+                initDiv.innerHTML = '<span class="error">❌ 无法测试：Tableau API 未加载</span>';
+                return;
+            }
+            
+            initDiv.innerHTML = '<span class="warning">⏳ 正在初始化...</span>';
+            log('开始初始化测试', 'info');
+            
+            try {
+                const timeout = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('初始化超时 (10秒)')), 10000)
+                );
+                
+                const init = tableau.extensions.initializeAsync();
+                
+                await Promise.race([init, timeout]);
+                
+                initDiv.innerHTML = '<span class="success">✅ 初始化成功</span>';
+                log('初始化成功', 'success');
+                
+                // 获取数据源信息
+                try {
+                    const dashboard = tableau.extensions.dashboardContent.dashboard;
+                    const worksheets = dashboard.worksheets;
+                    log(`Dashboard: ${dashboard.name}`, 'info');
+                    log(`Worksheets: ${worksheets.length}`, 'info');
+                    
+                    const dataSources = await dashboard.getDataSourcesAsync();
+                    log(`Data Sources: ${dataSources.length}`, 'info');
+                    dataSources.forEach(ds => {
+                        log(`  - ${ds.name} (${ds.id})`, 'info');
+                    });
+                } catch (err) {
+                    log(`获取数据源失败: ${err.message}`, 'error');
+                }
+                
+            } catch (err) {
+                initDiv.innerHTML = `<span class="error">❌ 初始化失败: ${err.message}</span>`;
+                log(`初始化失败: ${err.message}`, 'error');
+                log(`错误堆栈: ${err.stack}`, 'error');
+            }
+        }
+
+        // 执行检测
+        window.addEventListener('DOMContentLoaded', async () => {
+            log('开始诊断', 'info');
+            
+            checkEnvironment();
+            
+            // 等待 Tableau API 加载
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            checkTableauAPI();
+            
+            // 测试初始化
+            await testInitialization();
+            
+            log('诊断完成', 'info');
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,153 @@
+/* CSS 变量定义 */
+
+:root {
+  /* ── 品牌色 ── */
+  --color-primary: #1F77B4;
+  --color-primary-light: #3a94d4;
+  --color-primary-dark: #155e8e;
+  --color-primary-subtle: rgba(31, 119, 180, 0.08);
+  --color-primary-subtle-hover: rgba(31, 119, 180, 0.13);
+
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --color-error: #dc2626;
+  --color-info: #0891b2;
+
+  /* ── 文字色 ── */
+  --color-text-primary: #1a1d23;
+  --color-text-secondary: #52596a;
+  --color-text-tertiary: #8b93a5;
+  --color-text-disabled: #c2c8d4;
+  --color-text-inverse: #ffffff;
+
+  /* ── 背景色（微冷白层次系统）── */
+  --color-bg-primary: #f8fafc;
+  --color-bg-secondary: #f1f5f9;
+  --color-bg-tertiary: #e8edf3;
+  --color-bg-hover: #e2e8f0;
+  --color-bg-white: #ffffff;
+
+  /* ── 边框色 ── */
+  --color-border: #dde3ee;
+  --color-border-light: #edf0f7;
+  --color-border-dark: #c4cdd9;
+  --color-border-focus: rgba(31, 119, 180, 0.5);
+
+  /* ── 阴影 ── */
+  --color-shadow: rgba(15, 23, 42, 0.08);
+  --color-shadow-light: rgba(15, 23, 42, 0.04);
+  --color-shadow-dark: rgba(15, 23, 42, 0.14);
+  --color-shadow-primary: rgba(31, 119, 180, 0.2);
+
+  /* ── 组件语义色（兼容旧引用）── */
+  --color-bg: var(--color-bg-primary);
+  --color-card: var(--color-bg-white);
+  --color-text: var(--color-text-primary);
+  --header-bg: var(--color-bg-white);
+  --message-area-bg: var(--color-bg-secondary);
+  --border-color: var(--color-border);
+  --text-secondary: var(--color-text-secondary);
+  --scrollbar-track: var(--color-bg-secondary);
+  --scrollbar-thumb: var(--color-border);
+  --scrollbar-thumb-hover: var(--color-border-dark);
+
+  /* ── 间距 ── */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-xxl: 48px;
+
+  /* ── 圆角 ── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-round: 9999px;
+
+  /* ── 阴影组合 ── */
+  --shadow-xs: 0 1px 2px var(--color-shadow-light);
+  --shadow-sm: 0 2px 6px var(--color-shadow-light), 0 1px 2px var(--color-shadow);
+  --shadow-md: 0 4px 12px var(--color-shadow), 0 2px 4px var(--color-shadow-light);
+  --shadow-lg: 0 8px 24px var(--color-shadow-dark), 0 2px 8px var(--color-shadow);
+  --shadow-xl: 0 16px 40px var(--color-shadow-dark), 0 4px 12px var(--color-shadow);
+  --shadow-card: 0 1px 4px var(--color-shadow-light), 0 0 0 1px var(--color-border-light);
+  --shadow-focus: 0 0 0 3px var(--color-primary-subtle), 0 2px 8px var(--color-shadow-primary);
+
+  /* ── 字体 ── */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-family-mono: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+
+  --font-size-xs: 11px;
+  --font-size-sm: 13px;
+  --font-size-md: 15px;
+  --font-size-lg: 17px;
+  --font-size-xl: 20px;
+  --font-size-xxl: 24px;
+  --font-size-3xl: 30px;
+
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.75;
+
+  /* ── 过渡 ── */
+  --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-spring: 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* ── Z-index ── */
+  --z-index-dropdown: 1000;
+  --z-index-modal: 1050;
+  --z-index-popover: 1060;
+  --z-index-tooltip: 1070;
+}
+
+/* ── 深色主题 ── */
+[data-theme='dark'],
+html.dark {
+  --color-primary: #3a94d4;
+  --color-primary-light: #5aaee3;
+  --color-primary-dark: #2479b5;
+  --color-primary-subtle: rgba(58, 148, 212, 0.12);
+  --color-primary-subtle-hover: rgba(58, 148, 212, 0.18);
+
+  --color-text-primary: #e8ecf2;
+  --color-text-secondary: #9ba5b7;
+  --color-text-tertiary: #616b7e;
+  --color-text-disabled: #424c5c;
+
+  --color-bg-primary: #0f1117;
+  --color-bg-secondary: #161b25;
+  --color-bg-tertiary: #1c2230;
+  --color-bg-hover: #222a38;
+  --color-bg-white: #19202e;
+
+  --color-border: #2a3347;
+  --color-border-light: #1f2b3c;
+  --color-border-dark: #374457;
+  --color-border-focus: rgba(58, 148, 212, 0.5);
+
+  --color-shadow: rgba(0, 0, 0, 0.35);
+  --color-shadow-light: rgba(0, 0, 0, 0.2);
+  --color-shadow-dark: rgba(0, 0, 0, 0.5);
+  --color-shadow-primary: rgba(58, 148, 212, 0.2);
+
+  --color-bg: var(--color-bg-primary);
+  --color-card: var(--color-bg-white);
+  --color-text: var(--color-text-primary);
+  --header-bg: var(--color-bg-white);
+  --message-area-bg: var(--color-bg-secondary);
+  --border-color: var(--color-border);
+  --text-secondary: var(--color-text-secondary);
+  --scrollbar-track: var(--color-bg-secondary);
+  --scrollbar-thumb: var(--color-border);
+  --scrollbar-thumb-hover: var(--color-border-dark);
+}

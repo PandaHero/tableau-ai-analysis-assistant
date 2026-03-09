@@ -247,6 +247,22 @@ class VizQLClient:
         # 不应该到达这里
         raise last_error or VizQLError("请求失败")
 
+    def _raise_graphql_errors(self, response_data: dict[str, Any]) -> None:
+        """检查 GraphQL 响应中的 errors 字段并抛出异常。"""
+        errors = response_data.get("errors")
+        if not errors:
+            return
+
+        messages = []
+        for error in errors:
+            if isinstance(error, dict):
+                messages.append(str(error.get("message", error)))
+            else:
+                messages.append(str(error))
+
+        error_message = "; ".join(messages) or "GraphQL 查询失败"
+        raise VizQLError(message=f"GraphQL 查询失败: {error_message}")
+
     # ══════════════════════════════════════════════════════════════════════════
     # API 方法
     # ══════════════════════════════════════════════════════════════════════════
@@ -407,8 +423,10 @@ class VizQLClient:
         payload = {"query": query}
         if variables:
             payload["variables"] = variables
-        
-        return await self._execute_request(url, headers, payload)
+
+        response_data = await self._execute_request(url, headers, payload)
+        self._raise_graphql_errors(response_data)
+        return response_data
     
     async def get_datasource_fields_metadata(
         self,
@@ -503,8 +521,14 @@ class VizQLClient:
         """
         通过数据源名称获取 LUID
         
+        支持多种匹配策略：
+        1. 精确匹配（带项目名）
+        2. 精确匹配（不带项目名）
+        3. 前缀匹配（数据源名称是输入的前缀）
+        4. 模糊匹配（互相包含）
+        
         Args:
-            datasource_name: 数据源名称
+            datasource_name: 数据源名称（可能包含 "| 项目 : xxx" 后缀）
             api_key: Tableau 认证 token
             project_name: 项目名称（可选，用于精确匹配）
         
@@ -534,19 +558,34 @@ class VizQLClient:
         if project_name:
             for ds in datasources:
                 if ds.get("name") == datasource_name and ds.get("projectName") == project_name:
+                    logger.info(f"精确匹配（带项目）: {ds.get('name')} -> {ds.get('luid')}")
                     return ds.get("luid")
         
         # 精确匹配名称
         for ds in datasources:
             if ds.get("name") == datasource_name:
+                logger.info(f"精确匹配: {ds.get('name')} -> {ds.get('luid')}")
                 return ds.get("luid")
         
-        # 模糊匹配（名称包含搜索词）
+        # 前缀匹配（数据源名称是输入的前缀）
+        # 例如：输入 "销售分析(IMPALA) | 项目 : 001-数据源"，数据源名称是 "销售分析(IMPALA)"
+        for ds in datasources:
+            ds_name = ds.get("name", "")
+            if ds_name and datasource_name.startswith(ds_name):
+                logger.info(f"前缀匹配: {ds_name} -> {ds.get('luid')} (输入: {datasource_name})")
+                return ds.get("luid")
+        
+        # 模糊匹配（互相包含）
         name_lower = datasource_name.lower()
         for ds in datasources:
-            if name_lower in ds.get("name", "").lower():
+            ds_name = ds.get("name", "")
+            ds_name_lower = ds_name.lower()
+            if name_lower in ds_name_lower or ds_name_lower in name_lower:
+                logger.info(f"模糊匹配: {ds_name} -> {ds.get('luid')} (输入: {datasource_name})")
                 return ds.get("luid")
         
+        logger.warning(f"未找到匹配的数据源: {datasource_name}")
+        logger.debug(f"可用数据源: {[ds.get('name') for ds in datasources]}")
         return None
 
 # ══════════════════════════════════════════════════════════════════════════════

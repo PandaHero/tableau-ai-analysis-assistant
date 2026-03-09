@@ -288,3 +288,119 @@ class TestChatStreamSSE:
         )
 
         assert response.headers.get("cache-control") == "no-cache"
+
+    @patch(
+        "analytics_assistant.src.api.routers.chat.WorkflowExecutor",
+    )
+    @patch(
+        "analytics_assistant.src.api.routers.chat.get_history_manager",
+    )
+    def test_request_id_propagated_to_response_and_events(
+        self,
+        mock_get_hm,
+        mock_executor_cls,
+    ):
+        """显式传入的 request id 会回传到响应头、SSE 事件和 executor。"""
+        mock_hm = MagicMock()
+        mock_hm.truncate_history.return_value = [
+            {"role": "user", "content": "hello"},
+        ]
+        mock_hm.estimate_history_tokens.return_value = 10
+        mock_get_hm.return_value = mock_hm
+
+        async def mock_stream(*args, **kwargs) -> AsyncIterator[Dict[str, Any]]:
+            yield {"type": "token", "content": "你好"}
+            yield {"type": "complete"}
+
+        mock_executor = MagicMock()
+        mock_executor.execute_stream = mock_stream
+        mock_executor_cls.return_value = mock_executor
+
+        client = TestClient(app)
+        request_id = "req-test-123"
+        response = client.post(
+            "/api/chat/stream",
+            json=_make_chat_body(),
+            headers={
+                "X-Tableau-Username": "admin",
+                "X-Request-ID": request_id,
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers.get("x-request-id") == request_id
+        mock_executor_cls.assert_called_once_with("admin", request_id=request_id)
+
+        lines = response.text.strip().split("\n\n")
+        events = []
+        for line in lines:
+            if line.startswith("data: "):
+                events.append(json.loads(line[len("data: "):]))
+
+        assert events
+        assert all(event.get("requestId") == request_id for event in events)
+
+    @patch(
+        "analytics_assistant.src.api.routers.chat.WorkflowExecutor",
+    )
+    @patch(
+        "analytics_assistant.src.api.routers.chat.get_history_manager",
+    )
+    def test_optimization_metrics_preserved_in_sse_events(
+        self,
+        mock_get_hm,
+        mock_executor_cls,
+    ):
+        """executor 透传的 optimization_metrics 不应在 SSE 路由中丢失。"""
+        mock_hm = MagicMock()
+        mock_hm.truncate_history.return_value = [
+            {"role": "user", "content": "hello"},
+        ]
+        mock_hm.estimate_history_tokens.return_value = 10
+        mock_get_hm.return_value = mock_hm
+
+        async def mock_stream(*args, **kwargs) -> AsyncIterator[Dict[str, Any]]:
+            yield {
+                "type": "clarification",
+                "question": "请选择字段",
+                "options": ["销售方 (Sold Nm)"],
+                "optimization_metrics": {
+                    "auth_ms": 12.3,
+                    "semantic_understanding_ms": 45.6,
+                },
+            }
+            yield {
+                "type": "complete",
+                "optimization_metrics": {
+                    "workflow_executor_ms": 78.9,
+                },
+            }
+
+        mock_executor = MagicMock()
+        mock_executor.execute_stream = mock_stream
+        mock_executor_cls.return_value = mock_executor
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/chat/stream",
+            json=_make_chat_body(),
+            headers={"X-Tableau-Username": "admin"},
+        )
+
+        assert response.status_code == 200
+        lines = response.text.strip().split("\n\n")
+        events = []
+        for line in lines:
+            if line.startswith("data: "):
+                events.append(json.loads(line[len("data: "):]))
+
+        clarification_event = next(e for e in events if e["type"] == "clarification")
+        complete_event = next(e for e in events if e["type"] == "complete")
+
+        assert clarification_event["optimization_metrics"] == {
+            "auth_ms": 12.3,
+            "semantic_understanding_ms": 45.6,
+        }
+        assert complete_event["optimization_metrics"] == {
+            "workflow_executor_ms": 78.9,
+        }

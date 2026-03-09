@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from .time_hint_generator import TimeHintGenerator
 from ..schemas.intermediate import FieldCandidate, FewShotExample
+from ..schemas.planner import AnalysisPlan, EvidenceContext, PlanMode, StepIntent
 from ..schemas.prefilter import ComplexityType
 from ..schemas.config import SemanticConfig
 from ..components.history_manager import HistoryManager
@@ -69,6 +70,12 @@ BASE_PROMPT_HEADER = '''你是一个数据分析助手，负责理解用户的�
 {time_hints}
 </context>
 
+{analysis_plan_section}
+
+{current_step_intent_section}
+
+{evidence_context_section}
+
 <available_fields>
 {field_list}
 </available_fields>
@@ -104,6 +111,38 @@ COMPLEX_TASK_TEMPLATE = '''<computation_guide>
 6. self_check: 自检结果
 </task>'''
 
+ANALYSIS_PLAN_TEMPLATE = '''<analysis_plan>
+当前问题不应按单一步骤的简单聚合直接理解，请参考以下分析计划：
+- 模式: {plan_mode}
+- 目标: {goal}
+- 执行策略: {execution_strategy}
+- 推理重点: {reasoning_focus}
+- 建议子问题:
+{sub_questions}
+- 若单次查询无法覆盖所有子问题，优先生成验证主问题的首个关键查询骨架；若口径缺失，则发起澄清。
+</analysis_plan>'''
+
+EVIDENCE_CONTEXT_TEMPLATE = '''<evidence_context>
+以下是前序步骤已经沉淀出的结构化证据，请在当前步骤中优先复用这些上下文，避免重复分析：
+- 原始问题: {primary_question}
+- 已完成步骤:
+{completed_steps}
+- 已定位异常对象: {anomalous_entities}
+- 已验证解释轴: {validated_axes}
+- 尚未解决的问题: {open_questions}
+</evidence_context>'''
+
+CURRENT_STEP_INTENT_TEMPLATE = '''<current_step_intent>
+你当前正在执行分析计划中的一个具体步骤，请优先完成这个步骤的目标：
+- 步骤标题: {title}
+- 步骤目标: {goal}
+- 依赖步骤: {depends_on}
+- 语义重点: {semantic_focus}
+- 预期输出: {expected_output}
+- 候选解释轴/定位维度: {candidate_axes}
+- 如果缺失以下口径，应优先澄清: {clarification_if_missing}
+</current_step_intent>'''
+
 # 问题和历史部分
 PROMPT_FOOTER = '''
 <user_question>
@@ -121,6 +160,12 @@ COMPLEXITY_NAMES = {
     ComplexityType.SHARE: "占比",
     ComplexityType.CUMULATIVE: "累计",
     ComplexityType.SUBQUERY: "子查询",
+}
+
+PLAN_MODE_NAMES = {
+    PlanMode.DIRECT_QUERY: "直接查询",
+    PlanMode.DECOMPOSED_QUERY: "复杂拆解",
+    PlanMode.WHY_ANALYSIS: "原因分析",
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -173,6 +218,9 @@ class DynamicPromptBuilder:
         few_shot_examples: Optional[list[FewShotExample]] = None,
         prefilter_result: Optional[Any] = None,
         feature_output: Optional[Any] = None,
+        analysis_plan: Optional[AnalysisPlan] = None,
+        current_step_intent: Optional[StepIntent] = None,
+        evidence_context: Optional[EvidenceContext] = None,
     ) -> str:
         """构建 Prompt
         
@@ -187,6 +235,9 @@ class DynamicPromptBuilder:
             few_shot_examples: Few-shot 示例
             prefilter_result: PrefilterResult（用于计算种子插入）
             feature_output: FeatureExtractionOutput（用于计算种子插入）
+            analysis_plan: AnalysisPlan（用于复杂问题 / why 问题的多步分析提示）
+            current_step_intent: StepIntent（当前正在执行的步骤意图）
+            evidence_context: EvidenceContext（用于 follow-up step 复用前序证据）
         
         Returns:
             构建好的 Prompt 字符串
@@ -204,17 +255,25 @@ class DynamicPromptBuilder:
         few_shot_section = self._format_few_shot_examples(
             few_shot_examples, config.max_few_shot_examples
         )
+
+        # 4. 格式化分析计划
+        analysis_plan_section = self._format_analysis_plan(analysis_plan)
+        current_step_intent_section = self._format_current_step_intent(current_step_intent)
+        evidence_context_section = self._format_evidence_context(evidence_context)
         
-        # 4. 构建头部
+        # 5. 构建头部
         header = BASE_PROMPT_HEADER.format(
             current_date=config.current_date.isoformat(),
             timezone=config.timezone,
             time_hints=time_hints,
+            analysis_plan_section=analysis_plan_section,
+            current_step_intent_section=current_step_intent_section,
+            evidence_context_section=evidence_context_section,
             field_list=field_list,
             few_shot_section=few_shot_section,
         )
         
-        # 5. 构建任务部分
+        # 6. 构建任务部分
         if primary_complexity == ComplexityType.SIMPLE or not schema_json:
             task_section = SIMPLE_TASK_TEMPLATE
         else:
@@ -225,19 +284,19 @@ class DynamicPromptBuilder:
                 schema_section=f"<computation_schema>\n{schema_json}\n</computation_schema>",
             )
         
-        # 6. 格式化历史
+        # 7. 格式化历史
         history_section = self._format_history(history)
         
-        # 7. 构建尾部
+        # 8. 构建尾部
         footer = PROMPT_FOOTER.format(
             question=question,
             history_section=history_section,
         )
         
-        # 8. 组装
+        # 9. 组装
         base_prompt = header + "\n\n" + task_section + footer
         
-        # 9. 插入计算种子（如果高置信度）
+        # 10. 插入计算种子（如果高置信度）
         if self._should_insert_computation_seeds(prefilter_result, feature_output):
             seeds = self._collect_computation_seeds(prefilter_result, feature_output)
             if seeds:
@@ -246,6 +305,96 @@ class DynamicPromptBuilder:
                 base_prompt = self._insert_computation_module(base_prompt, seeds_module)
         
         return base_prompt
+
+    def _format_analysis_plan(self, analysis_plan: Optional[AnalysisPlan]) -> str:
+        """格式化 planner 输出，帮助模型保留多步分析视角。"""
+        if not analysis_plan or not analysis_plan.needs_planning:
+            return ""
+
+        plan_mode = PLAN_MODE_NAMES.get(analysis_plan.plan_mode, analysis_plan.plan_mode.value)
+        goal = analysis_plan.goal or "需要先拆解再执行"
+        reasoning_focus = "；".join(analysis_plan.reasoning_focus) or "无"
+
+        if analysis_plan.sub_questions:
+            sub_questions = "\n".join(
+                f"{idx}. {step.title}: {step.question}"
+                for idx, step in enumerate(analysis_plan.sub_questions, start=1)
+            )
+        else:
+            sub_questions = "1. 先确认关键分析对象和口径"
+
+        return ANALYSIS_PLAN_TEMPLATE.format(
+            plan_mode=plan_mode,
+            goal=goal,
+            execution_strategy=analysis_plan.execution_strategy,
+            reasoning_focus=reasoning_focus,
+            sub_questions=sub_questions,
+        )
+
+    def _format_current_step_intent(
+        self,
+        current_step_intent: Optional[StepIntent],
+    ) -> str:
+        """格式化当前正在执行的步骤意图。"""
+        if not current_step_intent:
+            return ""
+
+        goal = current_step_intent.goal or current_step_intent.purpose or "完成当前分析步骤"
+        depends_on = "、".join(current_step_intent.depends_on) if current_step_intent.depends_on else "无"
+        semantic_focus = "、".join(current_step_intent.semantic_focus) if current_step_intent.semantic_focus else "无"
+        expected_output = current_step_intent.expected_output or "输出当前步骤的查询结果与关键证据"
+        candidate_axes = "、".join(current_step_intent.candidate_axes) if current_step_intent.candidate_axes else "无"
+        clarification_if_missing = (
+            "、".join(current_step_intent.clarification_if_missing)
+            if current_step_intent.clarification_if_missing
+            else "无"
+        )
+
+        return CURRENT_STEP_INTENT_TEMPLATE.format(
+            title=current_step_intent.title,
+            goal=goal,
+            depends_on=depends_on,
+            semantic_focus=semantic_focus,
+            expected_output=expected_output,
+            candidate_axes=candidate_axes,
+            clarification_if_missing=clarification_if_missing,
+        )
+
+    def _format_evidence_context(
+        self,
+        evidence_context: Optional[EvidenceContext],
+    ) -> str:
+        """格式化多步分析的前序证据上下文。"""
+        if not evidence_context or not evidence_context.step_artifacts:
+            return ""
+
+        completed_steps = "\n".join(
+            f"- {artifact.title}: {artifact.table_summary or '已完成，等待进一步总结'}"
+            for artifact in evidence_context.step_artifacts[-3:]
+        )
+        anomalous_entities = (
+            "、".join(evidence_context.anomalous_entities[:5])
+            if evidence_context.anomalous_entities
+            else "暂无"
+        )
+        validated_axes = (
+            "、".join(evidence_context.validated_axes[:5])
+            if evidence_context.validated_axes
+            else "暂无"
+        )
+        open_questions = (
+            "；".join(evidence_context.open_questions[:5])
+            if evidence_context.open_questions
+            else "暂无"
+        )
+
+        return EVIDENCE_CONTEXT_TEMPLATE.format(
+            primary_question=evidence_context.primary_question,
+            completed_steps=completed_steps,
+            anomalous_entities=anomalous_entities,
+            validated_axes=validated_axes,
+            open_questions=open_questions,
+        )
     
     def _get_primary_complexity(self, complexity_list: list[ComplexityType]) -> ComplexityType:
         """获取主要复杂度类型（按优先级）"""

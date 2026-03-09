@@ -17,7 +17,7 @@ SemanticParser 状态定义
 字段分组：
 1. 输入字段：question, chat_history, datasource_luid, current_time
 2. 组件输出：intent_router_output, cache_hit, field_candidates, few_shot_examples, semantic_output
-3. 筛选值确认：confirmed_filters（多轮累积）
+3. 计划与筛选值确认：global_understanding, analysis_plan, confirmed_filters（多轮累积）
 4. 流程控制：needs_clarification, clarification_question, clarification_options, clarification_source
 5. 错误处理：retry_count, error_feedback, pipeline_error, error_history, correction_abort_reason
 6. 最终输出：semantic_query, parse_result
@@ -322,6 +322,89 @@ class SemanticParserState(TypedDict, total=False):
         "is_degraded": bool
     }
     """
+
+    analysis_plan: Optional[dict[str, Any]]
+    """AnalysisPlan 兼容字段（通常由 global_understanding 主链直接回填）
+
+    兼容说明：
+    - 主链优先使用 `global_understanding.analysis_plan`
+    - 为兼容旧节点 / parse_result，仍保留平铺后的 `analysis_plan`
+    - `analysis_planner_node` 仅作为独立兼容函数存在，不再是主图必经节点
+
+    结构：
+    {
+        "plan_mode": "direct_query" | "decomposed_query" | "why_analysis",
+        "needs_planning": bool,
+        "requires_llm_reasoning": bool,
+        "goal": Optional[str],
+        "execution_strategy": str,
+        "reasoning_focus": [str],
+        "sub_questions": [{
+            "title": str,
+            "question": str,
+            "purpose": Optional[str],
+            "step_type": "query" | "synthesis",
+            "uses_primary_query": bool
+        }],
+        "retrieval_focus_terms": [str],
+        "planner_confidence": float
+    }
+    """
+
+    current_step_intent: Optional[dict[str, Any]]
+    """当前正在执行的步骤意图（StepIntent 序列化后）
+
+    结构：
+    {
+        "step_id": Optional[str],
+        "title": str,
+        "goal": Optional[str],
+        "question": str,
+        "purpose": Optional[str],
+        "step_type": "query" | "synthesis" | "replan",
+        "uses_primary_query": bool,
+        "depends_on": [str],
+        "semantic_focus": [str],
+        "expected_output": Optional[str],
+        "candidate_axes": [str],
+        "clarification_if_missing": [str]
+    }
+    """
+
+    global_understanding: Optional[dict[str, Any]]
+    """全局语义理解输出（GlobalUnderstandingOutput 序列化后）
+
+    结构：
+    {
+        "analysis_mode": "single_query" | "complex_single_query" | "multi_step_analysis" | "why_analysis",
+        "single_query_feasible": bool,
+        "single_query_blockers": [str],
+        "decomposition_reason": Optional[str],
+        "needs_clarification": bool,
+        "clarification_question": Optional[str],
+        "clarification_options": [str],
+        "primary_restated_question": Optional[str],
+        "risk_flags": [str],
+        "llm_confidence": float,
+        "analysis_plan": Optional[dict]
+    }
+    """
+
+    evidence_context: Optional[dict[str, Any]]
+    """多步分析过程中逐步累积的结构化证据上下文（EvidenceContext 序列化后）
+
+    结构：
+    {
+        "primary_question": str,
+        "baseline_type": Optional[str],
+        "key_entities": [str],
+        "anomalous_entities": [str],
+        "validated_axes": [str],
+        "open_questions": [str],
+        "step_artifacts": [dict],
+        "axis_scores": [dict]
+    }
+    """
     
     field_rag_result: Optional[dict[str, Any]]
     """FieldRetriever 输出（FieldRAGResult 序列化后）
@@ -372,12 +455,19 @@ class SemanticParserState(TypedDict, total=False):
     {
         "rule_prefilter_ms": float,
         "feature_extractor_ms": float,
+        "global_understanding_ms": float,
+        "global_understanding_llm_used": bool,
+        "global_understanding_fallback_used": bool,
+        "analysis_planner_ms": float,  # 仅兼容层独立调用时出现
+        "analysis_planner_compat_fallback": bool,
         "field_retriever_ms": float,
         "dynamic_schema_builder_ms": float,
         "modular_prompt_builder_ms": float,
         "output_validator_ms": float,
         "total_optimization_ms": float,
         "feature_cache_hit": bool,
+        "feature_cache_context_bypass": bool,
+        "feature_extractor_step_intent": bool,
         "token_reduction_percent": float
     }
     """

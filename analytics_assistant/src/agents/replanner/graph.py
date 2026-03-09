@@ -112,6 +112,7 @@ async def run_replanner_agent(
         return ReplanDecision(
             should_replan=False,
             reason=f"已达到最大重规划轮数上限 ({max_rounds} 轮)",
+            suggested_questions=[],
         )
 
     # 获取 LLM
@@ -263,6 +264,10 @@ def _build_replan_history_summary(
         should_replan = decision.get("should_replan", False)
         reason = decision.get("reason", "")
         new_question = decision.get("new_question", "")
+        if not new_question:
+            candidate_questions = decision.get("candidate_questions") or []
+            if candidate_questions and isinstance(candidate_questions[0], dict):
+                new_question = str(candidate_questions[0].get("question") or "")
 
         if should_replan and new_question:
             parts.append(f"- 第 {i} 轮: 重规划 → \"{new_question}\" (原因: {reason[:60]}...)")

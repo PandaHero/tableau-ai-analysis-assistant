@@ -502,9 +502,11 @@ async def _setup_tableau_env() -> tuple:
         datasource_luid=data_model.datasource_id,
         data_model=data_model,
         auth=auth,
+        field_samples=getattr(data_model, "_field_samples_cache", None),
         current_time=datetime.now().isoformat(),
         platform_adapter=platform_adapter,
     )
+    ctx = await ctx.load_field_semantic(allow_online_inference=False)
 
     # 编译图
     checkpointer = MemorySaver()

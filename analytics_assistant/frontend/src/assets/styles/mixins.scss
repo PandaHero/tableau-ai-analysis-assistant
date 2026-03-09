@@ -1,0 +1,418 @@
+// SCSS Mixins - 可复用的样式片段
+
+@use 'sass:math';
+@use './variables.scss' as *;
+
+// ── 响应式断点 ──
+
+// 最小宽度断点
+@mixin breakpoint-up($size) {
+  @if $size == xs {
+    @media (min-width: $breakpoint-xs) { @content; }
+  } @else if $size == sm {
+    @media (min-width: $breakpoint-sm) { @content; }
+  } @else if $size == md {
+    @media (min-width: $breakpoint-md) { @content; }
+  } @else if $size == lg {
+    @media (min-width: $breakpoint-lg) { @content; }
+  } @else if $size == xl {
+    @media (min-width: $breakpoint-xl) { @content; }
+  }
+}
+
+// 最大宽度断点
+@mixin breakpoint-down($size) {
+  @if $size == xs {
+    @media (max-width: calc(#{$breakpoint-xs} - 1px)) { @content; }
+  } @else if $size == sm {
+    @media (max-width: calc(#{$breakpoint-sm} - 1px)) { @content; }
+  } @else if $size == md {
+    @media (max-width: calc(#{$breakpoint-md} - 1px)) { @content; }
+  } @else if $size == lg {
+    @media (max-width: calc(#{$breakpoint-lg} - 1px)) { @content; }
+  } @else if $size == xl {
+    @media (max-width: calc(#{$breakpoint-xl} - 1px)) { @content; }
+  }
+}
+
+// 区间断点
+@mixin breakpoint-between($min, $max) {
+  @media (min-width: $min) and (max-width: calc(#{$max} - 1px)) { @content; }
+}
+
+// ── Flexbox 布局 ──
+
+// Flex 居中
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// Flex 垂直居中
+@mixin flex-align-center {
+  display: flex;
+  align-items: center;
+}
+
+// Flex 水平居中
+@mixin flex-justify-center {
+  display: flex;
+  justify-content: center;
+}
+
+// Flex 两端对齐
+@mixin flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+// Flex 列布局
+@mixin flex-column {
+  display: flex;
+  flex-direction: column;
+}
+
+// ── 文本处理 ──
+
+// 单行文本截断
+@mixin text-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// 多行文本截断
+@mixin text-clamp($lines: 2) {
+  display: -webkit-box;
+  -webkit-line-clamp: $lines;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// 文本不可选
+@mixin text-no-select {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+// ── 滚动条样式 ──
+
+@mixin scrollbar($width: 8px, $track-color: null, $thumb-color: null) {
+  &::-webkit-scrollbar {
+    width: $width;
+    height: $width;
+  }
+  
+  &::-webkit-scrollbar-track {
+    background: $track-color or var(--scrollbar-track);
+  }
+  
+  &::-webkit-scrollbar-thumb {
+    background: $thumb-color or var(--scrollbar-thumb);
+    border-radius: calc($width / 2);
+    
+    &:hover {
+      background: var(--scrollbar-thumb-hover);
+    }
+  }
+}
+
+// 隐藏滚动条
+@mixin scrollbar-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+// ── 阴影效果 ──
+
+@mixin shadow-sm {
+  box-shadow: $shadow-sm;
+}
+
+@mixin shadow-md {
+  box-shadow: $shadow-md;
+}
+
+@mixin shadow-lg {
+  box-shadow: $shadow-lg;
+}
+
+@mixin shadow-xl {
+  box-shadow: $shadow-xl;
+}
+
+// ── 过渡动画 ──
+
+@mixin transition($properties...) {
+  transition-property: $properties;
+  transition-duration: $transition-normal;
+  transition-timing-function: ease-out;
+}
+
+@mixin transition-fast($properties...) {
+  transition-property: $properties;
+  transition-duration: $transition-fast;
+  transition-timing-function: ease-out;
+}
+
+@mixin transition-slow($properties...) {
+  transition-property: $properties;
+  transition-duration: $transition-slow;
+  transition-timing-function: ease-out;
+}
+
+// ── 位置定位 ──
+
+// 绝对定位居中
+@mixin absolute-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+// 绝对定位填充
+@mixin absolute-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+// 固定定位填充
+@mixin fixed-fill {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+// ── 按钮样式 ──
+
+// 基础按钮
+@mixin button-base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: $spacing-sm $spacing-md;
+  border: none;
+  border-radius: $radius-sm;
+  font-size: $font-size-base;
+  font-weight: $font-weight-medium;
+  line-height: $line-height-normal;
+  cursor: pointer;
+  transition: opacity $transition-fast, background-color $transition-fast;
+  
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  
+  &:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+}
+
+// 主要按钮
+@mixin button-primary {
+  @include button-base;
+  background-color: var(--color-primary);
+  color: var(--text-inverse);
+}
+
+// 次要按钮
+@mixin button-secondary {
+  @include button-base;
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  
+  &:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+  }
+}
+
+// 幽灵按钮
+@mixin button-ghost {
+  @include button-base;
+  background-color: transparent;
+  color: var(--text-secondary);
+  
+  &:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+  }
+}
+
+// ── 输入框样式 ──
+
+@mixin input-base {
+  padding: $spacing-sm $spacing-md;
+  border: 1px solid var(--border-color);
+  border-radius: $radius-sm;
+  font-size: $font-size-base;
+  line-height: $line-height-normal;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  transition: border-color $transition-fast;
+  
+  &:focus {
+    outline: none;
+    border-color: var(--border-focus);
+    border-width: 2px;
+    padding: calc(#{$spacing-sm} - 1px) calc(#{$spacing-md} - 1px);
+  }
+  
+  &::placeholder {
+    color: var(--text-tertiary);
+  }
+  
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+// ── 卡片样式 ──
+
+@mixin card {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  box-shadow: $shadow-sm;
+}
+
+@mixin card-hover {
+  @include card;
+  transition: box-shadow $transition-fast, transform $transition-fast;
+  
+  &:hover {
+    box-shadow: $shadow-md;
+    transform: translateY(-2px);
+  }
+}
+
+// ── 遮罩层 ──
+
+@mixin backdrop {
+  @include fixed-fill;
+  background-color: rgba(0, 0, 0, 0.3);
+  z-index: $z-index-modal-backdrop;
+}
+
+// ── 加载动画 ──
+
+@mixin loading-spinner($size: 20px, $color: var(--color-primary)) {
+  width: $size;
+  height: $size;
+  border: 2px solid transparent;
+  border-top-color: $color;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+// ── 脉冲动画 ──
+
+@mixin pulse-animation {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+// ── 淡入动画 ──
+
+@mixin fade-in($duration: $transition-normal) {
+  animation: fadeIn $duration ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+// ── 滑入动画 ──
+
+@mixin slide-in-right($duration: $transition-slow) {
+  animation: slideInRight $duration ease-out;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@mixin slide-in-bottom($duration: $transition-slow) {
+  animation: slideInBottom $duration ease-out;
+}
+
+@keyframes slideInBottom {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+// ── 可访问性 ──
+
+// 仅屏幕阅读器可见
+@mixin sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+// 焦点可见样式
+@mixin focus-visible {
+  &:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+}
+
+// ── 打印样式 ──
+
+@mixin print-hidden {
+  @media print {
+    display: none !important;
+  }
+}
+
+@mixin print-only {
+  display: none;
+  
+  @media print {
+    display: block !important;
+  }
+}

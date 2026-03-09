@@ -5,15 +5,17 @@ from typing import Any, Optional
 
 from langgraph.types import RunnableConfig
 
+from analytics_assistant.src.agents.base.context import get_context
+
 from ..state import SemanticParserState
 from ..components import (
     ErrorCorrector,
     FeedbackLearner,
-    QueryCache,
+    get_query_cache,
 )
 from ..schemas.output import SemanticOutput
 from ..schemas.error_correction import ErrorCorrectionHistory
-from analytics_assistant.src.agents.base.context import get_context
+from ..schemas.prefilter import PrefilterResult, ComplexityType
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +177,10 @@ async def error_corrector_node(state: SemanticParserState) -> dict[str, Any]:
         "thinking": result.thinking,
     }
 
-async def feedback_learner_node(state: SemanticParserState) -> dict[str, Any]:
+async def feedback_learner_node(
+    state: SemanticParserState,
+    config: Optional[RunnableConfig] = None,
+) -> dict[str, Any]:
     """反馈学习节点
 
     记录成功的查询，更新缓存，学习用户反馈。
@@ -195,6 +200,14 @@ async def feedback_learner_node(state: SemanticParserState) -> dict[str, Any]:
     semantic_query = state.get("semantic_query")
     datasource_luid = state.get("datasource_luid", "")
     confirmed_filters = state.get("confirmed_filters", [])
+    optimization_metrics = dict(state.get("optimization_metrics") or {})
+    is_degraded = bool(state.get("is_degraded", False))
+    ctx = get_context(config) if config else None
+    prefilter_result_raw = state.get("prefilter_result")
+    prefilter_result = (
+        PrefilterResult.model_validate(prefilter_result_raw)
+        if prefilter_result_raw else None
+    )
 
     if not semantic_output_raw:
         logger.warning("feedback_learner_node: 缺少 semantic_output")
@@ -209,15 +222,32 @@ async def feedback_learner_node(state: SemanticParserState) -> dict[str, Any]:
 
     # 缓存成功的查询
     if datasource_luid and semantic_query:
-        cache = QueryCache()
-        query_str = str(semantic_query) if not isinstance(semantic_query, str) else semantic_query
-        cache.set(
-            question=question,
-            datasource_luid=datasource_luid,
-            schema_hash="",
-            semantic_output=semantic_output_raw,
-            query=query_str,
-        )
+        cache = get_query_cache()
+        schema_hash = getattr(ctx, "schema_hash", "")
+        if schema_hash:
+            include_cache_embedding = (
+                is_degraded
+                or (bool(prefilter_result.low_confidence) if prefilter_result else False)
+                or (
+                    prefilter_result.detected_complexity != [ComplexityType.SIMPLE]
+                    if prefilter_result else False
+                )
+            )
+            optimization_metrics["query_cache_embedding_written"] = include_cache_embedding
+            cache.set(
+                question=question,
+                datasource_luid=datasource_luid,
+                schema_hash=schema_hash,
+                semantic_output=semantic_output_raw,
+                query=semantic_query,
+                analysis_plan=state.get("analysis_plan"),
+                global_understanding=state.get("global_understanding"),
+                include_embedding=include_cache_embedding,
+            )
+        else:
+            logger.warning(
+                "feedback_learner_node: 缺少 schema_hash，跳过 QueryCache 写入"
+            )
 
     # 学习同义词
     if confirmed_filters and datasource_luid:
@@ -238,6 +268,11 @@ async def feedback_learner_node(state: SemanticParserState) -> dict[str, Any]:
             "success": True,
             "query_id": semantic_output.query_id,
             "semantic_output": semantic_output_raw,
+            "analysis_plan": state.get("analysis_plan"),
+            "global_understanding": state.get("global_understanding"),
             "query": semantic_query,
+            "is_degraded": is_degraded,
+            "optimization_metrics": optimization_metrics,
+            "query_cache_hit": bool(state.get("cache_hit", False)),
         }
     }

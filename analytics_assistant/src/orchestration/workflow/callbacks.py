@@ -31,20 +31,28 @@ logger = logging.getLogger(__name__)
 # LLM 调用节点 → ProcessingStage
 _LLM_NODE_MAPPING: dict[str, str] = {
     "feature_extractor": "understanding",
+    "global_understanding_stage": "understanding",
     "semantic_understanding": "understanding",
+    "insight_agent": "generating",
+    "replanner_agent": "replanning",
     "field_mapper": "mapping",
     "field_semantic": "understanding",
 }
 
 # 用户可见节点（不调用 LLM，但需要展示进度）
 _VISIBLE_NODE_MAPPING: dict[str, str] = {
+    "authentication": "preparing",
+    "data_preparation": "preparing",
     "query_adapter": "building",
     "tableau_query": "executing",
     "feedback_learner": "generating",
+    "insight_agent": "generating",
+    "replanner_agent": "replanning",
     "rule_prefilter": "understanding",
+    "global_understanding_stage": "understanding",
     "filter_validator": "building",
     "output_validator": "building",
-    "error_corrector": "building",
+    "error_corrector": "understanding",
 }
 
 # 合并映射
@@ -52,6 +60,7 @@ _ALL_NODE_MAPPING: dict[str, str] = {**_LLM_NODE_MAPPING, **_VISIBLE_NODE_MAPPIN
 
 # 阶段显示名称
 _STAGE_NAMES_ZH: dict[str, str] = {
+    "preparing": "准备数据",
     "understanding": "理解问题",
     "mapping": "字段映射",
     "building": "构建查询",
@@ -60,6 +69,7 @@ _STAGE_NAMES_ZH: dict[str, str] = {
 }
 
 _STAGE_NAMES_EN: dict[str, str] = {
+    "preparing": "Preparing Data",
     "understanding": "Understanding",
     "mapping": "Mapping Fields",
     "building": "Building Query",

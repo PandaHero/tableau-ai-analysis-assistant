@@ -1,0 +1,158 @@
+# 标准测试问题数据集
+# 
+# 包含 20+ 个标准测试问题，覆盖各种查询类型
+# 每个问题包含：
+# - id: 唯一标识符
+# - category: 类别（simple, multi_dim, filter, time_series, calculation, ranking, complex）
+# - question: 用户问题文本
+# - expected_intent: 预期意图类型
+# - expected_confidence_min: 最小置信度要求
+# - description: 测试目的说明
+
+questions:
+  # ========== 简单查询（3个）==========
+  - id: simple_001
+    category: simple
+    question: "显示所有产品的销售额"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.7
+    description: "测试简单的单度量查询，验证能否正确识别销售额度量字段"
+
+  - id: simple_002
+    category: simple
+    question: "各地区的订单数量"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.7
+    description: "测试简单的单维度单度量查询，验证能否同时识别维度和度量"
+
+  - id: simple_003
+    category: simple
+    question: "按产品类别统计销售额"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.7
+    description: "测试按维度分组的聚合查询"
+
+  # ========== 多维度查询（3个）==========
+  - id: multi_dim_001
+    category: multi_dim
+    question: "按地区和产品类别显示销售额和利润"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.6
+    description: "测试多维度多度量查询，验证能否识别2个维度和2个度量"
+
+  - id: multi_dim_002
+    category: multi_dim
+    question: "各地区各产品的订单数量和平均订单金额"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.6
+    description: "测试多维度多度量查询，包含聚合函数"
+
+  - id: multi_dim_003
+    category: multi_dim
+    question: "按年份、季度、地区统计销售额"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.6
+    description: "测试多时间维度查询"
+
+  # ========== 带筛选查询（3个）==========
+  - id: filter_001
+    category: filter
+    question: "2024年的销售额"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.7
+    description: "测试年份筛选，验证能否正确解析时间筛选条件"
+
+  - id: filter_002
+    category: filter
+    question: "华东地区的订单数量"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.7
+    description: "测试地区筛选，验证能否正确解析分类筛选条件"
+
+  - id: filter_003
+    category: filter
+    question: "销售额大于100万的产品"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.6
+    description: "测试数值范围筛选"
+
+  # ========== 时间序列查询（3个）==========
+  - id: time_series_001
+    category: time_series
+    question: "过去6个月的销售趋势"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.6
+    description: "测试相对时间范围查询"
+
+  - id: time_series_002
+    category: time_series
+    question: "2024年每月的销售额"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.7
+    description: "测试按月聚合的时间序列查询"
+
+  - id: time_series_003
+    category: time_series
+    question: "今年和去年同期的销售额对比"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.5
+    description: "测试同比分析查询"
+
+  # ========== 计算字段查询（2个）==========
+  - id: calculation_001
+    category: calculation
+    question: "各产品的利润率"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.6
+    description: "测试计算字段（利润率 = 利润 / 销售额）"
+
+  - id: calculation_002
+    category: calculation
+    question: "各地区的销售额同比增长率"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.5
+    description: "测试复杂计算字段（同比增长率）"
+
+  # ========== 排名查询（2个）==========
+  - id: ranking_001
+    category: ranking
+    question: "销售额前10的产品"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.7
+    description: "测试Top N查询，验证排序和限制"
+
+  - id: ranking_002
+    category: ranking
+    question: "利润最低的5个地区"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.7
+    description: "测试Bottom N查询"
+
+  # ========== 复杂查询（4个）==========
+  - id: complex_001
+    category: complex
+    question: "2024年华东地区销售额前10的产品及其利润率"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.5
+    description: "测试复杂查询：多筛选 + 计算字段 + 排名"
+
+  - id: complex_002
+    category: complex
+    question: "各地区2024年每月销售额，按销售额降序排列，只显示前20条"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.5
+    description: "测试复杂查询：多维度 + 时间序列 + 筛选 + 排序 + 限制"
+
+  - id: complex_003
+    category: complex
+    question: "销售额大于50万且利润率高于20%的产品，按利润降序"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.5
+    description: "测试复杂查询：多筛选条件 + 计算字段 + 排序"
+
+  - id: complex_004
+    category: complex
+    question: "各产品类别在各地区的平均订单金额和订单数量，筛选订单数量大于100的"
+    expected_intent: DATA_QUERY
+    expected_confidence_min: 0.5
+    description: "测试复杂查询：多维度 + 多聚合 + 筛选"

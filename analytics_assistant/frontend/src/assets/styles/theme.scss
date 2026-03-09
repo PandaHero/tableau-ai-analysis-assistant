@@ -1,0 +1,254 @@
+// 主题样式 - 基于 Tableau 设计语言
+
+@use './variables.scss' as *;
+
+// ── 浅色主题 (默认) ──
+:root,
+[data-theme='light'] {
+  // 品牌色
+  --color-primary: #{$tableau-blue};
+  --color-success: #{$tableau-green};
+  --color-warning: #{$tableau-orange};
+  --color-error: #{$tableau-red};
+  --color-info: #{$tableau-blue};
+  
+  // 文字颜色
+  --text-primary: #{$text-primary};
+  --text-secondary: #{$text-secondary};
+  --text-tertiary: #{$text-tertiary};
+  --text-disabled: #{$text-disabled};
+  --text-inverse: #{$text-inverse};
+  
+  // 背景颜色
+  --bg-primary: #{$bg-primary};
+  --bg-secondary: #{$bg-secondary};
+  --bg-tertiary: #{$bg-tertiary};
+  --bg-hover: #{$bg-hover};
+  --bg-active: #{$bg-active};
+  
+  // 边框颜色
+  --border-color: #{$border-color};
+  --border-light: #{$border-light};
+  --border-dark: #{$border-dark};
+  --border-focus: #{$border-focus};
+  
+  // 阴影
+  --shadow-sm: #{$shadow-sm};
+  --shadow-md: #{$shadow-md};
+  --shadow-lg: #{$shadow-lg};
+  --shadow-xl: #{$shadow-xl};
+  
+  // 字体
+  --font-family-base: #{$font-family-base};
+  --font-family-mono: #{$font-family-mono};
+  
+  // 滚动条
+  --scrollbar-track: #{$color-gray-50};
+  --scrollbar-thumb: #{$color-gray-200};
+  --scrollbar-thumb-hover: #{$color-gray-300};
+}
+
+// ── 深色主题 ──
+[data-theme='dark'] {
+  // 品牌色 (深色模式下稍微调亮)
+  --color-primary: #3A94D4;
+  --color-success: #34D058;
+  --color-warning: #FFA940;
+  --color-error: #F5222D;
+  --color-info: #3A94D4;
+  
+  // 文字颜色
+  --text-primary: #{$dark-text-primary};
+  --text-secondary: #{$dark-text-secondary};
+  --text-tertiary: #808080;
+  --text-disabled: #4D4D4D;
+  --text-inverse: #{$color-gray-700};
+  
+  // 背景颜色
+  --bg-primary: #{$dark-bg-primary};
+  --bg-secondary: #{$dark-bg-secondary};
+  --bg-tertiary: #{$dark-bg-tertiary};
+  --bg-hover: #404040;
+  --bg-active: #4D4D4D;
+  
+  // 边框颜色
+  --border-color: #{$dark-border-color};
+  --border-light: #2D2D2D;
+  --border-dark: #4D4D4D;
+  --border-focus: #3A94D4;
+  
+  // 阴影 (深色模式下更深)
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 8px 24px rgba(0, 0, 0, 0.6);
+  
+  // 滚动条
+  --scrollbar-track: #{$dark-bg-secondary};
+  --scrollbar-thumb: #{$dark-bg-tertiary};
+  --scrollbar-thumb-hover: #4D4D4D;
+}
+
+// ── 主题过渡动画 ──
+// 仅在 theme-transitioning 类存在时应用全局过渡（避免常态卡顿）
+.theme-transitioning * {
+  transition: background-color 200ms ease,
+              border-color 200ms ease,
+              color 200ms ease !important;
+}
+
+
+// ── 组件主题样式 ──
+
+// HeaderBar
+.header-bar {
+  background-color: var(--bg-primary);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+// ChatContainer
+.chat-container {
+  background-color: var(--bg-secondary);
+}
+
+// InputArea
+.input-area {
+  background-color: transparent;
+  border-top: none;
+}
+
+
+// 用户消息
+.message-user {
+  background-color: var(--color-primary);
+  color: var(--text-inverse);
+}
+
+// AI 消息
+.message-ai {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+// 输入框
+.input-textarea {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  
+  &:focus {
+    border-color: var(--border-focus);
+    border-width: 2px;
+  }
+  
+  &::placeholder {
+    color: var(--text-tertiary);
+  }
+}
+
+// 发送按钮
+.send-button {
+  background-color: var(--color-primary);
+  color: var(--text-inverse);
+  
+  &:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+  
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
+// 设置面板
+.settings-panel {
+  background-color: var(--bg-primary);
+  border-left: 1px solid var(--border-color);
+  box-shadow: var(--shadow-lg);
+}
+
+// 遮罩层
+.modal-backdrop {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+[data-theme='dark'] .modal-backdrop {
+  background-color: rgba(0, 0, 0, 0.6);
+}
+
+// 卡片
+.card {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: $radius-md;
+  box-shadow: var(--shadow-sm);
+}
+
+// 按钮变体
+.button-primary {
+  background-color: var(--color-primary);
+  color: var(--text-inverse);
+  
+  &:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+}
+
+.button-secondary {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  
+  &:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+  }
+}
+
+.button-ghost {
+  background-color: transparent;
+  color: var(--text-secondary);
+  
+  &:hover:not(:disabled) {
+    background-color: var(--bg-hover);
+  }
+}
+
+// 错误消息
+.error-message {
+  background-color: #FEE2E2;
+  border: 1px solid var(--color-error);
+  color: #991B1B;
+}
+
+[data-theme='dark'] .error-message {
+  background-color: rgba(245, 34, 45, 0.15);
+  border-color: var(--color-error);
+  color: #FF7875;
+}
+
+// 成功消息
+.success-message {
+  background-color: #D1FAE5;
+  border: 1px solid var(--color-success);
+  color: #065F46;
+}
+
+[data-theme='dark'] .success-message {
+  background-color: rgba(52, 208, 88, 0.15);
+  border-color: var(--color-success);
+  color: #95DE64;
+}
+
+// 警告消息
+.warning-message {
+  background-color: #FEF3C7;
+  border: 1px solid var(--color-warning);
+  color: #92400E;
+}
+
+[data-theme='dark'] .warning-message {
+  background-color: rgba(255, 169, 64, 0.15);
+  border-color: var(--color-warning);
+  color: #FFC069;
+}

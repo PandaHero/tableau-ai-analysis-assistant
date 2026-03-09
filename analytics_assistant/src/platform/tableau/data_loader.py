@@ -21,7 +21,10 @@ Tableau 数据模型加载器
     data_model = await loader.load_data_model(datasource_id="xxx")
 """
 import asyncio
+import copy
 import logging
+import time
+from threading import Lock
 from typing import Any, Optional
 
 from analytics_assistant.src.core.schemas import DataModel, Field, LogicalTable, TableRelationship
@@ -31,6 +34,7 @@ from analytics_assistant.src.platform.tableau.client import VizQLClient
 from analytics_assistant.src.agents.field_semantic import (
     infer_field_semantic,
     build_enhanced_index_text,
+    FieldSemanticAttributes,
 )
 from analytics_assistant.src.infra.rag import get_rag_service, IndexConfig, IndexDocument, IndexBackend
 from analytics_assistant.src.infra.config import get_config
@@ -40,6 +44,13 @@ FieldSamples = dict[str, dict[str, Any]]  # {field_caption: {sample_values: [...
 
 # 字段索引名称前缀
 FIELD_INDEX_PREFIX = "fields_"
+
+# 进程级 DataModel 短 TTL 缓存，减少同数据源重复拉取 metadata。
+_DATA_MODEL_CACHE_TTL_SECONDS = 300
+_data_model_cache: dict[str, tuple[float, DataModel]] = {}
+_datasource_name_cache: dict[str, tuple[float, str]] = {}
+_prewarming_datasources: set[str] = set()
+_prewarm_lock = Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -123,13 +134,22 @@ class TableauDataLoader:
         # 如果只提供了名称，先获取 LUID
         if not datasource_id:
             logger.info(f"根据名称查找数据源: {datasource_name}")
-            datasource_id = await client.get_datasource_luid_by_name(
-                datasource_name=datasource_name,
-                api_key=auth.api_key,
-            )
+            datasource_id = self._get_cached_datasource_luid(datasource_name or "")
+            if not datasource_id:
+                datasource_id = await client.get_datasource_luid_by_name(
+                    datasource_name=datasource_name,
+                    api_key=auth.api_key,
+                )
             if not datasource_id:
                 raise ValueError(f"未找到数据源: {datasource_name}")
+            if datasource_name:
+                self._cache_datasource_luid(datasource_name, datasource_id)
             logger.info(f"找到数据源 LUID: {datasource_id}")
+
+        cached_model = self._get_cached_data_model(datasource_id)
+        if cached_model is not None:
+            logger.info(f"复用 DataModel 缓存: {datasource_id}")
+            return cached_model
         
         # 使用 GraphQL 获取完整元数据
         logger.info(f"加载数据源元数据 (GraphQL): {datasource_id}")
@@ -182,9 +202,14 @@ class TableauDataLoader:
             raw_metadata=graphql_data,
         )
         
-        # 创建字段索引（等待完成，确保后续 FieldRetriever 能使用 RAG 检索）
+        # 在线请求默认不创建索引，只恢复已有产物；缺失时由后台预热补齐。
         field_samples = {}
-        if not skip_index_creation:
+        if skip_index_creation:
+            field_samples = self._restore_existing_index_artifacts(
+                datasource_id=datasource_id,
+                data_model=data_model,
+            )
+        else:
             field_samples = await self._ensure_field_index_async(datasource_id, data_model)
             logger.info("字段索引创建完成")
 
@@ -194,7 +219,72 @@ class TableauDataLoader:
         except AttributeError:
             pass
 
+        self._cache_data_model(data_model)
+
         return data_model
+
+    def _get_cached_data_model(self, datasource_id: str) -> Optional[DataModel]:
+        """获取 DataModel 进程级缓存。"""
+        cached = _data_model_cache.get(datasource_id)
+        if cached is None:
+            return None
+
+        cached_at, data_model = cached
+        if time.time() - cached_at > _DATA_MODEL_CACHE_TTL_SECONDS:
+            _data_model_cache.pop(datasource_id, None)
+            return None
+
+        return copy.deepcopy(data_model)
+
+    def _cache_data_model(self, data_model: DataModel) -> None:
+        """写入 DataModel 进程级缓存。"""
+        _data_model_cache[data_model.datasource_id] = (
+            time.time(),
+            copy.deepcopy(data_model),
+        )
+
+    def _get_cached_datasource_luid(self, datasource_name: str) -> Optional[str]:
+        """获取 datasource_name -> LUID 的短 TTL 缓存。"""
+        cached = _datasource_name_cache.get(datasource_name)
+        if cached is None:
+            return None
+
+        cached_at, datasource_luid = cached
+        if time.time() - cached_at > _DATA_MODEL_CACHE_TTL_SECONDS:
+            _datasource_name_cache.pop(datasource_name, None)
+            return None
+
+        return datasource_luid
+
+    def _cache_datasource_luid(self, datasource_name: str, datasource_luid: str) -> None:
+        """写入 datasource_name -> LUID 的短 TTL 缓存。"""
+        _datasource_name_cache[datasource_name] = (
+            time.time(),
+            datasource_luid,
+        )
+
+    def _restore_existing_index_artifacts(
+        self,
+        datasource_id: str,
+        data_model: DataModel,
+    ) -> dict:
+        """仅恢复已有索引中的产物，不在在线请求中创建索引。"""
+        index_name = f"{FIELD_INDEX_PREFIX}{datasource_id}"
+        try:
+            rag_service = get_rag_service()
+            existing_index = rag_service.index.get_index(index_name)
+            if existing_index is None:
+                logger.info(
+                    f"字段索引不存在，跳过在线创建: {index_name}"
+                )
+                return {}
+
+            self._restore_queryable_flags(rag_service, index_name, data_model)
+            self._restore_field_semantic(rag_service, index_name, data_model)
+            return self._restore_field_samples(rag_service, index_name)
+        except Exception as e:
+            logger.warning(f"恢复字段索引产物失败: {e}")
+            return {}
     
     async def _ensure_field_index_async(
         self,
@@ -216,6 +306,32 @@ class TableauDataLoader:
         except Exception as e:
             logger.warning(f"后台创建字段索引失败: {e}")
             return {}
+
+    async def prepare_datasource_artifacts(
+        self,
+        datasource_id: str,
+        auth: Optional[TableauAuthContext] = None,
+    ) -> None:
+        """后台预热 datasource 产物：field samples、field semantic、RAG index。"""
+        if auth is None:
+            auth = await get_tableau_auth_async()
+
+        data_model = self._get_cached_data_model(datasource_id)
+        if data_model is None:
+            data_model = await self.load_data_model(
+                datasource_id=datasource_id,
+                auth=auth,
+                skip_index_creation=True,
+            )
+
+        field_samples = await self._ensure_field_index_async(datasource_id, data_model)
+        if field_samples:
+            try:
+                data_model._field_samples_cache = field_samples
+            except AttributeError:
+                pass
+
+        self._cache_data_model(data_model)
     
     async def _ensure_field_index(
         self,
@@ -252,6 +368,8 @@ class TableauDataLoader:
                 logger.debug(f"字段索引已存在: {index_name}")
                 # 从索引 metadata 恢复 queryable 标志到 DataModel
                 self._restore_queryable_flags(rag_service, index_name, data_model)
+                # 从索引 metadata 恢复字段语义，避免在线重复推断
+                self._restore_field_semantic(rag_service, index_name, data_model)
                 # 从索引 metadata 恢复 sample_values
                 return self._restore_field_samples(rag_service, index_name)
             
@@ -509,6 +627,77 @@ class TableauDataLoader:
         except Exception as e:
             logger.debug(f"恢复 field_samples 失败: {e}")
         return field_samples
+
+    def _restore_field_semantic(
+        self,
+        rag_service: Any,
+        index_name: str,
+        data_model: DataModel,
+    ) -> None:
+        """从已有索引的 metadata 恢复字段语义信息到 DataModel。"""
+        try:
+            index_fields = rag_service.index.get_index_fields(index_name)
+            if not index_fields:
+                return
+
+            restored: dict[str, FieldSemanticAttributes] = {}
+            for field_info in index_fields:
+                if not isinstance(field_info, dict):
+                    continue
+
+                field_caption = field_info.get("field_caption", "")
+                field_name = field_info.get("field_name", "")
+                role = field_info.get("role", "")
+                business_description = field_info.get("business_description", "")
+                if not field_caption or not role or not business_description:
+                    continue
+
+                aliases = field_info.get("aliases") or []
+                if not isinstance(aliases, list):
+                    aliases = [str(aliases)]
+
+                attrs_dict = {
+                    "role": role,
+                    "business_description": business_description,
+                    "aliases": aliases,
+                    "confidence": float(field_info.get("confidence", 0.8)),
+                    "reasoning": f"从字段索引恢复语义信息: {field_caption}",
+                }
+
+                if role == "dimension":
+                    attrs_dict.update({
+                        "category": field_info.get("category") or None,
+                        "category_detail": field_info.get("category_detail") or None,
+                        "level": field_info.get("level"),
+                        "granularity": field_info.get("granularity") or None,
+                    })
+                elif role == "measure":
+                    attrs_dict["measure_category"] = (
+                        field_info.get("measure_category") or None
+                    )
+                else:
+                    continue
+
+                try:
+                    semantic_attrs = FieldSemanticAttributes(**attrs_dict)
+                except Exception as e:
+                    logger.debug(
+                        f"恢复字段语义失败: field={field_caption}, error={e}"
+                    )
+                    continue
+
+                restored[field_caption] = semantic_attrs
+                if field_name and field_name != field_caption:
+                    restored[field_name] = semantic_attrs
+
+            if restored:
+                try:
+                    data_model._field_semantic_cache = restored
+                except AttributeError:
+                    pass
+                logger.info(f"从索引恢复 {len(restored)} 个字段语义缓存")
+        except Exception as e:
+            logger.debug(f"恢复 field_semantic 失败: {e}")
     
     def _convert_graphql_fields(
         self,
@@ -1081,8 +1270,41 @@ class TableauDataLoader:
             }
         return results
 
+def schedule_datasource_artifact_preparation(
+    datasource_id: str,
+    auth: Optional[TableauAuthContext] = None,
+) -> bool:
+    """调度后台预热任务，避免在在线请求里做重准备。"""
+    with _prewarm_lock:
+        if datasource_id in _prewarming_datasources:
+            return False
+        _prewarming_datasources.add(datasource_id)
+
+    async def _run() -> None:
+        try:
+            async with TableauDataLoader() as loader:
+                await loader.prepare_datasource_artifacts(
+                    datasource_id=datasource_id,
+                    auth=auth,
+                )
+            logger.info(f"后台预热完成: datasource={datasource_id}")
+        except Exception as e:
+            logger.warning(f"后台预热失败: datasource={datasource_id}, error={e}")
+        finally:
+            with _prewarm_lock:
+                _prewarming_datasources.discard(datasource_id)
+
+    try:
+        asyncio.create_task(_run())
+        return True
+    except RuntimeError:
+        with _prewarm_lock:
+            _prewarming_datasources.discard(datasource_id)
+        logger.warning("当前上下文无运行中的事件循环，无法调度后台预热任务")
+        return False
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 导出
 # ══════════════════════════════════════════════════════════════════════════════
 
-__all__ = ["TableauDataLoader"]
+__all__ = ["TableauDataLoader", "schedule_datasource_artifact_preparation"]

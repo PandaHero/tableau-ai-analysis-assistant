@@ -20,11 +20,23 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     """聊天请求模型。"""
 
-    messages: list[Message] = Field(..., description="对话历史")
+    messages: list[Message] = Field(
+        ...,
+        min_length=1,
+        description="对话历史，至少包含一条消息",
+    )
     datasource_name: str = Field(..., description="数据源名称")
     language: Literal["zh", "en"] = Field(default="zh", description="语言")
     analysis_depth: Literal["detailed", "comprehensive"] = Field(
         default="detailed",
         description="分析深度",
+    )
+    replan_mode: Literal["user_select", "auto_continue", "stop"] = Field(
+        default="user_select",
+        description="重规划继续策略：用户选择、自动继续或停止",
+    )
+    selected_candidate_question: Optional[str] = Field(
+        None,
+        description="当使用 user_select 时，前端或调用方选中的候选问题",
     )
     session_id: Optional[str] = Field(None, description="会话 ID")

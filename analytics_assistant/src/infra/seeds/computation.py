@@ -275,7 +275,7 @@ COMPUTATION_SEEDS: list[ComputationSeed] = [
     ComputationSeed(
         name="running_total",
         display_name="累计",
-        keywords=["累计", "累加", "累积", "汇总"],
+        keywords=["累计", "累加", "累积"],
         calc_type="TABLE_CALC_RUNNING",
         base_measures=["measure"],
         description="从起始到当前的累计值",
@@ -301,7 +301,7 @@ COMPUTATION_SEEDS: list[ComputationSeed] = [
     ComputationSeed(
         name="profit",
         display_name="利润",
-        keywords=["利润", "净利润", "毛利"],
+        keywords=["利润", "净利润"],
         calc_type="DIFFERENCE",
         formula="{revenue}-{cost}",
         base_measures=["revenue", "cost"],

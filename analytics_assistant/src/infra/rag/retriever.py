@@ -674,8 +674,15 @@ class RetrieverFactory:
         # 创建 BM25 检索器（用于混合检索）
         bm25_retriever = None
         if include_bm25:
-            bm25_retriever = BM25Retriever(chunks, config)
-            logger.info("BM25 检索器已创建，支持混合检索")
+            try:
+                bm25_retriever = BM25Retriever(chunks, config)
+                logger.info("BM25 检索器已创建，支持混合检索")
+            except Exception as exc:
+                logger.warning(
+                    "BM25 检索器初始化失败，降级为 exact+embedding: %s",
+                    exc,
+                )
+                bm25_retriever = None
         
         return CascadeRetriever(
             exact_retriever, 

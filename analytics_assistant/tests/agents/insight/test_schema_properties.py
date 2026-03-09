@@ -23,7 +23,10 @@ from analytics_assistant.src.agents.insight.schemas.output import (
     InsightOutput,
     NumericStats,
 )
-from analytics_assistant.src.agents.replanner.schemas.output import ReplanDecision
+from analytics_assistant.src.agents.replanner.schemas.output import (
+    CandidateQuestion,
+    ReplanDecision,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -32,7 +35,7 @@ from analytics_assistant.src.agents.replanner.schemas.output import ReplanDecisi
 
 # 基础策略
 _confidence = st.floats(min_value=0.0, max_value=1.0, allow_nan=False)
-_non_empty_text = st.text(min_size=1, max_size=100)
+_non_empty_text = st.text(min_size=1, max_size=100).filter(lambda s: s.strip())
 
 
 # Finding 策略
@@ -136,17 +139,40 @@ def _replan_decision_strategy(draw):
     """生成有效的 ReplanDecision。"""
     should_replan = draw(st.booleans())
     reason = draw(_non_empty_text)
+    candidate_questions = draw(st.lists(
+        st.builds(
+            CandidateQuestion,
+            question=_non_empty_text,
+            question_type=_non_empty_text,
+            priority=st.integers(min_value=1, max_value=5),
+            expected_info_gain=st.floats(
+                min_value=0.0,
+                max_value=1.0,
+                allow_nan=False,
+                allow_infinity=False,
+            ),
+            rationale=_non_empty_text,
+            estimated_mode=st.sampled_from([
+                "single_query",
+                "complex_single_query",
+                "multi_step_analysis",
+                "why_analysis",
+            ]),
+        ),
+        max_size=3,
+    ))
     if should_replan:
         new_question = draw(_non_empty_text)
         suggested = draw(st.lists(_non_empty_text, max_size=3))
     else:
         new_question = None
-        suggested = draw(st.lists(_non_empty_text, min_size=1, max_size=5))
+        suggested = draw(st.lists(_non_empty_text, max_size=5))
     return ReplanDecision(
         should_replan=should_replan,
         reason=reason,
         new_question=new_question,
         suggested_questions=suggested,
+        candidate_questions=candidate_questions,
     )
 
 

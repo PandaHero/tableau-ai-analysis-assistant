@@ -28,6 +28,9 @@ from .semantic_cache import SemanticCache
 
 logger = logging.getLogger(__name__)
 
+_query_cache_singleton: Optional["QueryCache"] = None
+_QUERY_CACHE_VERSION = "semantic-v3-planner-contract"
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
@@ -165,9 +168,13 @@ class QueryCache(SemanticCache[CachedQuery]):
         QueryCache 需要检查：
         1. TTL 是否过期
         2. schema_hash 是否匹配
+        3. parser_version 是否匹配当前代码
         """
         # TTL 检查
         if datetime.now() > cached.expires_at:
+            return False
+
+        if cached.parser_version != _QUERY_CACHE_VERSION:
             return False
         
         # Schema hash 检查
@@ -224,6 +231,14 @@ class QueryCache(SemanticCache[CachedQuery]):
             if datetime.now() > cached.expires_at:
                 logger.debug(f"QueryCache TTL 过期: question_hash={question_hash[:8]}...")
                 return None
+
+            if cached.parser_version != _QUERY_CACHE_VERSION:
+                logger.info(
+                    "QueryCache 版本不匹配，缓存失效: cached=%s, current=%s",
+                    cached.parser_version,
+                    _QUERY_CACHE_VERSION,
+                )
+                return None
             
             # Schema hash 检查（核心失效机制）
             if cached.schema_hash != current_schema_hash:
@@ -277,8 +292,11 @@ class QueryCache(SemanticCache[CachedQuery]):
         datasource_luid: str,
         schema_hash: str,
         semantic_output: dict[str, Any],
-        query: str,
+        query: Any,
+        analysis_plan: Optional[dict[str, Any]] = None,
+        global_understanding: Optional[dict[str, Any]] = None,
         ttl: Optional[int] = None,
+        include_embedding: bool = True,
     ) -> bool:
         """设置缓存"""
         ttl = ttl or self._default_ttl
@@ -287,7 +305,7 @@ class QueryCache(SemanticCache[CachedQuery]):
         try:
             # 计算 embedding（如果可用）
             question_embedding = None
-            if self._embedding:
+            if include_embedding and self._embedding:
                 try:
                     question_embedding = self._embedding.embed_query(question)
                 except (ConnectionError, TimeoutError) as e:
@@ -303,8 +321,11 @@ class QueryCache(SemanticCache[CachedQuery]):
                 question_embedding=question_embedding,
                 datasource_luid=datasource_luid,
                 schema_hash=schema_hash,
+                parser_version=_QUERY_CACHE_VERSION,
                 semantic_output=semantic_output,
                 query=query,
+                analysis_plan=analysis_plan,
+                global_understanding=global_understanding,
                 created_at=datetime.now(),
                 expires_at=datetime.now() + timedelta(seconds=ttl),
                 hit_count=0,
@@ -461,6 +482,14 @@ class QueryCache(SemanticCache[CachedQuery]):
 __all__ = [
     "CachedQuery",
     "QueryCache",
+    "get_query_cache",
     "compute_schema_hash",
     "compute_question_hash",
 ]
+
+def get_query_cache() -> QueryCache:
+    """获取进程级 QueryCache 单例。"""
+    global _query_cache_singleton
+    if _query_cache_singleton is None:
+        _query_cache_singleton = QueryCache()
+    return _query_cache_singleton

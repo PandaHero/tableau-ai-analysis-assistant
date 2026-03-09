@@ -41,11 +41,23 @@ class CachedQuery(BaseModel):
     schema_hash: str = Field(
         description="数据模型的 schema hash（用于失效检测）"
     )
+    parser_version: Optional[str] = Field(
+        default=None,
+        description="语义解析缓存版本（用于代码变更后的主动失效）"
+    )
     semantic_output: dict[str, Any] = Field(
         description="语义理解输出（序列化的 SemanticOutput）"
     )
-    query: str = Field(
-        description="生成的查询语句"
+    query: Any = Field(
+        description="生成的查询对象（通常为 semantic_query，兼容 str / dict）"
+    )
+    analysis_plan: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="与该缓存结果绑定的 analysis_plan 兼容字段"
+    )
+    global_understanding: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="与该缓存结果绑定的 global_understanding 输出"
     )
     created_at: datetime = Field(
         default_factory=datetime.now,
@@ -120,6 +132,10 @@ class CachedFeature(BaseModel):
     )
     datasource_luid: str = Field(
         description="数据源 LUID"
+    )
+    parser_version: Optional[str] = Field(
+        default=None,
+        description="特征缓存版本（用于规则变更后的主动失效）"
     )
     feature_output: dict[str, Any] = Field(
         description="特征提取输出（序列化的 FeatureExtractionOutput）"

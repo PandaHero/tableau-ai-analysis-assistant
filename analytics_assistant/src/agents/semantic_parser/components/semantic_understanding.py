@@ -56,6 +56,7 @@ _DEFAULT_TIMEZONE = "Asia/Shanghai"
 _DEFAULT_FISCAL_YEAR_START_MONTH = 1
 _DEFAULT_MAX_SCHEMA_TOKENS = 2000
 _DEFAULT_MAX_FEW_SHOT_EXAMPLES = 3
+_DEFAULT_SIMPLE_QUERY_MODEL_ID = "custom-deepseek-r1"
 
 def get_low_confidence_threshold() -> float:
     """获取低置信度阈值。"""
@@ -76,6 +77,12 @@ def get_max_schema_tokens() -> int:
 def get_max_few_shot_examples() -> int:
     """获取最大 Few-shot 示例数。"""
     return _get_config().get("max_few_shot_examples", _DEFAULT_MAX_FEW_SHOT_EXAMPLES)
+
+
+def get_simple_query_model_id() -> str:
+    """获取简单查询优先使用的模型 ID。"""
+    model_id = _get_config().get("simple_query_model_id", _DEFAULT_SIMPLE_QUERY_MODEL_ID)
+    return str(model_id or _DEFAULT_SIMPLE_QUERY_MODEL_ID)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # SemanticUnderstanding 类
@@ -308,4 +315,5 @@ __all__ = [
     "get_fiscal_year_start_month",
     "get_max_schema_tokens",
     "get_max_few_shot_examples",
+    "get_simple_query_model_id",
 ]

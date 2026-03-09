@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <link rel="icon" type="image/svg+xml" href="/src/assets/tableau_logo.svg">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VizQL Multi-Agent - Tableau Extension</title>
+
+    <!-- Tableau Extensions API -->
+    <script src="/tableau.extensions.1.latest.min.js"></script>
+    <!-- 立即触发握手，不等 Vue 加载。Tableau Desktop 有握手超时窗口，必须尽早调用。 -->
+    <script>
+      (function () {
+        try {
+          if (
+            typeof tableau !== 'undefined' &&
+            tableau.extensions &&
+            typeof tableau.extensions.initializeAsync === 'function'
+          ) {
+            window.__tableau_init_started__ = true;
+            tableau.extensions.initializeAsync().then(function () {
+              console.log('[Tableau] initializeAsync resolved (early-init)');
+            }).catch(function (err) {
+              console.warn('[Tableau] initializeAsync rejected (early-init):', err);
+            });
+          }
+        } catch (e) {
+          console.warn('[Tableau] early-init error:', e);
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

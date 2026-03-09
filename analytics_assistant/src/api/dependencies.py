@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 # Repository 单例缓存（按 namespace 缓存，避免重复创建）
 _repositories: dict = {}
 
+
+def _summarize_authorization_header(authorization: Optional[str]) -> str:
+    """返回脱敏后的 Authorization 头摘要。"""
+    if not authorization:
+        return "<missing>"
+    if authorization.startswith("Bearer "):
+        token = authorization[len("Bearer "):]
+        return f"Bearer ***{token[-4:]}" if token else "Bearer <empty>"
+    return "<non-bearer>"
+
 def get_repository(namespace: str) -> BaseRepository:
     """获取指定命名空间的 Repository 实例（单例）。
 
@@ -117,11 +127,21 @@ async def get_tableau_username(
     Raises:
         HTTPException: 认证失败时返回 401
     """
+    logger.info("=" * 60)
+    logger.info("[认证] 收到请求")
+    logger.info(f"[认证] X-Tableau-Username: {x_tableau_username or '<missing>'}")
+    logger.info(
+        f"[认证] Authorization 摘要: {_summarize_authorization_header(authorization)}"
+    )
+    logger.info("=" * 60)
+
     auth_config = _get_auth_config()
+    logger.info(f"[认证] 认证配置 - enabled: {auth_config.get('enabled', False)}")
 
     if auth_config.get("enabled", False):
         # 认证模式：验证 JWT token
         if not authorization:
+            logger.warning("[认证] 缺少 Authorization 请求头")
             raise HTTPException(
                 status_code=401,
                 detail="缺少 Authorization 请求头",
@@ -129,6 +149,7 @@ async def get_tableau_username(
 
         # 提取 Bearer token
         if not authorization.startswith("Bearer "):
+            logger.warning("[认证] Authorization 请求头格式错误")
             raise HTTPException(
                 status_code=401,
                 detail="Authorization 请求头格式错误，应为 'Bearer <token>'",
@@ -137,19 +158,34 @@ async def get_tableau_username(
         token = authorization[len("Bearer "):]
         payload = _verify_jwt_token(token, auth_config)
 
-        # 从 token payload 中获取用户名，回退到请求头
-        username = payload.get("sub") or x_tableau_username
+        username = payload.get("sub")
         if not username:
+            logger.warning("[认证] JWT token 中缺少 sub 字段")
             raise HTTPException(
                 status_code=401,
-                detail="JWT token 中缺少 sub 字段且未提供 X-Tableau-Username",
+                detail="JWT token 中缺少 sub 字段",
             )
+
+        if x_tableau_username and x_tableau_username != username:
+            logger.warning(
+                f"[认证] 请求头用户名与 JWT 不匹配: header={x_tableau_username}, "
+                f"jwt_sub={username}"
+            )
+            raise HTTPException(
+                status_code=401,
+                detail="请求头用户名与 JWT 身份不匹配",
+            )
+
+        logger.info(f"[认证] JWT 认证成功 - 用户名: {username}")
         return username
     else:
         # 开发模式：仅依赖 X-Tableau-Username 请求头
         if not x_tableau_username:
+            logger.error("[认证] ⚠️⚠️⚠️ X-Tableau-Username 请求头为空或不存在!")
+            logger.error("[认证] 这意味着前端没有正确发送用户名请求头")
             raise HTTPException(
                 status_code=401,
                 detail="缺少 X-Tableau-Username 请求头",
             )
+        logger.info(f"[认证] ✅ 开发模式认证成功 - 用户名: {x_tableau_username}")
         return x_tableau_username

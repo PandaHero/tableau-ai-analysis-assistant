@@ -1,600 +1,294 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-One-click startup script for Tableau Assistant (Backend + Frontend).
+Tableau AI Assistant 启动脚本
 
-This script automates the setup and launch process:
-1. Checks Python version (>= 3.12)
-2. Creates virtual environment if needed
-3. Installs Python dependencies
-4. Validates environment configuration
-5. Checks Node.js and npm
-6. Installs frontend dependencies
-7. Starts FastAPI server (production: serves static files, dev: starts Vue dev server)
+功能:
+1. 检查 Python 版本和虚拟环境
+2. 安装依赖
+3. 从 app.yaml 加载配置
+4. 启动后端服务器 (FastAPI)
+5. 启动前端服务器 (Vue/Vite) - 可选
 
-Usage:
-  python start.py                     # Development mode (hot reload, single worker)
-  python start.py --prod              # Production mode (multi-worker, auto-build frontend if needed)
-  python start.py --prod --rebuild    # Production mode + force rebuild frontend
-  python start.py --install-service   # Install systemd service (Linux only)
-  python start.py --uninstall-service # Uninstall systemd service (Linux only)
+使用方法:
+  python start.py                  # 开发模式 (后端+前端)
+  python start.py --backend-only   # 仅启动后端
+  python start.py --prod           # 生产模式
 """
 
 import os
 import sys
-
-# Fix Windows console encoding
-if sys.platform == 'win32':
-    os.environ['PYTHONIOENCODING'] = 'utf-8'
-    # Set console to UTF-8 mode
-    try:
-        import ctypes
-        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
-        ctypes.windll.kernel32.SetConsoleCP(65001)
-    except:
-        pass
 import subprocess
 import platform
-import time
 import signal
 import argparse
-import getpass
 from pathlib import Path
 from threading import Thread
 
-# Parse command line arguments
-parser = argparse.ArgumentParser(description='Start Tableau Assistant')
-parser.add_argument('--prod', action='store_true', help='Production mode (multi-worker, no hot reload)')
-parser.add_argument('--rebuild', action='store_true', help='Force rebuild frontend (use with --prod)')
-parser.add_argument('--backend-only', action='store_true', help='Start backend only (no frontend)')
-parser.add_argument('--install-service', action='store_true', help='Install systemd service (Linux only)')
-parser.add_argument('--uninstall-service', action='store_true', help='Uninstall systemd service (Linux only)')
-parser.add_argument('--workers', type=int, default=4, help='Number of uvicorn workers in prod mode (default: 4)')
+# ============================================
+# 命令行参数
+# ============================================
+parser = argparse.ArgumentParser(description='启动 Tableau Assistant')
+parser.add_argument('--prod', action='store_true', help='生产模式')
+parser.add_argument('--backend-only', action='store_true', help='仅启动后端')
+parser.add_argument('--workers', type=int, default=4, help='生产模式的 worker 数量')
 args, _ = parser.parse_known_args()
 
 PRODUCTION_MODE = args.prod
-REBUILD_FRONTEND = args.rebuild
 BACKEND_ONLY = args.backend_only
-INSTALL_SERVICE = args.install_service
-UNINSTALL_SERVICE = args.uninstall_service
 WORKERS = args.workers
 
+# ============================================
+# 全局变量
+# ============================================
+backend_process = None
+frontend_process = None
+
+# ============================================
+# 工具函数
+# ============================================
 
 def print_header(message):
-    """Print a formatted header message."""
+    """打印标题"""
     print(f"\n{'='*60}")
     print(f"  {message}")
     print(f"{'='*60}\n")
 
-
 def print_success(message):
-    """Print a success message."""
-    print(f"�?{message}")
-
+    """打印成功消息"""
+    print(f"[SUCCESS] {message}")
 
 def print_error(message):
-    """Print an error message."""
-    print(f"�?{message}")
-
+    """打印错误消息"""
+    print(f"[ERROR] {message}")
 
 def print_info(message):
-    """Print an info message."""
-    print(f"�?{message}")
+    """打印信息"""
+    print(f"[INFO] {message}")
 
+# ============================================
+# Python 和虚拟环境检查
+# ============================================
 
 def check_python_version():
-    """Check if Python version is >= 3.12."""
-    print_header("Checking Python Version")
+    """检查 Python 版本 >= 3.12"""
+    print_header("检查 Python 版本")
     
     version = sys.version_info
     current_version = f"{version.major}.{version.minor}.{version.micro}"
     
-    print_info(f"Current Python version: {current_version}")
+    print_info(f"当前 Python 版本: {current_version}")
     
     if version.major < 3 or (version.major == 3 and version.minor < 12):
-        print_error(f"Python 3.12 or higher is required")
-        print_error(f"Current version: {current_version}")
-        print_info("Please upgrade Python and try again")
+        print_error(f"需要 Python 3.12 或更高版本")
+        print_error(f"当前版本: {current_version}")
         sys.exit(1)
     
-    print_success(f"Python version {current_version} is compatible")
+    print_success(f"Python 版本 {current_version} 符合要求")
     return True
 
-
-def check_venv():
-    """Check if virtual environment exists."""
-    print_header("Checking Virtual Environment")
-    
-    venv_path = Path("venv")
-    
-    if venv_path.exists():
-        print_success("Virtual environment found")
-        return True
-    else:
-        print_info("Virtual environment not found")
-        return False
-
-
-def create_venv():
-    """Create a virtual environment."""
-    print_header("Creating Virtual Environment")
-    
-    try:
-        print_info("Creating virtual environment...")
-        subprocess.run([sys.executable, "-m", "venv", "venv"], check=True)
-        print_success("Virtual environment created successfully")
-        return True
-    except subprocess.CalledProcessError as e:
-        print_error(f"Failed to create virtual environment: {e}")
-        print_info("Please create it manually: python -m venv venv")
-        sys.exit(1)
-
-
 def get_venv_python():
-    """Get the path to the Python executable in the virtual environment."""
+    """获取虚拟环境中的 Python 路径"""
     system = platform.system()
-    
     if system == "Windows":
         return Path("venv") / "Scripts" / "python.exe"
     else:
         return Path("venv") / "bin" / "python"
 
-
 def get_venv_pip():
-    """Get the path to the pip executable in the virtual environment."""
+    """获取虚拟环境中的 pip 路径"""
     system = platform.system()
-    
     if system == "Windows":
         return Path("venv") / "Scripts" / "pip.exe"
     else:
         return Path("venv") / "bin" / "pip"
 
-
-def get_installed_packages():
-    """Get dict of installed packages and their versions."""
-    pip_path = get_venv_pip()
+def check_venv():
+    """检查虚拟环境是否存在"""
+    print_header("检查虚拟环境")
     
-    try:
-        result = subprocess.run(
-            [str(pip_path), "list", "--format=freeze"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        installed = {}
-        for line in result.stdout.strip().split('\n'):
-            if '==' in line:
-                name, version = line.split('==', 1)
-                installed[name.lower().replace('-', '_')] = version
-        return installed
-    except:
-        return {}
+    venv_path = Path("venv")
+    python_path = get_venv_python()
+    
+    if not venv_path.exists() or not python_path.exists():
+        print_error("虚拟环境不存在")
+        print_info("请先创建虚拟环境:")
+        print_info("  python -m venv venv")
+        print_info("然后安装依赖:")
+        if platform.system() == "Windows":
+            print_info("  venv\\Scripts\\pip install -r analytics_assistant\\requirements.txt")
+        else:
+            print_info("  venv/bin/pip install -r analytics_assistant/requirements.txt")
+        sys.exit(1)
+    
+    print_success("虚拟环境已找到")
+    return True
 
-
-def parse_requirements(requirements_path):
-    """Parse requirements.txt and return list of package names."""
-    packages = []
-    try:
-        with open(requirements_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if not line or line.startswith('#'):
-                    continue
-                # Extract package name (remove version specifiers)
-                for sep in ['>=', '<=', '==', '!=', '~=', '>', '<', '[']:
-                    if sep in line:
-                        line = line.split(sep)[0]
-                        break
-                packages.append(line.lower().replace('-', '_'))
-    except:
-        pass
-    return packages
-
+# ============================================
+# 依赖检查和安装
+# ============================================
 
 def install_dependencies():
-    """Install dependencies from requirements.txt (only missing ones)."""
-    print_header("Checking Dependencies")
+    """安装 Python 依赖"""
+    print_header("检查依赖")
     
     pip_path = get_venv_pip()
-    requirements_path = Path("analytics_assistant") / "requirements.txt"
+    requirements_path = Path("requirements.txt")
     
     if not pip_path.exists():
-        print_error(f"Pip not found at {pip_path}")
+        print_error(f"pip 未找到: {pip_path}")
         sys.exit(1)
     
     if not requirements_path.exists():
-        print_error(f"Requirements file not found at {requirements_path}")
+        print_error(f"requirements.txt 未找到: {requirements_path}")
         sys.exit(1)
     
-    # Get installed packages and required packages
-    installed = get_installed_packages()
-    required = parse_requirements(requirements_path)
-    
-    # Find missing packages
-    missing = [pkg for pkg in required if pkg not in installed]
-    
-    if not missing:
-        print_success(f"All {len(required)} dependencies already installed")
-        return True
-    
-    print_info(f"Found {len(missing)} missing packages: {', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}")
-    print_info("Installing missing dependencies...")
+    print_info("安装依赖...")
     
     try:
-        # Use pip install -r to install only missing (pip handles this efficiently)
-        result = subprocess.run(
-            [str(pip_path), "install", "-r", str(requirements_path)],
-            check=True,
-            capture_output=True,
-            text=True
+        subprocess.run(
+            [str(pip_path), "install", "-q", "-r", str(requirements_path)],
+            check=True
         )
-        
-        print_success("Dependencies installed successfully")
+        print_success("依赖安装完成")
         return True
     except subprocess.CalledProcessError as e:
-        print_error(f"Failed to install dependencies")
-        print_error(f"Exit code: {e.returncode}")
-        if e.stdout:
-            print_info(f"Output: {e.stdout[:500]}")
-        if e.stderr:
-            print_error(f"Error: {e.stderr[:500]}")
-        print_info("\nPlease try manually:")
+        print_error(f"依赖安装失败: {e}")
+        print_info("请手动安装:")
         print_info(f"  {pip_path} install -r {requirements_path}")
         sys.exit(1)
-    except Exception as e:
-        print_error(f"Unexpected error: {e}")
-        sys.exit(1)
-
-
-def check_env_file():
-    """Check if .env file exists."""
-    print_header("Checking Environment Configuration")
-    
-    env_path = Path(".env")
-    
-    if not env_path.exists():
-        print_error(".env file not found in project root")
-        print_info("Please create a .env file in the project root directory")
-        print_info("You can copy from .env.example if available")
-        sys.exit(1)
-    
-    print_success(".env file found")
-    return True
-
-
-def load_env_vars():
-    """Load environment variables from .env file."""
-    env_path = Path(".env")
-    env_vars = {}
-    
-    try:
-        with open(env_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    env_vars[key.strip()] = value.strip().strip("'\"")
-    except Exception as e:
-        print_error(f"Failed to read .env file: {e}")
-        sys.exit(1)
-    
-    return env_vars
-
-
-def validate_env_vars():
-    """Validate critical environment variables."""
-    print_header("Validating Environment Variables")
-    
-    # Load .env file
-    env_vars = load_env_vars()
-    
-    # Check for Tableau config
-    has_tableau = env_vars.get('TABLEAU_DOMAIN', '')
-    
-    # Tableau environment must be configured
-    if not has_tableau:
-        print_error("No Tableau environment configured!")
-        print_info("Please configure TABLEAU_DOMAIN and authentication variables")
-        sys.exit(1)
-    
-    # Validate authentication
-    auth_jwt = all([
-        env_vars.get("TABLEAU_JWT_CLIENT_ID"),
-        env_vars.get("TABLEAU_JWT_SECRET_ID"),
-        env_vars.get("TABLEAU_JWT_SECRET"),
-    ])
-    auth_pat = all([
-        env_vars.get("TABLEAU_PAT_NAME"),
-        env_vars.get("TABLEAU_PAT_SECRET"),
-    ])
-    if not auth_jwt and not auth_pat:
-        print_error("Tableau: Missing authentication (need JWT or PAT)")
-        sys.exit(1)
-    
-    # Check LLM config
-    if not env_vars.get('LLM_API_BASE'):
-        print_error("Missing LLM_API_BASE")
-        sys.exit(1)
-    
-    print_success("All critical environment variables are set")
-    
-    # Display configuration summary
-    print_info("\nConfiguration Summary:")
-    print(f"  Backend Host: {env_vars.get('HOST', '127.0.0.1')}")
-    print(f"  Backend Port: {env_vars.get('PORT', '8000')}")
-    print(f"  Frontend Host: {env_vars.get('VITE_APP_HOST', '127.0.0.1')}")
-    print(f"  Frontend Port: {env_vars.get('VITE_APP_PORT', '5173')}")
-    
-    # Show Tableau environment
-    print_info("\nTableau Environment:")
-    print(f"  Domain: {env_vars.get('TABLEAU_DOMAIN')}")
-    
-    print(f"\n  LLM API Base: {env_vars.get('LLM_API_BASE', 'Not set')}")
-    
-    return True
-
-
-def verify_env_config():
-    """Verify environment configuration using certificate manager."""
-    print_header("Verifying SSL Certificates")
-    
-    root_env = Path(".env")
-    
-    if not root_env.exists():
-        print_error("Root .env file not found!")
-        return False
-    
-    print_success("Root .env file found")
-    
-    # 使用证书管理器初始化证书
-    try:
-        # 添加项目路径�?sys.path
-        import sys
-        project_root = Path(__file__).parent
-        if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))
-        
-        from analytics_assistant.src.infra.certs import get_certificate_manager
-        
-        print_info("初始化证书管理器...")
-        manager = get_certificate_manager()
-        
-        if not manager.initialize():
-            print_error("�?证书初始化失�?")
-            return False
-        
-        # 获取 SSL 配置
-        ssl_config = manager.get_app_ssl_config()
-        ssl_cert = ssl_config.get("ssl_certfile", "")
-        ssl_key = ssl_config.get("ssl_keyfile", "")
-        
-        # 获取证书状�?
-        status = manager.get_status()
-        source = status.get("source", "unknown")
-        
-        print_success(f"�?证书来源: {source}")
-        print_success(f"�?证书文件: {ssl_cert}")
-        print_success(f"�?私钥文件: {ssl_key}")
-        
-        # 显示过期信息
-        app_status = status.get("application", {})
-        if app_status:
-            days_left = app_status.get("days_until_expiry", 0)
-            expires = app_status.get("expires", "")
-            if app_status.get("warning"):
-                print_error(f"⚠️ 证书即将过期! 剩余 {days_left} �?)
-            else:
-                print_info(f"证书有效�? 剩余 {days_left} �?)
-        
-        # 导出环境变量供后续使�?
-        env_exports = manager.export_to_env()
-        for key, value in env_exports.items():
-            os.environ[key] = value
-        
-        # 显示 HTTPS 配置
-        env_vars = load_env_vars()
-        host = env_vars.get('HOST', '127.0.0.1')
-        port = env_vars.get('PORT', '8000')
-        api_base_url = f"https://{host}:{port}"
-        print_info(f"API URL: {api_base_url}")
-        print_success("🔒 HTTPS 已启�?)
-        
-        return True
-        
-    except ImportError as e:
-        print_error(f"�?无法导入证书管理�? {e}")
-        print_info("请确保已安装所有依�? pip install -r analytics_assistant/requirements.txt")
-        return False
-    except Exception as e:
-        print_error(f"�?证书验证失败: {e}")
-        return False
-
 
 # ============================================
-# Systemd Service Management
+# 配置加载和验证
 # ============================================
 
-SERVICE_NAME = "tableau-assistant"
-SERVICE_FILE = f"/etc/systemd/system/{SERVICE_NAME}.service"
-
-
-def generate_service_file():
-    """Generate systemd service file content."""
-    project_dir = Path.cwd().resolve()
-    env_vars = load_env_vars()
+def load_config():
+    """从 app.yaml 加载配置"""
+    import yaml
     
-    host = env_vars.get('HOST', '0.0.0.0')
-    port = env_vars.get('PORT', '8000')
-    ssl_cert = env_vars.get('SSL_CERT_FILE', '')
-    ssl_key = env_vars.get('SSL_KEY_FILE', '')
+    print_header("加载配置")
     
-    # Resolve SSL paths
-    if ssl_cert and not Path(ssl_cert).is_absolute():
-        ssl_cert = str((project_dir / ssl_cert).resolve())
-    if ssl_key and not Path(ssl_key).is_absolute():
-        ssl_key = str((project_dir / ssl_key).resolve())
+    config_path = Path("analytics_assistant") / "config" / "app.yaml"
     
-    # Get current user
-    current_user = getpass.getuser()
+    if not config_path.exists():
+        print_error(f"配置文件不存在: {config_path}")
+        sys.exit(1)
     
-    # Build ExecStart command
-    exec_start = f"{project_dir}/venv/bin/uvicorn analytics_assistant.src.main:app --host {host} --port {port} --workers {WORKERS}"
-    
-    if ssl_cert and ssl_key:
-        exec_start += f" --ssl-certfile {ssl_cert} --ssl-keyfile {ssl_key}"
-    
-    service_content = f"""[Unit]
-Description=Tableau AI Analysis Assistant
-After=network.target
-
-[Service]
-Type=simple
-User={current_user}
-Group={current_user}
-WorkingDirectory={project_dir}
-Environment="PATH={project_dir}/venv/bin"
-EnvironmentFile={project_dir}/.env
-ExecStart={exec_start}
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-"""
-    return service_content
-
-
-def install_systemd_service():
-    """Install systemd service."""
-    print_header("Installing Systemd Service")
-    
-    # Check if running on Linux
-    if platform.system() != "Linux":
-        print_error("Systemd service installation is only supported on Linux")
-        print_info("On Windows, use Task Scheduler or run as a Windows Service")
-        return False
-    
-    # Check if running as root or with sudo
-    if os.geteuid() != 0:
-        print_error("Root privileges required to install systemd service")
-        print_info("Please run with sudo: sudo python start.py --install-service")
-        return False
-    
-    # Verify environment first
-    if not check_env_file():
-        return False
-    
-    # Generate service file
-    service_content = generate_service_file()
-    
-    print_info(f"Service file content:\n{'-'*40}")
-    print(service_content)
-    print('-'*40)
-    
-    # Write service file
     try:
-        with open(SERVICE_FILE, 'w') as f:
-            f.write(service_content)
-        print_success(f"Service file created: {SERVICE_FILE}")
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        print_success("配置文件加载成功")
+        return config
     except Exception as e:
-        print_error(f"Failed to create service file: {e}")
-        return False
+        print_error(f"加载配置文件失败: {e}")
+        sys.exit(1)
+
+def validate_config(config):
+    """验证配置"""
+    print_header("验证配置")
     
-    # Reload systemd
-    try:
-        subprocess.run(["systemctl", "daemon-reload"], check=True)
-        print_success("Systemd daemon reloaded")
-    except subprocess.CalledProcessError as e:
-        print_error(f"Failed to reload systemd: {e}")
-        return False
+    # 检查 Tableau 配置
+    tableau = config.get('tableau', {})
+    if not tableau.get('domain'):
+        print_error("Tableau 域名未配置")
+        print_info("请在 analytics_assistant/config/app.yaml 中配置 tableau.domain")
+        sys.exit(1)
     
-    # Enable service
-    try:
-        subprocess.run(["systemctl", "enable", SERVICE_NAME], check=True)
-        print_success(f"Service enabled: {SERVICE_NAME}")
-    except subprocess.CalledProcessError as e:
-        print_error(f"Failed to enable service: {e}")
-        return False
+    # 检查认证配置
+    jwt = tableau.get('jwt', {})
+    pat = tableau.get('pat', {})
     
-    print_success("Systemd service installed successfully!")
-    print_info("\nUseful commands:")
-    print(f"  Start:   sudo systemctl start {SERVICE_NAME}")
-    print(f"  Stop:    sudo systemctl stop {SERVICE_NAME}")
-    print(f"  Restart: sudo systemctl restart {SERVICE_NAME}")
-    print(f"  Status:  sudo systemctl status {SERVICE_NAME}")
-    print(f"  Logs:    sudo journalctl -u {SERVICE_NAME} -f")
+    has_jwt = all([jwt.get('client_id'), jwt.get('secret_id'), jwt.get('secret')])
+    has_pat = all([pat.get('name'), pat.get('secret')])
     
-    # Ask if user wants to start the service now
-    response = input("\nStart the service now? (y/n): ")
-    if response.lower() == 'y':
-        try:
-            subprocess.run(["systemctl", "start", SERVICE_NAME], check=True)
-            print_success(f"Service started: {SERVICE_NAME}")
-            subprocess.run(["systemctl", "status", SERVICE_NAME])
-        except subprocess.CalledProcessError as e:
-            print_error(f"Failed to start service: {e}")
-            print_info(f"Check logs: sudo journalctl -u {SERVICE_NAME} -n 50")
+    if not has_jwt and not has_pat:
+        print_error("Tableau 认证未配置")
+        print_info("请配置 JWT 或 PAT 认证")
+        sys.exit(1)
+    
+    print_success("配置验证通过")
+    print_info(f"Tableau 域名: {tableau.get('domain')}")
+    print_info(f"Tableau 站点: {tableau.get('site', 'default')}")
     
     return True
 
+# ============================================
+# 后端服务器
+# ============================================
 
-def uninstall_systemd_service():
-    """Uninstall systemd service."""
-    print_header("Uninstalling Systemd Service")
+def start_backend(config, host='127.0.0.1', port=5000):
+    """启动后端服务器"""
+    global backend_process
     
-    # Check if running on Linux
-    if platform.system() != "Linux":
-        print_error("Systemd service uninstallation is only supported on Linux")
-        return False
+    print_header("启动后端服务器")
     
-    # Check if running as root or with sudo
-    if os.geteuid() != 0:
-        print_error("Root privileges required to uninstall systemd service")
-        print_info("Please run with sudo: sudo python start.py --uninstall-service")
-        return False
+    python_path = get_venv_python()
     
-    # Stop service if running
-    try:
-        subprocess.run(["systemctl", "stop", SERVICE_NAME], check=False)
-        print_success(f"Service stopped: {SERVICE_NAME}")
-    except:
-        pass
+    # 从配置读取证书路径（统一证书管理）
+    ssl_config = config.get('ssl', {})
+    active_cert = ssl_config.get('active_cert', 'localhost')
+    certificates = ssl_config.get('certificates', {})
     
-    # Disable service
-    try:
-        subprocess.run(["systemctl", "disable", SERVICE_NAME], check=False)
-        print_success(f"Service disabled: {SERVICE_NAME}")
-    except:
-        pass
+    if active_cert not in certificates:
+        print_error(f"未找到证书配置: {active_cert}")
+        sys.exit(1)
     
-    # Remove service file
-    if Path(SERVICE_FILE).exists():
-        try:
-            os.remove(SERVICE_FILE)
-            print_success(f"Service file removed: {SERVICE_FILE}")
-        except Exception as e:
-            print_error(f"Failed to remove service file: {e}")
-            return False
+    cert_config = certificates[active_cert]
+    cert_file = Path(cert_config.get('cert_file'))
+    key_file = Path(cert_config.get('key_file'))
+    
+    # 从配置读取后端地址
+    api_config = config.get('api', {})
+    host = api_config.get('host', host)
+    port = api_config.get('port', port)
+    
+    # 检查证书文件是否存在
+    if not cert_file.exists() or not key_file.exists():
+        print_error(f"HTTPS 证书文件不存在")
+        print_info(f"证书文件: {cert_file}")
+        print_info(f"密钥文件: {key_file}")
+        sys.exit(1)
+    
+    # 构建命令
+    cmd = [
+        str(python_path),
+        "-m", "uvicorn",
+        "analytics_assistant.src.api.main:app",
+        "--host", host,
+        "--port", str(port),
+        "--ssl-keyfile", str(key_file),
+        "--ssl-certfile", str(cert_file),
+    ]
+    
+    if PRODUCTION_MODE:
+        cmd.extend(["--workers", str(WORKERS)])
+        print_info(f"生产模式: {WORKERS} workers")
     else:
-        print_info("Service file not found (already removed)")
+        cmd.append("--reload")
+        print_info("开发模式: 自动重载已启用")
     
-    # Reload systemd
+    print_info(f"后端地址: https://{host}:{port}")
+    print_info(f"API 文档: https://{host}:{port}/docs")
+    
     try:
-        subprocess.run(["systemctl", "daemon-reload"], check=True)
-        print_success("Systemd daemon reloaded")
-    except subprocess.CalledProcessError as e:
-        print_error(f"Failed to reload systemd: {e}")
-    
-    print_success("Systemd service uninstalled successfully!")
-    return True
+        backend_process = subprocess.Popen(cmd)
+        print_success("后端服务器已启动")
+        return backend_process
+    except Exception as e:
+        print_error(f"启动后端失败: {e}")
+        sys.exit(1)
 
+# ============================================
+# 前端服务器
+# ============================================
+
+def get_npm_command():
+    """获取 npm 命令"""
+    return "npm.cmd" if platform.system() == "Windows" else "npm"
 
 def check_node():
-    """Check if Node.js is installed."""
-    print_header("Checking Node.js")
+    """检查 Node.js"""
+    print_header("检查 Node.js")
     
     try:
         result = subprocess.run(
@@ -604,552 +298,183 @@ def check_node():
             check=True
         )
         version = result.stdout.strip()
-        print_success(f"Node.js {version} found")
+        print_success(f"Node.js {version} 已找到")
         return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print_error("Node.js not found")
-        print_info("Please install Node.js from https://nodejs.org/")
+    except:
+        print_error("Node.js 未安装")
+        print_info("请从 https://nodejs.org/ 安装 Node.js")
         return False
-
-
-def get_npm_command():
-    """Get the correct npm command for the platform."""
-    system = platform.system()
-    if system == "Windows":
-        return "npm.cmd"
-    else:
-        return "npm"
-
-
-def check_npm():
-    """Check if npm is installed."""
-    print_header("Checking npm")
-    
-    npm_cmd = get_npm_command()
-    
-    try:
-        result = subprocess.run(
-            [npm_cmd, "--version"],
-            capture_output=True,
-            text=True,
-            check=True,
-            shell=True,  # Use shell on Windows
-            encoding='utf-8',
-            errors='replace'
-        )
-        version = result.stdout.strip()
-        print_success(f"npm {version} found")
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print_error("npm not found")
-        print_info("npm should be installed with Node.js")
-        return False
-
-
-def check_frontend_deps():
-    """Check if frontend dependencies are installed."""
-    print_header("Checking Frontend Dependencies")
-    
-    node_modules = Path("analytics_assistant") / "frontend" / "node_modules"
-    
-    if node_modules.exists():
-        print_success("Frontend dependencies found")
-        return True
-    else:
-        print_info("Frontend dependencies not found")
-        return False
-
 
 def install_frontend_deps():
-    """Install frontend dependencies."""
-    print_header("Installing Frontend Dependencies")
+    """安装前端依赖"""
+    print_header("安装前端依赖")
     
     frontend_path = Path("analytics_assistant") / "frontend"
     npm_cmd = get_npm_command()
     
     if not frontend_path.exists():
-        print_error(f"Frontend directory not found at {frontend_path}")
+        print_error(f"前端目录不存在: {frontend_path}")
         return False
     
+    node_modules = frontend_path / "node_modules"
+    if node_modules.exists():
+        print_success("前端依赖已安装")
+        return True
+    
+    print_info("安装前端依赖...")
+    
     try:
-        print_info("Installing frontend dependencies...")
-        print_info("This may take a few minutes...")
-        
-        result = subprocess.run(
+        subprocess.run(
             [npm_cmd, "install"],
             cwd=str(frontend_path),
             check=True,
-            capture_output=True,
-            text=True,
-            shell=True,  # Use shell on Windows
-            encoding='utf-8',
-            errors='replace'
+            shell=True
         )
-        
-        print_success("Frontend dependencies installed successfully")
+        print_success("前端依赖安装完成")
         return True
-    except subprocess.CalledProcessError as e:
-        print_error(f"Failed to install frontend dependencies")
-        print_error(f"Exit code: {e.returncode}")
-        if e.stderr:
-            print_error(f"Error: {e.stderr[:500]}")
-        print_info("\nPlease try manually:")
-        print_info(f"  cd analytics_assistant/frontend")
-        print_info(f"  npm install")
+    except:
+        print_error("前端依赖安装失败")
         return False
 
-
 def build_frontend():
-    """Build frontend for production."""
-    print_header("Building Frontend for Production")
+    """构建前端静态文件（供 FastAPI serve，不启动 dev server）"""
+    global frontend_process
+    
+    print_header("构建前端")
     
     frontend_path = Path("analytics_assistant") / "frontend"
     npm_cmd = get_npm_command()
     
     if not frontend_path.exists():
-        print_error(f"Frontend directory not found at {frontend_path}")
+        print_error(f"前端目录不存在: {frontend_path}")
         return False
     
+    dist_path = frontend_path / "dist"
+    
+    # 生产模式下检查是否需要重新构建，开发模式下总是重新构建
+    if PRODUCTION_MODE:
+        # 检查 dist 是否已存在且新于源码（跳过重复构建）
+        index_html = dist_path / "index.html"
+        src_path = frontend_path / "src"
+        if index_html.exists() and src_path.exists():
+            dist_mtime = index_html.stat().st_mtime
+            # 检查 src 目录下是否有比 dist 更新的文件
+            need_rebuild = False
+            for f in src_path.rglob("*"):
+                if f.is_file() and f.stat().st_mtime > dist_mtime:
+                    need_rebuild = True
+                    break
+            if not need_rebuild:
+                print_success(f"前端已是最新构建，跳过重新构建")
+                print_info(f"前端地址: https://localhost:{_get_api_port()}")
+                return True
+    else:
+        print_info("开发模式: 强制重新构建前端")
+    
+    print_info("构建前端静态文件（这需要约 30-60 秒）...")
+    
     try:
-        print_info("Building frontend...")
-        print_info("This may take a minute...")
-        
         result = subprocess.run(
             [npm_cmd, "run", "build"],
             cwd=str(frontend_path),
             check=True,
-            capture_output=True,
-            text=True,
-            shell=True,
-            encoding='utf-8',
-            errors='replace'
+            shell=(platform.system() == "Windows")
         )
-        
-        # Check if dist folder exists
-        dist_path = frontend_path / "dist"
-        if dist_path.exists():
-            print_success("Frontend built successfully")
-            print_info(f"Build output: {dist_path}")
-            return True
-        else:
-            print_error("Build completed but dist folder not found")
-            return False
+        print_success("前端构建完成")
+        print_info(f"前端地址: https://localhost:{_get_api_port()}")
+        return True
     except subprocess.CalledProcessError as e:
-        print_error(f"Failed to build frontend")
-        print_error(f"Exit code: {e.returncode}")
-        if e.stderr:
-            print_error(f"Error: {e.stderr[:1000]}")
-        if e.stdout:
-            print_info(f"Output: {e.stdout[:1000]}")
+        print_error(f"前端构建失败: {e}")
+        print_info("请手动执行: cd analytics_assistant/frontend && npm run build")
         return False
 
 
-def check_frontend_build():
-    """Check if frontend is already built."""
-    dist_path = Path("analytics_assistant") / "frontend" / "dist" / "index.html"
-    return dist_path.exists()
-
-
-# Global process references
-backend_process = None
-frontend_process = None
-
-
-def start_backend():
-    """Start the FastAPI server in a subprocess."""
-    global backend_process
-    
-    print_header("Starting Backend Server")
-    
-    python_path = get_venv_python()
-    
-    if not python_path.exists():
-        print_error(f"Python not found at {python_path}")
-        return None
-    
-    # Load environment variables from root .env
-    env_vars = load_env_vars()
-    
-    host = env_vars.get('HOST', '127.0.0.1')
-    port = env_vars.get('PORT', '8000')
-    
-    # 从环境变量获�?SSL 配置（由证书管理器设置）
-    ssl_cert = os.environ.get('SSL_CERT_FILE', '')
-    ssl_key = os.environ.get('SSL_KEY_FILE', '')
-    
-    # Resolve relative paths from project root
-    if ssl_cert and not Path(ssl_cert).is_absolute():
-        ssl_cert = str(Path(ssl_cert).resolve())
-    if ssl_key and not Path(ssl_key).is_absolute():
-        ssl_key = str(Path(ssl_key).resolve())
-    
-    # Determine protocol
-    protocol = "https" if (ssl_cert and ssl_key and Path(ssl_cert).exists() and Path(ssl_key).exists()) else "http"
-    
-    print_info(f"Starting backend on {host}:{port}")
-    if protocol == "https":
-        print_success("🔒 HTTPS enabled")
-    else:
-        print_info("Using HTTP mode")
-    
-    # Display access URLs
-    print_success("Backend starting...")
-    print(f"  API:      {protocol}://{host}:{port}")
-    print(f"  Docs:     {protocol}://{host}:{port}/docs")
-    print(f"  Health:   {protocol}://{host}:{port}/health")
-    
-    # Get uvicorn path
-    system = platform.system()
-    if system == "Windows":
-        uvicorn_path = Path("venv") / "Scripts" / "uvicorn.exe"
-    else:
-        uvicorn_path = Path("venv") / "bin" / "uvicorn"
-    
-    if not uvicorn_path.exists():
-        print_error(f"Uvicorn not found at {uvicorn_path}")
-        print_info("Trying to use python -m uvicorn instead...")
-        uvicorn_cmd = [str(python_path), "-m", "uvicorn"]
-    else:
-        uvicorn_cmd = [str(uvicorn_path)]
-    
-    # Build uvicorn command
-    cmd = uvicorn_cmd + [
-        "analytics_assistant.src.main:app",
-        "--host", host,
-        "--port", port,
-    ]
-    
-    # Production mode: use workers, no reload
-    # Development mode: use reload, single worker
-    if PRODUCTION_MODE:
-        cmd.extend(["--workers", str(WORKERS)])
-        print_info(f"Workers: {WORKERS}")
-    else:
-        cmd.append("--reload")
-        print_info("Hot reload enabled")
-    
-    # Add SSL if configured
-    if protocol == "https":
-        cmd.extend(["--ssl-certfile", ssl_cert, "--ssl-keyfile", ssl_key])
-    
+def _get_api_port():
+    """获取后端端口（用于日志显示）"""
     try:
-        # Start backend process
-        backend_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # Combine stderr with stdout
-            text=True,
-            bufsize=1,  # Line buffered
-            encoding='utf-8',  # Fix Windows GBK encoding issue
-            errors='replace'  # Replace invalid characters
-        )
-        
-        print_success("�?Backend server started")
-        return backend_process
-    except Exception as e:
-        print_error(f"Failed to start backend: {e}")
-        return None
+        import yaml
+        config_path = Path("analytics_assistant") / "config" / "app.yaml"
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        return config.get('api', {}).get('port', 5000)
+    except Exception:
+        return 5000
 
-
-def start_frontend():
-    """Start the Vue dev server in a subprocess."""
-    global frontend_process
-    
-    print_header("Starting Frontend Server")
-    
-    frontend_path = Path("analytics_assistant") / "frontend"
-    npm_cmd = get_npm_command()
-    
-    if not frontend_path.exists():
-        print_error(f"Frontend directory not found at {frontend_path}")
-        return None
-    
-    print_info("Starting frontend dev server...")
-    
-    try:
-        # Start frontend process
-        frontend_process = subprocess.Popen(
-            [npm_cmd, "run", "dev"],
-            cwd=str(frontend_path),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            shell=True,  # Use shell on Windows
-            encoding='utf-8',  # Fix Windows GBK encoding issue
-            errors='replace'  # Replace invalid characters
-        )
-        
-        # Determine frontend protocol based on SSL configuration
-        env_vars = load_env_vars()
-        # 前端使用与后端相同的证书（从环境变量�?.env 获取�?
-        frontend_ssl_cert = os.environ.get('SSL_CERT_FILE', '') or env_vars.get('SSL_CERT_FILE', '')
-        frontend_ssl_key = os.environ.get('SSL_KEY_FILE', '') or env_vars.get('SSL_KEY_FILE', '')
-        frontend_host = env_vars.get('VITE_APP_HOST', '127.0.0.1')
-        frontend_port = env_vars.get('VITE_APP_PORT', '5173')
-        
-        # Check if frontend SSL is configured (Vite requires HTTPS)
-        if frontend_ssl_cert and frontend_ssl_key:
-            frontend_protocol = "https"
-            print_success("�?Frontend server started (HTTPS enabled)")
-        else:
-            frontend_protocol = "https"  # Vite 配置要求 HTTPS
-            print_success("�?Frontend server started")
-        
-        print(f"  Local:    {frontend_protocol}://{frontend_host}:{frontend_port}")
-        print(f"  Demo:     {frontend_protocol}://{frontend_host}:{frontend_port}/streaming-demo")
-        
-        return frontend_process
-    except Exception as e:
-        print_error(f"Failed to start frontend: {e}")
-        return None
-
+# ============================================
+# 进程管理
+# ============================================
 
 def cleanup_processes():
-    """Clean up all running processes."""
+    """清理所有进程"""
     global backend_process, frontend_process
     
-    print_info("\nStopping servers...")
+    print_info("\n正在停止服务器...")
     
     if backend_process:
-        try:
-            backend_process.terminate()
-            backend_process.wait(timeout=5)
-            print_success("�?Backend stopped")
-        except Exception as e:
-            print_error(f"Error stopping backend: {e}")
-            try:
-                backend_process.kill()
-            except:
-                pass
+        backend_process.terminate()
+        backend_process.wait()
+        print_info("后端服务器已停止")
     
     if frontend_process:
-        try:
-            frontend_process.terminate()
-            frontend_process.wait(timeout=5)
-            print_success("�?Frontend stopped")
-        except Exception as e:
-            print_error(f"Error stopping frontend: {e}")
-            try:
-                frontend_process.kill()
-            except:
-                pass
+        frontend_process.terminate()
+        frontend_process.wait()
+        print_info("前端服务器已停止")
 
+def signal_handler(sig, frame):
+    """处理 Ctrl+C 信号"""
+    cleanup_processes()
+    sys.exit(0)
 
-def print_process_output(process, name):
-    """Print process output in real-time."""
-    if process and process.stdout:
-        try:
-            for line in iter(process.stdout.readline, ''):
-                if line:
-                    print(f"[{name}] {line.rstrip()}")
-                if process.poll() is not None:
-                    break
-        except:
-            pass
+# ============================================
+# 主函数
+# ============================================
 
-
-def monitor_processes():
-    """Monitor both processes and restart if needed."""
-    global backend_process, frontend_process
-    
-    # Determine protocols
-    env_vars = load_env_vars()
-    
-    # Backend protocol - �?os.environ 获取（证书管理器设置的）
-    ssl_cert = os.environ.get('SSL_CERT_FILE', '') or env_vars.get('SSL_CERT_FILE', '')
-    ssl_key = os.environ.get('SSL_KEY_FILE', '') or env_vars.get('SSL_KEY_FILE', '')
-    backend_protocol = "https" if (ssl_cert and ssl_key and Path(ssl_cert).exists() and Path(ssl_key).exists()) else "http"
-    
-    # Get host and port from env
-    backend_host = env_vars.get('HOST', '127.0.0.1')
-    backend_port = env_vars.get('PORT', '8000')
-    
-    print_header("Server Running")
-    
-    if PRODUCTION_MODE or BACKEND_ONLY:
-        # Production mode - backend serves everything
-        print_success("Backend server is running!")
-        print_info("\nAccess URLs:")
-        print(f"  Application: {backend_protocol}://{backend_host}:{backend_port}")
-        print(f"  API Docs:    {backend_protocol}://{backend_host}:{backend_port}/docs")
-        print(f"  Health:      {backend_protocol}://{backend_host}:{backend_port}/api/health")
-        if PRODUCTION_MODE:
-            print_info("\n📦 Production mode: Frontend served from backend")
-    else:
-        # Development mode - separate frontend server
-        # 前端使用与后端相同的证书（Vite 配置要求 HTTPS�?
-        frontend_protocol = "https"
-        frontend_host = env_vars.get('VITE_APP_HOST', '127.0.0.1')
-        frontend_port = env_vars.get('VITE_APP_PORT', '5173')
-        
-        print_success("Both servers are running!")
-        print_info("\nAccess URLs:")
-        print(f"  Frontend:  {frontend_protocol}://{frontend_host}:{frontend_port}")
-        print(f"  Backend:   {backend_protocol}://{backend_host}:{backend_port}")
-        print(f"  API Docs:  {backend_protocol}://{backend_host}:{backend_port}/docs")
-        print_info("\n🔧 Development mode: Hot reload enabled")
-    
-    print_info("\nPress Ctrl+C to stop")
-    print_info("Server logs will appear below:\n")
+def main():
+    """主启动流程"""
+    print("=" * 60)
+    print("  Tableau AI Assistant - 启动")
     print("=" * 60)
     
-    # Start threads to print output
-    if backend_process:
-        backend_thread = Thread(target=print_process_output, args=(backend_process, "Backend"), daemon=True)
-        backend_thread.start()
+    # 注册信号处理
+    signal.signal(signal.SIGINT, signal_handler)
     
-    if frontend_process:
-        frontend_thread = Thread(target=print_process_output, args=(frontend_process, "Frontend"), daemon=True)
-        frontend_thread.start()
+    # 1. 检查 Python 版本
+    check_python_version()
+    
+    # 2. 检查虚拟环境
+    check_venv()
+    
+    # 3. 安装依赖
+    install_dependencies()
+    
+    # 4. 加载和验证配置
+    config = load_config()
+    validate_config(config)
+    
+    # 5. 先构建前端，再启动后端 serve 静态资源
+    # FastAPI 只会在启动时检查一次 dist 目录，必须保证后端启动前 dist 已可用。
+    if not BACKEND_ONLY:
+        if not check_node():
+            sys.exit(1)
+        if not install_frontend_deps():
+            sys.exit(1)
+        if not build_frontend():
+            sys.exit(1)
+
+    # 6. 启动后端
+    start_backend(config)
+    
+    # 7. 等待进程
+    print_info("\n服务器正在运行...")
+    print_info("按 Ctrl+C 停止")
     
     try:
-        while True:
-            time.sleep(1)
-            
-            # Check if processes are still running
-            if backend_process and backend_process.poll() is not None:
-                print("\n" + "=" * 60)
-                print_error("Backend process stopped unexpectedly")
-                print_error(f"Exit code: {backend_process.returncode}")
-                break
-            
-            if frontend_process and frontend_process.poll() is not None:
-                print("\n" + "=" * 60)
-                print_error("Frontend process stopped unexpectedly")
-                print_error(f"Exit code: {frontend_process.returncode}")
-                break
-    
+        if backend_process:
+            backend_process.wait()
     except KeyboardInterrupt:
-        print("\n" + "=" * 60)
-        print_info("Shutdown signal received")
+        pass
     finally:
         cleanup_processes()
 
-
-def main():
-    """Main startup sequence."""
-    
-    global BACKEND_ONLY  # Allow modification in this function
-    
-    # Handle systemd service installation/uninstallation
-    if INSTALL_SERVICE:
-        install_systemd_service()
-        return
-    
-    if UNINSTALL_SERVICE:
-        uninstall_systemd_service()
-        return
-    
-    mode_str = "Production" if PRODUCTION_MODE else "Development"
-    print_header(f"Tableau Assistant - One-Click Startup ({mode_str} Mode)")
-    
-    if PRODUCTION_MODE:
-        print_info("Running in PRODUCTION mode - backend serves static files\n")
-    else:
-        print_info("Running in DEVELOPMENT mode - backend + frontend dev server\n")
-    
-    # ========== Backend Setup ==========
-    # Step 1: Check Python version
-    check_python_version()
-    
-    # Step 2: Check/create virtual environment
-    if not check_venv():
-        create_venv()
-    
-    # Step 3: Install Python dependencies
-    install_dependencies()
-    
-    # Step 4: Check .env file
-    check_env_file()
-    
-    # Step 5: Validate environment variables
-    validate_env_vars()
-    
-    # Step 6: Verify environment configuration
-    if not verify_env_config():
-        print_error("Environment configuration verification failed")
-        sys.exit(1)
-    
-    # ========== Frontend Setup ==========
-    if not BACKEND_ONLY:
-        # Check Node.js
-        if not check_node():
-            print_error("Node.js is required for frontend")
-            print_info("Please install Node.js and try again")
-            sys.exit(1)
-        
-        # Check npm
-        if not check_npm():
-            print_error("npm is required for frontend")
-            sys.exit(1)
-        
-        # Install frontend dependencies
-        if not check_frontend_deps():
-            if not install_frontend_deps():
-                print_error("Failed to install frontend dependencies")
-                print_info("You can still run backend only with --backend-only")
-                response = input("Continue with backend only? (y/n): ")
-                if response.lower() != 'y':
-                    sys.exit(1)
-                BACKEND_ONLY = True
-        
-        # Build frontend for production mode
-        if PRODUCTION_MODE and not BACKEND_ONLY:
-            if REBUILD_FRONTEND or not check_frontend_build():
-                if not build_frontend():
-                    print_error("Failed to build frontend")
-                    sys.exit(1)
-            else:
-                print_success("Frontend already built (use --rebuild to force rebuild)")
-    
-    # ========== Start Servers ==========
-    print("\n")
-    
-    # Start backend
-    backend = start_backend()
-    if not backend:
-        print_error("Failed to start backend server")
-        sys.exit(1)
-    
-    # Wait a bit for backend to start
-    time.sleep(2)
-    
-    # Start frontend dev server (only in development mode)
-    if not PRODUCTION_MODE and not BACKEND_ONLY:
-        frontend = start_frontend()
-        if not frontend:
-            print_error("Failed to start frontend server")
-            print_info("Backend is still running")
-            cleanup_processes()
-            sys.exit(1)
-        
-        # Wait a bit for frontend to start
-        time.sleep(3)
-    
-    # Monitor processes
-    monitor_processes()
-
-
 if __name__ == "__main__":
-    # Register signal handlers for graceful shutdown
-    def signal_handler(sig, frame):
-        print("\n")
-        print_info("Shutdown signal received")
-        cleanup_processes()
-        sys.exit(0)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    if platform.system() != "Windows":
-        signal.signal(signal.SIGTERM, signal_handler)
-    
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n")
-        print_info("Startup cancelled by user")
-        cleanup_processes()
-        sys.exit(0)
-    except Exception as e:
-        print_error(f"Unexpected error: {e}")
-        cleanup_processes()
-        sys.exit(1)
+    main()

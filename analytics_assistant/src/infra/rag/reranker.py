@@ -283,24 +283,29 @@ class LLMReranker(BaseReranker):
     def __init__(
         self,
         top_k: int = 5,
-        llm_call_fn: Optional[Callable[[str], str]] = None
+        llm_call_fn: Optional[Callable[[str], str]] = None,
+        allm_call_fn: Optional[Callable] = None,
     ):
         """
         初始化 LLM 重排序器
         
         Args:
             top_k: 返回结果数量
-            llm_call_fn: 自定义 LLM 调用函数
+            llm_call_fn: 同步 LLM 调用函数（供 rerank 使用）
+            allm_call_fn: 异步 LLM 调用函数，签名 async (prompt: str) -> str
+                          优先用于 arerank，避免在 event loop 中阻塞。
         
         使用示例：
-            # 使用 ModelManager 获取 LLM
+            # 使用 ModelManager 获取 LLM（推荐异步方式）
             from analytics_assistant.src.infra.ai import get_model_manager
             manager = get_model_manager()
             llm = manager.create_llm()
-            reranker = LLMReranker(llm_call_fn=lambda p: llm.invoke(p).content)
+            async def async_call(p): return (await llm.ainvoke(p)).content
+            reranker = LLMReranker(allm_call_fn=async_call)
         """
         super().__init__(top_k)
         self.llm_call_fn = llm_call_fn
+        self.allm_call_fn = allm_call_fn
     
     def rerank(
         self,
@@ -343,6 +348,52 @@ class LLMReranker(BaseReranker):
             
         except Exception as e:
             logger.error(f"LLM 重排序失败: {e}")
+            return DefaultReranker(k).rerank(query, candidates, k)
+
+    async def arerank(
+        self,
+        query: str,
+        candidates: list[RetrievalResult],
+        top_k: Optional[int] = None,
+    ) -> list[RetrievalResult]:
+        """异步 LLM 重排序（优先使用 allm_call_fn 避免阻塞 event loop）。
+
+        若构造时提供了 allm_call_fn（async），直接 await；
+        否则退回到父类的 run_in_executor 方案（同步 llm_call_fn 在线程池中运行）。
+        """
+        if self.allm_call_fn is None:
+            # 退回父类：在线程池中运行同步 rerank
+            return await super().arerank(query, candidates, top_k)
+
+        k = top_k or self.top_k
+
+        if not candidates:
+            return []
+
+        unique = self._filter_duplicates(candidates)
+
+        if len(unique) <= 1:
+            return self._update_ranks(unique)
+
+        try:
+            prompt = self._build_rerank_prompt(query, unique)
+            result_text = await self.allm_call_fn(prompt)
+            ranked_indices = self._parse_ranking(result_text, len(unique))
+
+            reranked = []
+            for idx in ranked_indices:
+                if 0 <= idx < len(unique):
+                    reranked.append(unique[idx])
+
+            ranked_set = set(ranked_indices)
+            for i, candidate in enumerate(unique):
+                if i not in ranked_set:
+                    reranked.append(candidate)
+
+            return self._update_ranks(reranked[:k], recalculate_score=True)
+
+        except Exception as e:
+            logger.error(f"LLM 异步重排序失败: {e}")
             return DefaultReranker(k).rerank(query, candidates, k)
     
     def _build_rerank_prompt(self, query: str, candidates: list[RetrievalResult]) -> str:

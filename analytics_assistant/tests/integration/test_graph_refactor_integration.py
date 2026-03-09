@@ -75,6 +75,7 @@ class TestGraphCompilation:
             "rule_prefilter",
             "feature_cache",
             "feature_extractor",
+            "global_understanding_stage",
             "field_retriever",
             "dynamic_schema_builder",
             "modular_prompt_builder",
@@ -219,6 +220,87 @@ class TestWorkflowContextIntegration:
         result = await query_cache_node(state, config)
         assert "cache_hit" in result
         assert result["cache_hit"] is False
+
+    def test_enrich_field_candidates_propagates_semantic_metadata(self) -> None:
+        """字段语义中的 alias/描述/类别应能回填到 FieldCandidate。"""
+        from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
+        from analytics_assistant.src.orchestration.workflow.context import WorkflowContext
+
+        ctx = WorkflowContext(
+            datasource_luid="test-ds-004",
+            field_semantic={
+                "Comp Name": {
+                    "role": "dimension",
+                    "business_description": "表示省份，地理维度粗粒度",
+                    "aliases": ["省份", "省", "Province"],
+                    "category": "geography",
+                    "level": 2,
+                    "granularity": "coarse",
+                    "child_dimension": "城市",
+                    "confidence": 0.92,
+                    "reasoning": "test",
+                }
+            },
+        )
+        candidates = [
+            FieldCandidate(
+                field_name="Comp Name",
+                field_caption="Comp Name",
+                role="dimension",
+                confidence=0.8,
+            )
+        ]
+
+        enriched = ctx.enrich_field_candidates_with_hierarchy(candidates)
+
+        assert enriched[0].business_description == "表示省份，地理维度粗粒度"
+        assert enriched[0].aliases == ["省份", "省", "Province"]
+        assert enriched[0].category == "geography"
+        assert enriched[0].hierarchy_category == "geography"
+        assert enriched[0].level == 2
+        assert enriched[0].hierarchy_level == 2
+        assert enriched[0].drill_down_options == ["城市"]
+
+    def test_enrich_field_candidates_merges_aliases_from_model(self) -> None:
+        """模型化的字段语义结果也应能与已有 alias 合并。"""
+        from analytics_assistant.src.agents.field_semantic.schemas.output import (
+            FieldSemanticAttributes,
+        )
+        from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
+        from analytics_assistant.src.orchestration.workflow.context import WorkflowContext
+
+        ctx = WorkflowContext(
+            datasource_luid="test-ds-005",
+            field_semantic={
+                "Channel Manager Nm": FieldSemanticAttributes(
+                    role="dimension",
+                    business_description="组织维度中等粒度，表示部门负责人",
+                    aliases=["部门负责人", "组织负责人"],
+                    category="organization",
+                    category_detail="organization-manager",
+                    level=3,
+                    granularity="medium",
+                    confidence=0.91,
+                    reasoning="test",
+                )
+            },
+        )
+        candidates = [
+            FieldCandidate(
+                field_name="Channel Manager Nm",
+                field_caption="Channel Manager Nm",
+                role="dimension",
+                confidence=0.8,
+                aliases=["渠道经理"],
+            )
+        ]
+
+        enriched = ctx.enrich_field_candidates_with_hierarchy(candidates)
+
+        assert enriched[0].aliases == ["渠道经理", "部门负责人", "组织负责人"]
+        assert enriched[0].business_description == "组织维度中等粒度，表示部门负责人"
+        assert enriched[0].hierarchy_category == "organization"
+        assert enriched[0].hierarchy_level == 3
 
 
 # ═══════════════════════════════════════════════════════════════════════════

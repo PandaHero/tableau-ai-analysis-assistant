@@ -12,6 +12,7 @@ Semantic Parser Schemas
 7. intent.py - 意图识别模型 (IntentType, IntentRouterOutput)
 8. feedback.py - 反馈模型 (FeedbackType, FeedbackRecord, SynonymMapping)
 9. prefilter.py - 规则预处理模型 (PrefilterResult, FeatureExtractionOutput, FieldRAGResult, ValidationResult)
+10. planner.py - 分析计划模型 (AnalysisPlan, AnalysisPlanStep, PlanMode)
 
 注意：
 - 配置参数统一放在 app.yaml 中，config.py 中的 SemanticConfig 是运行时上下文，不是配置。
@@ -52,6 +53,21 @@ from .prefilter import (
     ValidationResult,
 )
 from .dynamic_schema import DynamicSchemaResult
+from .planner import (
+    AnalysisMode,
+    QueryFeasibilityBlocker,
+    PlanMode,
+    PlanStepType,
+    StepIntent,
+    AnalysisPlanStep,
+    AxisEvidenceScore,
+    StepArtifact,
+    EvidenceContext,
+    GlobalUnderstandingOutput,
+    AnalysisPlan,
+    parse_analysis_plan,
+    parse_step_intent,
+)
 
 __all__ = [
     # Output - Enums
@@ -100,4 +116,18 @@ __all__ = [
     "ValidationResult",
     # DynamicSchema
     "DynamicSchemaResult",
+    # Planner
+    "AnalysisMode",
+    "QueryFeasibilityBlocker",
+    "PlanMode",
+    "PlanStepType",
+    "StepIntent",
+    "AnalysisPlanStep",
+    "AxisEvidenceScore",
+    "StepArtifact",
+    "EvidenceContext",
+    "GlobalUnderstandingOutput",
+    "AnalysisPlan",
+    "parse_analysis_plan",
+    "parse_step_intent",
 ]

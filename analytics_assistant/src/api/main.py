@@ -7,15 +7,29 @@ FastAPI 应用入口
 """
 
 import logging
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
+from analytics_assistant.src.agents.semantic_parser.graph import (
+    compile_semantic_parser_graph,
+)
 from analytics_assistant.src.infra.config import get_config
 
 from .middleware import register_exception_handlers, RequestLoggingMiddleware
+
+# 配置日志输出到控制台
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +53,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     BaseStore 由 StoreFactory 懒加载，无需显式初始化。
     """
     logger.info("Analytics Assistant API 启动中...")
+    compile_semantic_parser_graph()
+    logger.info("semantic_parser graph 预编译完成")
     yield
     logger.info("Analytics Assistant API 已关闭")
 
@@ -93,6 +109,42 @@ def create_app() -> FastAPI:
     app.include_router(settings.router)
     app.include_router(feedback.router)
 
+    # ── 静态文件 serve（前端 build 产物）──────────────────────────────────────
+    # 前端 build 后的 dist 目录，FastAPI 直接 serve，不依赖 Vite dev server。
+    # 这样重启后端时，Tableau iframe 页面不会刷新，initializeAsync 握手状态永久保持。
+    _frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+    if _frontend_dist.exists():
+        # 挂载 assets 静态资源目录（JS/CSS/图片等 hash 文件名资源）
+        _assets_dir = _frontend_dist / "assets"
+        if _assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+
+        # 根路径返回 index.html（Tableau 扩展入口）
+        @app.get("/", include_in_schema=False)
+        async def serve_index():
+            return FileResponse(str(_frontend_dist / "index.html"))
+
+        # SPA fallback：非 /api/ 开头的路径都返回 index.html（或对应静态文件）
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def serve_spa(full_path: str, request: Request):
+            # /api/ 开头的请求不应走到这里（FastAPI 路由优先），但加个兜底防御
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404)
+            file_path = _frontend_dist / full_path
+            if file_path.exists() and file_path.is_file():
+                return FileResponse(str(file_path))
+            accept = request.headers.get("accept", "").lower()
+            if "text/html" not in accept:
+                raise HTTPException(status_code=404)
+            return FileResponse(str(_frontend_dist / "index.html"))
+
+        logger.info(f"前端静态文件已挂载: {_frontend_dist}")
+    else:
+        logger.warning(
+            f"前端 dist 目录不存在: {_frontend_dist}\n"
+            "请先执行: cd analytics_assistant/frontend && npm run build"
+        )
+
     return app
 
 # 应用实例（供 uvicorn 使用）
@@ -102,10 +154,11 @@ if __name__ == "__main__":
     import uvicorn
 
     api_config = _get_api_config()
+    host = api_config.get("host", "127.0.0.1")
     port = api_config.get("port", 8000)
     uvicorn.run(
         "analytics_assistant.src.api.main:app",
-        host="0.0.0.0",
+        host=host,
         port=port,
         reload=True,
     )

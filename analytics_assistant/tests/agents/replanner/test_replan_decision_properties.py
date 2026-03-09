@@ -2,8 +2,8 @@
 """
 ReplanDecision 属性测试
 
-Property 5: should_replan=True 时 reason 和 new_question 非空；
-            should_replan=False 时 suggested_questions 非空
+Property 5: should_replan=True 时必须能解析出主后续问题；
+            结构化 candidate_questions 与兼容字段保持一致
 
 **Validates: Requirements 6.2, 6.3**
 
@@ -13,7 +13,10 @@ import pytest
 from hypothesis import given, settings, strategies as st
 from pydantic import ValidationError
 
-from analytics_assistant.src.agents.replanner.schemas.output import ReplanDecision
+from analytics_assistant.src.agents.replanner.schemas.output import (
+    CandidateQuestion,
+    ReplanDecision,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -23,8 +26,21 @@ from analytics_assistant.src.agents.replanner.schemas.output import ReplanDecisi
 # 非空字符串策略
 non_empty_text = st.text(min_size=1, max_size=200).filter(lambda s: s.strip())
 
-# 建议问题列表策略（至少 1 条）
-suggested_questions_st = st.lists(non_empty_text, min_size=1, max_size=5)
+# 结构化候选问题策略
+candidate_question_st = st.builds(
+    CandidateQuestion,
+    question=non_empty_text,
+    question_type=non_empty_text,
+    priority=st.integers(min_value=1, max_value=5),
+    expected_info_gain=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+    rationale=non_empty_text,
+    estimated_mode=st.sampled_from([
+        "single_query",
+        "complex_single_query",
+        "multi_step_analysis",
+        "why_analysis",
+    ]),
+)
 
 # 有效的 should_replan=True 实例
 valid_replan_true_st = st.builds(
@@ -33,6 +49,7 @@ valid_replan_true_st = st.builds(
     reason=non_empty_text,
     new_question=non_empty_text,
     suggested_questions=st.lists(non_empty_text, min_size=0, max_size=5),
+    candidate_questions=st.lists(candidate_question_st, min_size=0, max_size=3),
 )
 
 # 有效的 should_replan=False 实例
@@ -41,7 +58,8 @@ valid_replan_false_st = st.builds(
     should_replan=st.just(False),
     reason=non_empty_text,
     new_question=st.one_of(st.none(), non_empty_text),
-    suggested_questions=suggested_questions_st,
+    suggested_questions=st.lists(non_empty_text, min_size=0, max_size=5),
+    candidate_questions=st.lists(candidate_question_st, min_size=0, max_size=3),
 )
 
 # 任意有效 ReplanDecision
@@ -62,22 +80,25 @@ class TestReplanDecisionProperty5:
         """**Validates: Requirements 6.2, 6.3**
 
         对于任意有效的 ReplanDecision：
-        - should_replan=True 时 reason 和 new_question 均为非空字符串
-        - should_replan=False 时 suggested_questions 至少包含一条建议
+        - should_replan=True 时最终一定能解析出主问题
+        - candidate_questions / suggested_questions / new_question 在兼容层面保持一致
         """
         # reason 始终非空
         assert decision.reason
         assert len(decision.reason.strip()) > 0
 
         if decision.should_replan:
-            # should_replan=True → new_question 非空
             assert decision.new_question is not None
             assert len(decision.new_question.strip()) > 0
-        else:
-            # should_replan=False → suggested_questions 非空
-            assert len(decision.suggested_questions) >= 1
-            for q in decision.suggested_questions:
-                assert len(q.strip()) > 0
+            assert decision.candidate_questions
+            assert decision.candidate_questions[0].question == decision.new_question
+
+        for candidate in decision.candidate_questions:
+            assert candidate.question.strip()
+
+        suggested_texts = {q.strip() for q in decision.suggested_questions if q.strip()}
+        candidate_texts = {item.question for item in decision.candidate_questions}
+        assert suggested_texts.issubset(candidate_texts | ({decision.new_question} if decision.new_question else set()))
 
     @given(reason=non_empty_text)
     @settings(max_examples=50)
@@ -89,19 +110,21 @@ class TestReplanDecisionProperty5:
                 reason=reason,
                 new_question=None,
                 suggested_questions=[],
+                candidate_questions=[],
             )
 
-    @given(reason=non_empty_text)
+    @given(reason=non_empty_text, suggested=st.lists(non_empty_text, min_size=0, max_size=5))
     @settings(max_examples=50)
-    def test_replan_false_without_suggestions_raises(self, reason: str):
-        """should_replan=False 但 suggested_questions 为空时应抛出 ValidationError。"""
-        with pytest.raises(ValidationError):
-            ReplanDecision(
-                should_replan=False,
-                reason=reason,
-                new_question=None,
-                suggested_questions=[],
-            )
+    def test_replan_false_without_suggestions_is_allowed(self, reason: str, suggested: list[str]):
+        """should_replan=False 允许直接 stop，不再强制要求 suggestions 非空。"""
+        decision = ReplanDecision(
+            should_replan=False,
+            reason=reason,
+            new_question=None,
+            suggested_questions=suggested,
+            candidate_questions=[],
+        )
+        assert decision.should_replan is False
 
     @given(decision=valid_replan_decision_st)
     @settings(max_examples=100)
@@ -114,6 +137,7 @@ class TestReplanDecisionProperty5:
         assert restored.reason == decision.reason
         assert restored.new_question == decision.new_question
         assert restored.suggested_questions == decision.suggested_questions
+        assert restored.candidate_questions == decision.candidate_questions
 
     @given(
         reason=non_empty_text,

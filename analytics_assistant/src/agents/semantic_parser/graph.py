@@ -8,9 +8,12 @@ SemanticParser LangGraph 子图定义
 
 节点函数定义在 nodes/ 目录下，路由函数定义在 routes.py 中。
 """
+import logging
 from typing import Any, Optional
 
 from langgraph.graph import StateGraph, END
+
+from analytics_assistant.src.agents.base.context import get_context as _get_context
 
 from .state import SemanticParserState
 
@@ -21,6 +24,8 @@ from .nodes import (
     rule_prefilter_node,
     feature_cache_node,
     feature_extractor_node,
+    global_understanding_node,
+    analysis_planner_node,
     field_retriever_node,
     dynamic_schema_builder_node,
     modular_prompt_builder_node,
@@ -45,21 +50,26 @@ from .routes import (
     route_by_feature_cache,
 )
 
+logger = logging.getLogger(__name__)
+
+_compiled_graph_singleton: Optional[Any] = None
+
 def create_semantic_parser_graph() -> StateGraph:
     """创建语义解析器子图
 
-    11 阶段优化架构：
+    主链优化架构：
     1. IntentRouter - 意图路由
     2. QueryCache - 查询缓存
     3. RulePrefilter - 规则预处理
     4. FeatureCache - 特征缓存
     5. FeatureExtractor - 特征提取
-    6. FieldRetriever - 字段检索
-    7. DynamicSchemaBuilder + DynamicPromptBuilder
-    8. SemanticUnderstanding - 语义理解
-    9. OutputValidator - 输出验证
-    10. FilterValueValidator - 筛选值验证
-    11. QueryAdapter + 执行 + 缓存
+    6. GlobalUnderstanding - 全局问题理解 / 单查询可行性判断，并直接回填 analysis_plan
+    7. FieldRetriever - 字段检索
+    8. DynamicSchemaBuilder + DynamicPromptBuilder
+    9. SemanticUnderstanding - 语义理解
+    10. OutputValidator - 输出验证
+    11. FilterValueValidator - 筛选值验证
+    12. QueryAdapter + 执行 + 缓存
 
     Returns:
         StateGraph 实例
@@ -72,6 +82,7 @@ def create_semantic_parser_graph() -> StateGraph:
     graph.add_node("rule_prefilter", rule_prefilter_node)
     graph.add_node("feature_cache", feature_cache_node)
     graph.add_node("feature_extractor", feature_extractor_node)
+    graph.add_node("global_understanding_stage", global_understanding_node)
     graph.add_node("field_retriever", field_retriever_node)
     graph.add_node("dynamic_schema_builder", dynamic_schema_builder_node)
     graph.add_node("modular_prompt_builder", modular_prompt_builder_node)
@@ -113,12 +124,13 @@ def create_semantic_parser_graph() -> StateGraph:
         "feature_cache",
         route_by_feature_cache,
         {
-            "cache_hit": "field_retriever",
+            "cache_hit": "global_understanding_stage",
             "cache_miss": "feature_extractor",
         }
     )
 
-    graph.add_edge("feature_extractor", "field_retriever")
+    graph.add_edge("feature_extractor", "global_understanding_stage")
+    graph.add_edge("global_understanding_stage", "field_retriever")
     graph.add_edge("field_retriever", "dynamic_schema_builder")
     graph.add_edge("dynamic_schema_builder", "modular_prompt_builder")
     graph.add_edge("modular_prompt_builder", "few_shot_manager")
@@ -174,11 +186,21 @@ def create_semantic_parser_graph() -> StateGraph:
     return graph
 
 def compile_semantic_parser_graph(checkpointer: Optional[Any] = None) -> Any:
-    """编译语义解析器子图"""
-    graph = create_semantic_parser_graph()
+    """编译语义解析器子图。
+
+    无 checkpointer 时复用进程级单例，避免每次请求重复编译。
+    """
+    global _compiled_graph_singleton
     if checkpointer:
+        graph = create_semantic_parser_graph()
         return graph.compile(checkpointer=checkpointer)
-    return graph.compile()
+
+    if _compiled_graph_singleton is None:
+        graph = create_semantic_parser_graph()
+        _compiled_graph_singleton = graph.compile()
+        logger.info("semantic_parser graph 已编译并缓存为进程级单例")
+
+    return _compiled_graph_singleton
 
 __all__ = [
     # 节点函数（从 nodes/ 重新导出，保持向后兼容）
@@ -194,6 +216,8 @@ __all__ = [
     "rule_prefilter_node",
     "feature_cache_node",
     "feature_extractor_node",
+    "global_understanding_node",
+    "analysis_planner_node",
     "dynamic_schema_builder_node",
     "modular_prompt_builder_node",
     "output_validator_node",

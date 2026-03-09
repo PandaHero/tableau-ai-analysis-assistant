@@ -44,6 +44,9 @@ from .semantic_cache import SemanticCache
 
 logger = logging.getLogger(__name__)
 
+_feature_cache_singleton: Optional["FeatureCache"] = None
+_FEATURE_CACHE_VERSION = "semantic-v4-step-intent"
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
 # ═══════════════════════════════════════════════════════════════════════════
@@ -149,7 +152,10 @@ class FeatureCache(SemanticCache[CachedFeature]):
         
         FeatureCache 不需要 schema_hash 验证，只检查 TTL。
         """
-        return datetime.now() <= cached.expires_at
+        return (
+            datetime.now() <= cached.expires_at
+            and cached.parser_version == _FEATURE_CACHE_VERSION
+        )
     
     def _parse_cached(self, value: dict[str, Any]) -> Optional[CachedFeature]:
         """解析缓存值"""
@@ -196,6 +202,14 @@ class FeatureCache(SemanticCache[CachedFeature]):
             if datetime.now() > cached.expires_at:
                 logger.debug(f"FeatureCache TTL 过期: question_hash={question_hash[:8]}...")
                 return None
+
+            if cached.parser_version != _FEATURE_CACHE_VERSION:
+                logger.info(
+                    "FeatureCache 版本不匹配，缓存失效: cached=%s, current=%s",
+                    cached.parser_version,
+                    _FEATURE_CACHE_VERSION,
+                )
+                return None
             
             # 更新命中计数
             cached.hit_count += 1
@@ -223,6 +237,7 @@ class FeatureCache(SemanticCache[CachedFeature]):
         datasource_luid: str,
         feature_output: FeatureExtractionOutput,
         ttl: Optional[int] = None,
+        include_embedding: bool = True,
     ) -> bool:
         """设置缓存"""
         ttl = ttl or self._default_ttl
@@ -231,7 +246,7 @@ class FeatureCache(SemanticCache[CachedFeature]):
         try:
             # 计算 embedding（如果可用）
             question_embedding = []
-            if self._embedding:
+            if include_embedding and self._embedding:
                 try:
                     question_embedding = self._embedding.embed_query(question)
                 except (ConnectionError, TimeoutError) as e:
@@ -246,6 +261,7 @@ class FeatureCache(SemanticCache[CachedFeature]):
                 question_hash=question_hash,
                 question_embedding=question_embedding,
                 datasource_luid=datasource_luid,
+                parser_version=_FEATURE_CACHE_VERSION,
                 feature_output=feature_output.model_dump(),
                 created_at=datetime.now(),
                 expires_at=datetime.now() + timedelta(seconds=ttl),
@@ -350,5 +366,13 @@ class FeatureCache(SemanticCache[CachedFeature]):
 
 __all__ = [
     "FeatureCache",
+    "get_feature_cache",
     "compute_feature_hash",
 ]
+
+def get_feature_cache() -> FeatureCache:
+    """获取进程级 FeatureCache 单例。"""
+    global _feature_cache_singleton
+    if _feature_cache_singleton is None:
+        _feature_cache_singleton = FeatureCache()
+    return _feature_cache_singleton

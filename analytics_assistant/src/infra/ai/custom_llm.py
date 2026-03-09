@@ -7,15 +7,20 @@
 设计说明：
 - ChatOpenAI 会自动在 base_url 后追加 /chat/completions
 - 对于使用非标准端点的 API（如 /api/v1/offline/deep/think），需要自定义实现
-- 本类继承 BaseChatModel，实现 _generate 和 _stream 方法
-- LangChain 框架会自动处理 astream()、ainvoke() 等高级方法
+- 本类继承 BaseChatModel，实现 _generate、_stream 和 _astream 方法
+- 必须实现原生 _astream 以支持真正的 token 级别异步流式输出；
+  若只有同步 _stream，LangChain 会通过线程池包装，导致 on_token 回调无法
+  在流式过程中被触发（all tokens arrive at once）。
 """
 import json
 import logging
-from typing import Any, Iterator, Optional
+from typing import Any, AsyncIterator, Iterator, Optional
 
 import httpx
-from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -263,5 +268,101 @@ class CustomChatLLM(BaseChatModel):
                             
                     except (KeyError, IndexError):
                         continue
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """
+        原生异步流式生成
+
+        必须实现此方法以支持真正的 token 级别异步流：
+        - 若只有同步 _stream，LangChain 会在线程池中运行它，
+          导致 on_token（协程）无法在流式过程中被 await，
+          所有 token 只能在 LLM 完成后一次性到达前端。
+        - 本方法使用 httpx.AsyncClient 进行真正的异步 HTTP 流，
+          每个 token 到达时立即 yield，on_token 回调可实时触发。
+
+        对于推理模型（R1）：
+        - thinking 内容通过 additional_kwargs["thinking"] 实时传递
+        """
+        payload = self._build_request(messages, stream=True, **kwargs)
+        headers = self._get_headers()
+
+        logger.debug(
+            f"CustomChatLLM 异步流式请求: url={self.api_base}, model={self.model_name}"
+        )
+
+        async with httpx.AsyncClient(
+            verify=self.verify_ssl, timeout=self.timeout
+        ) as client:
+            async with client.stream(
+                "POST",
+                self.api_base,
+                headers=headers,
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+
+                    data = self._parse_sse_line(line)
+                    if not data:
+                        continue
+
+                    try:
+                        delta = data["choices"][0].get("delta", {})
+                        delta_type = delta.get("type", "")
+                        content = delta.get("content", "")
+
+                        # thinking 类型（推理过程）- 实时传递
+                        if delta_type == "thinking":
+                            if content:
+                                chunk = ChatGenerationChunk(
+                                    message=AIMessageChunk(
+                                        content="",
+                                        additional_kwargs={"thinking": content},
+                                    )
+                                )
+                                yield chunk
+                            continue
+
+                        # text 类型（正常内容）
+                        if content:
+                            chunk = ChatGenerationChunk(
+                                message=AIMessageChunk(content=content)
+                            )
+                            if run_manager:
+                                await run_manager.on_llm_new_token(content)
+                            yield chunk
+
+                    except (KeyError, IndexError):
+                        continue
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: Optional[list[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """
+        原生异步非流式生成（通过 _astream 收集完整响应）
+        """
+        content_parts: list[str] = []
+        async for chunk in self._astream(messages, stop, run_manager, **kwargs):
+            if chunk.message.content:
+                content_parts.append(str(chunk.message.content))
+
+        full_content = "".join(content_parts)
+        message = AIMessage(content=full_content)
+        generation = ChatGeneration(message=message)
+        return ChatResult(generations=[generation])
+
 
 __all__ = ["CustomChatLLM"]
