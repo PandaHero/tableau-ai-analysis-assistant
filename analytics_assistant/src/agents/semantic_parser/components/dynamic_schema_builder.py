@@ -262,22 +262,26 @@ class DynamicSchemaBuilder:
             FieldCandidate 列表
         """
         candidates: list[FieldCandidate] = []
+        seen_names: set[str] = set()
         
         if field_rag_result is None:
             return candidates
         
+        def _add_unique(fields: list[FieldCandidate]) -> None:
+            for f in fields:
+                if f.field_name not in seen_names:
+                    seen_names.add(f.field_name)
+                    candidates.append(f)
+        
         # 添加度量字段
-        measures = getattr(field_rag_result, 'measures', [])
-        candidates.extend(measures)
+        _add_unique(getattr(field_rag_result, 'measures', []))
         
         # 添加维度字段
-        dimensions = getattr(field_rag_result, 'dimensions', [])
-        candidates.extend(dimensions)
+        _add_unique(getattr(field_rag_result, 'dimensions', []))
         
-        # 添加时间字段（如果需要时间模块）
+        # 添加时间字段（如果需要时间模块；去重避免与 dimensions 重叠）
         if SchemaModule.TIME in modules:
-            time_fields = getattr(field_rag_result, 'time_fields', [])
-            candidates.extend(time_fields)
+            _add_unique(getattr(field_rag_result, 'time_fields', []))
         
         # 按置信度排序并限制数量
         candidates.sort(key=lambda x: x.confidence, reverse=True)
@@ -332,9 +336,39 @@ class DynamicSchemaBuilder:
         Returns:
             Schema JSON 字符串，SIMPLE 类型返回空字符串
         """
-        # SIMPLE 类型不需要 computations Schema
+        # SIMPLE 类型不需要 computations Schema，但提供精简的结构约束
         if detected_complexity == [ComplexityType.SIMPLE] or not allowed_calc_types:
-            return ""
+            return json.dumps({
+                "type": "object",
+                "description": "简单查询输出结构（无需 computations）",
+                "properties": {
+                    "what": {
+                        "type": "object",
+                        "properties": {
+                            "measures": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "度量字段列表",
+                            },
+                        },
+                    },
+                    "where": {
+                        "type": "object",
+                        "properties": {
+                            "dimensions": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "维度字段列表",
+                            },
+                            "filters": {
+                                "type": "array",
+                                "description": "筛选条件列表",
+                            },
+                        },
+                    },
+                },
+                "required": ["what", "where"],
+            }, ensure_ascii=False, indent=2)
         
         # 收集需要的字段
         schema_fields: set[str] = set(COMPUTATION_BASE_FIELDS)

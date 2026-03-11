@@ -24,7 +24,7 @@ from ..schemas.planner import (
     PlanStepType,
     QueryFeasibilityBlocker,
 )
-from ..schemas.prefilter import FeatureExtractionOutput, PrefilterResult
+from ..schemas.prefilter import ComplexityType, FeatureExtractionOutput, PrefilterResult
 from ..state import SemanticParserState
 from .planner import build_analysis_plan, build_global_understanding_fallback
 
@@ -483,7 +483,15 @@ async def global_understanding_node(state: SemanticParserState) -> dict[str, Any
     llm_used = False
     fallback_used = False
 
-    if question.strip():
+    # 简单查询（SIMPLE 复杂度 + 无 matched_computations）直接走规则 fallback，
+    # 避免为 SINGLE_QUERY 场景浪费 REASONING 模型调用。
+    is_simple_query = (
+        prefilter_result is not None
+        and prefilter_result.detected_complexity == [ComplexityType.SIMPLE]
+        and not prefilter_result.matched_computations
+    )
+
+    if question.strip() and not is_simple_query:
         try:
             llm_output = await _run_llm_global_understanding(
                 question,
@@ -502,6 +510,10 @@ async def global_understanding_node(state: SemanticParserState) -> dict[str, Any
                 "global_understanding_node: LLM 路径失败，回退规则 fallback: %s",
                 exc,
             )
+    elif is_simple_query:
+        logger.info(
+            "global_understanding_node: 简单查询，跳过 LLM，直接使用规则 fallback"
+        )
 
     if global_understanding is None:
         fallback_plan = build_analysis_plan(

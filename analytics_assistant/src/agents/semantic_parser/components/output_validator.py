@@ -17,6 +17,7 @@ Requirements: 8.1, 8.2, 8.3, 8.4, 8.5
 """
 
 import logging
+import re
 from difflib import SequenceMatcher
 from typing import Any, Optional
 
@@ -201,7 +202,7 @@ class OutputValidator:
         self,
         measures: list[Any],
         field_rag_result: FieldRAGResult,
-    ) -> tuple[list[OutputValidationError], list[str]]:
+    ) -> tuple[list[OutputValidationError], list[Any]]:
         """验证度量字段。"""
         errors = []
         corrected = []
@@ -213,12 +214,15 @@ class OutputValidator:
             # 提取字段名
             field_name = self._extract_field_name(measure)
             if not field_name:
+                corrected.append(measure)
                 continue
             
             result = self._validate_field(field_name, valid_names, "度量")
             if result.error:
                 errors.append(result.error)
-            corrected.append(result.corrected_name or field_name)
+            corrected.append(
+                self._apply_field_correction(measure, result.corrected_name or field_name)
+            )
         
         return errors, corrected
     
@@ -226,7 +230,7 @@ class OutputValidator:
         self,
         dimensions: list[Any],
         field_rag_result: FieldRAGResult,
-    ) -> tuple[list[OutputValidationError], list[str]]:
+    ) -> tuple[list[OutputValidationError], list[Any]]:
         """验证维度字段。"""
         errors = []
         corrected = []
@@ -240,15 +244,35 @@ class OutputValidator:
             # 提取字段名
             field_name = self._extract_field_name(dimension)
             if not field_name:
+                corrected.append(dimension)
                 continue
             
             result = self._validate_field(field_name, valid_names, "维度")
             if result.error:
                 errors.append(result.error)
-            corrected.append(result.corrected_name or field_name)
+            corrected.append(
+                self._apply_field_correction(dimension, result.corrected_name or field_name)
+            )
         
         return errors, corrected
     
+    @staticmethod
+    def _apply_field_correction(original: Any, corrected_name: str) -> Any:
+        """将修正后的字段名应用到原始结构，保留其余元数据。"""
+        if isinstance(original, dict):
+            patched = original.copy()
+            if "field_name" in patched:
+                patched["field_name"] = corrected_name
+            elif "name" in patched:
+                patched["name"] = corrected_name
+            return patched
+        if hasattr(original, "field_name"):
+            try:
+                return original.model_copy(update={"field_name": corrected_name})
+            except Exception:
+                pass
+        return corrected_name
+
     def _validate_computations(
         self,
         computations: list[Any],
@@ -257,7 +281,7 @@ class OutputValidator:
         """验证计算表达式。"""
         errors = []
         valid_measures = {
-            self._extract_field_name(c) 
+            self._extract_field_name(c).lower()
             for c in field_rag_result.measures 
             if self._extract_field_name(c)
         }
@@ -268,7 +292,7 @@ class OutputValidator:
                 base_measures = comp.get("base_measures", [])
                 for measure in base_measures:
                     measure_name = self._extract_field_name(measure)
-                    if measure_name and measure_name not in valid_measures:
+                    if measure_name and measure_name.lower() not in valid_measures:
                         errors.append(OutputValidationError(
                             error_type=ValidationErrorType.INVALID_FIELD,
                             field_name=measure_name,
@@ -284,6 +308,22 @@ class OutputValidator:
                         message=f"公式 '{formula}' 括号不匹配",
                         auto_correctable=False,
                     ))
+                
+                # 检查公式中 [FieldName] 引用是否有效（跳过已在 base_measures 中报告的字段）
+                already_reported = {
+                    self._extract_field_name(m).lower()
+                    for m in base_measures
+                    if self._extract_field_name(m)
+                }
+                if formula:
+                    for ref in re.findall(r'\[([^\]]+)\]', formula):
+                        if ref.lower() not in valid_measures and ref.lower() not in already_reported:
+                            errors.append(OutputValidationError(
+                                error_type=ValidationErrorType.INVALID_FIELD,
+                                field_name=ref,
+                                message=f"公式中引用的字段 '[{ref}]' 不在候选列表中",
+                                auto_correctable=False,
+                            ))
         
         return errors
     

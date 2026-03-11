@@ -170,6 +170,41 @@ class SemanticLexiconBuilder:
         dimension_category_hints: dict[str, set[str]] = defaultdict(set)
         dimension_level_hints: dict[int, set[str]] = defaultdict(set)
 
+        self._ingest_measure_seeds(measure_category_hints, measure_identifier_hints)
+        self._ingest_dimension_seeds(dimension_category_hints, dimension_level_hints)
+        self._ingest_field_candidates(
+            field_candidates or [],
+            measure_category_hints,
+            measure_identifier_hints,
+            dimension_category_hints,
+            dimension_level_hints,
+        )
+        self._ingest_field_semantic(
+            field_semantic or {},
+            measure_category_hints,
+            measure_identifier_hints,
+            dimension_category_hints,
+            dimension_level_hints,
+        )
+
+        self._backfill_identifier_fallback_hints(measure_identifier_hints)
+        measure_placeholder_hints = self._build_placeholder_hints(
+            measure_category_hints,
+        )
+
+        return self._assemble_lexicon(
+            measure_category_hints,
+            measure_identifier_hints,
+            measure_placeholder_hints,
+            dimension_category_hints,
+            dimension_level_hints,
+        )
+
+    def _ingest_measure_seeds(
+        self,
+        category_hints: dict[str, set[str]],
+        identifier_hints: dict[str, set[str]],
+    ) -> None:
         for seed in MEASURE_SEEDS:
             category = normalize_seed_hint(seed.get("measure_category", ""))
             if not category:
@@ -178,9 +213,14 @@ class SemanticLexiconBuilder:
                 seed.get("field_caption"),
                 seed.get("aliases", []),
             )
-            measure_category_hints[category].update(category_terms)
-            measure_identifier_hints[category].update(_expand_terms(category_terms))
+            category_hints[category].update(category_terms)
+            identifier_hints[category].update(_expand_terms(category_terms))
 
+    def _ingest_dimension_seeds(
+        self,
+        category_hints: dict[str, set[str]],
+        level_hints: dict[int, set[str]],
+    ) -> None:
         for seed in DIMENSION_SEEDS:
             category = normalize_seed_hint(seed.get("category", ""))
             category_terms = collect_seed_hint_terms(
@@ -188,13 +228,21 @@ class SemanticLexiconBuilder:
                 seed.get("aliases", []),
             )
             if category and category_terms:
-                dimension_category_hints[category].update(category_terms)
+                category_hints[category].update(category_terms)
 
             level = seed.get("level")
             if isinstance(level, int) and category_terms:
-                dimension_level_hints[level].update(category_terms)
+                level_hints[level].update(category_terms)
 
-        for field in field_candidates or []:
+    def _ingest_field_candidates(
+        self,
+        candidates: Iterable[FieldCandidate],
+        measure_category_hints: dict[str, set[str]],
+        measure_identifier_hints: dict[str, set[str]],
+        dimension_category_hints: dict[str, set[str]],
+        dimension_level_hints: dict[int, set[str]],
+    ) -> None:
+        for field in candidates:
             if field.role.lower() == "measure":
                 category = normalize_seed_hint(field.measure_category or "")
                 if category:
@@ -212,7 +260,15 @@ class SemanticLexiconBuilder:
                 if isinstance(level, int) and category_terms:
                     dimension_level_hints[level].update(category_terms)
 
-        for field_name, raw_info in (field_semantic or {}).items():
+    def _ingest_field_semantic(
+        self,
+        field_semantic: dict[str, Any],
+        measure_category_hints: dict[str, set[str]],
+        measure_identifier_hints: dict[str, set[str]],
+        dimension_category_hints: dict[str, set[str]],
+        dimension_level_hints: dict[int, set[str]],
+    ) -> None:
+        for field_name, raw_info in field_semantic.items():
             if not isinstance(raw_info, dict):
                 continue
 
@@ -242,6 +298,20 @@ class SemanticLexiconBuilder:
             if isinstance(level, int) and dimension_terms:
                 dimension_level_hints[level].update(dimension_terms)
 
+    @staticmethod
+    def _backfill_identifier_fallback_hints(
+        measure_identifier_hints: dict[str, set[str]],
+    ) -> None:
+        """将技术缩写兜底词补入 identifier hints。"""
+        for category, hints in _MEASURE_IDENTIFIER_FALLBACK_HINTS.items():
+            normalized_category = normalize_seed_hint(category)
+            measure_identifier_hints[normalized_category].update(hints)
+
+    @staticmethod
+    def _build_placeholder_hints(
+        measure_category_hints: dict[str, set[str]],
+    ) -> dict[str, set[str]]:
+        """从 category hints 和 fallback 构建 placeholder hints。"""
         measure_placeholder_hints = {
             category: set(hints)
             for category, hints in measure_category_hints.items()
@@ -251,10 +321,16 @@ class SemanticLexiconBuilder:
             normalized_category = normalize_seed_hint(category)
             measure_placeholder_hints.setdefault(normalized_category, set()).update(hints)
 
-        for category, hints in _MEASURE_IDENTIFIER_FALLBACK_HINTS.items():
-            normalized_category = normalize_seed_hint(category)
-            measure_identifier_hints[normalized_category].update(hints)
+        return measure_placeholder_hints
 
+    @staticmethod
+    def _assemble_lexicon(
+        measure_category_hints: dict[str, set[str]],
+        measure_identifier_hints: dict[str, set[str]],
+        measure_placeholder_hints: dict[str, set[str]],
+        dimension_category_hints: dict[str, set[str]],
+        dimension_level_hints: dict[int, set[str]],
+    ) -> SemanticLexicon:
         return SemanticLexicon(
             measure_category_hints={
                 category: set(hints)

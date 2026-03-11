@@ -2,6 +2,7 @@
 """语义理解节点"""
 import logging
 import re
+import threading
 import time
 from datetime import datetime
 from typing import Any, Optional
@@ -24,27 +25,39 @@ from analytics_assistant.src.infra.seeds import (
 
 from ..node_utils import merge_metrics, parse_field_candidates
 from ..state import SemanticParserState
-from ..components.semantic_lexicon_builder import (
-    SemanticLexicon,
-    SemanticLexiconBuilder,
-    collect_seed_hint_terms,
-    expand_hint_variants,
-    get_default_semantic_lexicon,
+from ..components.candidate_resolver import (
+    CLARIFICATION_CANDIDATE_MIN_CONFIDENCE as _CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
+    CandidateMatchContext,
+    _field_display_name,
+    _build_runtime_semantic_lexicon,
+    _measure_name_matches_placeholder,
+    _matches_measure_placeholder,
+    _score_dimension_fallback_candidate,
+    _resolve_simple_candidates,
+    _format_clarification_option,
+    _build_clarification_question,
+    _build_missing_dimension_question,
+    _should_use_missing_dimension_question,
+    _collect_clarification_options,
 )
 from ..components.semantic_understanding import (
     SemanticUnderstanding,
     get_low_confidence_threshold,
     get_simple_query_model_id,
+    get_confidence_blend_weights,
 )
 from ..schemas.output import (
     ClarificationSource,
+    ComplexSemanticOutput,
     DerivedComputation,
     SemanticOutput,
     SelfCheck,
     What,
     Where,
 )
-from ..schemas.planner import PlanMode, StepIntent, parse_analysis_plan, parse_step_intent
+from ..schemas.planner import EvidenceContext, PlanMode, StepIntent, parse_analysis_plan, parse_step_intent
+from ..schemas.config import SemanticConfig
+from ..prompts import DynamicPromptBuilder
 from ..schemas.prefilter import ComplexityType, FeatureExtractionOutput, PrefilterResult
 from ..schemas.intermediate import FieldCandidate, FewShotExample
 
@@ -52,16 +65,24 @@ logger = logging.getLogger(__name__)
 
 _FAST_SEMANTIC_MIN_CONFIDENCE = 0.75
 _FAST_SEMANTIC_MAX_PROMPT_LENGTH = 2600
-_SIMPLE_SHORTCUT_MIN_CONFIDENCE = 0.85
-_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE = 0.5
 _fast_semantic_model_available: Optional[bool] = None
-_SEMANTIC_LEXICON_BUILDER = SemanticLexiconBuilder()
+_fast_semantic_model_unavailable_since: Optional[float] = None
+_FAST_MODEL_RETRY_TTL_SECONDS = 300  # 5 分钟后重试
+_fast_model_lock = threading.Lock()
+
+_CN_DIGIT_MAP = {"一": "1", "二": "2", "三": "3", "四": "4", "五": "5",
+                  "六": "6", "七": "7", "八": "8", "九": "9", "十": "10"}
 
 _TOP_N_PATTERNS: tuple[tuple[re.Pattern[str], SortDirection], ...] = (
-    (re.compile(r"(?:前|top)\s*(\d+)", re.IGNORECASE), SortDirection.DESC),
-    (re.compile(r"(?:后|bottom)\s*(\d+)", re.IGNORECASE), SortDirection.ASC),
+    (re.compile(r"(?:前|top)[\s\-]*(\d+)", re.IGNORECASE), SortDirection.DESC),
+    (re.compile(r"(?:后|bottom)[\s\-]*(\d+)", re.IGNORECASE), SortDirection.ASC),
     (re.compile(r"最高(?:的)?\s*(\d+)", re.IGNORECASE), SortDirection.DESC),
     (re.compile(r"最低(?:的)?\s*(\d+)", re.IGNORECASE), SortDirection.ASC),
+    (re.compile(r"排名(?:前|最高)?\s*(\d+)", re.IGNORECASE), SortDirection.DESC),
+    (re.compile(r"排名(?:后|最低)\s*(\d+)", re.IGNORECASE), SortDirection.ASC),
+    # 中文数字支持（前三名、前五等）
+    (re.compile(r"前([一二三四五六七八九十])(?:名|个)?"), SortDirection.DESC),
+    (re.compile(r"后([一二三四五六七八九十])(?:名|个)?"), SortDirection.ASC),
 )
 
 def _post_process_semantic_output(result: SemanticOutput) -> SemanticOutput:
@@ -106,7 +127,7 @@ def _post_process_semantic_output(result: SemanticOutput) -> SemanticOutput:
 def _infer_fallback_aggregation(term: str) -> AggregationType:
     """为特征提取的度量候选推断一个合理的默认聚合。"""
     normalized = term.strip().lower()
-    count_hints = ("count", "数量", "数", "个数", "次数", "笔数")
+    count_hints = ("count", "数量", "个数", "次数", "笔数", "总数", "条数", "单数")
     if any(hint in normalized for hint in count_hints):
         return AggregationType.COUNT
     return AggregationType.SUM
@@ -202,22 +223,40 @@ def _get_semantic_llm(
     modular_prompt: str,
 ):
     """根据当前请求复杂度选择更合适的语义理解模型。"""
-    global _fast_semantic_model_available
+    global _fast_semantic_model_available, _fast_semantic_model_unavailable_since
     use_fast_model = _should_use_fast_semantic_model(state, modular_prompt)
     simple_query_model_id = get_simple_query_model_id()
-    if use_fast_model and _fast_semantic_model_available is not False:
+
+    with _fast_model_lock:
+        # TTL 重试：如果快模型之前不可用，检查是否已过 TTL
+        if (
+            _fast_semantic_model_available is False
+            and _fast_semantic_model_unavailable_since is not None
+            and (time.time() - _fast_semantic_model_unavailable_since) > _FAST_MODEL_RETRY_TTL_SECONDS
+        ):
+            logger.info("semantic_understanding_node: 快模型 TTL 已过期，重新尝试")
+            _fast_semantic_model_available = None
+            _fast_semantic_model_unavailable_since = None
+
+        should_try_fast = use_fast_model and _fast_semantic_model_available is not False
+
+    if should_try_fast:
         try:
             llm = get_llm(
                 agent_name="semantic_parser",
                 model_id=simple_query_model_id,
                 enable_json_mode=True,
             )
-            _fast_semantic_model_available = True
+            with _fast_model_lock:
+                _fast_semantic_model_available = True
             return llm, True
         except Exception as exc:
-            _fast_semantic_model_available = False
+            with _fast_model_lock:
+                _fast_semantic_model_available = False
+                _fast_semantic_model_unavailable_since = time.time()
             logger.warning(
-                "semantic_understanding_node: 快模型不可用，回退默认模型: %s",
+                "semantic_understanding_node: 快模型不可用，回退默认模型 (TTL=%ds): %s",
+                _FAST_MODEL_RETRY_TTL_SECONDS,
                 exc,
             )
 
@@ -226,718 +265,6 @@ def _get_semantic_llm(
         enable_json_mode=True,
     )
     return llm, False
-
-
-def _field_display_name(field: FieldCandidate) -> str:
-    return field.field_caption or field.field_name
-
-
-def _normalize_match_text(text: str) -> str:
-    normalized = re.sub(r"[_\-/]+", " ", text.strip().lower())
-    normalized = re.sub(r"\s+", " ", normalized)
-    return normalized
-
-
-def _compact_match_text(text: str) -> str:
-    return _normalize_match_text(text).replace(" ", "")
-
-
-def _text_matches(text: str, candidate_text: str) -> bool:
-    normalized_text = _normalize_match_text(text)
-    normalized_candidate = _normalize_match_text(candidate_text)
-    if not normalized_text or not normalized_candidate:
-        return False
-    if normalized_text in normalized_candidate:
-        return True
-    return _compact_match_text(normalized_text) in _compact_match_text(normalized_candidate)
-
-
-def _normalize_required_terms(required_terms: list[str]) -> list[str]:
-    normalized_terms: list[str] = []
-    seen_terms: set[str] = set()
-    for term in required_terms:
-        normalized = term.strip()
-        if not normalized:
-            continue
-        key = _normalize_match_text(normalized)
-        if key in seen_terms:
-            continue
-        seen_terms.add(key)
-        normalized_terms.append(normalized)
-    return normalized_terms
-
-
-def _format_clarification_option(field: FieldCandidate) -> str:
-    """将候选字段格式化为更适合展示给用户的澄清选项。"""
-    technical_name = field.field_name.strip()
-    display_name = _field_display_name(field).strip() or technical_name
-    aliases = [
-        alias.strip()
-        for alias in (field.aliases or [])
-        if alias and alias.strip()
-    ]
-    alias = next(
-        (
-            item
-            for item in aliases
-            if item.lower() not in {display_name.lower(), technical_name.lower()}
-        ),
-        "",
-    )
-
-    primary_label = display_name or technical_name
-    details: list[str] = []
-    if alias and primary_label.lower() == technical_name.lower():
-        primary_label = alias
-        if technical_name and technical_name.lower() != primary_label.lower():
-            details.append(technical_name)
-    else:
-        if alias:
-            details.append(alias)
-        if technical_name and technical_name.lower() != primary_label.lower():
-            details.append(technical_name)
-
-    logical_table = (field.logical_table_caption or "").strip()
-    detail_keys = {primary_label.lower()}
-    detail_keys.update(item.lower() for item in details)
-    if logical_table and logical_table.lower() not in detail_keys:
-        details.append(f"表:{logical_table}")
-
-    if details:
-        return f"{primary_label} ({', '.join(details[:2])})"
-    return primary_label
-
-
-def _candidate_search_text(field: FieldCandidate) -> str:
-    parts = [
-        field.field_name,
-        field.field_caption,
-        field.business_description or "",
-        " ".join(field.aliases or []),
-    ]
-    return _normalize_match_text(" ".join(part for part in parts if part))
-
-
-def _candidate_identifier_text(field: FieldCandidate) -> str:
-    parts = [
-        field.field_name,
-        field.field_caption,
-        " ".join(field.aliases or []),
-    ]
-    return _normalize_match_text(" ".join(part for part in parts if part))
-
-
-def _candidate_identifier_terms(field: FieldCandidate) -> set[str]:
-    terms = collect_seed_hint_terms(
-        field.field_name,
-        field.field_caption,
-        field.aliases or [],
-    )
-    expanded_terms: set[str] = set()
-    for term in terms:
-        expanded_terms.update(expand_hint_variants(term))
-    return expanded_terms
-
-
-def _candidate_identifier_hint_text(field: FieldCandidate) -> str:
-    return " ".join(sorted(_candidate_identifier_terms(field)))
-
-
-def _build_runtime_semantic_lexicon(
-    field_candidates: list[FieldCandidate],
-) -> SemanticLexicon:
-    """为当前字段候选集合构建运行时语义词典。"""
-    if not field_candidates:
-        return get_default_semantic_lexicon()
-    return _SEMANTIC_LEXICON_BUILDER.build(field_candidates=field_candidates)
-
-
-def _measure_term_categories(
-    term: str,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> list[str]:
-    term_lower = _normalize_match_text(term)
-    if not term_lower:
-        return []
-    lexicon = lexicon or get_default_semantic_lexicon()
-    return [
-        category
-        for category, hints in lexicon.measure_category_hints.items()
-        if any(_text_matches(hint, term_lower) for hint in hints)
-    ]
-
-
-def _measure_placeholder_hints(
-    placeholder: str,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> set[str]:
-    lexicon = lexicon or get_default_semantic_lexicon()
-    hints = set(lexicon.measure_placeholder_hints.get(placeholder, {placeholder}))
-    for raw_hint in list(hints):
-        hints.update(expand_hint_variants(raw_hint))
-    return {hint for hint in hints if hint}
-
-
-def _measure_identifier_hints(
-    category: str,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> set[str]:
-    lexicon = lexicon or get_default_semantic_lexicon()
-    return set(lexicon.measure_identifier_hints.get(category, set()))
-
-
-def _measure_candidate_matches_category(
-    field: FieldCandidate,
-    category: str,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> bool:
-    candidate_category = _normalize_match_text(field.measure_category or "")
-    if candidate_category == category:
-        return True
-
-    identifier_hint_text = _candidate_identifier_hint_text(field)
-    if not identifier_hint_text:
-        return False
-
-    return any(
-        _text_matches(hint, identifier_hint_text)
-        for hint in _measure_identifier_hints(category, lexicon)
-    )
-
-
-def _measure_name_matches_placeholder(
-    name: str,
-    placeholder: str,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> bool:
-    normalized_name = _normalize_match_text(name)
-    if not normalized_name:
-        return False
-    return any(
-        _text_matches(hint, normalized_name)
-        for hint in _measure_placeholder_hints(placeholder, lexicon)
-    )
-
-
-def _infer_dimension_preferences(
-    required_terms: list[str],
-    lexicon: Optional[SemanticLexicon] = None,
-) -> tuple[set[str], list[int]]:
-    lexicon = lexicon or get_default_semantic_lexicon()
-    preferred_categories: set[str] = set()
-    preferred_levels: list[int] = []
-    for term in _normalize_required_terms(required_terms):
-        normalized_term = _normalize_match_text(term)
-        if not normalized_term:
-            continue
-        for category, hints in lexicon.dimension_category_hints.items():
-            if any(_text_matches(hint, normalized_term) for hint in hints):
-                preferred_categories.add(category)
-        for hints, level in lexicon.dimension_level_hints:
-            if any(_text_matches(hint, normalized_term) for hint in hints):
-                preferred_levels.append(level)
-                break
-    return preferred_categories, preferred_levels
-
-
-def _dimension_term_preferences(
-    term: str,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> tuple[set[str], list[int]]:
-    return _infer_dimension_preferences([term], lexicon)
-
-
-def _get_dimension_candidate_category(field: FieldCandidate) -> str:
-    category = (
-        field.hierarchy_category
-        or field.category
-        or ""
-    )
-    return _normalize_match_text(str(category))
-
-
-def _get_dimension_candidate_level(field: FieldCandidate) -> Optional[int]:
-    return field.hierarchy_level or field.level
-
-
-def _dimension_candidate_matches_preferences(
-    field: FieldCandidate,
-    *,
-    preferred_categories: set[str],
-    preferred_levels: list[int],
-) -> bool:
-    candidate_category = _get_dimension_candidate_category(field)
-    candidate_level = _get_dimension_candidate_level(field)
-
-    if preferred_categories:
-        if candidate_category not in preferred_categories:
-            return False
-
-        # 如果用户问题已经隐含了明确层级（省份/部门/城市等），
-        # 只有层级足够接近时才允许仅靠 semantic metadata 直接命中，
-        # 避免把“部门”误吸附到“销售员/渠道经理”等更细粒度字段。
-        if preferred_levels:
-            if candidate_level is None:
-                return False
-            closest_gap = min(abs(candidate_level - level) for level in preferred_levels)
-            return closest_gap <= 1
-
-        return True
-
-    if preferred_levels:
-        if candidate_level is None:
-            return False
-        closest_gap = min(abs(candidate_level - level) for level in preferred_levels)
-        return closest_gap <= 1
-
-    return False
-
-
-def _score_dimension_fallback_candidate(
-    required_terms: list[str],
-    field: FieldCandidate,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> float:
-    score = field.confidence
-    preferred_categories, preferred_levels = _infer_dimension_preferences(
-        required_terms,
-        lexicon,
-    )
-    candidate_category = _get_dimension_candidate_category(field)
-    candidate_level = _get_dimension_candidate_level(field)
-
-    if preferred_categories:
-        if candidate_category in preferred_categories:
-            score += 0.25
-        elif candidate_category == "time":
-            score -= 0.25
-        else:
-            score -= 0.05
-
-    if preferred_levels and candidate_level is not None:
-        closest_gap = min(abs(candidate_level - level) for level in preferred_levels)
-        score += max(0.0, 0.12 - 0.04 * closest_gap)
-
-    if field.sample_values:
-        score += 0.02
-
-    return score
-
-
-def _build_missing_dimension_question(term: str) -> str:
-    normalized = term.strip()
-    if normalized:
-        return f"当前候选中没有明显对应“{normalized}”的维度字段。以下哪个字段最接近你的分析意图？"
-    return "当前候选中没有明显对应的维度字段。以下哪个字段最接近你的分析意图？"
-
-
-def _should_use_missing_dimension_question(
-    required_terms: list[str],
-    candidates: list[FieldCandidate],
-    lexicon: Optional[SemanticLexicon] = None,
-) -> bool:
-    preferred_categories, _ = _infer_dimension_preferences(required_terms, lexicon)
-    if not preferred_categories:
-        return False
-    return not any(
-        _get_dimension_candidate_category(candidate) in preferred_categories
-        for candidate in candidates
-    )
-
-
-def _measure_term_matches_candidate(
-    term: str,
-    field: FieldCandidate,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> bool:
-    term_lower = _normalize_match_text(term)
-    if not term_lower:
-        return False
-
-    searchable_text = _candidate_search_text(field)
-    if _text_matches(term_lower, searchable_text):
-        return True
-
-    matched_categories = _measure_term_categories(term_lower, lexicon)
-    if not matched_categories:
-        return False
-
-    # “销售数量 / 订单数量”这类词同时带有通用销售词和更具体的数量信号，
-    # 优先按数量/计数解释，避免误吸到 revenue 候选。
-    category_priority = ["quantity", "count", "profit", "cost", "revenue"]
-    for category in category_priority:
-        if category not in matched_categories:
-            continue
-        if _measure_candidate_matches_category(field, category, lexicon):
-            return True
-
-        if category in {"quantity", "count"}:
-            return False
-
-    return False
-
-
-def _dimension_term_matches_candidate(
-    term: str,
-    field: FieldCandidate,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> bool:
-    term_lower = _normalize_match_text(term)
-    if not term_lower:
-        return False
-    if _text_matches(term_lower, _candidate_search_text(field)):
-        return True
-
-    preferred_categories, preferred_levels = _dimension_term_preferences(term_lower, lexicon)
-    if not preferred_categories and not preferred_levels:
-        return False
-
-    return _dimension_candidate_matches_preferences(
-        field,
-        preferred_categories=preferred_categories,
-        preferred_levels=preferred_levels,
-    )
-
-
-def _score_simple_candidate(
-    term: str,
-    field: FieldCandidate,
-    matcher,
-    *,
-    min_confidence: float = _SIMPLE_SHORTCUT_MIN_CONFIDENCE,
-) -> Optional[float]:
-    """为简单查询快捷路径计算候选字段分数。"""
-    if field.confidence < min_confidence:
-        return None
-    if not matcher(term, field):
-        return None
-
-    score = field.confidence
-    searchable_text = _candidate_search_text(field)
-    if _text_matches(term, searchable_text):
-        score += 0.1
-    if field.match_type == "exact":
-        score += 0.05
-    return score
-
-
-def _resolve_simple_candidates(
-    required_terms: list[str],
-    candidates: list[FieldCandidate],
-    matcher,
-    *,
-    allow_partial: bool = False,
-    min_confidence: float = _SIMPLE_SHORTCUT_MIN_CONFIDENCE,
-) -> tuple[list[FieldCandidate], list[str]]:
-    """按需求词顺序解析简单查询候选，可选择保留未解析项。"""
-    selected: list[FieldCandidate] = []
-    unresolved: list[str] = []
-    used_field_names: set[str] = set()
-
-    for term in _normalize_required_terms(required_terms):
-        # 同义词命中时复用已选字段，避免将一个业务字段误判为多个需求。
-        if any(matcher(term, candidate) for candidate in selected):
-            continue
-
-        best_candidate: Optional[FieldCandidate] = None
-        best_score = -1.0
-        for candidate in candidates:
-            if candidate.field_name in used_field_names:
-                continue
-            score = _score_simple_candidate(
-                term,
-                candidate,
-                matcher,
-                min_confidence=min_confidence,
-            )
-            if score is None:
-                continue
-            if score > best_score:
-                best_candidate = candidate
-                best_score = score
-
-        if best_candidate is None:
-            unresolved.append(term)
-            if not allow_partial:
-                return [], unresolved
-            continue
-
-        selected.append(best_candidate)
-        used_field_names.add(best_candidate.field_name)
-
-    return selected, unresolved
-
-
-def _select_simple_candidates(
-    required_terms: list[str],
-    candidates: list[FieldCandidate],
-    matcher,
-) -> Optional[list[FieldCandidate]]:
-    selected, unresolved = _resolve_simple_candidates(
-        required_terms,
-        candidates,
-        matcher,
-    )
-    if unresolved:
-        return None
-    return selected
-
-
-def _build_clarification_question(term: str, role_label: str) -> str:
-    normalized = term.strip()
-    if normalized:
-        return f"“{normalized}”具体对应哪个{role_label}字段？"
-    return f"请确认你想使用哪个{role_label}字段？"
-
-
-def _collect_clarification_options(
-    required_terms: list[str],
-    candidates: list[FieldCandidate],
-    matcher,
-    *,
-    limit: int = 3,
-    exclude_field_names: Optional[set[str]] = None,
-    min_confidence: float = _CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
-    fallback_scorer=None,
-) -> list[str]:
-    """为规则澄清构造候选选项。"""
-    exclude_field_names = exclude_field_names or set()
-    matched_scored: list[tuple[float, FieldCandidate]] = []
-    fallback_scored: list[tuple[float, FieldCandidate]] = []
-
-    for candidate in candidates:
-        if candidate.field_name in exclude_field_names:
-            continue
-
-        best_score: Optional[float] = None
-        for term in _normalize_required_terms(required_terms):
-            score = _score_simple_candidate(
-                term,
-                candidate,
-                matcher,
-                min_confidence=min_confidence,
-            )
-            if score is not None:
-                best_score = max(best_score or score, score)
-
-        if best_score is not None:
-            matched_scored.append((best_score, candidate))
-        else:
-            score = (
-                fallback_scorer(required_terms, candidate)
-                if fallback_scorer is not None
-                else candidate.confidence
-            )
-            fallback_scored.append((score, candidate))
-
-    ranked_candidates = matched_scored or fallback_scored
-    options: list[str] = []
-    for _, candidate in sorted(
-        ranked_candidates,
-        key=lambda item: item[0],
-        reverse=True,
-    ):
-        option = _format_clarification_option(candidate)
-        if not option or option in options:
-            continue
-        options.append(option)
-        if len(options) >= limit:
-            break
-    return options
-
-
-def _try_build_simple_clarification_output(
-    state: SemanticParserState,
-    question: str,
-) -> Optional[SemanticOutput]:
-    """对简单但字段映射不明确的请求直接生成澄清输出。"""
-    if _step_intent_requires_reasoning(state):
-        return None
-    prefilter_result = _get_prefilter_result(state)
-    feature_output = _get_feature_output(state)
-    if prefilter_result is None or feature_output is None:
-        return None
-    if prefilter_result.detected_complexity != [ComplexityType.SIMPLE]:
-        return None
-    if prefilter_result.time_hints or prefilter_result.matched_computations:
-        return None
-    if feature_output.is_degraded or feature_output.confirmed_computations:
-        return None
-    if feature_output.confirmation_confidence < _SIMPLE_SHORTCUT_MIN_CONFIDENCE:
-        return None
-
-    candidates = parse_field_candidates(state.get("field_candidates", []))
-    measure_candidates = [
-        candidate for candidate in candidates if candidate.role.lower() == "measure"
-    ]
-    dimension_candidates = [
-        candidate for candidate in candidates if candidate.role.lower() == "dimension"
-    ]
-    lexicon = _build_runtime_semantic_lexicon(candidates)
-    measure_matcher = (
-        lambda term, candidate: _measure_term_matches_candidate(term, candidate, lexicon)
-    )
-    dimension_matcher = (
-        lambda term, candidate: _dimension_term_matches_candidate(term, candidate, lexicon)
-    )
-
-    selected_measures, unresolved_measures = _resolve_simple_candidates(
-        feature_output.required_measures,
-        measure_candidates,
-        measure_matcher,
-        allow_partial=True,
-        min_confidence=_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
-    )
-    selected_dimensions, unresolved_dimensions = _resolve_simple_candidates(
-        feature_output.required_dimensions,
-        dimension_candidates,
-        dimension_matcher,
-        allow_partial=True,
-        min_confidence=_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
-    )
-
-    clarification_question = None
-    clarification_options: list[str] = []
-
-    if unresolved_measures:
-        clarification_question = _build_clarification_question(
-            unresolved_measures[0],
-            "度量",
-        )
-        clarification_options = _collect_clarification_options(
-            unresolved_measures,
-            measure_candidates,
-            measure_matcher,
-            exclude_field_names={candidate.field_name for candidate in selected_measures},
-        )
-    elif unresolved_dimensions:
-        if _should_use_missing_dimension_question(
-            [unresolved_dimensions[0]],
-            dimension_candidates,
-            lexicon,
-        ):
-            clarification_question = _build_missing_dimension_question(
-                unresolved_dimensions[0],
-            )
-        else:
-            clarification_question = _build_clarification_question(
-                unresolved_dimensions[0],
-                "维度",
-            )
-        clarification_options = _collect_clarification_options(
-            unresolved_dimensions,
-            dimension_candidates,
-            dimension_matcher,
-            exclude_field_names={
-                candidate.field_name for candidate in selected_dimensions
-            },
-            fallback_scorer=lambda required_terms, candidate: (
-                _score_dimension_fallback_candidate(required_terms, candidate, lexicon)
-            ),
-        )
-
-    if not clarification_question or not clarification_options:
-        return None
-
-    return SemanticOutput(
-        restated_question=question,
-        what=What(measures=[candidate.field_name for candidate in selected_measures]),
-        where=Where(
-            dimensions=[candidate.field_name for candidate in selected_dimensions]
-        ),
-        how_type=HowType.SIMPLE,
-        computations=[],
-        needs_clarification=True,
-        clarification_question=clarification_question,
-        clarification_options=clarification_options,
-        self_check=SelfCheck(
-            field_mapping_confidence=0.55,
-            time_range_confidence=1.0,
-            computation_confidence=1.0,
-            overall_confidence=0.55,
-        ),
-        parsing_warnings=["基于简单查询候选直接生成澄清问题"],
-    )
-
-
-def _try_build_simple_semantic_output(
-    state: SemanticParserState,
-    question: str,
-) -> Optional[SemanticOutput]:
-    """对高置信度简单查询直接构造语义输出，跳过 LLM。"""
-    if _step_intent_requires_reasoning(state):
-        return None
-    prefilter_result = _get_prefilter_result(state)
-    feature_output = _get_feature_output(state)
-    if prefilter_result is None or feature_output is None:
-        return None
-    if prefilter_result.detected_complexity != [ComplexityType.SIMPLE]:
-        return None
-    if prefilter_result.time_hints or prefilter_result.matched_computations:
-        return None
-    if feature_output.is_degraded or feature_output.confirmed_computations:
-        return None
-    if feature_output.confirmation_confidence < _SIMPLE_SHORTCUT_MIN_CONFIDENCE:
-        return None
-    if state.get("few_shot_examples"):
-        return None
-
-    candidates = parse_field_candidates(state.get("field_candidates", []))
-    measure_candidates = [
-        candidate
-        for candidate in candidates
-        if candidate.role.lower() == "measure"
-    ]
-    dimension_candidates = [
-        candidate
-        for candidate in candidates
-        if candidate.role.lower() == "dimension"
-    ]
-    lexicon = _build_runtime_semantic_lexicon(candidates)
-    measure_matcher = (
-        lambda term, candidate: _measure_term_matches_candidate(term, candidate, lexicon)
-    )
-    dimension_matcher = (
-        lambda term, candidate: _dimension_term_matches_candidate(term, candidate, lexicon)
-    )
-
-    selected_measures = _select_simple_candidates(
-        feature_output.required_measures,
-        measure_candidates,
-        measure_matcher,
-    )
-    if not selected_measures:
-        return None
-
-    selected_dimensions = _select_simple_candidates(
-        feature_output.required_dimensions,
-        dimension_candidates,
-        dimension_matcher,
-    )
-    if feature_output.required_dimensions and not selected_dimensions:
-        return None
-
-    overall_confidence = min(1.0, max(0.9, feature_output.confirmation_confidence))
-    return SemanticOutput(
-        restated_question=question,
-        what=What(measures=[candidate.field_name for candidate in selected_measures]),
-        where=Where(
-            dimensions=[
-                candidate.field_name
-                for candidate in (selected_dimensions or [])
-            ]
-        ),
-        how_type=HowType.SIMPLE,
-        computations=[],
-        needs_clarification=False,
-        self_check=SelfCheck(
-            field_mapping_confidence=overall_confidence,
-            time_range_confidence=1.0,
-            computation_confidence=1.0,
-            overall_confidence=overall_confidence,
-        ),
-        parsing_warnings=["基于简单查询高置信度候选直接生成语义输出"],
-    )
 
 
 def _get_measure_names(
@@ -970,35 +297,6 @@ def _get_dimension_names(
     if feature_output:
         return [item.strip() for item in feature_output.required_dimensions if item.strip()]
     return []
-
-
-def _matches_measure_placeholder(
-    field: FieldCandidate,
-    placeholder: str,
-    lexicon: Optional[SemanticLexicon] = None,
-) -> bool:
-    placeholder_hints = _measure_placeholder_hints(placeholder, lexicon)
-    category = _normalize_match_text(field.measure_category or "")
-    if category and category in placeholder_hints:
-        return True
-
-    searchable_parts = [
-        field.field_name,
-        field.field_caption,
-        " ".join(field.aliases or []),
-    ]
-    searchable_text = _normalize_match_text(
-        " ".join(part for part in searchable_parts if part)
-    )
-    if any(_text_matches(hint, searchable_text) for hint in placeholder_hints):
-        return True
-
-    # 业务描述只作为兜底语义，不参与主类别判断，避免被通用词误吸附。
-    business_description = _normalize_match_text(field.business_description or "")
-    return bool(business_description) and any(
-        _text_matches(hint, business_description)
-        for hint in placeholder_hints
-    )
 
 
 def _build_measure_mapping(
@@ -1049,17 +347,13 @@ def _build_measure_mapping(
         if matched:
             continue
 
-        for idx, candidate in enumerate(measure_candidates):
-            if idx in used_candidates:
-                continue
-            mapping[placeholder] = _field_display_name(candidate)
-            used_candidates.add(idx)
-            matched = True
-            break
-
-        if not matched and measure_names:
-            fallback_index = min(len(mapping), len(measure_names) - 1)
-            mapping[placeholder] = measure_names[fallback_index]
+        if not matched:
+            logger.warning(
+                "semantic_understanding_node: 计算种子 %s 的占位符 '%s' "
+                "无法匹配到任何候选度量，跳过该占位符",
+                seed_name,
+                placeholder,
+            )
 
     logger.debug(
         "semantic_understanding_node: 计算种子 %s 的 measure_mapping=%s",
@@ -1089,8 +383,10 @@ def _backfill_computations(
     if not seed_names:
         return result
 
-    seeds_by_name = {seed.name: seed for seed in COMPUTATION_SEEDS}
-    seeds_by_name.update({seed.display_name: seed for seed in COMPUTATION_SEEDS})
+    seeds_by_name: dict[str, Any] = {}
+    for seed in COMPUTATION_SEEDS:
+        seeds_by_name.setdefault(seed.name, seed)
+        seeds_by_name.setdefault(seed.display_name, seed)
     ordered_seeds = [seeds_by_name[name] for name in seed_names if name in seeds_by_name]
     if not ordered_seeds:
         return result
@@ -1170,7 +466,13 @@ def _extract_top_n_spec(question: str) -> Optional[tuple[int, SortDirection]]:
     for pattern, direction in _TOP_N_PATTERNS:
         match = pattern.search(question)
         if match:
-            return int(match.group(1)), direction
+            raw = match.group(1)
+            # 中文数字转换
+            n_str = _CN_DIGIT_MAP.get(raw, raw)
+            try:
+                return int(n_str), direction
+            except ValueError:
+                continue
     return None
 
 
@@ -1224,11 +526,11 @@ def _backfill_confidence_from_signals(
 ) -> SemanticOutput:
     feature_output = _get_feature_output(state)
     prefilter_result = _get_prefilter_result(state)
-    confidence_floor = max(
+    upstream_confidence = max(
         getattr(feature_output, "confirmation_confidence", 0.0) if feature_output else 0.0,
         getattr(prefilter_result, "match_confidence", 0.0) if prefilter_result else 0.0,
     )
-    if confidence_floor <= 0:
+    if upstream_confidence <= 0:
         return result
 
     has_structured_signal = bool(
@@ -1240,21 +542,43 @@ def _backfill_confidence_from_signals(
     if not has_structured_signal:
         return result
 
-    if not result.needs_clarification and confidence_floor < get_low_confidence_threshold():
+    weights = get_confidence_blend_weights()
+    llm_w = weights["llm_weight"]
+    upstream_w = weights["upstream_weight"]
+    divergence_threshold = weights["divergence_threshold"]
+
+    llm_confidence = result.self_check.overall_confidence
+
+    # 如果 LLM 给出的置信度显著低于上游信号，记录警告而非强行覆盖。
+    # LLM 可能发现了上游无法检测的语义问题。
+    if upstream_confidence - llm_confidence > divergence_threshold:
+        result.parsing_warnings.append(
+            f"LLM 自评置信度 ({llm_confidence:.2f}) 显著低于上游信号 "
+            f"({upstream_confidence:.2f})，保留 LLM 判断"
+        )
         return result
 
-    if confidence_floor > result.self_check.overall_confidence:
-        result.self_check.overall_confidence = min(1.0, confidence_floor)
-        result.self_check.field_mapping_confidence = max(
-            result.self_check.field_mapping_confidence,
-            min(1.0, confidence_floor),
+    # 对需要澄清的结果：取两者较低值，避免虚高。
+    if result.needs_clarification:
+        blended = min(llm_confidence, upstream_confidence)
+    else:
+        # 正常结果：取加权平均，LLM 权重更高，因为它能看到全局上下文。
+        blended = llm_confidence * llm_w + upstream_confidence * upstream_w
+
+    if blended != llm_confidence:
+        result.self_check.overall_confidence = min(1.0, blended)
+        result.self_check.field_mapping_confidence = min(
+            1.0,
+            result.self_check.field_mapping_confidence * llm_w
+            + upstream_confidence * upstream_w,
         )
         if result.computations:
-            result.self_check.computation_confidence = max(
-                result.self_check.computation_confidence,
-                min(1.0, confidence_floor),
+            result.self_check.computation_confidence = min(
+                1.0,
+                result.self_check.computation_confidence * llm_w
+                + upstream_confidence * upstream_w,
             )
-        result.parsing_warnings.append("基于前序节点信号校准 self_check 置信度")
+        result.parsing_warnings.append("基于前序节点信号与 LLM 自评加权校准置信度")
 
     return result
 
@@ -1267,42 +591,30 @@ def _enrich_clarification_output(
     if not result.needs_clarification:
         return result
 
-    feature_output = state.get("feature_extraction_output") or {}
+    feature_output = _get_feature_output(state)
     required_measures = [
         item.strip()
-        for item in feature_output.get("required_measures", [])
+        for item in (feature_output.required_measures if feature_output else [])
         if isinstance(item, str) and item.strip()
     ]
     required_dimensions = [
         item.strip()
-        for item in feature_output.get("required_dimensions", [])
+        for item in (feature_output.required_dimensions if feature_output else [])
         if isinstance(item, str) and item.strip()
     ]
     candidates = parse_field_candidates(state.get("field_candidates", []))
-    measure_candidates = [
-        candidate for candidate in candidates if candidate.role.lower() == "measure"
-    ]
-    dimension_candidates = [
-        candidate for candidate in candidates if candidate.role.lower() == "dimension"
-    ]
-    lexicon = _build_runtime_semantic_lexicon(candidates)
-    measure_matcher = (
-        lambda term, candidate: _measure_term_matches_candidate(term, candidate, lexicon)
-    )
-    dimension_matcher = (
-        lambda term, candidate: _dimension_term_matches_candidate(term, candidate, lexicon)
-    )
+    ctx = CandidateMatchContext.from_field_candidates(candidates)
     selected_measure_candidates, unresolved_measures = _resolve_simple_candidates(
         required_measures,
-        measure_candidates,
-        measure_matcher,
+        ctx.measure_candidates,
+        ctx.measure_matcher,
         allow_partial=True,
         min_confidence=_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
     )
     selected_dimension_candidates, unresolved_dimensions = _resolve_simple_candidates(
         required_dimensions,
-        dimension_candidates,
-        dimension_matcher,
+        ctx.dimension_candidates,
+        ctx.dimension_matcher,
         allow_partial=True,
         min_confidence=_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
     )
@@ -1395,6 +707,28 @@ def _enrich_clarification_output(
             result.where = Where.model_validate(where_payload)
             enriched = True
 
+    # 如果 LLM 已经提供了澄清选项，尝试将其映射到已知候选字段的友好显示名。
+    # 避免前端显示技术字段名（如 SUM(Sales)）。
+    if result.clarification_options:
+        all_candidates = ctx.measure_candidates + ctx.dimension_candidates
+        reformatted_options: list[str] = []
+        for option in result.clarification_options:
+            option_lower = option.strip().lower()
+            matched_candidate = next(
+                (
+                    c for c in all_candidates
+                    if c.field_name.strip().lower() == option_lower
+                    or (c.field_caption or "").strip().lower() == option_lower
+                ),
+                None,
+            )
+            if matched_candidate is not None:
+                reformatted_options.append(_format_clarification_option(matched_candidate))
+            else:
+                reformatted_options.append(option.strip())
+        if reformatted_options:
+            result.clarification_options = reformatted_options
+
     if not result.clarification_options:
         clarification_question = None
         clarification_options: list[str] = []
@@ -1405,8 +739,8 @@ def _enrich_clarification_output(
             )
             clarification_options = _collect_clarification_options(
                 unresolved_measures,
-                measure_candidates,
-                measure_matcher,
+                ctx.measure_candidates,
+                ctx.measure_matcher,
                 exclude_field_names={
                     candidate.field_name for candidate in selected_measure_candidates
                 },
@@ -1414,8 +748,8 @@ def _enrich_clarification_output(
         elif unresolved_dimensions and not unresolved_measures:
             if _should_use_missing_dimension_question(
                 [unresolved_dimensions[0]],
-                dimension_candidates,
-                lexicon,
+                ctx.dimension_candidates,
+                ctx.lexicon,
             ):
                 clarification_question = _build_missing_dimension_question(
                     unresolved_dimensions[0],
@@ -1427,13 +761,13 @@ def _enrich_clarification_output(
                 )
             clarification_options = _collect_clarification_options(
                 unresolved_dimensions,
-                dimension_candidates,
-                dimension_matcher,
+                ctx.dimension_candidates,
+                ctx.dimension_matcher,
                 exclude_field_names={
                     candidate.field_name for candidate in selected_dimension_candidates
                 },
                 fallback_scorer=lambda required_terms, candidate: (
-                    _score_dimension_fallback_candidate(required_terms, candidate, lexicon)
+                    _score_dimension_fallback_candidate(required_terms, candidate, ctx.lexicon)
                 ),
             )
 
@@ -1490,33 +824,10 @@ async def semantic_understanding_node(
     planner_requires_reasoning = _analysis_plan_requires_reasoning(state)
     using_fast_model = False
     is_reasoning_model = False
-    used_simple_shortcut = False
-    used_simple_clarification_shortcut = False
+    thinking = None
 
-    if modular_prompt:
-        if planner_requires_reasoning:
-            logger.info(
-                "semantic_understanding_node: analysis_plan 要求保留推理路径，跳过简单快捷路径"
-            )
-        else:
-            shortcut_result = _try_build_simple_semantic_output(state, question)
-            if shortcut_result is not None:
-                logger.info("semantic_understanding_node: 命中简单查询直出快捷路径")
-                result = shortcut_result
-                used_simple_shortcut = True
-                modular_prompt = None
-            else:
-                clarification_result = _try_build_simple_clarification_output(state, question)
-                if clarification_result is not None:
-                    logger.info("semantic_understanding_node: 命中简单查询澄清快捷路径")
-                    result = clarification_result
-                    used_simple_clarification_shortcut = True
-                    modular_prompt = None
-
-    if used_simple_shortcut or used_simple_clarification_shortcut:
-        pass
-    elif not modular_prompt:
-        # 降级：如果没有 modular_prompt，使用旧的方式构建
+    if not modular_prompt:
+        # 降级：modular_prompt 缺失，就地构建 Prompt 并尽量传递所有可用的上游信息
         logger.warning(
             "semantic_understanding_node: 未找到 modular_prompt，使用降级模式"
         )
@@ -1540,13 +851,65 @@ async def semantic_understanding_node(
             except (ValueError, TypeError):
                 pass
 
-        understanding = SemanticUnderstanding()
-        result = await understanding.understand(
+        semantic_config = SemanticConfig(current_date=current_date or datetime.now().date())
+
+        prefilter_result = _get_prefilter_result(state)
+        feature_output = _get_feature_output(state)
+
+        analysis_plan = parse_analysis_plan(
+            raw_analysis_plan=state.get("analysis_plan"),
+            raw_global_understanding=state.get("global_understanding"),
+        )
+        current_step_intent = parse_step_intent(state.get("current_step_intent"))
+        evidence_context_raw = state.get("evidence_context")
+        evidence_context = (
+            EvidenceContext.model_validate(evidence_context_raw)
+            if evidence_context_raw else None
+        )
+
+        dynamic_schema_result_raw = state.get("dynamic_schema_result")
+        schema_text = ""
+        detected_complexity = [ComplexityType.SIMPLE]
+        allowed_calc_types: list[str] = []
+        if dynamic_schema_result_raw:
+            schema_text = dynamic_schema_result_raw.get("schema_text", "")
+            detected_complexity = [
+                ComplexityType(c)
+                for c in dynamic_schema_result_raw.get("detected_complexity", ["simple"])
+            ]
+            allowed_calc_types = dynamic_schema_result_raw.get("allowed_calc_types", [])
+
+        prompt_builder = DynamicPromptBuilder()
+        modular_prompt = prompt_builder.build(
             question=question,
+            config=semantic_config,
             field_candidates=field_candidates,
-            current_date=current_date,
+            schema_json=schema_text,
+            detected_complexity=detected_complexity,
+            allowed_calc_types=allowed_calc_types,
             history=history,
             few_shot_examples=few_shot_examples,
+            prefilter_result=prefilter_result,
+            feature_output=feature_output,
+            analysis_plan=analysis_plan,
+            current_step_intent=current_step_intent,
+            evidence_context=evidence_context,
+        )
+
+        logger.info(
+            "semantic_understanding_node: 降级模式 Prompt 已构建, "
+            f"prompt_length={len(modular_prompt)}"
+        )
+
+        llm = get_llm(agent_name="semantic_parser", enable_json_mode=True)
+        messages = [HumanMessage(content=modular_prompt)]
+
+        result, thinking = await stream_llm_structured(
+            llm=llm,
+            messages=messages,
+            output_model=SemanticOutput,
+            on_token=None,
+            on_thinking=None,
             return_thinking=True,
         )
     else:
@@ -1556,6 +919,10 @@ async def semantic_understanding_node(
             f"prompt_length={len(modular_prompt)}"
         )
 
+        # 复杂查询使用 ComplexSemanticOutput，让 LLM 同时输出全局理解字段
+        use_complex_output = planner_requires_reasoning
+        output_model = ComplexSemanticOutput if use_complex_output else SemanticOutput
+
         logger.info("[semantic_understanding_node] 获取 LLM...")
         llm, using_fast_model = _get_semantic_llm(state, modular_prompt)
         is_reasoning_model = bool(getattr(llm, "_is_reasoning_model", False))
@@ -1563,7 +930,8 @@ async def semantic_understanding_node(
             "[semantic_understanding_node] 模型已选择: "
             f"model={getattr(llm, 'model_name', 'unknown')}, "
             f"fast_model={using_fast_model}, "
-            f"reasoning_model={is_reasoning_model}"
+            f"reasoning_model={is_reasoning_model}, "
+            f"complex_output={use_complex_output}"
         )
 
         messages = [HumanMessage(content=modular_prompt)]
@@ -1580,7 +948,7 @@ async def semantic_understanding_node(
             result, thinking = await stream_llm_structured(
                 llm=llm,
                 messages=messages,
-                output_model=SemanticOutput,
+                output_model=output_model,
                 on_token=None,        # 不向前端发送 JSON token（结构化输出不应显示给用户）
                 on_thinking=on_thinking,
                 return_thinking=True,
@@ -1588,10 +956,13 @@ async def semantic_understanding_node(
             logger.info("[semantic_understanding_node] LLM 调用完成")
         except Exception as e:
             if using_fast_model:
-                global _fast_semantic_model_available
-                _fast_semantic_model_available = False
+                global _fast_semantic_model_available, _fast_semantic_model_unavailable_since
+                with _fast_model_lock:
+                    _fast_semantic_model_available = False
+                    _fast_semantic_model_unavailable_since = time.time()
                 logger.warning(
-                    "[semantic_understanding_node] 快模型调用失败，回退默认模型: %s",
+                    "[semantic_understanding_node] 快模型调用失败，回退默认模型 (TTL=%ds): %s",
+                    _FAST_MODEL_RETRY_TTL_SECONDS,
                     e,
                 )
                 llm = get_llm(
@@ -1603,7 +974,7 @@ async def semantic_understanding_node(
                 result, thinking = await stream_llm_structured(
                     llm=llm,
                     messages=messages,
-                    output_model=SemanticOutput,
+                    output_model=output_model,
                     on_token=None,
                     on_thinking=on_thinking,
                     return_thinking=True,
@@ -1612,6 +983,23 @@ async def semantic_understanding_node(
             else:
                 logger.exception(f"[semantic_understanding_node] LLM 调用失败: {e}")
                 raise
+
+    # ── 提取复杂查询的全局理解字段 ──────────────────────────────────────
+    complex_global_fields: Optional[dict[str, Any]] = None
+    if isinstance(result, ComplexSemanticOutput):
+        complex_global_fields = {
+            "analysis_mode": result.analysis_mode.value,
+            "single_query_feasible": result.single_query_feasible,
+            "decomposition_reason": result.decomposition_reason,
+            "risk_flags": result.risk_flags,
+            "llm_confidence": result.self_check.overall_confidence,
+        }
+        logger.info(
+            "semantic_understanding_node: complex output extracted, "
+            "analysis_mode=%s, single_query_feasible=%s",
+            result.analysis_mode.value,
+            result.single_query_feasible,
+        )
 
     result = _post_process_semantic_output(result)
     result = _backfill_computations(result, state)
@@ -1628,9 +1016,16 @@ async def semantic_understanding_node(
         f"needs_clarification={result.needs_clarification}"
     )
 
+    # ── 构建输出 ──────────────────────────────────────────────────────────
+    # 存储 semantic_output 时排除 ComplexSemanticOutput 的额外字段，
+    # 确保下游 SemanticOutput.model_validate() 不会因 extra="forbid" 报错
+    _complex_extra_fields = {"analysis_mode", "single_query_feasible", "decomposition_reason", "risk_flags"}
+    semantic_output_dump = result.model_dump(exclude=_complex_extra_fields)
+
     output = {
-        "semantic_output": result.model_dump(),
+        "semantic_output": semantic_output_dump,
         "needs_clarification": result.needs_clarification,
+        "thinking": thinking if thinking else None,
     }
 
     if result.needs_clarification:
@@ -1642,19 +1037,43 @@ async def semantic_understanding_node(
             else ClarificationSource.SEMANTIC_UNDERSTANDING.value
         )
 
+    # 复杂查询：用 LLM 的全局理解判断更新 state 中的 global_understanding
+    if complex_global_fields:
+        existing_global = state.get("global_understanding") or {}
+        output["global_understanding"] = {
+            **existing_global,
+            **complex_global_fields,
+            "primary_restated_question": result.restated_question,
+        }
+
+        # LLM 判断单查可行时，覆盖规则 plan 的 needs_planning，
+        # 防止 executor 错误地执行多步
+        llm_mode = complex_global_fields["analysis_mode"]
+        llm_feasible = complex_global_fields["single_query_feasible"]
+        if llm_feasible and llm_mode in ("single_query", "complex_single_query"):
+            existing_plan = state.get("analysis_plan") or {}
+            output["analysis_plan"] = {
+                **existing_plan,
+                "needs_planning": False,
+                "plan_mode": "direct_query",
+                "single_query_feasible": True,
+                "requires_llm_reasoning": False,
+                "decomposition_reason": complex_global_fields.get("decomposition_reason"),
+            }
+            logger.info(
+                "semantic_understanding_node: LLM 判断单查可行 (mode=%s)，"
+                "覆盖规则 plan needs_planning=False",
+                llm_mode,
+            )
+
     elapsed_ms = (time.time() - start_time) * 1000
     output["optimization_metrics"] = merge_metrics(
         state,
         semantic_understanding_ms=elapsed_ms,
-        semantic_understanding_fast_model=(
-            using_fast_model if modular_prompt else False
-        ),
-        semantic_understanding_reasoning_model=(
-            is_reasoning_model if modular_prompt else False
-        ),
-        semantic_understanding_shortcut=used_simple_shortcut,
-        semantic_understanding_clarification_shortcut=used_simple_clarification_shortcut,
+        semantic_understanding_fast_model=using_fast_model,
+        semantic_understanding_reasoning_model=is_reasoning_model,
         semantic_understanding_planner_forced_llm=planner_requires_reasoning,
+        semantic_understanding_complex_output=complex_global_fields is not None,
     )
 
     logger.info("[semantic_understanding_node] 执行完成")

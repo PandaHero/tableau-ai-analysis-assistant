@@ -79,37 +79,23 @@ class ModelManager:
     - 通过 API 动态添加的模型：持久化到 SQLite（重启后自动恢复）
     """
     
-    _instance = None
-    _lock = threading.Lock()  # 双重检查锁定，确保线程安全
-    
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                # 双重检查：在获取锁后再次检查，避免竞态条件
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-        return cls._instance
-    
     def __init__(self):
-        if not hasattr(self, '_initialized'):
-            self._initialized = True
-            
-            # 初始化子模块
-            self._registry = ModelRegistry()
-            self._factory = ModelFactory()
-            self._router = TaskRouter(self._registry)
-            self._persistence = ModelPersistence()
-            
-            # 记录动态添加的配置 ID
-            self._dynamic_config_ids: set = set()
-            
-            logger.info("ModelManager initialized (facade pattern)")
-            
-            # 从统一配置文件加载配置
-            self._load_from_unified_config()
-            
-            # 从持久化存储加载动态配置
-            self._load_from_persistence()
+        # 初始化子模块
+        self._registry = ModelRegistry()
+        self._factory = ModelFactory()
+        self._router = TaskRouter(self._registry)
+        self._persistence = ModelPersistence()
+        
+        # 记录动态添加的配置 ID
+        self._dynamic_config_ids: set = set()
+        
+        logger.info("ModelManager initialized (facade pattern)")
+        
+        # 从统一配置文件加载配置
+        self._load_from_unified_config()
+        
+        # 从持久化存储加载动态配置
+        self._load_from_persistence()
     
     # ═══════════════════════════════════════════════════════════════════════
     # 配置加载
@@ -384,8 +370,10 @@ class ModelManager:
             except Exception as e:
                 logger.warning(f"无法初始化 embedding 缓存: {e}")
 
+        # 缓存 key 包含模型 ID，防止切换模型后返回旧向量
+        resolved_model_id = model_id or "default"
         def make_cache_key(text: str) -> str:
-            return hashlib.md5(text.encode("utf-8")).hexdigest()
+            return hashlib.md5(f"{resolved_model_id}:{text}".encode("utf-8")).hexdigest()
 
         # 检查缓存
         uncached_indices: list[int] = []
@@ -474,14 +462,15 @@ class ModelManager:
     def _run_async_in_sync(self, coro) -> Any:
         """在同步上下文中运行异步协程的辅助方法"""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, coro)
-                    return future.result()
-            else:
-                return loop.run_until_complete(coro)
+            loop = asyncio.get_running_loop()
         except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, coro)
+                return future.result()
+        else:
             return asyncio.run(coro)
 
     def embed_documents_batch(
@@ -563,12 +552,15 @@ class ModelManager:
 # ═══════════════════════════════════════════════════════════════════════════
 
 _model_manager_instance: Optional[ModelManager] = None
+_model_manager_lock = threading.Lock()
 
 def get_model_manager() -> ModelManager:
-    """获取 ModelManager 单例实例"""
+    """获取 ModelManager 单例实例（线程安全）"""
     global _model_manager_instance
     if _model_manager_instance is None:
-        _model_manager_instance = ModelManager()
+        with _model_manager_lock:
+            if _model_manager_instance is None:
+                _model_manager_instance = ModelManager()
     return _model_manager_instance
 
 def get_embeddings(model_id: Optional[str] = None, **kwargs) -> Embeddings:

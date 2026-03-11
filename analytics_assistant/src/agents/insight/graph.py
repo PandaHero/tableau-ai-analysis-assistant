@@ -19,7 +19,7 @@ from langchain.agents.middleware import (
     SummarizationMiddleware,
     ToolRetryMiddleware,
 )
-from deepagents import FilesystemMiddleware
+from analytics_assistant.src.agents.base.middleware import FilesystemMiddleware
 
 from analytics_assistant.src.agents.base import get_llm, stream_llm_structured
 from analytics_assistant.src.infra.ai import TaskType
@@ -172,6 +172,13 @@ async def run_insight_agent(
     # 构建中间件栈
     middleware_stack = _build_middleware_stack(agents_config, llm)
 
+    # 将 FilesystemMiddleware 的 read_file 工具注入到工具列表
+    fs_mw_ref = None
+    for mw in middleware_stack:
+        if isinstance(mw, FilesystemMiddleware):
+            insight_tools.extend(mw.get_tools())
+            fs_mw_ref = mw
+
     # 构建 DataProfile 摘要
     data_profile_summary = _build_data_profile_summary(data_profile)
 
@@ -199,23 +206,28 @@ async def run_insight_agent(
     )
 
     # 执行 ReAct 循环
-    result = await stream_llm_structured(
-        llm=llm,
-        messages=messages,
-        output_model=InsightOutput,
-        tools=insight_tools,
-        middleware=middleware_stack,
-        max_iterations=max_iterations,
-        on_token=on_token,
-        on_thinking=on_thinking,
-    )
+    try:
+        result = await stream_llm_structured(
+            llm=llm,
+            messages=messages,
+            output_model=InsightOutput,
+            tools=insight_tools,
+            middleware=middleware_stack,
+            max_iterations=max_iterations,
+            on_token=on_token,
+            on_thinking=on_thinking,
+        )
 
-    logger.info(
-        f"Insight Agent 完成: findings={len(result.findings)}, "
-        f"overall_confidence={result.overall_confidence:.2f}"
-    )
+        logger.info(
+            f"Insight Agent 完成: findings={len(result.findings)}, "
+            f"overall_confidence={result.overall_confidence:.2f}"
+        )
 
-    return result
+        return result
+    finally:
+        data_store.cleanup()
+        if fs_mw_ref is not None:
+            fs_mw_ref.cleanup()
 
 def _build_data_profile_summary(data_profile: DataProfile) -> str:
     """构建 DataProfile 摘要文本。
@@ -239,11 +251,11 @@ def _build_data_profile_summary(data_profile: DataProfile) -> str:
             stats = col.numeric_stats
             parts = []
             if stats.min is not None:
-                parts.append(f"min={stats.min:.2f}")
+                parts.append(f"min={stats.min:g}")
             if stats.max is not None:
-                parts.append(f"max={stats.max:.2f}")
+                parts.append(f"max={stats.max:g}")
             if stats.avg is not None:
-                parts.append(f"avg={stats.avg:.2f}")
+                parts.append(f"avg={stats.avg:g}")
             if parts:
                 col_desc += f" [{', '.join(parts)}]"
         elif col.categorical_stats:
@@ -261,7 +273,7 @@ def _build_semantic_output_summary(semantic_output_dict: dict[str, Any]) -> str:
     """构建语义解析输出摘要。
 
     Args:
-        semantic_output_dict: 语义解析输出字典
+        semantic_output_dict: 语义解析输出字典（SemanticOutput.model_dump() 格式）
 
     Returns:
         摘要文本
@@ -273,28 +285,80 @@ def _build_semantic_output_summary(semantic_output_dict: dict[str, Any]) -> str:
     if restated:
         parts.append(f"**用户问题**: {restated}")
 
-    # 意图
-    intent = semantic_output_dict.get("intent", "")
-    if intent:
-        parts.append(f"**分析意图**: {intent}")
+    # 计算复杂度
+    how_type = semantic_output_dict.get("how_type", "")
+    if how_type:
+        parts.append(f"**计算复杂度**: {how_type}")
 
-    # 涉及的字段
-    fields = semantic_output_dict.get("fields", [])
-    if fields:
-        field_names = [f.get("name", "") for f in fields if f.get("name")]
-        if field_names:
-            parts.append(f"**涉及字段**: {', '.join(field_names)}")
+    # 度量字段 (what.measures)
+    what = semantic_output_dict.get("what", {})
+    measures = what.get("measures", []) if isinstance(what, dict) else []
+    if measures:
+        measure_names = []
+        for m in measures:
+            name = m.get("field_name", "") if isinstance(m, dict) else str(m)
+            agg = m.get("aggregation", "") if isinstance(m, dict) else ""
+            if name:
+                measure_names.append(f"{name}({agg})" if agg else name)
+        if measure_names:
+            parts.append(f"**度量字段**: {', '.join(measure_names)}")
 
-    # 筛选条件
-    filters = semantic_output_dict.get("filters", [])
+    # 维度字段 (where.dimensions)
+    where = semantic_output_dict.get("where", {})
+    dimensions = where.get("dimensions", []) if isinstance(where, dict) else []
+    if dimensions:
+        dim_names = []
+        for d in dimensions:
+            name = d.get("field_name", "") if isinstance(d, dict) else str(d)
+            granularity = d.get("date_granularity", "") if isinstance(d, dict) else ""
+            if name:
+                dim_names.append(f"{name}({granularity})" if granularity else name)
+        if dim_names:
+            parts.append(f"**维度字段**: {', '.join(dim_names)}")
+
+    # 筛选条件 (where.filters)
+    filters = where.get("filters", []) if isinstance(where, dict) else []
     if filters:
         filter_descs = []
         for f in filters:
-            col = f.get("column", "")
-            vals = f.get("values", [])
-            if col and vals:
-                filter_descs.append(f"{col} in {vals}")
+            if not isinstance(f, dict):
+                continue
+            field_name = f.get("field_name", "")
+            filter_type = f.get("filter_type", "")
+            if field_name:
+                if filter_type == "SET":
+                    vals = f.get("values", [])
+                    exclude = f.get("exclude", False)
+                    op = "NOT IN" if exclude else "IN"
+                    filter_descs.append(f"{field_name} {op} {vals}")
+                elif filter_type == "DATE_RANGE":
+                    start = f.get("start_date", "")
+                    end = f.get("end_date", "")
+                    filter_descs.append(f"{field_name}: {start} ~ {end}")
+                elif filter_type == "NUMERIC_RANGE":
+                    min_v = f.get("min_value", "")
+                    max_v = f.get("max_value", "")
+                    filter_descs.append(f"{field_name}: {min_v} ~ {max_v}")
+                elif filter_type == "TOP_N":
+                    n = f.get("n", "")
+                    by = f.get("by_field", "")
+                    filter_descs.append(f"{field_name}: Top {n} by {by}")
+                else:
+                    filter_descs.append(f"{field_name} ({filter_type})")
         if filter_descs:
             parts.append(f"**筛选条件**: {'; '.join(filter_descs)}")
+
+    # 派生计算 (computations)
+    computations = semantic_output_dict.get("computations", [])
+    if computations:
+        comp_descs = []
+        for c in computations:
+            if isinstance(c, dict):
+                display = c.get("display_name", c.get("name", ""))
+                calc_type = c.get("calc_type", "")
+                if display:
+                    comp_descs.append(f"{display}({calc_type})" if calc_type else display)
+        if comp_descs:
+            parts.append(f"**派生计算**: {', '.join(comp_descs)}")
 
     return "\n".join(parts) if parts else "（无语义解析信息）"

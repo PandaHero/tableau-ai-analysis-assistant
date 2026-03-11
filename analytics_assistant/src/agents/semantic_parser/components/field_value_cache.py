@@ -37,8 +37,7 @@ logger = logging.getLogger(__name__)
 def _get_config() -> dict[str, Any]:
     """获取 field_value_cache 配置。"""
     try:
-        config = get_config()
-        return config.config.get("semantic_parser", {}).get("field_value_cache", {})
+        return get_config().get_field_value_cache_config()
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
@@ -118,6 +117,8 @@ class FieldValueCache:
             }
             for _ in range(self._shard_count)
         ]
+        # 淘汰锁：序列化并发淘汰，避免多个 set() 同时触发 _evict_if_needed 时的竞态
+        self._eviction_lock = asyncio.Lock()
     
     def _load_config(
         self,
@@ -179,43 +180,48 @@ class FieldValueCache:
     async def _evict_if_needed(self) -> int:
         """全局 LRU 淘汰：如果总数超过限制，淘汰最老的条目
         
+        使用 _eviction_lock 序列化并发淘汰，避免多个 set() 同时触发时重复淘汰。
+        扫描阶段无 await 点，在 asyncio 协作多任务中原子执行。
+        
         Returns:
             淘汰的条目数
         """
-        evicted = 0
+        if self._get_total_size() <= self._max_fields:
+            return 0
         
-        while self._get_total_size() > self._max_fields:
-            # 找到所有分片中最老的条目
-            oldest_shard_idx = -1
-            oldest_key = None
-            oldest_time = None
+        async with self._eviction_lock:
+            evicted = 0
             
-            for idx, shard in enumerate(self._shards):
-                cache: OrderedDict = shard["cache"]
-                if not cache:
-                    continue
+            while self._get_total_size() > self._max_fields:
+                # 扫描所有分片找到最老条目（无 await，原子执行）
+                oldest_shard_idx = -1
+                oldest_key = None
+                oldest_time = None
                 
-                # OrderedDict 的第一个元素是最老的
-                first_key = next(iter(cache))
-                first_item: _CacheEntry = cache[first_key]
+                for idx, shard in enumerate(self._shards):
+                    cache: OrderedDict = shard["cache"]
+                    if not cache:
+                        continue
+                    
+                    first_key = next(iter(cache))
+                    first_item: _CacheEntry = cache[first_key]
+                    
+                    if oldest_time is None or first_item.cached_at < oldest_time:
+                        oldest_time = first_item.cached_at
+                        oldest_key = first_key
+                        oldest_shard_idx = idx
                 
-                if oldest_time is None or first_item.cached_at < oldest_time:
-                    oldest_time = first_item.cached_at
-                    oldest_key = first_key
-                    oldest_shard_idx = idx
+                if oldest_shard_idx < 0:
+                    break
+                
+                shard = self._shards[oldest_shard_idx]
+                async with shard["lock"]:
+                    cache: OrderedDict = shard["cache"]
+                    if oldest_key in cache:
+                        del cache[oldest_key]
+                        evicted += 1
             
-            if oldest_shard_idx < 0:
-                break
-            
-            # 删除最老的条目
-            shard = self._shards[oldest_shard_idx]
-            async with shard["lock"]:
-                cache: OrderedDict = shard["cache"]
-                if oldest_key in cache:
-                    del cache[oldest_key]
-                    evicted += 1
-        
-        return evicted
+            return evicted
     
     async def get(
         self,

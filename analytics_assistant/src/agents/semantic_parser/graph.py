@@ -25,7 +25,6 @@ from .nodes import (
     feature_cache_node,
     feature_extractor_node,
     global_understanding_node,
-    analysis_planner_node,
     field_retriever_node,
     dynamic_schema_builder_node,
     modular_prompt_builder_node,
@@ -36,6 +35,9 @@ from .nodes import (
     query_adapter_node,
     error_corrector_node,
     feedback_learner_node,
+    unified_feature_and_understanding_node,
+    prepare_prompt_node,
+    parallel_retrieval_node,
 )
 
 # 路由函数
@@ -47,7 +49,6 @@ from .routes import (
     route_after_filter_validation,
     route_after_query,
     route_after_correction,
-    route_by_feature_cache,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,19 +58,25 @@ _compiled_graph_singleton: Optional[Any] = None
 def create_semantic_parser_graph() -> StateGraph:
     """创建语义解析器子图
 
-    主链优化架构：
+    精简管线架构（15 → 11 节点，复杂查询 LLM 3→2 次）：
     1. IntentRouter - 意图路由
     2. QueryCache - 查询缓存
-    3. RulePrefilter - 规则预处理
-    4. FeatureCache - 特征缓存
-    5. FeatureExtractor - 特征提取
-    6. GlobalUnderstanding - 全局问题理解 / 单查询可行性判断，并直接回填 analysis_plan
-    7. FieldRetriever - 字段检索
-    8. DynamicSchemaBuilder + DynamicPromptBuilder
-    9. SemanticUnderstanding - 语义理解
-    10. OutputValidator - 输出验证
-    11. FilterValueValidator - 筛选值验证
-    12. QueryAdapter + 执行 + 缓存
+    3. UnifiedFeatureAndUnderstanding - 规则预处理 + 特征缓存/提取 + 全局理解（纯规则）
+       （合并 rule_prefilter + feature_cache + feature_extractor + global_understanding）
+       （global_understanding 始终使用规则 fallback，不调 LLM）
+    4. ParallelRetrieval - 字段检索 ∥ Few-shot 检索
+       （合并 field_retriever + few_shot_manager，并行执行）
+    5. PreparePrompt - Schema 裁剪 + Prompt 构建
+       （合并 dynamic_schema_builder + modular_prompt_builder）
+       （复杂查询注入全局理解增强指令）
+    6. SemanticUnderstanding - 语义理解
+       （简单查询：输出 SemanticOutput）
+       （复杂查询：输出 ComplexSemanticOutput = SemanticOutput + 全局理解字段）
+    7. OutputValidator - 输出验证
+    8. FilterValueValidator - 筛选值验证
+    9. QueryAdapter + 执行 + 缓存
+    10. ErrorCorrector - 错误修正
+    11. FeedbackLearner - 反馈学习
 
     Returns:
         StateGraph 实例
@@ -79,14 +86,9 @@ def create_semantic_parser_graph() -> StateGraph:
     # ========== 添加节点 ==========
     graph.add_node("intent_router", intent_router_node)
     graph.add_node("query_cache", query_cache_node)
-    graph.add_node("rule_prefilter", rule_prefilter_node)
-    graph.add_node("feature_cache", feature_cache_node)
-    graph.add_node("feature_extractor", feature_extractor_node)
-    graph.add_node("global_understanding_stage", global_understanding_node)
-    graph.add_node("field_retriever", field_retriever_node)
-    graph.add_node("dynamic_schema_builder", dynamic_schema_builder_node)
-    graph.add_node("modular_prompt_builder", modular_prompt_builder_node)
-    graph.add_node("few_shot_manager", few_shot_manager_node)
+    graph.add_node("unified_feature_understanding", unified_feature_and_understanding_node)
+    graph.add_node("parallel_retrieval", parallel_retrieval_node)
+    graph.add_node("prepare_prompt", prepare_prompt_node)
     graph.add_node("semantic_understanding", semantic_understanding_node)
     graph.add_node("output_validator", output_validator_node)
     graph.add_node("filter_validator", filter_validator_node)
@@ -114,27 +116,13 @@ def create_semantic_parser_graph() -> StateGraph:
         route_by_cache,
         {
             "cache_hit": "feedback_learner",
-            "cache_miss": "rule_prefilter",
+            "cache_miss": "unified_feature_understanding",
         }
     )
 
-    graph.add_edge("rule_prefilter", "feature_cache")
-
-    graph.add_conditional_edges(
-        "feature_cache",
-        route_by_feature_cache,
-        {
-            "cache_hit": "global_understanding_stage",
-            "cache_miss": "feature_extractor",
-        }
-    )
-
-    graph.add_edge("feature_extractor", "global_understanding_stage")
-    graph.add_edge("global_understanding_stage", "field_retriever")
-    graph.add_edge("field_retriever", "dynamic_schema_builder")
-    graph.add_edge("dynamic_schema_builder", "modular_prompt_builder")
-    graph.add_edge("modular_prompt_builder", "few_shot_manager")
-    graph.add_edge("few_shot_manager", "semantic_understanding")
+    graph.add_edge("unified_feature_understanding", "parallel_retrieval")
+    graph.add_edge("parallel_retrieval", "prepare_prompt")
+    graph.add_edge("prepare_prompt", "semantic_understanding")
 
     graph.add_conditional_edges(
         "semantic_understanding",
@@ -176,8 +164,8 @@ def create_semantic_parser_graph() -> StateGraph:
         "error_corrector",
         route_after_correction,
         {
-            "retry": "query_adapter",
-            "max_retries": END,
+            "retry": "output_validator",
+            "abort": END,
         }
     )
 
@@ -217,10 +205,12 @@ __all__ = [
     "feature_cache_node",
     "feature_extractor_node",
     "global_understanding_node",
-    "analysis_planner_node",
     "dynamic_schema_builder_node",
     "modular_prompt_builder_node",
     "output_validator_node",
+    "unified_feature_and_understanding_node",
+    "prepare_prompt_node",
+    "parallel_retrieval_node",
     # 路由函数（从 routes.py 重新导出，保持向后兼容）
     "route_by_intent",
     "route_by_cache",
@@ -229,7 +219,6 @@ __all__ = [
     "route_after_filter_validation",
     "route_after_query",
     "route_after_correction",
-    "route_by_feature_cache",
     # 子图组装
     "create_semantic_parser_graph",
     "compile_semantic_parser_graph",

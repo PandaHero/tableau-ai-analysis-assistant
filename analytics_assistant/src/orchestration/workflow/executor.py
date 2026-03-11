@@ -1112,6 +1112,7 @@ class WorkflowExecutor:
                         conversation_history=history,
                         replan_history=replan_history_records,
                         analysis_depth=analysis_depth,
+                        field_semantic=ctx.field_semantic,
                         on_token=callbacks.on_token,
                         on_thinking=callbacks.on_thinking,
                     )
@@ -1185,6 +1186,7 @@ class WorkflowExecutor:
                     ),
                     replan_history=replan_history_records,
                     analysis_depth=analysis_depth,
+                    field_semantic=ctx.field_semantic,
                     on_token=callbacks.on_token,
                     on_thinking=callbacks.on_thinking,
                 )
@@ -1421,12 +1423,19 @@ class WorkflowExecutor:
             parse_result: dict[str, Any],
             analysis_plan: AnalysisPlan,
         ) -> None:
-            """按 analysis_plan 顺序执行多步查询和汇总步骤。"""
+            """基于 depends_on 依赖图执行多步查询，支持并行和顺序策略。
+
+            执行模式由 analysis_plan.execution_strategy 决定：
+            - "parallel": 无依赖关系的步骤通过 asyncio.gather 并行执行
+            - "sequential" / 其他: 按步骤顺序逐一执行
+            """
             total_steps = len(analysis_plan.sub_questions)
             if not analysis_plan.needs_planning or total_steps == 0:
                 return
 
             evidence_context = _build_initial_evidence_context(question)
+            is_parallel = analysis_plan.execution_strategy == "parallel"
+
             planner_event = {
                 "type": "planner",
                 "planMode": analysis_plan.plan_mode.value,
@@ -1442,6 +1451,7 @@ class WorkflowExecutor:
             await event_queue.put(planner_event)
 
             stage_metrics["planner_multistep_enabled"] = True
+            stage_metrics["planner_execution_strategy"] = analysis_plan.execution_strategy
             stage_metrics["planner_steps_total"] = total_steps
             stage_metrics["planner_query_steps_total"] = sum(
                 1
@@ -1455,6 +1465,9 @@ class WorkflowExecutor:
             )
 
             completed_steps: list[dict[str, Any]] = []
+            completed_ids: set[str] = set()
+
+            # ── 主步骤（primary）始终最先执行 ─────────────────────────
             primary_index, primary_step = _get_primary_plan_step(analysis_plan)
 
             if primary_index is not None and primary_step is not None:
@@ -1514,42 +1527,20 @@ class WorkflowExecutor:
                     semantic_summary=semantic_summary,
                     key_findings=_extract_insight_key_findings(primary_step_insight),
                 )
+                primary_step_id = primary_step.step_id or f"step-{primary_index}"
+                completed_ids.add(primary_step_id)
                 stage_metrics["planner_completed_steps"] = len(completed_steps)
             else:
                 await _emit_parse_result_event(parse_result)
 
-            for index, step in enumerate(analysis_plan.sub_questions, start=1):
-                if primary_index is not None and index == primary_index:
-                    continue
-
+            # ── 单个后续查询步骤的执行逻辑（可被 gather 并行调用）────
+            async def _run_single_query_step(
+                index: int,
+                step: AnalysisPlanStep,
+                snapshot_evidence: EvidenceContext,
+                snapshot_completed: list[dict[str, Any]],
+            ) -> Optional[dict[str, Any]]:
                 step_payload = _serialize_plan_step(step, index=index, total=total_steps)
-
-                if step.step_type == PlanStepType.SYNTHESIS:
-                    synthesis_summary = _build_synthesis_step_summary(
-                        question,
-                        completed_steps,
-                    )
-                    await event_queue.put({
-                        "type": "plan_step",
-                        "status": "completed",
-                        "step": step_payload,
-                        "summary": synthesis_summary,
-                        "evidenceCount": len(completed_steps),
-                        "optimization_metrics": _current_metrics(),
-                    })
-                    completed_steps.append({
-                        "step": step_payload,
-                        "summary_text": synthesis_summary,
-                    })
-                    evidence_context = _append_step_artifact(
-                        evidence_context,
-                        step_payload=step_payload,
-                        summary_text=synthesis_summary,
-                        key_findings=[synthesis_summary],
-                        open_questions=analysis_plan.risk_flags,
-                    )
-                    stage_metrics["planner_completed_steps"] = len(completed_steps)
-                    continue
 
                 await event_queue.put({
                     "type": "plan_step",
@@ -1559,10 +1550,14 @@ class WorkflowExecutor:
                     "optimization_metrics": _current_metrics(),
                 })
 
-                followup_history = _build_followup_history(history, question, completed_steps)
+                followup_history = _build_followup_history(
+                    history, question, snapshot_completed,
+                )
                 followup_started_at = loop.time()
                 followup_config = create_workflow_config(
-                    thread_id=f"{session_id or f'stream-{datasource_luid}'}:plan-step-{index}",
+                    thread_id=(
+                        f"{session_id or f'stream-{datasource_luid}'}:plan-step-{index}"
+                    ),
                     context=ctx,
                     on_token=callbacks.on_token,
                     on_thinking=callbacks.on_thinking,
@@ -1578,7 +1573,7 @@ class WorkflowExecutor:
                             "step_id": step.step_id or f"step-{index}",
                             "goal": step.goal or step.purpose,
                         },
-                        "evidence_context": evidence_context.model_dump(),
+                        "evidence_context": snapshot_evidence.model_dump(),
                         "current_time": ctx.current_time,
                         "language": language,
                         "analysis_depth": analysis_depth,
@@ -1594,7 +1589,7 @@ class WorkflowExecutor:
                     int(stage_metrics.get("planner_followup_steps_executed", 0)) + 1
                 )
                 followup_parse_result = followup_state.get("parse_result") or {}
-                step_metrics = _merge_metrics(
+                step_metrics_local = _merge_metrics(
                     followup_state.get("optimization_metrics"),
                     followup_parse_result.get("optimization_metrics"),
                     {"planner_followup_parse_ms": followup_parse_ms},
@@ -1607,7 +1602,7 @@ class WorkflowExecutor:
                         "question": followup_state.get("clarification_question", ""),
                         "options": followup_state.get("clarification_options") or [],
                         "source": followup_state.get("clarification_source", ""),
-                        "optimization_metrics": _current_metrics(step_metrics),
+                        "optimization_metrics": _current_metrics(step_metrics_local),
                     }
                     await event_queue.put({
                         "type": "plan_step",
@@ -1619,7 +1614,7 @@ class WorkflowExecutor:
                         "optimization_metrics": clarification_event["optimization_metrics"],
                     })
                     await event_queue.put(clarification_event)
-                    return
+                    return None
 
                 if not followup_parse_result.get("success"):
                     stage_metrics["planner_failed_step"] = index
@@ -1628,62 +1623,196 @@ class WorkflowExecutor:
                         "status": "error",
                         "step": step_payload,
                         "error": "多步分析未生成可执行解析结果",
-                        "optimization_metrics": _current_metrics(step_metrics),
+                        "optimization_metrics": _current_metrics(step_metrics_local),
                     })
-                    return
+                    return None
 
-                semantic_raw = followup_parse_result.get("semantic_output", {})
-                semantic_summary = await _emit_parse_result_event(
+                semantic_raw_local = followup_parse_result.get("semantic_output", {})
+                semantic_summary_local = await _emit_parse_result_event(
                     followup_parse_result,
                     plan_step=step_payload,
-                    step_metrics=step_metrics,
+                    step_metrics=step_metrics_local,
                 )
                 query_result = await _execute_query_from_semantic(
                     ctx=ctx,
                     datasource_luid=datasource_luid,
-                    semantic_raw=semantic_raw,
+                    semantic_raw=semantic_raw_local,
                     semantic_query=followup_parse_result.get("query"),
                     plan_step=step_payload,
-                    semantic_summary=semantic_summary,
-                    step_metrics=step_metrics,
+                    semantic_summary=semantic_summary_local,
+                    step_metrics=step_metrics_local,
                     fail_hard=False,
                 )
                 if not query_result["success"]:
-                    return
-                completed_steps.append({
-                    "step": step_payload,
-                    "summary_text": query_result.get("summary_text", ""),
-                    "tableData": query_result.get("tableData"),
-                    "semantic_summary": semantic_summary,
-                })
+                    return None
+
                 step_insight_output = await _run_plan_step_insight_round(
-                    semantic_raw=semantic_raw,
+                    semantic_raw=semantic_raw_local,
                     plan_step=step_payload,
                     query_id=followup_parse_result.get("query_id"),
                     table_data=query_result.get("tableData"),
-                    semantic_summary=semantic_summary,
-                    step_metrics=step_metrics,
+                    semantic_summary=semantic_summary_local,
+                    step_metrics=step_metrics_local,
                 )
                 await _emit_insight_event(
                     step_insight_output,
                     source="plan_step",
                     plan_step=step_payload,
-                    step_metrics=step_metrics,
+                    step_metrics=step_metrics_local,
                 )
                 stage_metrics["planner_step_insights_emitted"] = int(
                     stage_metrics.get("planner_step_insights_emitted", 0)
                 ) + 1
+
+                return {
+                    "index": index,
+                    "step": step,
+                    "step_payload": step_payload,
+                    "summary_text": query_result.get("summary_text", ""),
+                    "tableData": query_result.get("tableData"),
+                    "semantic_summary": semantic_summary_local,
+                    "query_id": followup_parse_result.get("query_id"),
+                    "semantic_raw": semantic_raw_local,
+                    "insight_output": step_insight_output,
+                }
+
+            def _collect_step_result(
+                result: dict[str, Any],
+            ) -> None:
+                """将单步结果收集到 completed_steps / completed_ids / evidence_context。"""
+                nonlocal evidence_context
+                step_id = result["step"].step_id or f"step-{result['index']}"
+                completed_ids.add(step_id)
+                completed_steps.append({
+                    "step": result["step_payload"],
+                    "summary_text": result["summary_text"],
+                    "tableData": result.get("tableData"),
+                    "semantic_summary": result.get("semantic_summary"),
+                })
                 evidence_context = _append_step_artifact(
                     evidence_context,
-                    step_payload=step_payload,
-                    query_id=followup_parse_result.get("query_id"),
-                    restated_question=semantic_raw.get("restated_question"),
-                    table_data=query_result.get("tableData"),
-                    summary_text=query_result.get("summary_text", ""),
-                    semantic_summary=semantic_summary,
-                    key_findings=_extract_insight_key_findings(step_insight_output),
+                    step_payload=result["step_payload"],
+                    query_id=result.get("query_id"),
+                    restated_question=(result.get("semantic_raw") or {}).get(
+                        "restated_question"
+                    ),
+                    table_data=result.get("tableData"),
+                    summary_text=result["summary_text"],
+                    semantic_summary=result.get("semantic_summary"),
+                    key_findings=_extract_insight_key_findings(
+                        result.get("insight_output")
+                    ),
                 )
-                stage_metrics["planner_completed_steps"] = len(completed_steps)
+
+            # ── 基于 depends_on 的分波执行 ────────────────────────────
+            remaining: list[tuple[int, AnalysisPlanStep]] = [
+                (index, step)
+                for index, step in enumerate(analysis_plan.sub_questions, start=1)
+                if primary_index is None or index != primary_index
+            ]
+
+            while remaining:
+                ready: list[tuple[int, AnalysisPlanStep]] = []
+                not_ready: list[tuple[int, AnalysisPlanStep]] = []
+                for item in remaining:
+                    idx, step = item
+                    step_deps = set(step.depends_on or [])
+                    if step_deps.issubset(completed_ids):
+                        ready.append(item)
+                    else:
+                        not_ready.append(item)
+
+                if not ready:
+                    logger.warning(
+                        "[_execute_analysis_plan] 依赖死锁：%d 个步骤无法执行",
+                        len(remaining),
+                    )
+                    break
+
+                synthesis_ready = [
+                    (i, s) for i, s in ready
+                    if s.step_type == PlanStepType.SYNTHESIS
+                ]
+                query_ready = [
+                    (i, s) for i, s in ready
+                    if s.step_type != PlanStepType.SYNTHESIS
+                ]
+
+                # ── 查询步骤 ──────────────────────────────────────────
+                if query_ready:
+                    if is_parallel and len(query_ready) > 1:
+                        logger.info(
+                            "[_execute_analysis_plan] 并行执行 %d 个查询步骤",
+                            len(query_ready),
+                        )
+                        snapshot_ev = evidence_context.model_copy(deep=True)
+                        snapshot_cs = list(completed_steps)
+                        tasks = [
+                            _run_single_query_step(i, s, snapshot_ev, snapshot_cs)
+                            for i, s in query_ready
+                        ]
+                        results = await asyncio.gather(
+                            *tasks, return_exceptions=True,
+                        )
+                        for (idx, step), result in zip(query_ready, results):
+                            if isinstance(result, Exception):
+                                logger.error(
+                                    "[_execute_analysis_plan] 步骤 %s 并行异常: %s",
+                                    step.step_id or f"step-{idx}",
+                                    result,
+                                )
+                                continue
+                            if result is None:
+                                continue
+                            _collect_step_result(result)
+                        stage_metrics["planner_completed_steps"] = len(completed_steps)
+                        stage_metrics["planner_parallel_waves"] = int(
+                            stage_metrics.get("planner_parallel_waves", 0)
+                        ) + 1
+                    else:
+                        for idx, step in query_ready:
+                            result = await _run_single_query_step(
+                                idx, step, evidence_context, list(completed_steps),
+                            )
+                            if result is None:
+                                return
+                            _collect_step_result(result)
+                            stage_metrics["planner_completed_steps"] = len(
+                                completed_steps
+                            )
+
+                # ── 汇总步骤 ──────────────────────────────────────────
+                for idx, step in synthesis_ready:
+                    step_payload = _serialize_plan_step(
+                        step, index=idx, total=total_steps,
+                    )
+                    synthesis_summary = _build_synthesis_step_summary(
+                        question, completed_steps,
+                    )
+                    await event_queue.put({
+                        "type": "plan_step",
+                        "status": "completed",
+                        "step": step_payload,
+                        "summary": synthesis_summary,
+                        "evidenceCount": len(completed_steps),
+                        "optimization_metrics": _current_metrics(),
+                    })
+                    completed_steps.append({
+                        "step": step_payload,
+                        "summary_text": synthesis_summary,
+                    })
+                    syn_step_id = step.step_id or f"step-{idx}"
+                    completed_ids.add(syn_step_id)
+                    evidence_context = _append_step_artifact(
+                        evidence_context,
+                        step_payload=step_payload,
+                        summary_text=synthesis_summary,
+                        key_findings=[synthesis_summary],
+                        open_questions=analysis_plan.risk_flags,
+                    )
+                    stage_metrics["planner_completed_steps"] = len(completed_steps)
+
+                remaining = not_ready
 
             await _run_post_planner_agents(
                 semantic_raw=parse_result.get("semantic_output", {}) or {},

@@ -38,8 +38,7 @@ _QUERY_CACHE_VERSION = "semantic-v3-planner-contract"
 def _get_config() -> dict[str, Any]:
     """获取 query_cache 配置。"""
     try:
-        config = get_config()
-        return config.config.get("semantic_parser", {}).get("query_cache", {})
+        return get_config().get_query_cache_config()
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
@@ -227,25 +226,8 @@ class QueryCache(SemanticCache[CachedQuery]):
                 logger.debug(f"QueryCache 未命中: question_hash={question_hash[:8]}...")
                 return None
             
-            # TTL 检查
-            if datetime.now() > cached.expires_at:
-                logger.debug(f"QueryCache TTL 过期: question_hash={question_hash[:8]}...")
-                return None
-
-            if cached.parser_version != _QUERY_CACHE_VERSION:
-                logger.info(
-                    "QueryCache 版本不匹配，缓存失效: cached=%s, current=%s",
-                    cached.parser_version,
-                    _QUERY_CACHE_VERSION,
-                )
-                return None
-            
-            # Schema hash 检查（核心失效机制）
-            if cached.schema_hash != current_schema_hash:
-                logger.info(
-                    f"QueryCache schema_hash 不匹配，缓存失效: "
-                    f"cached={cached.schema_hash[:8]}..., current={current_schema_hash[:8]}..."
-                )
+            if not self._validate_cached(cached, current_schema_hash=current_schema_hash):
+                logger.debug(f"QueryCache 验证失败（TTL/版本/schema）: question_hash={question_hash[:8]}...")
                 return None
             
             # 更新命中计数
@@ -342,7 +324,7 @@ class QueryCache(SemanticCache[CachedQuery]):
             
             # 添加到 FAISS 索引
             if question_embedding:
-                self._add_to_faiss(question_hash, question_embedding)
+                self._add_to_faiss(datasource_luid, question_hash, question_embedding)
             
             logger.info(f"QueryCache 已缓存: question='{question[:20]}...', ttl={ttl}s")
             return True
@@ -358,11 +340,8 @@ class QueryCache(SemanticCache[CachedQuery]):
             if cache_manager is not None:
                 # 使用批量删除：删除所有条目
                 deleted = cache_manager.delete_by_filter(lambda _: True)
-                # 重置 FAISS 索引
-                self._init_faiss()
-                self._key_to_id.clear()
-                self._id_to_key.clear()
-                self._next_id = 0
+                # 重置该数据源的 FAISS 索引
+                self._reset_faiss_for_datasource(datasource_luid)
                 logger.info(f"QueryCache 已失效 {deleted} 条缓存: datasource={datasource_luid}")
                 return deleted
             else:
@@ -372,7 +351,7 @@ class QueryCache(SemanticCache[CachedQuery]):
                 count = 0
                 for item in items:
                     store.delete(namespace, item.key)
-                    self._remove_from_faiss(item.key)
+                    self._remove_from_faiss(datasource_luid, item.key)
                     count += 1
                 logger.info(f"QueryCache 已失效 {count} 条缓存: datasource={datasource_luid}")
                 return count
@@ -395,11 +374,8 @@ class QueryCache(SemanticCache[CachedQuery]):
                     return value.get("schema_hash") != new_schema_hash
 
                 deleted = cache_manager.delete_by_filter(_schema_mismatch)
-                # 重置 FAISS 索引（部分删除后索引不一致，需重建）
-                self._init_faiss()
-                self._key_to_id.clear()
-                self._id_to_key.clear()
-                self._next_id = 0
+                # 重置该数据源的 FAISS 索引（部分删除后索引不一致，需重建）
+                self._reset_faiss_for_datasource(datasource_luid)
                 logger.info(
                     f"QueryCache schema 变更失效 {deleted} 条缓存: "
                     f"datasource={datasource_luid}, new_hash={new_schema_hash[:8]}..."
@@ -420,7 +396,7 @@ class QueryCache(SemanticCache[CachedQuery]):
                         continue
                     if cached.schema_hash != new_schema_hash:
                         store.delete(namespace, item.key)
-                        self._remove_from_faiss(item.key)
+                        self._remove_from_faiss(datasource_luid, item.key)
                         count += 1
                 
                 logger.info(
@@ -472,7 +448,9 @@ class QueryCache(SemanticCache[CachedQuery]):
                 "ttl_seconds": self._default_ttl,
                 "similarity_threshold": self._similarity_threshold,
                 "faiss_available": self._faiss_available,
-                "faiss_index_size": self._faiss_index.ntotal if self._faiss_index else 0,
+                "faiss_index_size": sum(
+                    idx.ntotal for idx in self._faiss_indices.values()
+                ) if self._faiss_indices else 0,
             }
             
         except Exception as e:

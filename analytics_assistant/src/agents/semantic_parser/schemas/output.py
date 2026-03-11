@@ -8,8 +8,10 @@ Semantic Parser Output Models
 注意：新代码应直接从 core/schemas/semantic_output 导入。
 """
 from analytics_assistant.src.core.schemas.semantic_output import (
+    AnalysisModeEnum,
     CalcType,
     ClarificationSource,
+    ComplexSemanticOutput,
     DerivedComputation,
     FilterUnion,
     SelfCheck,
@@ -20,9 +22,11 @@ from analytics_assistant.src.core.schemas.semantic_output import (
 
 __all__ = [
     # Enums
+    "AnalysisModeEnum",
     "CalcType",
     "ClarificationSource",
     # Models
+    "ComplexSemanticOutput",
     "DerivedComputation",
     "FilterUnion",
     "SelfCheck",

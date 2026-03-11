@@ -17,7 +17,7 @@ from ..schemas.prefilter import PrefilterResult, ComplexityType
 
 logger = logging.getLogger(__name__)
 
-_SEMANTIC_LOOKUP_MIN_QUESTION_LEN = 18
+_SEMANTIC_LOOKUP_MIN_QUESTION_LEN = 6
 _SEMANTIC_LOOKUP_CONVERSATIONAL_MARKERS = (
     "帮我",
     "看一下",

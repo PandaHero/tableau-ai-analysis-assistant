@@ -33,8 +33,7 @@ logger = logging.getLogger(__name__)
 def _get_token_optimization_config() -> dict[str, Any]:
     """获取 token_optimization 配置。"""
     try:
-        config = get_config()
-        return config.config.get("semantic_parser", {}).get("token_optimization", {})
+        return get_config().get_token_optimization_config()
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
@@ -63,20 +62,23 @@ def get_use_summarization() -> bool:
 def estimate_tokens(text: str, chars_per_token: int = _DEFAULT_CHARS_PER_TOKEN) -> int:
     """估算文本的 token 数
     
-    使用简单的字符数估算，适用于中英文混合文本。
-    中文约 1.5-2 字符/token，英文约 4 字符/token。
-    这里使用保守估计（2 字符/token）。
+    对中文和非中文字符分别估算：
+    - 中文字符（CJK Unified Ideographs）：约 1.5 字符/token
+    - 非中文字符（英文、数字、标点等）：约 4 字符/token
     
     Args:
         text: 输入文本
-        chars_per_token: 每个 token 的平均字符数
+        chars_per_token: 备用每 token 字符数（当无法区分时使用）
     
     Returns:
         估算的 token 数
     """
     if not text:
         return 0
-    return max(1, len(text) // chars_per_token)
+    cjk_count = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+    non_cjk_count = len(text) - cjk_count
+    tokens = cjk_count / 1.5 + non_cjk_count / 4
+    return max(1, int(tokens))
 
 def estimate_message_tokens(message: dict[str, str]) -> int:
     """估算单条消息的 token 数

@@ -7,6 +7,7 @@ DataStore - 数据存储后端
 """
 import json
 import logging
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -29,7 +30,7 @@ class DataStore:
 
     # 配置默认值
     _DEFAULT_MEMORY_THRESHOLD = 1000
-    _DEFAULT_TEMP_DIR = "analytics_assistant/data/temp"
+    _DEFAULT_TEMP_DIR = str(Path(tempfile.gettempdir()) / "analytics_assistant" / "data_store")
 
     def __init__(self, store_id: str) -> None:
         """初始化 DataStore。
@@ -246,6 +247,13 @@ class DataStore:
     def temp_dir(self) -> str:
         """获取临时文件目录。"""
         return self._temp_dir
+
+    def __del__(self) -> None:
+        """析构时自动清理临时文件。"""
+        try:
+            self.cleanup()
+        except Exception:
+            pass
 
     def cleanup(self) -> None:
         """清理临时文件。"""

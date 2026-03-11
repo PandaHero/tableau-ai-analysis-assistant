@@ -3,7 +3,7 @@
 
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from ..node_utils import merge_metrics
 from ..schemas.planner import (
@@ -56,6 +56,31 @@ _DECOMPOSITION_KEYWORDS = (
     "再",
 )
 
+# 明确暗示并行执行的关键词（子问题之间无依赖）
+_PARALLEL_KEYWORDS = (
+    "分别",
+    "各自",
+    "同时",
+    "并且",
+    "以及",
+    "对比",
+    "比较",
+    "和",
+    "与",
+    "vs",
+)
+
+# 明确暗示顺序执行的关键词（后步依赖前步结果）
+_SEQUENTIAL_KEYWORDS = (
+    "先",
+    "再",
+    "然后",
+    "接着",
+    "之后",
+    "基于",
+    "根据前面",
+)
+
 
 def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in text for keyword in keywords)
@@ -103,11 +128,81 @@ def _get_focus_subject(focus_terms: list[str]) -> str:
     return "、".join(focus_terms[:3])
 
 
+# ── field_semantic 维度提取 ────────────────────────────────────────────────
+
+_CATEGORY_DISPLAY: dict[str, str] = {
+    "time": "时间",
+    "geography": "地区",
+    "product": "产品",
+    "product_line": "产品线",
+    "channel": "渠道",
+    "organization": "组织",
+    "customer": "客户",
+    "segment": "细分",
+    "category": "类别",
+}
+
+_FALLBACK_CANDIDATE_AXES = ["时间", "地区", "产品", "组织"]
+
+
+def _extract_dimension_axes(
+    field_semantic: Optional[dict[str, Any]],
+    *,
+    max_axes: int = 6,
+) -> list[str]:
+    """从 field_semantic 提取可用维度类别作为 candidate_axes。
+
+    遍历 field_semantic 中 role=dimension 的字段，收集其 category/
+    hierarchy_category 并去重，映射为中文显示名。若 field_semantic
+    为空则回退到默认硬编码列表。
+    """
+    if not field_semantic:
+        return list(_FALLBACK_CANDIDATE_AXES)
+
+    seen: set[str] = set()
+    axes: list[str] = []
+
+    for field_name, info in field_semantic.items():
+        if not isinstance(info, dict):
+            continue
+        role = info.get("role", "")
+        if role != "dimension":
+            continue
+        category = (
+            info.get("hierarchy_category")
+            or info.get("category")
+            or ""
+        ).strip().lower()
+        if not category or category in seen:
+            continue
+        seen.add(category)
+        display = _CATEGORY_DISPLAY.get(category, category)
+        axes.append(display)
+        if len(axes) >= max_axes:
+            break
+
+    return axes if axes else list(_FALLBACK_CANDIDATE_AXES)
+
+
+def _build_axes_phrase(
+    axes: list[str],
+    *,
+    conjunction: str = "、",
+) -> str:
+    """将 candidate_axes 列表拼接为自然语言片段。"""
+    if not axes:
+        return "各关键维度"
+    return conjunction.join(axes[:4])
+
+
 def _build_why_plan(
     question: str,
     focus_terms: list[str],
+    field_semantic: Optional[dict[str, Any]] = None,
 ) -> AnalysisPlan:
     focus_subject = _get_focus_subject(focus_terms)
+    candidate_axes = _extract_dimension_axes(field_semantic)
+    axes_phrase = _build_axes_phrase(candidate_axes)
     return AnalysisPlan(
         plan_mode=PlanMode.WHY_ANALYSIS,
         needs_planning=True,
@@ -137,7 +232,7 @@ def _build_why_plan(
                 title="定位异常切片",
                 goal="定位最异常的对象或切片",
                 question=(
-                    f"围绕“{question}”，继续按时间、地区、产品或组织切片比较 {focus_subject} 的变化，"
+                    f"围绕\u201c{question}\u201d，继续按{axes_phrase}切片比较 {focus_subject} 的变化，"
                     "找出贡献最大或异常最明显的切片。"
                 ),
                 purpose="找到最可能承载原因的证据切片",
@@ -145,7 +240,7 @@ def _build_why_plan(
                 depends_on=["step-1"],
                 semantic_focus=focus_terms or ["异常定位", "切片比较", "贡献分析"],
                 expected_output="定位异常对象集合或关键切片",
-                candidate_axes=["时间", "地区", "产品", "组织"],
+                candidate_axes=_extract_dimension_axes(field_semantic),
             ),
             AnalysisPlanStep(
                 step_id="step-3",
@@ -164,13 +259,79 @@ def _build_why_plan(
     )
 
 
+def _build_parallel_plan(
+    question: str,
+    focus_terms: list[str],
+    field_semantic: Optional[dict[str, Any]] = None,
+) -> AnalysisPlan:
+    """构建并行子问题计划：子问题之间无依赖，可同时执行。"""
+    focus_subject = _get_focus_subject(focus_terms)
+    candidate_axes = _extract_dimension_axes(field_semantic)
+    axes_phrase = _build_axes_phrase(candidate_axes)
+
+    return AnalysisPlan(
+        plan_mode=PlanMode.DECOMPOSED_QUERY,
+        needs_planning=True,
+        requires_llm_reasoning=True,
+        goal=f"并行拆解并对比分析：{question}",
+        execution_strategy="parallel",
+        reasoning_focus=[
+            "每个子问题独立生成完整查询骨架",
+            "关注对比/并列的多个分析维度或对象",
+            "最终汇总时进行跨子问题的对比与洞察",
+        ],
+        sub_questions=[
+            AnalysisPlanStep(
+                step_id="step-1",
+                title="主视角查询",
+                goal="覆盖主问题的核心查询",
+                question=question,
+                purpose="先产出覆盖主问题的核心查询骨架",
+                step_type=PlanStepType.QUERY,
+                uses_primary_query=True,
+                semantic_focus=focus_terms or ["主问题", "首跳验证"],
+                expected_output="主视角的核心查询结果",
+            ),
+            AnalysisPlanStep(
+                step_id="step-2",
+                title="补充视角查询",
+                goal="覆盖对比或并列的补充视角",
+                question=(
+                    f"围绕\u201c{question}\u201d，从{axes_phrase}等视角补充查询 {focus_subject}，"
+                    "与主查询形成对比或并列。"
+                ),
+                purpose="独立于主查询，提供补充视角",
+                step_type=PlanStepType.QUERY,
+                depends_on=[],
+                semantic_focus=focus_terms or ["补充视角", "对比并列"],
+                expected_output="补充视角的查询结果",
+            ),
+            AnalysisPlanStep(
+                step_id="step-3",
+                title="汇总对比",
+                goal="合并并对比前序并行查询结果",
+                question=f"结合前面各步骤的结果，对比分析\u201c{question}\u201d的完整回答。",
+                purpose="跨子问题汇总与对比",
+                step_type=PlanStepType.SYNTHESIS,
+                depends_on=["step-1", "step-2"],
+                semantic_focus=["对比汇总", "差异分析", "风险提示"],
+                expected_output="完整的对比分析与风险点",
+            ),
+        ],
+        retrieval_focus_terms=focus_terms,
+        planner_confidence=0.85,
+    )
+
+
 def _build_complex_plan(
     question: str,
     complexities: list[ComplexityType],
     focus_terms: list[str],
     cue_driven: bool,
+    field_semantic: Optional[dict[str, Any]] = None,
 ) -> AnalysisPlan:
     focus_subject = _get_focus_subject(focus_terms)
+    candidate_axes = _extract_dimension_axes(field_semantic)
     complexity_names = [
         complexity.value if hasattr(complexity, "value") else str(complexity)
         for complexity in complexities
@@ -218,7 +379,7 @@ def _build_complex_plan(
                 depends_on=["step-1"],
                 semantic_focus=focus_terms or ["补充验证", "复杂计算依赖"],
                 expected_output="补齐复杂逻辑所需的口径或依赖字段",
-                candidate_axes=["基础度量", "时间基线", "对比维度"],
+                candidate_axes=candidate_axes or ["基础度量", "时间基线", "对比维度"],
             ),
             AnalysisPlanStep(
                 step_id="step-3",
@@ -241,6 +402,7 @@ def build_analysis_plan(
     question: str,
     prefilter_result: Optional[PrefilterResult] = None,
     feature_output: Optional[FeatureExtractionOutput] = None,
+    field_semantic: Optional[dict[str, Any]] = None,
 ) -> AnalysisPlan:
     """根据规则与特征输出构建分析计划。"""
 
@@ -268,12 +430,23 @@ def build_analysis_plan(
 
     why_detected = _contains_any(question_lower, _WHY_KEYWORDS)
     decomposition_cues = _contains_any(question_lower, _DECOMPOSITION_KEYWORDS)
+    parallel_cues = _contains_any(question_lower, _PARALLEL_KEYWORDS)
+    sequential_cues = _contains_any(question_lower, _SEQUENTIAL_KEYWORDS)
     cue_driven_planning = decomposition_cues and (
         len(focus_terms) >= 2 or len(normalized_question) >= 18
     )
 
     if why_detected:
-        return _build_why_plan(normalized_question, focus_terms)
+        return _build_why_plan(normalized_question, focus_terms, field_semantic)
+
+    # 并行场景：有并行关键词、无顺序关键词、问题足够有意义
+    if (
+        parallel_cues
+        and not sequential_cues
+        and not why_detected
+        and len(normalized_question) >= 10
+    ):
+        return _build_parallel_plan(normalized_question, focus_terms, field_semantic)
 
     if non_simple_complexities or cue_driven_planning:
         return _build_complex_plan(
@@ -281,6 +454,7 @@ def build_analysis_plan(
             detected_complexity,
             focus_terms,
             cue_driven=cue_driven_planning,
+            field_semantic=field_semantic,
         )
 
     return AnalysisPlan(

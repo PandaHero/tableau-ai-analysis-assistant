@@ -98,7 +98,7 @@ class RulePrefilter:
             }
             
             # 财年配置从 semantic_understanding 读取
-            su_config = config.get("semantic_parser", {}).get("semantic_understanding", {})
+            su_config = config.get_semantic_understanding_config()
             self._config_fiscal_year_start_month = su_config.get(
                 "fiscal_year_start_month",
                 self._DEFAULT_FISCAL_YEAR_START_MONTH

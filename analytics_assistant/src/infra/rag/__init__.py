@@ -219,7 +219,7 @@ __all__ = [
 
     "EmbeddingError",
 
-    "IndexError",
+    "RAGIndexError",
 
     "IndexExistsError",
 

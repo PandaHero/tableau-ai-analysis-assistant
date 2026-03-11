@@ -110,36 +110,36 @@ class IntentRouter:
         """
         try:
             config = get_config()
-            intent_config = config.get("intent_router", {})
+            intent_config = config.get_intent_router_config()
             confidence_config = intent_config.get("confidence", {})
             l1_config = intent_config.get("l1", {})
             rules_config = intent_config.get("rules", {})
             
             # 置信度配置
-            self.BASE_CONFIDENCE = confidence_config.get("base", self._DEFAULT_BASE_CONFIDENCE)
-            self.CONFIDENCE_INCREMENT = confidence_config.get("increment", self._DEFAULT_CONFIDENCE_INCREMENT)
-            self.MAX_CONFIDENCE = confidence_config.get("max", self._DEFAULT_MAX_CONFIDENCE)
-            self.HIGH_CONFIDENCE = confidence_config.get("high", self._DEFAULT_HIGH_CONFIDENCE)
-            self.FALLBACK_CONFIDENCE = confidence_config.get("fallback", self._DEFAULT_FALLBACK_CONFIDENCE)
+            self.base_confidence = confidence_config.get("base", self._DEFAULT_BASE_CONFIDENCE)
+            self.confidence_increment = confidence_config.get("increment", self._DEFAULT_CONFIDENCE_INCREMENT)
+            self.max_confidence = confidence_config.get("max", self._DEFAULT_MAX_CONFIDENCE)
+            self.high_confidence = confidence_config.get("high", self._DEFAULT_HIGH_CONFIDENCE)
+            self.fallback_confidence = confidence_config.get("fallback", self._DEFAULT_FALLBACK_CONFIDENCE)
             
             # L1 配置
             self.enable_l1 = l1_config.get("enabled", False)
             self.l1_confidence_threshold = l1_config.get("threshold", self._DEFAULT_L1_CONFIDENCE_THRESHOLD)
             
             # 规则配置
-            self.SHORT_QUESTION_THRESHOLD = rules_config.get("short_question_threshold", self._DEFAULT_SHORT_QUESTION_THRESHOLD)
+            self.short_question_threshold = rules_config.get("short_question_threshold", self._DEFAULT_SHORT_QUESTION_THRESHOLD)
             
             logger.debug("IntentRouter 配置加载成功")
             
         except Exception as e:
             logger.warning(f"加载 IntentRouter 配置失败，使用默认值: {e}")
             # 使用默认值
-            self.BASE_CONFIDENCE = self._DEFAULT_BASE_CONFIDENCE
-            self.CONFIDENCE_INCREMENT = self._DEFAULT_CONFIDENCE_INCREMENT
-            self.MAX_CONFIDENCE = self._DEFAULT_MAX_CONFIDENCE
-            self.HIGH_CONFIDENCE = self._DEFAULT_HIGH_CONFIDENCE
-            self.FALLBACK_CONFIDENCE = self._DEFAULT_FALLBACK_CONFIDENCE
-            self.SHORT_QUESTION_THRESHOLD = self._DEFAULT_SHORT_QUESTION_THRESHOLD
+            self.base_confidence = self._DEFAULT_BASE_CONFIDENCE
+            self.confidence_increment = self._DEFAULT_CONFIDENCE_INCREMENT
+            self.max_confidence = self._DEFAULT_MAX_CONFIDENCE
+            self.high_confidence = self._DEFAULT_HIGH_CONFIDENCE
+            self.fallback_confidence = self._DEFAULT_FALLBACK_CONFIDENCE
+            self.short_question_threshold = self._DEFAULT_SHORT_QUESTION_THRESHOLD
             self.enable_l1 = False
             self.l1_confidence_threshold = self._DEFAULT_L1_CONFIDENCE_THRESHOLD
         
@@ -195,7 +195,7 @@ class IntentRouter:
         logger.info("IntentRouter L2 兜底: 返回 DATA_QUERY")
         return IntentRouterOutput(
             intent_type=IntentType.DATA_QUERY,
-            confidence=self.FALLBACK_CONFIDENCE,
+            confidence=self.fallback_confidence,
             reason="L0 规则未命中，默认进入数据分析流程",
             source="L2_FALLBACK",
         )
@@ -232,6 +232,10 @@ class IntentRouter:
     def _check_irrelevant(self, question: str) -> Optional[IntentRouterOutput]:
         """检查明确无关问题（正则匹配）。
         
+        当无关模式命中时，还会检查问题是否同时包含数据分析强关键词。
+        如果包含（如"分析天气数据的销售额"），则不判为 IRRELEVANT，
+        避免子串匹配误杀合法的数据分析问题。
+        
         Args:
             question: 原始问题（保留大小写，用于正则匹配）
         
@@ -240,9 +244,21 @@ class IntentRouter:
         """
         for pattern in self._irrelevant_patterns:
             if pattern.search(question):
+                # 防误杀：如果问题同时包含数据分析强关键词，跳过 IRRELEVANT
+                question_lower = question.strip().lower()
+                has_data_keyword = any(
+                    kw in question_lower
+                    for kw in self._data_analysis_keywords
+                    if kw not in self._ambiguous_keywords
+                )
+                if has_data_keyword:
+                    logger.debug(
+                        f"IntentRouter: 无关模式命中但同时含数据分析关键词，跳过 IRRELEVANT"
+                    )
+                    return None
                 return IntentRouterOutput(
                     intent_type=IntentType.IRRELEVANT,
-                    confidence=self.HIGH_CONFIDENCE,
+                    confidence=self.high_confidence,
                     reason="检测到与数据分析无关的问题",
                     source="L0_RULES",
                 )
@@ -261,7 +277,7 @@ class IntentRouter:
             if keyword in question_lower:
                 return IntentRouterOutput(
                     intent_type=IntentType.GENERAL,
-                    confidence=self.HIGH_CONFIDENCE,
+                    confidence=self.high_confidence,
                     reason=f"检测到元数据问答关键词: {keyword}",
                     source="L0_RULES",
                 )
@@ -269,6 +285,11 @@ class IntentRouter:
     
     def _check_data_analysis(self, question_lower: str) -> Optional[IntentRouterOutput]:
         """检查数据分析关键词。
+        
+        改进：
+        1. 最长匹配优先去重（"销售额" 不再同时计 "销售"）
+        2. 置信度基于强关键词数量计算
+        3. 只有模糊关键词时使用低置信度
         
         Args:
             question_lower: 小写化的问题
@@ -284,23 +305,58 @@ class IntentRouter:
         if not matched_keywords:
             return None
         
+        # 最长匹配优先去重：如果 "销售额" 匹配了，移除被包含的 "销售"
+        matched_keywords = self._deduplicate_keywords(matched_keywords)
+        
         # 过滤弱关键词
         strong_keywords = self._filter_weak_keywords(matched_keywords)
         
-        # 短问题且只有模糊关键词，不匹配
-        if not strong_keywords and len(question_lower) < self.SHORT_QUESTION_THRESHOLD:
-            return None
+        # 没有强关键词
+        if not strong_keywords:
+            # 短问题：不匹配
+            if len(question_lower) < self.short_question_threshold:
+                return None
+            # 长问题：使用低置信度（兜底级别），留给后续流程判断
+            return IntentRouterOutput(
+                intent_type=IntentType.DATA_QUERY,
+                confidence=self.fallback_confidence,
+                reason=f"仅检测到模糊关键词: {', '.join(matched_keywords[:3])}",
+                source="L0_RULES",
+            )
         
-        # 计算置信度
-        confidence = self._calculate_confidence(len(matched_keywords))
+        # 基于强关键词数量计算置信度
+        confidence = self._calculate_confidence(len(strong_keywords))
         
         return IntentRouterOutput(
             intent_type=IntentType.DATA_QUERY,
             confidence=confidence,
-            reason=f"检测到数据分析关键词: {', '.join(matched_keywords[:3])}",
+            reason=f"检测到数据分析关键词: {', '.join(strong_keywords[:3])}",
             source="L0_RULES",
         )
     
+    @staticmethod
+    def _deduplicate_keywords(keywords: list[str]) -> list[str]:
+        """最长匹配优先去重。
+        
+        如果一个关键词是另一个更长关键词的子串，只保留更长的那个。
+        例如 ["销售", "销售额"] → ["销售额"]
+        
+        Args:
+            keywords: 匹配到的关键词列表
+        
+        Returns:
+            去重后的关键词列表
+        """
+        # 按长度降序排列
+        sorted_kws = sorted(keywords, key=len, reverse=True)
+        result: list[str] = []
+        for kw in sorted_kws:
+            # 如果当前词是某个已保留的更长词的子串，则跳过
+            if any(kw in kept and kw != kept for kept in result):
+                continue
+            result.append(kw)
+        return result
+
     def _filter_weak_keywords(self, keywords: list[str]) -> list[str]:
         """过滤弱关键词（太短/太模糊的词）。
         
@@ -322,8 +378,8 @@ class IntentRouter:
             置信度（0-1）
         """
         return min(
-            self.BASE_CONFIDENCE + match_count * self.CONFIDENCE_INCREMENT,
-            self.MAX_CONFIDENCE
+            self.base_confidence + match_count * self.confidence_increment,
+            self.max_confidence
         )
     
     async def _try_l1_classifier(

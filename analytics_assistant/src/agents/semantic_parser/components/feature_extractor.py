@@ -21,7 +21,10 @@ from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
 from analytics_assistant.src.infra.seeds import DIMENSION_SEEDS, MEASURE_SEEDS
-from analytics_assistant.src.agents.base.node import get_llm
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from analytics_assistant.src.agents.base.node import get_llm, stream_llm_structured
+from analytics_assistant.src.infra.ai.models import TaskType
 
 from ..schemas.planner import EvidenceContext, StepIntent
 from ..schemas.prefilter import (
@@ -36,7 +39,7 @@ from ..prompts.feature_extractor_prompt import (
 
 logger = logging.getLogger(__name__)
 
-_RULE_FAST_PATH_MIN_CONFIDENCE = 0.7
+_RULE_FAST_PATH_MIN_CONFIDENCE = 0.85
 _RULE_FAST_PATH_MAX_TERMS = 3
 _ASCII_TERM_PATTERN = re.compile(r"^[a-z0-9_ ]+$")
 _TIME_DIMENSION_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
@@ -96,10 +99,15 @@ class FeatureExtractor:
         self._llm = None
 
     def _get_llm(self):
-        """懒加载 LLM，避免规则快路径也初始化模型。"""
+        """懒加载 LLM，避免规则快路径也初始化模型。
+
+        使用 TaskType.FIELD_MAPPING 获取专用快模型，而非复用
+        SemanticUnderstanding 的主模型。
+        """
         if self._llm is None:
             self._llm = get_llm(
                 agent_name="semantic_parser",
+                task_type=TaskType.FIELD_MAPPING,
                 enable_json_mode=True,
             )
         return self._llm
@@ -189,8 +197,7 @@ class FeatureExtractor:
         current_step_intent: Optional[StepIntent] = None,
         evidence_context: Optional[EvidenceContext] = None,
     ) -> FeatureExtractionOutput:
-        """使用 LLM 提取特征。"""
-        # 构建 Prompt
+        """使用 LLM 提取特征（结构化输出）。"""
         user_prompt = build_feature_extractor_prompt(
             question,
             prefilter_result,
@@ -198,49 +205,22 @@ class FeatureExtractor:
             evidence_context=evidence_context,
         )
         llm = self._get_llm()
-        
-        # 调用 LLM
+
         messages = [
-            {"role": "system", "content": FEATURE_EXTRACTOR_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
+            SystemMessage(content=FEATURE_EXTRACTOR_SYSTEM_PROMPT),
+            HumanMessage(content=user_prompt),
         ]
-        
-        response = await llm.ainvoke(messages)
-        
-        # 解析响应
-        return self._parse_response(response.content, prefilter_result)
-    
-    def _parse_response(
-        self,
-        content: str,
-        prefilter_result: PrefilterResult,
-    ) -> FeatureExtractionOutput:
-        """解析 LLM 响应。"""
+
         try:
-            # 尝试解析 JSON
-            # 查找 JSON 块
-            json_start = content.find("{")
-            json_end = content.rfind("}") + 1
-            
-            if json_start >= 0 and json_end > json_start:
-                json_str = content[json_start:json_end]
-                data = json.loads(json_str)
-                
-                return FeatureExtractionOutput(
-                    required_measures=data.get("required_measures", []),
-                    required_dimensions=data.get("required_dimensions", []),
-                    confirmed_time_hints=data.get("confirmed_time_hints", []),
-                    confirmed_computations=data.get("confirmed_computations", []),
-                    confirmation_confidence=data.get("confirmation_confidence", 0.8),
-                    is_degraded=False,
-                )
-            
-            # 解析失败，使用降级
-            logger.warning("FeatureExtractor 响应解析失败，使用降级模式")
-            return self._create_degraded_output(prefilter_result)
-            
-        except json.JSONDecodeError as e:
-            logger.warning(f"FeatureExtractor JSON 解析失败: {e}")
+            result = await stream_llm_structured(
+                llm=llm,
+                messages=messages,
+                output_model=FeatureExtractionOutput,
+            )
+            result.is_degraded = False
+            return result
+        except Exception as e:
+            logger.warning(f"FeatureExtractor 结构化输出解析失败，使用降级模式: {e}")
             return self._create_degraded_output(prefilter_result)
     
     def _create_degraded_output(
@@ -409,19 +389,28 @@ class FeatureExtractor:
         required_dimensions: list[str],
         prefilter_result: PrefilterResult,
     ) -> float:
-        """估算规则快路径的确认置信度。"""
+        """估算规则快路径的确认置信度。
+
+        权重设计原则：只有同时满足多个条件的高确定性查询才应超过阈值(0.85)，
+        避免歧义场景（如"销售"可能匹配"销售额"或"销售数量"）被跳过 LLM 验证。
+        """
         confidence = 0.0
         if required_measures:
-            confidence += 0.5
+            confidence += 0.35
         if required_dimensions:
-            confidence += 0.2
+            confidence += 0.15
+        # 多字段命中说明语义更明确
         if len(required_measures) > 1:
-            confidence += 0.1
+            confidence += 0.05
         if len(required_dimensions) > 1:
             confidence += 0.05
+        # 时间提示和简单复杂度作为辅助信号
         if prefilter_result.time_hints:
             confidence += 0.1
         if prefilter_result.detected_complexity == [ComplexityType.SIMPLE]:
+            confidence += 0.1
+        # 同时有度量和维度的组合加分
+        if required_measures and required_dimensions:
             confidence += 0.1
         return min(0.9, confidence)
 

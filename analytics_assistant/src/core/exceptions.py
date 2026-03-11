@@ -118,35 +118,6 @@ class VizQLError(Exception):
             parts.append(f"(HTTP {self.status_code})")
         return " ".join(parts)
 
-    class ConfigurationError(Exception):
-        """配置错误。
-
-        当配置缺失、格式错误或值无效时抛出。
-
-        Attributes:
-            config_key: 出错的配置键路径（如 "rag.retrieval.top_k"）
-        """
-
-        def __init__(
-            self,
-            message: str,
-            config_key: Optional[str] = None,
-        ):
-            """初始化 ConfigurationError。
-
-            Args:
-                message: 错误消息
-                config_key: 出错的配置键路径
-            """
-            super().__init__(message)
-            self.message = message
-            self.config_key = config_key
-
-        def __str__(self) -> str:
-            if self.config_key:
-                return f"[{self.config_key}] {self.message}"
-            return self.message
-
 class VizQLAuthError(VizQLError):
     """VizQL 认证错误 (401/403)。"""
     pass

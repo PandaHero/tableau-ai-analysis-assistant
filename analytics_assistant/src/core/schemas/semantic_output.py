@@ -284,6 +284,56 @@ class SemanticOutput(BaseModel):
                 schema["$defs"].pop(def_name, None)
         return schema
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 复杂查询扩展输出模型
+# ═══════════════════════════════════════════════════════════════════════════
+
+class AnalysisModeEnum(str, Enum):
+    """全局分析模式（与 planner.AnalysisMode 保持同步）"""
+    SINGLE_QUERY = "single_query"
+    COMPLEX_SINGLE_QUERY = "complex_single_query"
+    MULTI_STEP_ANALYSIS = "multi_step_analysis"
+    WHY_ANALYSIS = "why_analysis"
+
+
+class ComplexSemanticOutput(SemanticOutput):
+    """复杂查询的扩展输出模型。
+
+    继承 SemanticOutput 的全部字段，额外增加全局理解判断字段。
+    用于复杂查询场景下，让 LLM 在一次调用中同时完成：
+    1. 全局结构理解（analysis_mode / single_query_feasible）
+    2. 结构化语义解析（what / where / computations）
+
+    LLM 只需给出轻量判断字段，详细的 AnalysisPlan 由规则 planner 根据
+    analysis_mode 生成。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    analysis_mode: AnalysisModeEnum = Field(
+        default=AnalysisModeEnum.SINGLE_QUERY,
+        description=(
+            "分析模式判断: "
+            "single_query=简单直接单查; "
+            "complex_single_query=语义复杂但仍可由单条查询完成; "
+            "multi_step_analysis=需要多步拆解,下一步依赖前一步结果; "
+            "why_analysis=原因/归因分析"
+        ),
+    )
+    single_query_feasible: bool = Field(
+        default=True,
+        description="在当前系统能力下，是否可以通过单条查询表达",
+    )
+    decomposition_reason: Optional[str] = Field(
+        default=None,
+        description="为什么需要拆解或可以保留单查的原因说明",
+    )
+    risk_flags: list[str] = Field(
+        default_factory=list,
+        description="分析中发现的风险点，如口径不清、基线缺失等",
+    )
+
+
+
 __all__ = [
     "CalcType",
     "ClarificationSource",
@@ -292,5 +342,7 @@ __all__ = [
     "What",
     "Where",
     "SemanticOutput",
+    "ComplexSemanticOutput",
+    "AnalysisModeEnum",
     "FilterUnion",
 ]

@@ -146,9 +146,9 @@ class TestAnalysisPlanner:
 
     @pytest.mark.asyncio
     async def test_global_understanding_node_serializes_output(self):
-        """global_understanding 节点应优先返回 LLM 产出的统一契约。"""
+        """全局理解节点应优先返回 LLM 产出的统一契约。"""
         prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.SIMPLE],
+            detected_complexity=[ComplexityType.TIME_COMPARE],
             detected_language="zh",
         )
         feature_output = FeatureExtractionOutput(
@@ -195,7 +195,7 @@ class TestAnalysisPlanner:
     async def test_global_understanding_node_backfills_plan_when_llm_omits_steps(self):
         """如果 LLM 漏掉 analysis_plan，节点也应补出可用计划。"""
         prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.SIMPLE],
+            detected_complexity=[ComplexityType.TIME_COMPARE],
             detected_language="zh",
         )
         feature_output = FeatureExtractionOutput(

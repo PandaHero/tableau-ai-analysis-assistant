@@ -30,6 +30,7 @@
 import hashlib
 import json
 import logging
+import math
 from typing import Any, Awaitable, Callable, Optional
 
 from langgraph.store.base import BaseStore
@@ -486,9 +487,9 @@ class CacheManager:
             TTL（分钟），None 表示不设置
         """
         if ttl_seconds is not None:
-            return max(1, ttl_seconds // 60)
+            return max(1, math.ceil(ttl_seconds / 60))
         elif self.default_ttl is not None:
-            return max(1, self.default_ttl // 60)
+            return max(1, math.ceil(self.default_ttl / 60))
         return None
 
 __all__ = [

@@ -88,6 +88,7 @@ class FeedbackLearner:
     # 命名空间前缀
     FEEDBACK_NAMESPACE_PREFIX = ("semantic_parser", "feedback")
     SYNONYM_NAMESPACE_PREFIX = ("semantic_parser", "synonyms")
+    FILTER_VALUE_NAMESPACE_PREFIX = ("semantic_parser", "filter_values")
     
     # 默认配置
     _DEFAULT_SYNONYM_THRESHOLD = 3  # 同义词学习阈值
@@ -116,6 +117,9 @@ class FeedbackLearner:
         self._store = store
         
         self._few_shot_manager = few_shot_manager
+        
+        # 内存计数器：跟踪每个数据源的反馈数，避免每次 record() 都全量查询
+        self._feedback_counts: dict[str, int] = {}
         
         # 从配置加载参数
         self._load_config(synonym_threshold, max_feedback_per_datasource, auto_promote_enabled)
@@ -156,6 +160,69 @@ class FeedbackLearner:
     def _make_synonym_key(self, original_term: str, correct_field: str) -> str:
         """生成同义词映射的 key。"""
         return f"{original_term.lower()}:{correct_field.lower()}"
+
+    def _make_filter_value_namespace(self, datasource_luid: str) -> tuple:
+        """生成筛选值修正存储命名空间。"""
+        return (*self.FILTER_VALUE_NAMESPACE_PREFIX, datasource_luid)
+
+    async def learn_filter_value_correction(
+        self,
+        field_name: str,
+        original_value: str,
+        confirmed_value: str,
+        datasource_luid: str,
+    ) -> bool:
+        """学习筛选值修正。
+
+        记录用户确认的筛选值修正（如 "北京" → "Beijing"），
+        与术语→字段的同义词映射分开存储。
+
+        Args:
+            field_name: 字段名
+            original_value: 用户原始输入的筛选值
+            confirmed_value: 确认后的正确值
+            datasource_luid: 数据源 ID
+
+        Returns:
+            是否成功
+        """
+        if self._store is None:
+            logger.warning("FeedbackLearner 存储不可用，无法学习筛选值修正")
+            return False
+
+        namespace = self._make_filter_value_namespace(datasource_luid)
+        key = f"{field_name.lower()}:{original_value.lower()}"
+
+        try:
+            item = self._store.get(namespace, key)
+
+            if item is not None and item.value is not None:
+                data = item.value
+                data["confirmation_count"] = data.get("confirmation_count", 0) + 1
+                data["updated_at"] = datetime.now().isoformat()
+            else:
+                data = {
+                    "field_name": field_name,
+                    "original_value": original_value,
+                    "confirmed_value": confirmed_value,
+                    "datasource_luid": datasource_luid,
+                    "confirmation_count": 1,
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                }
+
+            self._store.put(namespace, key, data)
+
+            logger.info(
+                f"FeedbackLearner 已学习筛选值修正: "
+                f"field={field_name}, '{original_value}' -> '{confirmed_value}', "
+                f"count={data['confirmation_count']}"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"FeedbackLearner learn_filter_value_correction 失败: {e}")
+            return False
 
     async def record(self, feedback: FeedbackRecord) -> bool:
         """记录用户反馈。
@@ -562,7 +629,7 @@ class FeedbackLearner:
     async def _evict_if_needed(self, datasource_luid: str) -> None:
         """如果反馈数超过上限，淘汰旧反馈。
         
-        淘汰策略：删除最旧的反馈记录
+        使用内存计数器快速跳过，只有计数器超过上限时才触发真正的全量查询 + 排序。
         
         Args:
             datasource_luid: 数据源 ID
@@ -570,10 +637,19 @@ class FeedbackLearner:
         if self._store is None:
             return
         
+        # 快速路径：内存计数器未超限则跳过
+        count = self._feedback_counts.get(datasource_luid, 0) + 1
+        self._feedback_counts[datasource_luid] = count
+        if count <= self.max_feedback_per_datasource:
+            return
+        
         namespace = self._make_feedback_namespace(datasource_luid)
         
         try:
             items = self._store.search(namespace, limit=self.max_feedback_per_datasource + 100)
+            
+            # 修正计数器与实际存储同步
+            self._feedback_counts[datasource_luid] = len(items)
             
             if len(items) <= self.max_feedback_per_datasource:
                 return
@@ -605,6 +681,9 @@ class FeedbackLearner:
                     f"FeedbackLearner 淘汰反馈: id={record.id}, "
                     f"created_at={record.created_at}"
                 )
+            
+            # 淘汰后更新计数器
+            self._feedback_counts[datasource_luid] = len(records_with_key) - to_delete
                 
         except Exception as e:
             logger.error(f"FeedbackLearner _evict_if_needed 失败: {e}")

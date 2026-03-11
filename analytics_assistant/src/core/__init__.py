@@ -7,7 +7,7 @@ Core 层 - 平台无关的领域模型和接口
 2. 接口定义 (interfaces.py) - BasePlatformAdapter, BaseQueryBuilder 等
 3. 异常定义 (exceptions.py)
 
-注意：SemanticOutput（语义解析器输出）定义在 agents/semantic_parser/schemas/output.py
+注意：SemanticOutput（语义解析器输出）定义在 core/schemas/semantic_output.py
 """
 
 from analytics_assistant.src.core.exceptions import ValidationError

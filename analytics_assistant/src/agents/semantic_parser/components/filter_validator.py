@@ -53,8 +53,7 @@ logger = logging.getLogger(__name__)
 def _get_config() -> dict[str, Any]:
     """获取 filter_validator 配置。"""
     try:
-        config = get_config()
-        return config.config.get("semantic_parser", {}).get("filter_validator", {})
+        return get_config().get_filter_validator_config()
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}

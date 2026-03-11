@@ -16,10 +16,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from analytics_assistant.src.infra.error_sanitizer import (
-    sanitize_error_message,
-    sanitize_error_message as _sanitize_error_message,
-)
+from analytics_assistant.src.infra.error_sanitizer import sanitize_error_message
 
 logger = logging.getLogger(__name__)
 

@@ -44,11 +44,15 @@ def route_after_query(state: SemanticParserState) -> str:
     return "success"
 
 def route_after_correction(state: SemanticParserState) -> str:
-    """错误修正后的路由"""
+    """错误修正后的路由
+
+    - correction_abort_reason: 修正器主动终止（重复错误、超限等）
+    - pipeline_error 仍存在: 修正器未能清除错误（防御性兜底，防止无限循环）
+    """
     if state.get("correction_abort_reason"):
-        return "max_retries"
+        return "abort"
     if state.get("pipeline_error"):
-        return "max_retries"
+        return "abort"
     return "retry"
 
 def route_by_feature_cache(state: SemanticParserState) -> str:

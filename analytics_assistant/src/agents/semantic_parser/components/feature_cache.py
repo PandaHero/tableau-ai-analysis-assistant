@@ -198,17 +198,8 @@ class FeatureCache(SemanticCache[CachedFeature]):
                 logger.debug(f"FeatureCache 未命中: question_hash={question_hash[:8]}...")
                 return None
             
-            # TTL 检查
-            if datetime.now() > cached.expires_at:
-                logger.debug(f"FeatureCache TTL 过期: question_hash={question_hash[:8]}...")
-                return None
-
-            if cached.parser_version != _FEATURE_CACHE_VERSION:
-                logger.info(
-                    "FeatureCache 版本不匹配，缓存失效: cached=%s, current=%s",
-                    cached.parser_version,
-                    _FEATURE_CACHE_VERSION,
-                )
+            if not self._validate_cached(cached):
+                logger.debug(f"FeatureCache 验证失败（TTL/版本）: question_hash={question_hash[:8]}...")
                 return None
             
             # 更新命中计数
@@ -279,7 +270,7 @@ class FeatureCache(SemanticCache[CachedFeature]):
             
             # 添加到 FAISS 索引
             if question_embedding:
-                self._add_to_faiss(question_hash, question_embedding)
+                self._add_to_faiss(datasource_luid, question_hash, question_embedding)
             
             logger.info(f"FeatureCache 已缓存: question='{question[:20]}...', ttl={ttl}s")
             return True
@@ -295,11 +286,8 @@ class FeatureCache(SemanticCache[CachedFeature]):
             if cache_manager is not None:
                 # 使用批量删除：删除所有条目
                 deleted = cache_manager.delete_by_filter(lambda _: True)
-                # 重置 FAISS 索引
-                self._init_faiss()
-                self._key_to_id.clear()
-                self._id_to_key.clear()
-                self._next_id = 0
+                # 重置该数据源的 FAISS 索引
+                self._reset_faiss_for_datasource(datasource_luid)
                 logger.info(f"FeatureCache 已失效 {deleted} 条缓存: datasource={datasource_luid}")
                 return deleted
             else:
@@ -309,7 +297,7 @@ class FeatureCache(SemanticCache[CachedFeature]):
                 count = 0
                 for item in items:
                     store.delete(namespace, item.key)
-                    self._remove_from_faiss(item.key)
+                    self._remove_from_faiss(datasource_luid, item.key)
                     count += 1
                 logger.info(f"FeatureCache 已失效 {count} 条缓存: datasource={datasource_luid}")
                 return count
@@ -357,18 +345,14 @@ class FeatureCache(SemanticCache[CachedFeature]):
                 "ttl_seconds": self._default_ttl,
                 "similarity_threshold": self._similarity_threshold,
                 "faiss_available": self._faiss_available,
-                "faiss_index_size": self._faiss_index.ntotal if self._faiss_index else 0,
+                "faiss_index_size": sum(
+                    idx.ntotal for idx in self._faiss_indices.values()
+                ) if self._faiss_indices else 0,
             }
             
         except Exception as e:
             logger.error(f"获取 FeatureCache 统计失败: {e}")
             return {"error": str(e)}
-
-__all__ = [
-    "FeatureCache",
-    "get_feature_cache",
-    "compute_feature_hash",
-]
 
 def get_feature_cache() -> FeatureCache:
     """获取进程级 FeatureCache 单例。"""
@@ -376,3 +360,9 @@ def get_feature_cache() -> FeatureCache:
     if _feature_cache_singleton is None:
         _feature_cache_singleton = FeatureCache()
     return _feature_cache_singleton
+
+__all__ = [
+    "FeatureCache",
+    "get_feature_cache",
+    "compute_feature_hash",
+]

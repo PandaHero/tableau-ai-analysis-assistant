@@ -118,7 +118,7 @@ class SemanticParserState(TypedDict, total=False):
             "restated_question": str,
             "what": dict,
             "where": dict,
-            "how_type": str,
+            "how": str,
             "computations": Optional[list[dict]],
             "query": str,
             "datasource_luid": str,

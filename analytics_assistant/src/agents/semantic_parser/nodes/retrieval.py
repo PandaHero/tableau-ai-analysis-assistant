@@ -235,8 +235,14 @@ async def few_shot_manager_node(state: SemanticParserState) -> dict[str, Any]:
             ),
         }
 
+    # 优先从 prefilter_result 获取 detected_complexity（unified 节点已产出），
+    # 回退到 dynamic_schema_result（兼容旧管线）
+    prefilter_result_raw = state.get("prefilter_result")
     dynamic_schema_result = state.get("dynamic_schema_result") or {}
-    detected_complexity = dynamic_schema_result.get("detected_complexity", [])
+    if prefilter_result_raw and prefilter_result_raw.get("detected_complexity"):
+        detected_complexity = prefilter_result_raw["detected_complexity"]
+    else:
+        detected_complexity = dynamic_schema_result.get("detected_complexity", [])
     analysis_plan = parse_analysis_plan(
         raw_analysis_plan=state.get("analysis_plan"),
         raw_global_understanding=state.get("global_understanding"),

@@ -44,8 +44,7 @@ logger = logging.getLogger(__name__)
 def _get_config() -> dict[str, Any]:
     """获取 semantic_understanding 配置。"""
     try:
-        config = get_config()
-        return config.config.get("semantic_parser", {}).get("semantic_understanding", {})
+        return get_config().get_semantic_understanding_config()
     except Exception as e:
         logger.warning(f"无法加载配置，使用默认值: {e}")
         return {}
@@ -77,6 +76,20 @@ def get_max_schema_tokens() -> int:
 def get_max_few_shot_examples() -> int:
     """获取最大 Few-shot 示例数。"""
     return _get_config().get("max_few_shot_examples", _DEFAULT_MAX_FEW_SHOT_EXAMPLES)
+
+def get_confidence_blend_weights() -> dict[str, float]:
+    """获取置信度融合权重。
+
+    Returns:
+        dict with keys: llm_weight, upstream_weight, divergence_threshold
+    """
+    defaults = {
+        "llm_weight": 0.6,
+        "upstream_weight": 0.4,
+        "divergence_threshold": 0.3,
+    }
+    configured = _get_config().get("confidence_blend", {})
+    return {k: configured.get(k, v) for k, v in defaults.items()}
 
 
 def get_simple_query_model_id() -> str:
@@ -150,7 +163,7 @@ class SemanticUnderstanding:
         on_partial: Optional[Callable[[dict[str, Any]], Awaitable[None]]] = None,
         on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
         return_thinking: bool = False,
-    ) -> SemanticOutput:
+    ) -> "SemanticOutput | tuple[SemanticOutput, str]":
         """执行语义理解
         
         流程：
@@ -175,7 +188,8 @@ class SemanticUnderstanding:
             return_thinking: 是否返回 thinking
         
         Returns:
-            SemanticOutput 实例
+            return_thinking=False 时返回 SemanticOutput 实例；
+            return_thinking=True 时返回 (SemanticOutput, thinking_text) 元组。
         
         Raises:
             ValueError: 如果 LLM 输出无法解析
@@ -189,27 +203,21 @@ class SemanticUnderstanding:
             max_few_shot_examples=get_max_few_shot_examples(),
         )
         
-        # 2. 转换字段候选格式
-        prompt_fields = self._convert_field_candidates(field_candidates)
-        
-        # 3. 转换 Few-shot 示例格式
-        prompt_examples = self._convert_few_shot_examples(few_shot_examples)
-        
-        # 4. 构建 Prompt
+        # 2. 构建 Prompt
         prompt = self._prompt_builder.build(
             question=question,
-            field_candidates=prompt_fields,
+            field_candidates=field_candidates,
             config=config,
             history=history,
-            few_shot_examples=prompt_examples,
+            few_shot_examples=few_shot_examples,
         )
         
-        # 5. 构建消息
+        # 3. 构建消息
         messages: list[BaseMessage] = [
             HumanMessage(content=prompt),
         ]
         
-        # 6. 调用 LLM
+        # 4. 调用 LLM
         llm = self._get_llm()
         
         logger.debug(f"调用 LLM 进行语义理解，问题: {question[:50]}...")
@@ -235,79 +243,19 @@ class SemanticUnderstanding:
                 return_thinking=False,
             )
         
-        # 7. 后处理：检查自检结果
-        result = self._post_process(result)
+        # 5. 后处理由 semantic_understanding_node 统一执行（_post_process_semantic_output）
         
-        # 8. 设置澄清来源
+        # 6. 设置澄清来源
         if result.needs_clarification:
             result.clarification_source = ClarificationSource.SEMANTIC_UNDERSTANDING
         
         logger.debug(f"语义理解完成，query_id: {result.query_id}")
         
+        if return_thinking:
+            return result, thinking
         return result
     
-    def _convert_field_candidates(
-        self,
-        candidates: list[FieldCandidate],
-    ) -> list[FieldCandidate]:
-        """转换字段候选格式
-        
-        由于现在使用统一的 FieldCandidate，直接返回即可。
-        保留此方法以便未来扩展。
-        """
-        return candidates
     
-    def _convert_few_shot_examples(
-        self,
-        examples: Optional[list[FewShotExample]],
-    ) -> Optional[list[FewShotExample]]:
-        """转换 Few-shot 示例格式
-        
-        由于现在使用统一的 FewShotExample，直接返回即可。
-        保留此方法以便未来扩展。
-        """
-        return examples
-    
-    def _post_process(self, result: SemanticOutput) -> SemanticOutput:
-        """后处理：检查自检结果
-        
-        如果任一置信度低于阈值，确保 potential_issues 非空。
-        """
-        self_check = result.self_check
-        low_confidence_threshold = get_low_confidence_threshold()
-        
-        # 检查各项置信度
-        low_confidence_fields = []
-        
-        if self_check.field_mapping_confidence < low_confidence_threshold:
-            low_confidence_fields.append(
-                f"字段映射置信度较低 ({self_check.field_mapping_confidence:.2f})"
-            )
-        
-        if self_check.time_range_confidence < low_confidence_threshold:
-            low_confidence_fields.append(
-                f"时间范围置信度较低 ({self_check.time_range_confidence:.2f})"
-            )
-        
-        if self_check.computation_confidence < low_confidence_threshold:
-            low_confidence_fields.append(
-                f"计算逻辑置信度较低 ({self_check.computation_confidence:.2f})"
-            )
-        
-        if self_check.overall_confidence < low_confidence_threshold:
-            low_confidence_fields.append(
-                f"整体置信度较低 ({self_check.overall_confidence:.2f})"
-            )
-        
-        # 如果有低置信度字段但 potential_issues 为空，添加警告
-        if low_confidence_fields and not self_check.potential_issues:
-            self_check.potential_issues = low_confidence_fields
-            result.parsing_warnings.append(
-                "检测到低置信度但 LLM 未报告问题，已自动添加警告"
-            )
-        
-        return result
-
 __all__ = [
     "SemanticUnderstanding",
     "get_low_confidence_threshold",

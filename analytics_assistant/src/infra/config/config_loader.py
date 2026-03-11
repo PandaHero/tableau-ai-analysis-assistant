@@ -478,7 +478,72 @@ class AppConfig:
     def get(self, key: str, default: Any = None) -> Any:
         """获取配置项"""
         return self.config.get(key, default)
-    
+
+    def get_nested_config(self, *keys: str, default: Any = None) -> Any:
+        """按路径获取嵌套配置项
+
+        Args:
+            *keys: 配置键路径，如 ("semantic_parser", "query_cache")
+            default: 所有键都不存在时的默认值，默认为 {}
+
+        Returns:
+            对应路径的配置字典或 default
+
+        Examples:
+            config.get_nested_config("semantic_parser", "query_cache")
+            config.get_nested_config("rag", "reranking", default=None)
+        """
+        if default is None:
+            default = {}
+        result = self.config
+        for key in keys:
+            if not isinstance(result, dict):
+                return default
+            result = result.get(key)
+            if result is None:
+                return default
+        return result
+
+    # ============================================
+    # 语义解析器子模块配置
+    # ============================================
+
+    def get_query_cache_config(self) -> dict[str, Any]:
+        """获取查询缓存配置"""
+        return self.get_semantic_parser_config().get('query_cache', {})
+
+    def get_intent_router_config(self) -> dict[str, Any]:
+        """获取意图路由配置（顶层配置项）"""
+        return self.config.get('intent_router', {})
+
+    def get_error_corrector_config(self) -> dict[str, Any]:
+        """获取错误纠正器配置"""
+        return self.get_semantic_parser_config().get('error_corrector', {})
+
+    def get_token_optimization_config(self) -> dict[str, Any]:
+        """获取 token 优化配置（包含历史管理器参数）"""
+        return self.get_semantic_parser_config().get('token_optimization', {})
+
+    def get_feedback_config(self) -> dict[str, Any]:
+        """获取反馈学习器配置"""
+        return self.get_semantic_parser_config().get('feedback', {})
+
+    def get_few_shot_config(self) -> dict[str, Any]:
+        """获取少样本管理器配置"""
+        return self.get_semantic_parser_config().get('few_shot', {})
+
+    def get_filter_validator_config(self) -> dict[str, Any]:
+        """获取筛选验证器配置"""
+        return self.get_semantic_parser_config().get('filter_validator', {})
+
+    def get_field_value_cache_config(self) -> dict[str, Any]:
+        """获取字段值缓存配置"""
+        return self.get_semantic_parser_config().get('field_value_cache', {})
+
+    def get_semantic_understanding_config(self) -> dict[str, Any]:
+        """获取语义理解配置"""
+        return self.get_semantic_parser_config().get('semantic_understanding', {})
+
     def reload(self):
         """重新加载配置"""
         self._load_config()

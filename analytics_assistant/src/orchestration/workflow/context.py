@@ -24,7 +24,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, PrivateAttr
 
 from analytics_assistant.src.platform.tableau.auth import (
     get_tableau_auth_async,
@@ -90,8 +90,8 @@ class WorkflowContext(BaseModel):
         description="上一次的 schema hash（用于检测变更）"
     )
     
-    # 缓存的 schema hash（不作为 Pydantic 字段，使用 __pydantic_private__）
-    _cached_schema_hash: Optional[str] = None
+    # 缓存的 schema hash（不作为 Pydantic 字段）
+    _cached_schema_hash: Optional[str] = PrivateAttr(default=None)
     
     # ========== 语义解析器需要的字段 ==========
     

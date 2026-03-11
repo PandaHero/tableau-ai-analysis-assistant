@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 _NUMERIC_TYPES: set[str] = {
     "INTEGER", "INT", "REAL", "FLOAT",
     "DOUBLE", "DECIMAL", "NUMBER", "NUMERIC",
+    "BIGINT", "SMALLINT", "TINYINT", "MEDIUMINT",
+    "MONEY", "CURRENCY",
 }
 
 class DataProfiler:

@@ -5,7 +5,6 @@ FeatureExtractor 单元测试
 验证规则快路径与 LLM 回退的核心行为。
 """
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +14,7 @@ from analytics_assistant.src.agents.semantic_parser.components.feature_extractor
 )
 from analytics_assistant.src.agents.semantic_parser.schemas.prefilter import (
     ComplexityType,
+    FeatureExtractionOutput,
     MatchedComputation,
     PrefilterResult,
 )
@@ -88,17 +88,13 @@ class TestFeatureExtractor:
     @pytest.mark.asyncio
     async def test_complex_query_falls_back_to_llm(self):
         """复杂查询不走规则快路径，仍会调用 LLM。"""
-        fake_llm = MagicMock()
-        fake_llm.ainvoke = AsyncMock(
-            return_value=SimpleNamespace(
-                content=(
-                    '{"required_measures":["利润"],'
-                    '"required_dimensions":["地区"],'
-                    '"confirmed_time_hints":[],'
-                    '"confirmed_computations":["profit_rate"],'
-                    '"confirmation_confidence":0.9}'
-                )
-            )
+        llm_output = FeatureExtractionOutput(
+            required_measures=["利润"],
+            required_dimensions=["地区"],
+            confirmed_time_hints=[],
+            confirmed_computations=["profit_rate"],
+            confirmation_confidence=0.9,
+            is_degraded=False,
         )
 
         with patch(
@@ -106,8 +102,11 @@ class TestFeatureExtractor:
             return_value=_DummyConfig(),
         ), patch(
             "analytics_assistant.src.agents.semantic_parser.components.feature_extractor.get_llm",
-            return_value=fake_llm,
-        ) as mock_get_llm:
+            return_value=MagicMock(),
+        ) as mock_get_llm, patch(
+            "analytics_assistant.src.agents.semantic_parser.components.feature_extractor.stream_llm_structured",
+            new=AsyncMock(return_value=llm_output),
+        ) as mock_stream:
             extractor = FeatureExtractor()
             prefilter_result = PrefilterResult(
                 detected_complexity=[ComplexityType.RATIO],
@@ -128,22 +127,18 @@ class TestFeatureExtractor:
             assert result.required_dimensions == ["地区"]
             assert result.confirmed_computations == ["profit_rate"]
             mock_get_llm.assert_called_once()
-            fake_llm.ainvoke.assert_awaited_once()
+            mock_stream.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_step_intent_skips_rule_fast_path_and_merges_candidate_axes(self):
         """follow-up step 应强制走 LLM，并把 candidate_axes 合并回字段需求。"""
-        fake_llm = MagicMock()
-        fake_llm.ainvoke = AsyncMock(
-            return_value=SimpleNamespace(
-                content=(
-                    '{"required_measures":["销售额"],'
-                    '"required_dimensions":["异常省份"],'
-                    '"confirmed_time_hints":[],'
-                    '"confirmed_computations":[],'
-                    '"confirmation_confidence":0.88}'
-                )
-            )
+        llm_output = FeatureExtractionOutput(
+            required_measures=["销售额"],
+            required_dimensions=["异常省份"],
+            confirmed_time_hints=[],
+            confirmed_computations=[],
+            confirmation_confidence=0.88,
+            is_degraded=False,
         )
 
         with patch(
@@ -151,8 +146,11 @@ class TestFeatureExtractor:
             return_value=_DummyConfig(),
         ), patch(
             "analytics_assistant.src.agents.semantic_parser.components.feature_extractor.get_llm",
-            return_value=fake_llm,
-        ) as mock_get_llm:
+            return_value=MagicMock(),
+        ) as mock_get_llm, patch(
+            "analytics_assistant.src.agents.semantic_parser.components.feature_extractor.stream_llm_structured",
+            new=AsyncMock(return_value=llm_output),
+        ) as mock_stream:
             extractor = FeatureExtractor()
             prefilter_result = PrefilterResult(
                 detected_complexity=[ComplexityType.SIMPLE],
@@ -177,4 +175,4 @@ class TestFeatureExtractor:
             assert "产品" in result.required_dimensions
             assert "渠道" in result.required_dimensions
             mock_get_llm.assert_called_once()
-            fake_llm.ainvoke.assert_awaited_once()
+            mock_stream.assert_awaited_once()

@@ -94,7 +94,7 @@ class ErrorCorrector:
         """从 YAML 配置加载参数"""
         try:
             config = get_config()
-            error_config = config.get("semantic_parser", {}).get("error_corrector", {})
+            error_config = config.get_error_corrector_config()
             
             self.max_retries: int = error_config.get(
                 "max_retries", 
@@ -159,8 +159,8 @@ class ErrorCorrector:
             '[TIMESTAMP]',
             error_info
         )
-        # 去除具体数值（保留错误结构）
-        normalized = re.sub(r'\b\d+\b', 'N', normalized)
+        # 去除可变数值（行号/位置/数量等 3 位以上纯数字），保留错误码和短标识符
+        normalized = re.sub(r'\b\d{3,}\b', 'N', normalized)
         # 去除 UUID
         normalized = re.sub(
             r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
@@ -331,13 +331,15 @@ class ErrorCorrector:
         ]
         
         # 调用 LLM
-        result = await stream_llm_structured(
+        result, thinking = await stream_llm_structured(
             llm=self._llm,
             messages=messages,
-            output_schema=SemanticOutput,
+            output_model=SemanticOutput,
+            return_thinking=True,
         )
         
-        thinking = f"基于错误 '{error_type}' 进行修正"
+        if not thinking:
+            thinking = f"基于错误 '{error_type}' 进行修正"
         return result, thinking
     
     # ═══════════════════════════════════════════════════════════════════════
@@ -350,6 +352,20 @@ class ErrorCorrector:
         在新的查询开始时调用，清除之前的错误记录。
         """
         self._error_history.clear()
+
+    def restore_history(self, history: list[dict]) -> None:
+        """从序列化数据恢复错误历史
+        
+        在节点调用间恢复之前的错误状态，替代直接访问 _error_history。
+        
+        Args:
+            history: ErrorCorrectionHistory 的字典列表（来自 state 序列化）
+        """
+        self._error_history.clear()
+        for h in history:
+            self._error_history.append(
+                ErrorCorrectionHistory.model_validate(h)
+            )
     
     @property
     def error_history(self) -> list[ErrorCorrectionHistory]:

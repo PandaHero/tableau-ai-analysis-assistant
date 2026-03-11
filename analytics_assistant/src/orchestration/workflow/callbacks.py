@@ -66,6 +66,7 @@ _STAGE_NAMES_ZH: dict[str, str] = {
     "building": "构建查询",
     "executing": "执行分析",
     "generating": "生成洞察",
+    "replanning": "重新规划",
 }
 
 _STAGE_NAMES_EN: dict[str, str] = {
@@ -75,6 +76,7 @@ _STAGE_NAMES_EN: dict[str, str] = {
     "building": "Building Query",
     "executing": "Executing Analysis",
     "generating": "Generating Insights",
+    "replanning": "Replanning",
 }
 
 def get_processing_stage(node_name: str) -> Optional[str]:

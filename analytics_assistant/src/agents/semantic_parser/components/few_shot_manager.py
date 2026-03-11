@@ -20,6 +20,7 @@ RAG 服务集成：
 Requirements: 4.1-4.5 - FewShotManager 示例管理
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -224,13 +225,18 @@ class FewShotManager:
                 )
                 
                 if search_results:
-                    # 从搜索结果中获取示例 ID，然后从存储中获取完整示例
+                    # 从搜索结果中并行获取完整示例
+                    get_tasks = [
+                        self.get(result.doc_id, datasource_luid)
+                        for result in search_results
+                    ]
+                    fetched = await asyncio.gather(*get_tasks, return_exceptions=True)
+
                     scored_examples: list[tuple] = []
-                    for result in search_results:
-                        example_id = result.doc_id
-                        example = await self.get(example_id, datasource_luid)
-                        if example:
-                            scored_examples.append((example, result.score))
+                    for result, example in zip(search_results, fetched):
+                        if isinstance(example, BaseException) or example is None:
+                            continue
+                        scored_examples.append((example, result.score))
                     
                     if scored_examples:
                         # 排序：首先按 accepted_count 降序，然后按相似度降序
@@ -293,8 +299,18 @@ class FewShotManager:
                         example.question_embedding
                     )
                 else:
-                    # 没有 embedding 的示例，给一个较低的相似度
-                    similarity = 0.5
+                    # 无 embedding：尝试即时计算
+                    try:
+                        example.question_embedding = self._rag_service.embedding.embed_query(
+                            example.question
+                        )
+                        similarity = cosine_similarity(
+                            question_embedding,
+                            example.question_embedding
+                        )
+                    except Exception:
+                        # 无法计算 embedding，已被接受过的示例仍保留
+                        similarity = self.similarity_threshold if example.accepted_count > 0 else 0.0
                 
                 # 只保留相似度 >= threshold 的示例
                 if similarity >= self.similarity_threshold:

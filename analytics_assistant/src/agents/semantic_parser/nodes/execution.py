@@ -6,6 +6,7 @@ from typing import Any, Optional
 from langgraph.types import RunnableConfig
 
 from analytics_assistant.src.agents.base.context import get_context
+from analytics_assistant.src.agents.base.node import get_llm
 
 from ..state import SemanticParserState
 from ..components import (
@@ -14,10 +15,19 @@ from ..components import (
     get_query_cache,
 )
 from ..schemas.output import SemanticOutput
-from ..schemas.error_correction import ErrorCorrectionHistory
 from ..schemas.prefilter import PrefilterResult, ComplexityType
 
 logger = logging.getLogger(__name__)
+
+_feedback_learner: Optional[FeedbackLearner] = None
+
+
+def _get_feedback_learner() -> FeedbackLearner:
+    """惰性获取 FeedbackLearner 单例，避免重复创建和配置加载。"""
+    global _feedback_learner
+    if _feedback_learner is None:
+        _feedback_learner = FeedbackLearner()
+    return _feedback_learner
 
 async def query_adapter_node(
     state: SemanticParserState,
@@ -136,19 +146,31 @@ async def error_corrector_node(state: SemanticParserState) -> dict[str, Any]:
     error_type = pipeline_error.get("error_type", "unknown")
     error_message = pipeline_error.get("message", "")
 
-    corrector = ErrorCorrector()
+    corrector = ErrorCorrector(
+        llm=get_llm(agent_name="semantic_parser", enable_json_mode=True)
+    )
 
     # 恢复错误历史
-    for h in error_history:
-        corrector._error_history.append(
-            ErrorCorrectionHistory.model_validate(h)
-        )
+    corrector.restore_history(error_history)
+
+    # 构建修正上下文，让 LLM 修正 Prompt 包含关键信息
+    context: dict[str, Any] = {}
+    field_candidates_raw = state.get("field_candidates", [])
+    if field_candidates_raw:
+        context["available_fields"] = [
+            fc.get("field_name") or fc.get("name", "")
+            if isinstance(fc, dict) else str(fc)
+            for fc in field_candidates_raw
+        ]
+    if error_history:
+        context["error_history"] = error_history
 
     result = await corrector.correct(
         question=question,
         previous_output=semantic_output,
         error_info=error_message,
         error_type=error_type,
+        context=context or None,
     )
 
     new_error_history = [h.model_dump() for h in corrector.error_history]
@@ -249,13 +271,14 @@ async def feedback_learner_node(
                 "feedback_learner_node: 缺少 schema_hash，跳过 QueryCache 写入"
             )
 
-    # 学习同义词
+    # 学习筛选值修正（非同义词——筛选值是 value→value 修正，不是 term→field 映射）
     if confirmed_filters and datasource_luid:
-        learner = FeedbackLearner()
+        learner = _get_feedback_learner()
         for conf in confirmed_filters:
-            await learner.learn_synonym(
-                original_term=conf.get("original_value", ""),
-                correct_field=conf.get("confirmed_value", ""),
+            await learner.learn_filter_value_correction(
+                field_name=conf.get("field_name", ""),
+                original_value=conf.get("original_value", ""),
+                confirmed_value=conf.get("confirmed_value", ""),
                 datasource_luid=datasource_luid,
             )
 

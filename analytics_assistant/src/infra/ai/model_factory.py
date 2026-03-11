@@ -185,7 +185,7 @@ class ModelFactory:
         if config.auth_type == AuthType.CUSTOM_HEADER:
             # 自定义 header 认证（如 apikey: xxx）
             # ChatOpenAI 需要 api_key，但实际认证通过 default_headers
-            openai_kwargs["api_key"] = "dummy"  # 占位，实际不使用
+            openai_kwargs["api_key"] = "custom-header-auth"  # 占位，实际认证通过 default_headers
             openai_kwargs["default_headers"] = {
                 config.auth_header: config.api_key
             }

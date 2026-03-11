@@ -39,16 +39,19 @@ def create_insight_tools(
         LangChain BaseTool 列表
     """
 
+    _MAX_BATCH_LIMIT = 200
+
     @tool
     def read_data_batch(offset: int, limit: int) -> str:
         """分批读取数据。
 
         Args:
             offset: 起始行偏移量（从 0 开始）
-            limit: 读取行数
+            limit: 读取行数（上限 200 行）
         """
         try:
-            rows = data_store.read_batch(offset, limit)
+            actual_limit = min(limit, _MAX_BATCH_LIMIT)
+            rows = data_store.read_batch(offset, actual_limit)
             return json.dumps(
                 {"rows": rows, "count": len(rows), "offset": offset},
                 ensure_ascii=False,

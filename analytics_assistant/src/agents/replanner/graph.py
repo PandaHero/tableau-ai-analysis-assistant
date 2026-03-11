@@ -72,6 +72,7 @@ async def run_replanner_agent(
     conversation_history: Optional[list[dict[str, str]]] = None,
     replan_history: Optional[list[dict[str, Any]]] = None,
     analysis_depth: str = "detailed",
+    field_semantic: Optional[dict[str, Any]] = None,
     on_token: Optional[Callable[[str], Awaitable[None]]] = None,
     on_thinking: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> ReplanDecision:
@@ -87,6 +88,7 @@ async def run_replanner_agent(
         conversation_history: 对话历史（可选）
         replan_history: 重规划历史（之前各轮的 ReplanDecision，可选）
         analysis_depth: 分析深度（"detailed" 或 "comprehensive"）
+        field_semantic: 字段语义信息（可选，用于让 LLM 感知数据源可用字段）
         on_token: Token 流式回调
         on_thinking: 思考过程回调
 
@@ -126,6 +128,7 @@ async def run_replanner_agent(
     semantic_output_summary = _build_semantic_output_summary(semantic_output_dict)
     data_profile_summary = _build_data_profile_summary(data_profile_dict)
     replan_history_summary = _build_replan_history_summary(replan_history)
+    field_semantic_summary = _build_field_semantic_summary(field_semantic)
 
     # 构建消息
     system_prompt = get_system_prompt()
@@ -135,6 +138,7 @@ async def run_replanner_agent(
         data_profile_summary=data_profile_summary,
         replan_history_summary=replan_history_summary,
         analysis_depth=analysis_depth,
+        field_semantic_summary=field_semantic_summary,
     )
 
     messages: list[BaseMessage] = [
@@ -273,5 +277,58 @@ def _build_replan_history_summary(
             parts.append(f"- 第 {i} 轮: 重规划 → \"{new_question}\" (原因: {reason[:60]}...)")
         else:
             parts.append(f"- 第 {i} 轮: 不重规划 (原因: {reason[:60]}...)")
+
+    return "\n".join(parts)
+
+def _build_field_semantic_summary(
+    field_semantic: Optional[dict[str, Any]],
+) -> str:
+    """构建数据源字段语义摘要，供 Replanner LLM 感知可用字段。
+
+    Args:
+        field_semantic: 字段语义字典（字段名 → 属性）
+
+    Returns:
+        摘要文本（空字符串表示无语义信息）
+    """
+    if not field_semantic:
+        return ""
+
+    dimensions: list[str] = []
+    measures: list[str] = []
+
+    for field_name, info in field_semantic.items():
+        if not isinstance(info, dict):
+            continue
+        role = info.get("role", "")
+        aliases = info.get("aliases") or []
+        desc = info.get("business_description") or ""
+        category = (
+            info.get("hierarchy_category")
+            or info.get("category")
+            or info.get("measure_category")
+            or ""
+        )
+
+        alias_text = f"（别名: {', '.join(aliases[:3])}）" if aliases else ""
+        category_text = f"[{category}]" if category else ""
+        desc_text = f" - {desc}" if desc else ""
+        entry = f"  - {field_name} {category_text}{alias_text}{desc_text}"
+
+        if role == "dimension":
+            dimensions.append(entry)
+        elif role == "measure":
+            measures.append(entry)
+
+    if not dimensions and not measures:
+        return ""
+
+    parts = []
+    if measures:
+        parts.append(f"**度量字段** ({len(measures)} 个):")
+        parts.extend(measures[:10])
+    if dimensions:
+        parts.append(f"**维度字段** ({len(dimensions)} 个):")
+        parts.extend(dimensions[:10])
 
     return "\n".join(parts)

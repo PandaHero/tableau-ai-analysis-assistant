@@ -9,7 +9,7 @@
 """
 import hashlib
 
-from pydantic import BaseModel, Field as PydanticField, ConfigDict
+from pydantic import BaseModel, Field as PydanticField, ConfigDict, PrivateAttr
 from typing import Any, Optional
 
 class Field(BaseModel):
@@ -95,7 +95,7 @@ class DataModel(BaseModel):
     raw_metadata: Optional[dict[str, Any]] = PydanticField(default=None, description="原始 API 响应")
     
     # 缓存的 schema_hash（延迟计算）
-    _cached_schema_hash: Optional[str] = None
+    _cached_schema_hash: Optional[str] = PrivateAttr(default=None)
     
     @property
     def schema_hash(self) -> str:

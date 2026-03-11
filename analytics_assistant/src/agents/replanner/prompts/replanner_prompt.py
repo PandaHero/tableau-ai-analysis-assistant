@@ -113,6 +113,7 @@ def build_user_prompt(
     data_profile_summary: str,
     replan_history_summary: str,
     analysis_depth: str = "detailed",
+    field_semantic_summary: str = "",
 ) -> str:
     """构建用户提示。
 
@@ -122,6 +123,7 @@ def build_user_prompt(
         data_profile_summary: 数据画像摘要
         replan_history_summary: 重规划历史摘要（之前各轮的决策）
         analysis_depth: 分析深度（"detailed" 或 "comprehensive"）
+        field_semantic_summary: 数据源字段语义摘要（可选，让 LLM 感知可用字段）
 
     Returns:
         用户提示字符串
@@ -133,6 +135,13 @@ def build_user_prompt(
         f"## 数据概览\n{data_profile_summary}",
         f"## 当前洞察结果\n{insight_summary}",
     ]
+
+    if field_semantic_summary:
+        parts.append(
+            f"## 可用数据源字段\n"
+            f"以下是数据源中可用的维度和度量字段，生成后续问题时请优先使用这些字段：\n"
+            f"{field_semantic_summary}"
+        )
 
     if replan_history_summary:
         parts.append(f"## 重规划历史\n{replan_history_summary}")

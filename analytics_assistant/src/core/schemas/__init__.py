@@ -36,6 +36,8 @@ from analytics_assistant.src.core.schemas.enums import (
 
     MappingSource,
 
+    MeasureCategory,
+
     ObserverDecision,
 
     RankStyle,
@@ -188,6 +190,8 @@ __all__ = [
 
     "MappingSource",
 
+    "MeasureCategory",
+
     "ObserverDecision",
 
     "RankStyle",
@@ -256,7 +260,7 @@ __all__ = [
 
     # Validation
 
-    "ValidationError",
+    "ValidationErrorDetail",
 
     "ValidationErrorType",
 

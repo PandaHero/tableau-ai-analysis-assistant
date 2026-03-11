@@ -16,6 +16,26 @@ from analytics_assistant.src.agents.base.context import get_context
 
 logger = logging.getLogger(__name__)
 
+_field_value_cache: Optional[FieldValueCache] = None
+_output_validator: Optional[OutputValidator] = None
+
+
+def _get_field_value_cache() -> FieldValueCache:
+    """惰性获取 FieldValueCache 单例，使缓存跨调用复用。"""
+    global _field_value_cache
+    if _field_value_cache is None:
+        _field_value_cache = FieldValueCache()
+    return _field_value_cache
+
+
+def _get_output_validator() -> OutputValidator:
+    """惰性获取 OutputValidator 单例，避免重复加载配置。"""
+    global _output_validator
+    if _output_validator is None:
+        _output_validator = OutputValidator()
+    return _output_validator
+
+
 async def output_validator_node(state: SemanticParserState) -> dict[str, Any]:
     """输出验证节点
 
@@ -49,7 +69,7 @@ async def output_validator_node(state: SemanticParserState) -> dict[str, Any]:
         time_fields=classified["time_fields"],
     )
 
-    validator = OutputValidator()
+    validator = _get_output_validator()
     result = validator.validate(
         semantic_output=semantic_output_raw,
         field_rag_result=field_rag_result,
@@ -145,10 +165,9 @@ async def filter_validator_node(
             "confirmed_filters": existing_confirmations,
         }
 
-    field_value_cache = FieldValueCache()
     validator = FilterValueValidator(
         platform_adapter=platform_adapter,
-        field_value_cache=field_value_cache,
+        field_value_cache=_get_field_value_cache(),
     )
 
     # 应用已有的确认到 semantic_output
@@ -229,14 +248,15 @@ async def filter_validator_node(
 
             all_confirmations = existing_confirmations + new_confirmations
 
-            value_confirmations = {}
+            # 逐字段应用确认（避免不同字段相同 original_value 时互相覆盖）
+            updated_output = semantic_output
             for conf in new_confirmations:
-                value_confirmations[conf["original_value"]] = conf["confirmed_value"]
-
-            updated_output = validator.apply_confirmations(
-                semantic_output,
-                value_confirmations,
-            )
+                updated_output = validator.apply_single_confirmation(
+                    updated_output,
+                    conf["field_name"],
+                    conf["original_value"],
+                    conf["confirmed_value"],
+                )
             return {
                 "semantic_output": updated_output.model_dump(),
                 "filter_validation_result": summary.model_dump(),

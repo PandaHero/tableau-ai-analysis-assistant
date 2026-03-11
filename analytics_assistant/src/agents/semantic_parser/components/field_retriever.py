@@ -35,6 +35,8 @@ Requirements: 5.1-5.6 - FieldRetriever 字段检索
 
 import asyncio
 import logging
+import re
+import threading
 from typing import Any, Optional
 
 from analytics_assistant.src.infra.config import get_config
@@ -65,8 +67,7 @@ def _get_field_retriever_config() -> dict[str, Any]:
 def _get_rerank_config() -> dict[str, Any]:
     """获取重排序配置（rag.reranking 节）。"""
     try:
-        config = get_config()
-        return config.config.get("rag", {}).get("reranking", {})
+        return get_config().get_nested_config("rag", "reranking")
     except Exception as e:
         logger.warning(f"无法加载 rerank 配置，使用默认值: {e}")
         return {}
@@ -77,17 +78,23 @@ def _get_rerank_config() -> dict[str, Any]:
 
 def _get_field_attr(obj: Any, *names, default=None) -> Any:
     """从对象或字典中获取属性。"""
-    for name in names:
-        if isinstance(obj, dict):
+    if isinstance(obj, dict):
+        for name in names:
             if name in obj:
                 return obj[name]
-        else:
-            if hasattr(obj, name):
-                return getattr(obj, name)
+    else:
+        for name in names:
+            val = getattr(obj, name, None)
+            if val is not None:
+                return val
     return default
 
+_reranker_cache: dict[int, Optional[LLMReranker]] = {}
+_reranker_lock = threading.Lock()
+
+
 def _create_llm_reranker(top_k: int) -> Optional[LLMReranker]:
-    """创建 LLMReranker 实例（使用异步 LLM 调用，避免阻塞 event loop）。
+    """获取或创建 LLMReranker 实例（进程级缓存，避免每次请求创建新 LLM）。
 
     使用 ModelManager 获取默认 LLM，同时提供：
     - allm_call_fn：异步调用（arerank 优先使用，不阻塞 event loop）
@@ -100,6 +107,10 @@ def _create_llm_reranker(top_k: int) -> Optional[LLMReranker]:
     Returns:
         LLMReranker 实例，或 None（创建失败时）
     """
+    with _reranker_lock:
+        if top_k in _reranker_cache:
+            return _reranker_cache[top_k]
+
     try:
         manager = get_model_manager()
         llm = manager.create_llm()
@@ -112,10 +123,14 @@ def _create_llm_reranker(top_k: int) -> Optional[LLMReranker]:
             response = await llm.ainvoke(prompt)
             return response.content if hasattr(response, 'content') else str(response)
 
-        return LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn, allm_call_fn=allm_call_fn)
+        reranker = LLMReranker(top_k=top_k, llm_call_fn=llm_call_fn, allm_call_fn=allm_call_fn)
     except Exception as e:
         logger.warning(f"创建 LLMReranker 失败，将跳过重排序: {e}")
-        return None
+        reranker = None
+
+    with _reranker_lock:
+        _reranker_cache[top_k] = reranker
+    return reranker
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FieldRetriever 组件
@@ -411,17 +426,14 @@ class FieldRetriever:
                     continue
 
                 matched_names.add(field_name)
-                metadata = result.metadata or {}
 
                 # 归一化分数：映射到 [0.5, 0.95]
+                # 当所有分数相同时，使用原始分数的绝对值（clamp 到 [0, 1]）
                 if score_range > 0:
                     normalized = (result.score - min_score) / score_range
                 else:
-                    normalized = 1.0
+                    normalized = min(max(result.score, 0.0), 1.0)
                 confidence = 0.5 + normalized * 0.45
-
-                # 从 field_map 获取字段对象
-                field_map.get(field_name) or field_caption_map.get(field_name)
 
                 candidates.append(FieldCandidate(
                     field_name=field_name,
@@ -597,6 +609,14 @@ class FieldRetriever:
 
         return matched
 
+    # 时间字段关键词：长度 ≥ 3 的可安全做子串匹配，短关键词需拆分匹配以防误判
+    _TIME_SUBSTR_KEYWORDS = {
+        "date", "time", "year", "month", "day", "week", "quarter",
+        "日期", "时间", "季度", "yyyymm", "yyyymmdd",
+    }
+    # 短关键词：必须作为独立分段出现（按 _/- 拆分后精确匹配）
+    _TIME_SEGMENT_KEYWORDS = {"dt", "yyyy", "mm", "dd", "年", "月", "日", "周"}
+
     def _retrieve_time_fields(self, dimensions: list[Any]) -> list[FieldCandidate]:
         """检索时间字段。
 
@@ -605,11 +625,6 @@ class FieldRetriever:
         """
         time_candidates = []
         time_data_types = {"date", "datetime", "timestamp"}
-        time_keywords = {
-            "date", "time", "year", "month", "day", "week", "quarter",
-            "日期", "时间", "年", "月", "日", "周", "季度",
-            "dt", "yyyymm", "yyyymmdd", "yyyy", "mm", "dd"  # 常见的日期字段命名
-        }
 
         for field in dimensions:
             # 跳过不可查询的幽灵字段
@@ -630,9 +645,8 @@ class FieldRetriever:
             if data_type.lower() in time_data_types:
                 is_time_field = True
                 confidence = 0.95
-            # 检查字段名/标题
-            elif any(kw in field_name.lower() or kw in field_caption.lower()
-                     for kw in time_keywords):
+            # 检查字段名/标题（长关键词用子串匹配）
+            elif self._has_time_keyword(field_name, field_caption):
                 is_time_field = True
                 confidence = 0.85
 
@@ -645,6 +659,28 @@ class FieldRetriever:
         time_candidates.sort(key=lambda c: c.confidence, reverse=True)
 
         return time_candidates[:self.top_k]
+
+    @classmethod
+    def _has_time_keyword(cls, field_name: str, field_caption: str) -> bool:
+        """判断字段名/标题是否包含时间关键词。
+
+        长关键词（≥3 字符）使用子串匹配；短关键词（dd/mm/dt 等）按 _/- 拆分后
+        做精确段匹配，避免 "added" 误匹配 "dd"、"summary" 误匹配 "mm"。
+        """
+        name_lower = field_name.lower()
+        caption_lower = field_caption.lower()
+
+        # 长关键词：安全子串匹配
+        for kw in cls._TIME_SUBSTR_KEYWORDS:
+            if kw in name_lower or kw in caption_lower:
+                return True
+
+        # 短关键词：按 _ / - 拆分后精确段匹配
+        name_segments = set(re.split(r"[_\-]", name_lower))
+        caption_segments = set(re.split(r"[_\-]", caption_lower))
+        all_segments = name_segments | caption_segments
+
+        return bool(all_segments & cls._TIME_SEGMENT_KEYWORDS)
 
     # ═══════════════════════════════════════════════════════════════════════
     # 辅助方法

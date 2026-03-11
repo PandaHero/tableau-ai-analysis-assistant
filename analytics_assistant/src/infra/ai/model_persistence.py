@@ -9,6 +9,7 @@ API Key 使用 Fernet 对称加密后存储，密钥从环境变量读取。
 """
 import logging
 import os
+from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
@@ -184,10 +185,12 @@ class ModelPersistence:
                     config_dict["api_key"] = self._encrypt_api_key(
                         config_dict["api_key"]
                     )
-                # 枚举值转字符串，确保可序列化
+                # 枚举值和 datetime 转字符串，确保可序列化
                 for key, val in config_dict.items():
                     if isinstance(val, Enum):
                         config_dict[key] = val.value
+                    elif isinstance(val, datetime):
+                        config_dict[key] = val.isoformat()
                     elif isinstance(val, list):
                         config_dict[key] = [
                             item.value if isinstance(item, Enum) else item
