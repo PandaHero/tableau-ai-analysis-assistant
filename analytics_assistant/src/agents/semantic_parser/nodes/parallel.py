@@ -9,14 +9,15 @@
 - prepare_prompt_node:
     合并 dynamic_schema_builder + modular_prompt_builder
 - parallel_retrieval_node:
-    使用 asyncio.gather() 并行执行 field_retriever + few_shot_manager
+    通过 RetrievalRouter 收口字段检索、值候选和 few-shot 检索
 """
 
-import asyncio
 import logging
 import time
 from datetime import datetime
 from typing import Any, Optional
+
+from analytics_assistant.src.orchestration.retrieval_memory import RetrievalRouter
 
 from ..state import SemanticParserState
 from ..components import (
@@ -26,7 +27,6 @@ from ..components import (
 from ..node_utils import merge_metrics
 from ..schemas.planner import parse_step_intent, EvidenceContext
 from ..schemas.prefilter import (
-    ComplexityType,
     FeatureExtractionOutput,
     PrefilterResult,
 )
@@ -35,9 +35,8 @@ from .cache import (
     _should_allow_semantic_lookup,
     _is_feature_cache_compatible,
 )
+from .global_understanding import run_global_understanding
 from .optimization import feature_extractor_node
-from analytics_assistant.src.agents.base.context import get_context
-from .planner import build_analysis_plan, build_global_understanding_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -169,10 +168,7 @@ async def unified_feature_and_understanding_node(
 
     feature_ms = (time.time() - total_start) * 1000 - prefilter_ms
 
-    # ── Step 4: rule-based global understanding (~1ms, no LLM) ─────────────
-    # 规则 planner 生成初步 analysis_plan，供 prepare_prompt 注入 prompt。
-    # 复杂查询的精确全局理解由 semantic_understanding_node 通过
-    # ComplexSemanticOutput 在同一次 LLM 调用中完成。
+    # LLM-first global understanding for the main parser path.
     plan_start = time.time()
     feature_output_obj: Optional[FeatureExtractionOutput] = None
     try:
@@ -180,33 +176,26 @@ async def unified_feature_and_understanding_node(
     except Exception:
         pass
 
-    # 从 WorkflowContext 获取 field_semantic，用于动态生成 candidate_axes
-    field_semantic = None
-    try:
-        ctx = get_context(config) if config else None
-        if ctx is not None:
-            field_semantic = ctx.field_semantic
-    except Exception:
-        pass
-
-    analysis_plan = build_analysis_plan(
-        question=question,
+    global_understanding = await run_global_understanding(
+        question,
         prefilter_result=prefilter_result,
         feature_output=feature_output_obj,
-        field_semantic=field_semantic,
+        field_semantic=state.get("field_semantic"),
+        feature_flags=state.get("feature_flags"),
     )
-    global_understanding = build_global_understanding_fallback(question, analysis_plan)
+    analysis_plan = global_understanding.analysis_plan
+    if analysis_plan is None:
+        raise ValueError("global_understanding must return analysis_plan")
     plan_ms = (time.time() - plan_start) * 1000
 
     is_complex = analysis_plan.needs_planning
     logger.info(
-        "unified: rule-based plan, mode=%s, is_complex=%s, plan_ms=%.1fms",
+        "unified: llm-first plan, mode=%s, is_complex=%s, plan_ms=%.1fms",
         analysis_plan.plan_mode.value,
         is_complex,
         plan_ms,
     )
 
-    # ── Merge results ──────────────────────────────────────────────────────
     total_ms = (time.time() - total_start) * 1000
 
     merged: dict[str, Any] = {
@@ -223,8 +212,9 @@ async def unified_feature_and_understanding_node(
             feature_extractor_ms=feature_ms,
             global_understanding_ms=plan_ms,
             global_understanding_mode=global_understanding.analysis_mode.value,
-            global_understanding_llm_used=False,
-            global_understanding_rule_only=True,
+            global_understanding_llm_used=True,
+            global_understanding_fallback_used=False,
+            global_understanding_rule_only=False,
             unified_total_ms=total_ms,
         ),
     }
@@ -400,69 +390,20 @@ async def parallel_retrieval_node(
     state: SemanticParserState,
     config=None,
 ) -> dict[str, Any]:
-    """并行检索节点：field_retriever ∥ few_shot_manager。
+    """并行检索节点。
 
-    两者互不依赖：
-    - field_retriever 需要 feature_extraction_output + global_understanding（来自 unified）
-    - few_shot_manager 需要 question + datasource_luid + prefilter_result（来自 unified）
-
-    合并后减少 1 个图节点，同时并行执行减少 ~150-300ms。
-
-    输入（从 state 读取）：
-    - 继承 field_retriever_node 和 few_shot_manager_node 的全部输入
-
-    输出（写入 state）：
-    - field_candidates
-    - few_shot_examples
-    - optimization_metrics
+    这里不再手工拼接多个检索结果，而是统一交给 `RetrievalRouter`：
+    - 保留已有 field / few-shot 检索实现；
+    - 统一产出候选 ref 与检索指标；
+    - 为 root_graph / 审计 / 回放提供稳定引用。
     """
     from .retrieval import field_retriever_node, few_shot_manager_node
 
-    start_time = time.time()
-    logger.info("parallel_retrieval: field_retriever ∥ few_shot_manager")
-
-    field_task = field_retriever_node(state, config=config)
-    fewshot_task = few_shot_manager_node(state)
-
-    raw_field, raw_fewshot = await asyncio.gather(
-        field_task, fewshot_task, return_exceptions=True
+    router = RetrievalRouter(
+        field_retriever=field_retriever_node,
+        fewshot_retriever=few_shot_manager_node,
     )
-
-    if isinstance(raw_field, BaseException):
-        logger.error("parallel_retrieval: field_retriever failed: %s", raw_field)
-        field_result: dict[str, Any] = {"field_candidates": []}
-    else:
-        field_result = raw_field
-
-    if isinstance(raw_fewshot, BaseException):
-        logger.error("parallel_retrieval: few_shot_manager failed: %s", raw_fewshot)
-        fewshot_result: dict[str, Any] = {"few_shot_examples": []}
-    else:
-        fewshot_result = raw_fewshot
-
-    total_ms = (time.time() - start_time) * 1000
-
-    field_metrics = field_result.get("optimization_metrics", {})
-    fewshot_metrics = fewshot_result.get("optimization_metrics", {})
-
-    merged: dict[str, Any] = {}
-    for key, value in field_result.items():
-        if key != "optimization_metrics":
-            merged[key] = value
-    for key, value in fewshot_result.items():
-        if key != "optimization_metrics":
-            merged[key] = value
-
-    merged["optimization_metrics"] = {
-        **field_metrics,
-        **fewshot_metrics,
-        "parallel_retrieval_total_ms": total_ms,
-        "parallel_retrieval_executed": True,
-    }
-
-    logger.info("parallel_retrieval: done, total=%.1fms", total_ms)
-
-    return merged
+    return await router.retrieve(state=state, config=config)
 
 
 __all__ = [

@@ -1,216 +1,159 @@
-# Analytics Assistant
+# Tableau AI Analysis Assistant
 
-基于 LangGraph 的智能数据分析助手，采用多 Agent 组合架构实现语义解析，支持自然语言查询、VizQL 查询生成和智能洞察分析。当前适配 Tableau 平台，架构设计支持扩展到其他 BI 平台。
+基于 FastAPI、LangGraph、LangChain 和 Tableau 的数据分析助手后端工程。
 
-## ✨ 核心特性
+当前仓库已经完成 `backend-langgraph-refactor` 主体重构，后端运行主干统一为 `root_graph`，复杂问题与 `why` 问题也已经纳入同一套 root-native 状态机。
 
-### 🎯 自然语言查询
-- 用自然语言提问，自动生成 VizQL 查询
-- 支持中英文混合查询
-- 智能识别时间表达式（"上个月"、"去年同期"等）
+## 当前状态
 
-### 🧠 多 Agent 组合架构
-- **SemanticParser Agent**：三元模型提取 (What × Where × How)、意图分类、计算推理、ReAct 错误修正
-- **FieldMapper Agent**：RAG 两阶段检索（向量 top-K + LLM Rerank），高置信度快速路径
-- **FieldSemantic Agent**：字段语义推断（维度/度量分类），种子匹配 + LLM 批量推断
+- 后端主干已统一为 `root_graph -> context_graph -> semantic_graph -> query_graph -> answer_graph`
+- `interrupt / resume / checkpoint` 已接入正式运行链路
+- `retrieval / memory / freshness / rebuild` 已按 spec 收口
+- `why / 复杂问题` 已支持 planner、解释轴排序、screening wave、evidence bundle 和统一 final answer/replan
+- SSE v2、展示语义、错误码映射和关键合同测试已落地
 
-### 🚀 Token 级流式输出
-- 实时推送 LLM 生成的每个 token
-- SSE (Server-Sent Events) 协议
+## 后端架构
 
-### 🔍 RAG 语义字段映射
-- 两阶段检索：向量检索 top-K + LLM Rerank
-- 高置信度快速路径（≥0.9 直接返回，无需 LLM）
-- 字段映射缓存（基于 LangGraph SqliteStore）
+### 1. 顶层编排
 
-### 🏗️ 纯语义中间层
-- LLM 只做语义理解，输出平台无关的语义模型
-- VizQL 转换由确定性代码完成（100% 语法正确）
-- 支持表计算（累计、排名、占比、移动平均、同比环比）
-- 支持 LOD 表达式（FIXED、INCLUDE、EXCLUDE）
+后端只有一个顶层总控：
 
-## 🏗️ 系统架构
-
-### 三元模型 (What × Where × How)
-
-| 元素 | 说明 | 示例 |
-|------|------|------|
-| What | 度量 + 聚合 | Sales (SUM) |
-| Where | 维度 (分组) + 过滤器 (条件) | 维度: City, 过滤器: City="Beijing" |
-| How | 计算复杂度 | SIMPLE / COMPLEX |
-
-### 计算类型 (CalcType)
-
-**Table Calculations**: RANK, RUNNING_TOTAL, MOVING_CALC, PERCENT_OF_TOTAL, DIFFERENCE 等
-
-**LOD Expressions**: LOD_FIXED, LOD_INCLUDE, LOD_EXCLUDE
-
-## 📁 项目结构
-
-```
-analytics-assistant/
-├── analytics_assistant/
-│   ├── config/                         # 配置文件
-│   │   └── app.yaml                    # 统一应用配置
-│   ├── src/
-│   │   ├── agents/                     # Agent 模块（LangGraph 工作流）
-│   │   │   ├── base/                   # Agent 基础设施（node.py, middleware_runner.py）
-│   │   │   ├── semantic_parser/        # 语义解析 Agent (Step1 + Step2 + ReAct)
-│   │   │   │   ├── components/         # 业务组件
-│   │   │   │   ├── prompts/            # Prompt 模板
-│   │   │   │   ├── schemas/            # 数据模型
-│   │   │   │   ├── seeds/              # 种子数据
-│   │   │   │   ├── graph.py            # LangGraph 图定义
-│   │   │   │   └── state.py            # State 定义
-│   │   │   ├── field_mapper/           # 字段映射 Agent
-│   │   │   │   ├── prompts/
-│   │   │   │   ├── schemas/
-│   │   │   │   └── node.py
-│   │   │   └── field_semantic/         # 字段语义推断 Agent
-│   │   │       ├── components/
-│   │   │       ├── prompts/
-│   │   │       ├── schemas/
-│   │   │       └── inference.py
-│   │   │
-│   │   ├── core/                       # 核心模块（接口、异常、通用 Schema）
-│   │   │   ├── schemas/                # 通用数据模型
-│   │   │   ├── interfaces.py           # 抽象接口定义
-│   │   │   └── exceptions.py           # 自定义异常
-│   │   │
-│   │   ├── infra/                      # 基础设施
-│   │   │   ├── ai/                     # LLM、Embedding 封装
-│   │   │   ├── storage/                # 存储（SqliteStore、缓存）
-│   │   │   ├── config/                 # 配置管理
-│   │   │   ├── rag/                    # RAG 检索
-│   │   │   └── seeds/                  # 全局种子数据
-│   │   │
-│   │   ├── orchestration/              # 工作流编排
-│   │   │   └── workflow/               # WorkflowContext
-│   │   │
-│   │   └── platform/                   # 平台适配器
-│   │       ├── base.py                 # 平台注册表和工厂
-│   │       └── tableau/                # Tableau 平台实现
-│   │
-│   ├── tests/                          # 测试
-│   │   ├── agents/                     # Agent 模块测试
-│   │   ├── integration/                # 集成测试
-│   │   └── manual/                     # 手动测试脚本
-│   │
-│   ├── public/                         # Tableau Extension 静态资源
-│   └── data/                           # 数据目录（缓存、索引、证书）
-│
-├── .env                                # 环境变量配置
-├── pytest.ini                          # 测试配置
-└── start.py                            # 启动脚本
+```text
+root_graph
+  -> context_graph
+  -> semantic_graph
+  -> query_graph / planner_runtime
+  -> answer_graph
 ```
 
-## 🚀 快速开始
+其中：
 
-### 1. 安装依赖
+- `context_graph` 负责 datasource 解析、上下文快照、freshness / degrade
+- `semantic_graph` 负责语义解析、retrieval / memory、complex / why planning
+- `query_graph` 负责查询编译、高风险闸门、结果物化
+- `answer_graph` 负责最终洞察和最终重规划
+- `planner_runtime` 负责复杂问题和 `why` 问题的多步执行
 
-```bash
-git clone https://github.com/PandaHero/tableau-ai-analysis-assistant.git
-cd tableau-ai-analysis-assistant
+### 2. 问题类型
 
+- 简单问题：单轮 `semantic -> query -> answer`
+- 复杂但单查可解问题：仍走单轮链，只是语义更复杂
+- 复杂多步问题：走 planner DAG
+- `why` 问题：走专门的诊断型 planner，包含：
+  - `verify_anomaly`
+  - `rank_explanatory_axes`
+  - `screen_top_axes`
+  - `locate_anomalous_slice`
+  - `synthesize_cause`
+
+### 3. 最终回答模型
+
+最终 `insight` 和最终 `replan` 已统一基于 `evidence_bundle` 工作：
+
+- 简单问题：单次查询结果打包成 evidence bundle
+- 复杂问题：planner synthesis 后的证据包进入 `answer_graph`
+- `why` 问题：原因证据链进入 `answer_graph`
+
+## 存储分层
+
+当前后端按职责拆分存储：
+
+- `business_storage`：业务表，如 `sessions / messages / feedback / runs / interrupts`
+- `checkpointer`：LangGraph 运行恢复
+- `storage`：缓存、memory、metadata 索引
+- `vector_storage`：向量检索索引
+- `artifacts/`：查询结果、字段索引、manifest、profiles 等文件产物
+
+默认本地配置以 SQLite + FAISS + 文件系统为主，后续可替换为更强的生产后端，而不改业务接口。
+
+## 快速开始
+
+### 1. 准备环境
+
+- Python 3.12+
+- Windows 环境默认使用仓库根目录下的 `venv`
+
+### 2. 安装依赖
+
+```powershell
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-pip install -r requirements.txt
+venv\Scripts\pip install -r requirements.txt
 ```
 
-### 2. 配置
+### 3. 配置环境变量
 
-**环境变量** — 复制并编辑 `.env`：
+复制环境变量模板并填写真实密钥：
 
-```bash
-cp .env.example .env
+```powershell
+Copy-Item .env.example .env
 ```
 
-关键配置项：
-```env
-# Tableau 连接
-TABLEAU_DOMAIN=https://your-tableau-server.com
-TABLEAU_SITE=your-site
-TABLEAU_JWT_CLIENT_ID=your-client-id
-TABLEAU_JWT_SECRET_ID=your-secret-id
-TABLEAU_JWT_SECRET=your-secret
+主要配置文件：
 
-# LLM 配置
-ACTIVE_LLM=deepseek          # 可选: deepseek-r1 | deepseek | qwen3
-LLM_API_BASE=https://api.deepseek.com
-LLM_API_KEY=your-api-key
+- `.env`
+- `analytics_assistant/config/app.yaml`
 
-# Embedding 配置
-ZHIPUAI_API_KEY=your-zhipu-api-key
+### 4. 启动服务
+
+开发模式：
+
+```powershell
+venv\Scripts\python.exe start.py
 ```
 
-**应用配置** — 编辑 `analytics_assistant/config/app.yaml`：
+只启动后端：
 
-阈值、超时、缓存 TTL、RAG 参数等运行时配置统一在 `app.yaml` 中管理，参考 `app.example.yaml`。
-
-### 3. 启动服务
-
-```bash
-python start.py
+```powershell
+venv\Scripts\python.exe start.py --backend-only
 ```
 
-## 🛠️ 技术栈
+直接启动 FastAPI：
 
-| 组件 | 技术 |
-|------|------|
-| Agent 编排 | LangGraph 0.3+ |
-| LLM 框架 | LangChain 0.3+ |
-| API 框架 | FastAPI |
-| 数据验证 | Pydantic v2 |
-| 向量检索 | FAISS + Sentence Transformers |
-| 缓存存储 | LangGraph SqliteStore |
-| BI 平台 | Tableau VizQL Data Service |
-| Embedding | 智谱 AI |
-| LLM | DeepSeek / DeepSeek-R1 / Qwen3 |
-
-## 🧪 测试
-
-```bash
-# 运行所有测试
-pytest
-
-# 运行集成测试
-pytest analytics_assistant/tests/integration/
-
-# 运行指定 Agent 测试
-pytest analytics_assistant/tests/agents/
+```powershell
+venv\Scripts\python.exe -m analytics_assistant.src.api.main
 ```
 
-测试配置见 `pytest.ini`，PYTHONPATH 已自动设置。
+## 测试
 
-## 🔌 支持的 LLM
+运行全部测试：
 
-| 提供商 | ACTIVE_LLM | 说明 |
-|--------|------------|------|
-| DeepSeek R1 (私有部署) | `deepseek-r1` | 公司内部部署，推理模型 |
-| DeepSeek (官方) | `deepseek` | DeepSeek 官方 API |
-| Qwen3 (私有部署) | `qwen3` | 公司内部部署 |
+```powershell
+venv\Scripts\pytest.exe
+```
 
-通过 `.env` 中的 `ACTIVE_LLM` 切换，对应的 API 地址和密钥自动生效。
+运行关键后端链路测试：
 
-## 📐 编码规范
+```powershell
+venv\Scripts\pytest.exe analytics_assistant/tests/orchestration/workflow/test_root_graph_runner.py
+venv\Scripts\pytest.exe analytics_assistant/tests/api/routers/test_chat.py
+venv\Scripts\pytest.exe analytics_assistant/tests/platform/tableau/test_data_loader.py
+```
 
-项目遵循严格的编码规范，详见 `.kiro/steering/coding-standards.md`，核心要点：
+## 文档入口
 
-- 所有导入在文件顶部，禁止延迟导入
-- 配置参数统一放 `app.yaml`，禁止硬编码
-- Prompt 放 `prompts/`，Schema 放 `schemas/`
-- 使用 `typing` 模块泛型（`List[str]` 而非 `list[str]`）
-- 复用 `infra/` 基础设施，禁止重复造轮子
+- 后端重构 spec 总入口：`analytics_assistant/specs/backend-langgraph-refactor/README.md`
+- 当前 `why / complex` 专项说明：
+  - `analytics_assistant/specs/backend-langgraph-refactor/why-and-complex-analysis-design.md`
+  - `analytics_assistant/specs/backend-langgraph-refactor/why-and-complex-analysis-implementation-notes.md`
+- 历史设计资料保留在：
+  - `analytics_assistant/docs/`
 
-## 📄 许可证
+## 目录概览
 
-[MIT License](LICENSE)
+```text
+analytics_assistant/
+  src/
+    api/
+    orchestration/
+    agents/
+    platform/
+    infra/
+  specs/
+    backend-langgraph-refactor/
+  tests/
+  config/
+```
 
-## 👥 作者
+## 说明
 
-- **PandaHero** - [GitHub](https://github.com/PandaHero)
-
----
-
-**版本**: v3.0.0 | **更新**: 2026-02-08
+这个仓库当前以后端重构后的实现为准，不再以 legacy executor 或旧 SSE 兼容路径作为主入口。阅读和继续开发时，优先参考 spec 目录下的重构文档与当前代码实现。

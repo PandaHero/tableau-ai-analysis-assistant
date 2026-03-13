@@ -11,7 +11,13 @@ from analytics_assistant.src.agents.semantic_parser.nodes.cache import (
     feature_cache_node,
     query_cache_node,
 )
-from analytics_assistant.src.agents.semantic_parser.nodes.execution import feedback_learner_node
+from analytics_assistant.src.agents.semantic_parser.components import (
+    build_query_cache_partition_key,
+    build_query_cache_scope_key,
+)
+from analytics_assistant.src.agents.semantic_parser.nodes.feedback import (
+    feedback_learner_node,
+)
 from analytics_assistant.src.agents.semantic_parser.schemas.output import (
     SemanticOutput,
     SelfCheck,
@@ -161,7 +167,12 @@ class TestQueryCacheContract:
             result = await query_cache_node(state)
 
         assert result["cache_hit"] is True
-        assert result["semantic_query"] == {"query": "cached-vizql", "kind": "vizql"}
+        assert result["semantic_query"] == {
+            "mode": "compiler_input",
+            "source": "semantic_output",
+            "query_id": None,
+            "restated_question": cached.semantic_output["restated_question"],
+        }
         assert result["analysis_plan"] == analysis_plan
         assert result["global_understanding"] == global_understanding
         assert result["optimization_metrics"]["query_cache_hit"] is True
@@ -192,32 +203,116 @@ class TestQueryCacheContract:
         state = {
             "question": "为什么华东区销售额下降了？",
             "semantic_output": semantic_output,
-            "semantic_query": {"query": "cached-vizql", "kind": "vizql"},
+            "semantic_query": {
+                "mode": "compiler_input",
+                "source": "semantic_output",
+                "query_id": "q-cache",
+                "restated_question": "涓轰粈涔堝崕涓滃尯閿€鍞涓嬮檷浜?",
+            },
             "datasource_luid": "ds-1",
             "analysis_plan": analysis_plan,
             "global_understanding": global_understanding,
             "optimization_metrics": {},
         }
         mock_cache = MagicMock()
+        mock_store = MagicMock()
 
         with patch(
-            "analytics_assistant.src.agents.semantic_parser.nodes.execution.get_query_cache",
+            "analytics_assistant.src.orchestration.retrieval_memory.feedback.get_query_cache",
             return_value=mock_cache,
         ), patch(
-            "analytics_assistant.src.agents.semantic_parser.nodes.execution.get_context",
-            return_value=SimpleNamespace(schema_hash="schema-1"),
+            "analytics_assistant.src.orchestration.retrieval_memory.feedback.get_context",
+            return_value=SimpleNamespace(schema_hash="schema-1", user_id="alice"),
+        ), patch(
+            "analytics_assistant.src.orchestration.retrieval_memory.memory_store.get_kv_store",
+            return_value=mock_store,
         ):
+            from analytics_assistant.src.agents.semantic_parser.nodes import feedback as feedback_module
+
+            feedback_module._feedback_learning_service = None
             result = await feedback_learner_node(state, config={"configurable": {}})
+
+        expected_scope_key = build_query_cache_scope_key(user_id="alice")
+        expected_partition = build_query_cache_partition_key(
+            "ds-1",
+            scope_key=expected_scope_key,
+        )
 
         mock_cache.set.assert_called_once_with(
             question="为什么华东区销售额下降了？",
             datasource_luid="ds-1",
             schema_hash="schema-1",
             semantic_output=semantic_output,
-            query={"query": "cached-vizql", "kind": "vizql"},
+            query={
+                "mode": "compiler_input",
+                "source": "semantic_output",
+                "query_id": "q-cache",
+                "restated_question": "涓轰粈涔堝崕涓滃尯閿€鍞涓嬮檷浜?",
+            },
             analysis_plan=analysis_plan,
             global_understanding=global_understanding,
             include_embedding=False,
+            scope_key=expected_scope_key,
         )
         assert result["parse_result"]["analysis_plan"] == analysis_plan
         assert result["parse_result"]["global_understanding"] == global_understanding
+        assert result["parse_result"]["semantic_guard"] == {
+            "verified": True,
+            "validation_mode": "deterministic",
+            "corrected": False,
+            "compiler_ready": True,
+            "allowed_to_execute": True,
+            "query_contract_mode": "compiler_input",
+            "query_contract_source": "semantic_output",
+            "error_count": 0,
+            "filter_confirmation_count": 0,
+            "needs_clarification": False,
+            "needs_value_confirmation": False,
+            "has_unresolvable_filters": False,
+            "errors": [],
+        }
+        assert result["parse_result"]["retrieval_trace_ref"] == (
+            f"kv://retrieval_memory/retrieval_trace/{expected_partition}/q-cache"
+        )
+        assert len(result["parse_result"]["memory_write_refs"]) == 1
+        assert result["parse_result"]["memory_write_refs"][0].startswith(
+            f"kv://retrieval_memory/memory_audit/{expected_partition}/"
+        )
+        assert mock_store.put.call_count == 2
+        assert [call.args[0] for call in mock_store.put.call_args_list] == [
+            ("retrieval_memory", "memory_audit", expected_partition),
+            ("retrieval_memory", "retrieval_trace", expected_partition),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_query_cache_node_uses_scope_key_from_context(self):
+        """QueryCache 读路径必须带上租户/用户 scope_key，避免跨用户串缓存。"""
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None
+        scope_key = "scope_demo"
+
+        with patch(
+            "analytics_assistant.src.agents.semantic_parser.nodes.cache.get_query_cache",
+            return_value=mock_cache,
+        ), patch(
+            "analytics_assistant.src.agents.semantic_parser.nodes.cache.get_context",
+            return_value=SimpleNamespace(
+                schema_hash="schema-1",
+                query_cache_scope_key=scope_key,
+            ),
+        ):
+            result = await query_cache_node(
+                {
+                    "question": "华东区销售额",
+                    "datasource_luid": "ds-1",
+                },
+                config={"configurable": {}},
+            )
+
+        assert result["cache_hit"] is False
+        mock_cache.get.assert_called_once_with(
+            "华东区销售额",
+            "ds-1",
+            "schema-1",
+            scope_key=scope_key,
+        )

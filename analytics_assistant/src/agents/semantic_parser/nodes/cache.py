@@ -9,6 +9,7 @@ from langgraph.types import RunnableConfig
 from analytics_assistant.src.agents.base.context import get_context
 from analytics_assistant.src.infra.seeds import COMPLEXITY_KEYWORDS
 
+from ..query_contract import normalize_query_contract
 from ..state import SemanticParserState
 from ..components import get_query_cache, get_feature_cache
 from ..node_utils import merge_metrics
@@ -110,7 +111,7 @@ async def query_cache_node(
     输出：
     - cache_hit: 是否命中缓存
     - semantic_output: 缓存的语义输出（如果命中）
-    - semantic_query: 缓存的查询（如果命中）
+    - semantic_query: 规整后的 compiler_input 契约（如果命中）
     - analysis_plan / global_understanding: 缓存的规划上下文（如果命中）
     """
     question = state.get("question", "")
@@ -127,33 +128,41 @@ async def query_cache_node(
     ctx = get_context(config) if config else None
     if ctx is not None:
         current_schema_hash = ctx.schema_hash
+        current_scope_key = ctx.query_cache_scope_key
     else:
         logger.warning("query_cache_node: 未提供 WorkflowContext，缓存可能无法正确验证")
         current_schema_hash = ""
+        current_scope_key = "global"
 
     cache = get_query_cache()
     allow_semantic_lookup = _should_allow_semantic_lookup(question)
 
     # 精确匹配
-    cached = cache.get(question, datasource_luid, current_schema_hash)
+    cached = cache.get(
+        question,
+        datasource_luid,
+        current_schema_hash,
+        scope_key=current_scope_key,
+    )
 
     if cached is None and allow_semantic_lookup:
         # 尝试语义相似匹配
-        cached = cache.get_similar(question, datasource_luid, current_schema_hash)
+        cached = cache.get_similar(
+            question,
+            datasource_luid,
+            current_schema_hash,
+            scope_key=current_scope_key,
+        )
 
     if cached is not None:
         logger.info(f"query_cache_node: 缓存命中, hit_count={cached.hit_count}")
-        cached_query = cached.query
-        if isinstance(cached_query, dict):
-            semantic_query = cached_query
-        elif isinstance(cached_query, str):
-            semantic_query = {"query": cached_query}
-        else:
-            semantic_query = {"query": str(cached_query)}
         return {
             "cache_hit": True,
             "semantic_output": cached.semantic_output,
-            "semantic_query": semantic_query,
+            "semantic_query": normalize_query_contract(
+                cached.semantic_output,
+                cached.query,
+            ),
             "analysis_plan": cached.analysis_plan,
             "global_understanding": cached.global_understanding,
             "optimization_metrics": merge_metrics(

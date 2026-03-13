@@ -18,7 +18,14 @@ Semantic Parser Components
 
 from .intent_router import IntentType, IntentRouterOutput, IntentRouter
 from .semantic_cache import SemanticCache
-from .query_cache import QueryCache, get_query_cache, compute_schema_hash, compute_question_hash
+from .query_cache import (
+    QueryCache,
+    build_query_cache_partition_key,
+    build_query_cache_scope_key,
+    get_query_cache,
+    compute_schema_hash,
+    compute_question_hash,
+)
 from .feature_cache import FeatureCache, get_feature_cache, compute_feature_hash
 from .field_retriever import FieldRetriever
 # FieldCandidate 和 FieldRAGResult 从 schemas 导入
@@ -80,6 +87,8 @@ __all__ = [
     # QueryCache
     "CachedQuery",
     "QueryCache",
+    "build_query_cache_partition_key",
+    "build_query_cache_scope_key",
     "get_query_cache",
     "compute_schema_hash",
     "compute_question_hash",

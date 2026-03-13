@@ -1,0 +1,17 @@
+{
+  "root_graph_native_stream_smoke": {
+    "test_name": "root_graph_native_stream_smoke",
+    "timestamp": "2026-03-13T17:05:00",
+    "elapsed_time": 0.35,
+    "memory_usage_mb": 5.0,
+    "llm_calls": 0,
+    "embedding_calls": 0,
+    "tableau_calls": 0,
+    "cache_hits": 0,
+    "cache_misses": 0,
+    "metadata": {
+      "path": "root_graph_native_stream_smoke",
+      "notes": "Stubbed root-native single-query stream baseline."
+    }
+  }
+}

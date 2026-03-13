@@ -1,28 +1,31 @@
 # -*- coding: utf-8 -*-
-"""
-FastAPI 依赖注入
+"""FastAPI 依赖注入入口。"""
 
-提供 BaseRepository 工厂和用户认证依赖。
-支持 JWT token 验证（可通过 app.yaml 配置启用/禁用）。
-"""
+from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 import jwt
 from fastapi import Header, HTTPException
 
+from analytics_assistant.src.infra.business_storage import (
+    AnalysisRunRepository,
+    FeedbackRepository,
+    InterruptRepository,
+    SessionRepository,
+    SettingsRepository,
+)
 from analytics_assistant.src.infra.config import get_config
-from analytics_assistant.src.infra.storage import BaseRepository
 
 logger = logging.getLogger(__name__)
 
-# Repository 单例缓存（按 namespace 缓存，避免重复创建）
-_repositories: dict = {}
+# 仓库单例缓存，测试可以直接替换其中实例。
+_repositories: dict[str, Any] = {}
 
 
 def _summarize_authorization_header(authorization: Optional[str]) -> str:
-    """返回脱敏后的 Authorization 头摘要。"""
+    """返回脱敏后的 Authorization 摘要。"""
     if not authorization:
         return "<missing>"
     if authorization.startswith("Bearer "):
@@ -30,124 +33,101 @@ def _summarize_authorization_header(authorization: Optional[str]) -> str:
         return f"Bearer ***{token[-4:]}" if token else "Bearer <empty>"
     return "<non-bearer>"
 
-def get_repository(namespace: str) -> BaseRepository:
-    """获取指定命名空间的 Repository 实例（单例）。
 
-    Args:
-        namespace: 命名空间（如 "sessions"、"user_settings"、"user_feedback"）
-
-    Returns:
-        BaseRepository 实例
-    """
+def get_repository(namespace: str) -> Any:
+    """按命名空间返回结构化业务仓储。"""
     if namespace not in _repositories:
-        _repositories[namespace] = BaseRepository(namespace)
+        if namespace == "sessions":
+            _repositories[namespace] = SessionRepository()
+        elif namespace == "user_settings":
+            _repositories[namespace] = SettingsRepository()
+        elif namespace == "user_feedback":
+            _repositories[namespace] = FeedbackRepository()
+        elif namespace == "analysis_runs":
+            _repositories[namespace] = AnalysisRunRepository()
+        elif namespace == "analysis_interrupts":
+            _repositories[namespace] = InterruptRepository()
+        else:
+            raise KeyError(f"unsupported repository namespace: {namespace}")
     return _repositories[namespace]
 
-def get_session_repository() -> BaseRepository:
-    """获取会话 Repository（FastAPI 依赖注入用）。"""
+
+def get_session_repository() -> SessionRepository:
+    """获取会话仓储。"""
     return get_repository("sessions")
 
-def get_settings_repository() -> BaseRepository:
-    """获取用户设置 Repository（FastAPI 依赖注入用）。"""
+
+def get_settings_repository() -> SettingsRepository:
+    """获取用户设置仓储。"""
     return get_repository("user_settings")
 
-def get_feedback_repository() -> BaseRepository:
-    """获取用户反馈 Repository（FastAPI 依赖注入用）。"""
+
+def get_feedback_repository() -> FeedbackRepository:
+    """获取用户反馈仓储。"""
     return get_repository("user_feedback")
 
-def _get_auth_config() -> dict:
-    """从 app.yaml 读取认证配置。
 
-    Returns:
-        认证配置字典，包含 enabled、secret_key、algorithm 等字段
-    """
+def get_analysis_run_repository() -> AnalysisRunRepository:
+    """获取分析运行仓储。"""
+    return get_repository("analysis_runs")
+
+
+def get_interrupt_repository() -> InterruptRepository:
+    """获取中断仓储。"""
+    return get_repository("analysis_interrupts")
+
+
+def _get_auth_config() -> dict[str, Any]:
+    """从配置读取 API 认证参数。"""
     try:
         config = get_config()
         return config.get("api", {}).get("auth", {})
-    except Exception as e:
-        logger.warning(f"加载认证配置失败，使用默认值: {e}")
+    except Exception as exc:
+        logger.warning("加载认证配置失败，使用默认配置: %s", exc)
         return {}
 
-def _verify_jwt_token(token: str, auth_config: dict) -> dict:
-    """验证 JWT token 并返回 payload。
 
-    Args:
-        token: JWT token 字符串
-        auth_config: 认证配置字典
-
-    Returns:
-        JWT payload 字典
-
-    Raises:
-        HTTPException: token 无效或过期时返回 401
-    """
-    secret_key = auth_config.get("secret_key", "")
-    algorithm = auth_config.get("algorithm", "HS256")
+def _verify_jwt_token(token: str, auth_config: dict[str, Any]) -> dict[str, Any]:
+    """校验 JWT 并返回 payload。"""
+    secret_key = str(auth_config.get("secret_key") or "").strip()
+    algorithm = str(auth_config.get("algorithm") or "HS256").strip() or "HS256"
 
     if not secret_key:
-        logger.error("JWT secret_key 未配置，无法验证 token")
-        raise HTTPException(
-            status_code=401,
-            detail="服务端认证配置错误",
-        )
+        logger.error("JWT secret_key 未配置，无法校验 token")
+        raise HTTPException(status_code=401, detail="服务端认证配置错误")
 
     try:
-        payload = jwt.decode(token, secret_key, algorithms=[algorithm])
-        return payload
-    except jwt.ExpiredSignatureError as e:
+        return jwt.decode(token, secret_key, algorithms=[algorithm])
+    except jwt.ExpiredSignatureError as exc:
         logger.warning("JWT token 已过期")
-        raise HTTPException(
-            status_code=401,
-            detail="认证凭证已过期，请刷新 token",
-        ) from e
-    except jwt.InvalidTokenError as e:
-        logger.warning(f"JWT token 验证失败: {e}")
-        raise HTTPException(
-            status_code=401,
-            detail="无效的认证凭证",
-        ) from e
+        raise HTTPException(status_code=401, detail="认证凭证已过期，请刷新 token") from exc
+    except jwt.InvalidTokenError as exc:
+        logger.warning("JWT token 校验失败: %s", exc)
+        raise HTTPException(status_code=401, detail="无效的认证凭证") from exc
+
 
 async def get_tableau_username(
     x_tableau_username: Optional[str] = Header(None, alias="X-Tableau-Username"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
 ) -> str:
-    """验证用户身份，支持 JWT token 验证和请求头认证。
-
-    认证模式由 app.yaml 的 api.auth.enabled 控制：
-    - enabled=True: 验证 Authorization: Bearer <token> 请求头中的 JWT token
-    - enabled=False（开发模式）: 仅依赖 X-Tableau-Username 请求头
-
-    Args:
-        x_tableau_username: X-Tableau-Username 请求头值
-        authorization: Authorization 请求头值
-
-    Returns:
-        经过验证的用户名
-
-    Raises:
-        HTTPException: 认证失败时返回 401
-    """
+    """获取并校验当前请求的 Tableau 用户名。"""
     logger.info("=" * 60)
     logger.info("[认证] 收到请求")
-    logger.info(f"[认证] X-Tableau-Username: {x_tableau_username or '<missing>'}")
+    logger.info("[认证] X-Tableau-Username: %s", x_tableau_username or "<missing>")
     logger.info(
-        f"[认证] Authorization 摘要: {_summarize_authorization_header(authorization)}"
+        "[认证] Authorization 摘要: %s",
+        _summarize_authorization_header(authorization),
     )
     logger.info("=" * 60)
 
     auth_config = _get_auth_config()
-    logger.info(f"[认证] 认证配置 - enabled: {auth_config.get('enabled', False)}")
+    enabled = bool(auth_config.get("enabled", False))
+    logger.info("[认证] 配置 enabled=%s", enabled)
 
-    if auth_config.get("enabled", False):
-        # 认证模式：验证 JWT token
+    if enabled:
         if not authorization:
             logger.warning("[认证] 缺少 Authorization 请求头")
-            raise HTTPException(
-                status_code=401,
-                detail="缺少 Authorization 请求头",
-            )
-
-        # 提取 Bearer token
+            raise HTTPException(status_code=401, detail="缺少 Authorization 请求头")
         if not authorization.startswith("Bearer "):
             logger.warning("[认证] Authorization 请求头格式错误")
             raise HTTPException(
@@ -157,35 +137,41 @@ async def get_tableau_username(
 
         token = authorization[len("Bearer "):]
         payload = _verify_jwt_token(token, auth_config)
+        if "sub" not in payload or payload.get("sub") is None:
+            logger.warning("[认证] JWT token 缺少 sub 字段")
+            raise HTTPException(status_code=401, detail="JWT token 缺少 sub 字段")
 
-        username = payload.get("sub")
-        if not username:
-            logger.warning("[认证] JWT token 中缺少 sub 字段")
-            raise HTTPException(
-                status_code=401,
-                detail="JWT token 中缺少 sub 字段",
-            )
+        # 不主动 strip `sub`，避免篡改 JWT 中的真实身份值。
+        username = str(payload["sub"])
+        if username == "":
+            logger.warning("[认证] JWT token sub 字段为空字符串")
+            raise HTTPException(status_code=401, detail="JWT token sub 字段不能为空")
 
-        if x_tableau_username and x_tableau_username != username:
+        if x_tableau_username is not None and x_tableau_username != username:
             logger.warning(
-                f"[认证] 请求头用户名与 JWT 不匹配: header={x_tableau_username}, "
-                f"jwt_sub={username}"
+                "[认证] Header 用户名与 JWT 不匹配: header=%s, sub=%s",
+                x_tableau_username,
+                username,
             )
-            raise HTTPException(
-                status_code=401,
-                detail="请求头用户名与 JWT 身份不匹配",
-            )
+            raise HTTPException(status_code=401, detail="请求头用户身份与 JWT 不匹配")
 
-        logger.info(f"[认证] JWT 认证成功 - 用户名: {username}")
+        logger.info("[认证] JWT 认证成功，用户=%s", username)
         return username
-    else:
-        # 开发模式：仅依赖 X-Tableau-Username 请求头
-        if not x_tableau_username:
-            logger.error("[认证] ⚠️⚠️⚠️ X-Tableau-Username 请求头为空或不存在!")
-            logger.error("[认证] 这意味着前端没有正确发送用户名请求头")
-            raise HTTPException(
-                status_code=401,
-                detail="缺少 X-Tableau-Username 请求头",
-            )
-        logger.info(f"[认证] ✅ 开发模式认证成功 - 用户名: {x_tableau_username}")
-        return x_tableau_username
+
+    if not x_tableau_username:
+        logger.error("[认证] X-Tableau-Username 请求头缺失")
+        raise HTTPException(status_code=401, detail="缺少 X-Tableau-Username 请求头")
+
+    logger.info("[认证] 开发模式认证成功，用户=%s", x_tableau_username)
+    return x_tableau_username
+
+
+__all__ = [
+    "get_analysis_run_repository",
+    "get_feedback_repository",
+    "get_interrupt_repository",
+    "get_repository",
+    "get_session_repository",
+    "get_settings_repository",
+    "get_tableau_username",
+]

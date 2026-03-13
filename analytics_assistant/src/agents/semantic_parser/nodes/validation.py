@@ -2,10 +2,10 @@
 """验证相关节点：输出验证、筛选值验证"""
 import logging
 import time
-from datetime import datetime
 from typing import Any, Optional
 
-from langgraph.types import interrupt, RunnableConfig
+from langgraph.types import interrupt
+from langgraph.types import RunnableConfig
 
 from ..state import SemanticParserState
 from ..components import FilterValueValidator, FieldValueCache, OutputValidator
@@ -13,6 +13,7 @@ from ..schemas.output import SemanticOutput, ClarificationSource
 from ..schemas.prefilter import FieldRAGResult
 from ..node_utils import parse_field_candidates, classify_fields, merge_metrics
 from analytics_assistant.src.agents.base.context import get_context
+from .understanding import semantic_understanding_node
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,42 @@ def _get_output_validator() -> OutputValidator:
     return _output_validator
 
 
-async def output_validator_node(state: SemanticParserState) -> dict[str, Any]:
+def _resolve_resumed_text(value: Any, *, label: str) -> str:
+    resolved = str(value or "").strip()
+    if not resolved:
+        raise ValueError(f"{label} resume value must not be empty")
+    return resolved
+
+
+def _append_clarification_turn(
+    history: Any,
+    *,
+    assistant_message: str,
+    slot_name: str,
+    user_value: str,
+) -> list[dict[str, str]]:
+    updated_history = list(history or [])
+    normalized_assistant_message = str(assistant_message or "").strip()
+    normalized_slot_name = str(slot_name or "").strip() or "field"
+    normalized_user_value = str(user_value or "").strip()
+
+    if normalized_assistant_message:
+        updated_history.append({
+            "role": "assistant",
+            "content": normalized_assistant_message,
+        })
+    if normalized_user_value:
+        updated_history.append({
+            "role": "user",
+            "content": f"{normalized_slot_name}: {normalized_user_value}",
+        })
+    return updated_history
+
+
+async def output_validator_node(
+    state: SemanticParserState,
+    config: Optional[RunnableConfig] = None,
+) -> dict[str, Any]:
     """输出验证节点
 
     验证 SemanticUnderstanding 输出，自动修正简单错误。
@@ -92,9 +128,52 @@ async def output_validator_node(state: SemanticParserState) -> dict[str, Any]:
         output["semantic_output"] = result.corrected_output
 
     if result.needs_clarification:
-        output["needs_clarification"] = True
-        output["clarification_question"] = result.clarification_message
-        output["clarification_source"] = ClarificationSource.SEMANTIC_UNDERSTANDING.value
+        clarification_message = str(result.clarification_message or "").strip()
+        clarified_value = _resolve_resumed_text(
+            interrupt({
+                "interrupt_type": "missing_slot",
+                "message": clarification_message,
+                "source": ClarificationSource.SEMANTIC_UNDERSTANDING.value,
+                "slot_name": "field",
+                "options": [],
+                "resume_strategy": "langgraph_native",
+            }),
+            label="missing_slot",
+        )
+
+        resumed_state = dict(state)
+        resumed_state.pop("modular_prompt", None)
+        resumed_state["chat_history"] = _append_clarification_turn(
+            state.get("chat_history"),
+            assistant_message=clarification_message,
+            slot_name="field",
+            user_value=clarified_value,
+        )
+
+        semantic_retry_output = await semantic_understanding_node(resumed_state, config)
+        validated_retry_output = await output_validator_node(
+            {
+                **resumed_state,
+                **semantic_retry_output,
+            },
+            config,
+        )
+        for carried_key in ("semantic_output", "thinking", "global_understanding", "analysis_plan"):
+            if carried_key in semantic_retry_output and carried_key not in validated_retry_output:
+                validated_retry_output[carried_key] = semantic_retry_output[carried_key]
+        validated_retry_output["chat_history"] = list(
+            semantic_retry_output.get("chat_history")
+            or resumed_state.get("chat_history")
+            or []
+        )
+        combined_retry_metrics = dict(
+            semantic_retry_output.get("optimization_metrics") or {}
+        )
+        combined_retry_metrics.update(
+            validated_retry_output.get("optimization_metrics") or {}
+        )
+        validated_retry_output["optimization_metrics"] = combined_retry_metrics
+        return validated_retry_output
 
     return output
 
@@ -207,85 +286,104 @@ async def filter_validator_node(
             },
             "confirmed_filters": existing_confirmations,
         }
+    confirmed_filters = list(existing_confirmations)
 
-    # 检查是否有需要用户确认的筛选值
-    pending_confirmations = [
-        r for r in summary.results
-        if r.needs_confirmation and len(r.similar_values) > 0
-    ]
-
-    if pending_confirmations:
-        confirmation_request = {
-            "type": "filter_value_confirmation",
-            "pending": [
-                {
-                    "field_name": r.field_name,
-                    "requested_value": r.requested_value,
-                    "similar_values": r.similar_values,
-                    "message": r.message,
-                }
-                for r in pending_confirmations
-            ],
-        }
-
-        user_response = interrupt(confirmation_request)
-
-        if user_response and "confirmations" in user_response:
-            new_confirmations = []
-            for field_name, confirmed_value in user_response["confirmations"].items():
-                original_value = next(
-                    (r.requested_value for r in pending_confirmations
-                     if r.field_name == field_name),
-                    None
-                )
-                if original_value:
-                    new_confirmations.append({
-                        "field_name": field_name,
-                        "original_value": original_value,
-                        "confirmed_value": confirmed_value,
-                        "confirmed_at": datetime.now().isoformat(),
-                    })
-
-            all_confirmations = existing_confirmations + new_confirmations
-
-            # 逐字段应用确认（避免不同字段相同 original_value 时互相覆盖）
-            updated_output = semantic_output
-            for conf in new_confirmations:
-                updated_output = validator.apply_single_confirmation(
-                    updated_output,
-                    conf["field_name"],
-                    conf["original_value"],
-                    conf["confirmed_value"],
-                )
-            return {
-                "semantic_output": updated_output.model_dump(),
-                "filter_validation_result": summary.model_dump(),
-                "confirmed_filters": all_confirmations,
-            }
-
-    # 检查是否有无法解决的筛选值
-    if summary.has_unresolvable_filters:
-        unresolvable = [
+    while True:
+        pending_confirmations = [
             r for r in summary.results
-            if r.is_unresolvable
+            if r.needs_confirmation and len(r.similar_values) > 0
         ]
-        messages = [r.message for r in unresolvable if r.message]
 
-        return {
-            "semantic_output": semantic_output.model_dump(),
-            "filter_validation_result": summary.model_dump(),
-            "confirmed_filters": existing_confirmations,
-            "needs_clarification": True,
-            "clarification_question": "\n".join(messages) if messages else "筛选值无法匹配，请检查输入",
-            "clarification_source": ClarificationSource.FILTER_VALIDATOR.value,
-        }
+        if pending_confirmations:
+            first_pending = pending_confirmations[0]
+            confirmed_value = str(
+                interrupt({
+                    "interrupt_type": "value_confirm",
+                    "message": (
+                        first_pending.message
+                        or f"Please confirm the filter value for {first_pending.field_name}"
+                    ),
+                    "source": ClarificationSource.FILTER_VALIDATOR.value,
+                    "field": first_pending.field_name,
+                    "requested_value": first_pending.requested_value,
+                    "candidates": list(first_pending.similar_values),
+                    "resume_strategy": "langgraph_native",
+                })
+                or ""
+            ).strip()
+            if not confirmed_value:
+                raise ValueError("value_confirm resume value must not be empty")
+
+            confirmed_filters.append({
+                "field_name": first_pending.field_name,
+                "original_value": first_pending.requested_value,
+                "confirmed_value": confirmed_value,
+            })
+            semantic_output = validator.apply_single_confirmation(
+                semantic_output,
+                first_pending.field_name,
+                first_pending.requested_value,
+                confirmed_value,
+            )
+            summary = await validator.validate(
+                semantic_output=semantic_output,
+                data_model=data_model,
+                datasource_id=datasource_id,
+                **platform_kwargs,
+            )
+            continue
+
+        if summary.has_unresolvable_filters:
+            unresolvable = [r for r in summary.results if r.is_unresolvable]
+            first_unresolvable = unresolvable[0] if unresolvable else None
+            if first_unresolvable is None:
+                raise ValueError("unresolvable filter summary is missing result details")
+
+            messages = [r.message for r in unresolvable if r.message]
+            replacement_value = _resolve_resumed_text(
+                interrupt({
+                    "interrupt_type": "missing_slot",
+                    "message": (
+                        "\n".join(messages)
+                        if messages
+                        else "Filter value could not be resolved"
+                    ),
+                    "source": ClarificationSource.FILTER_VALIDATOR.value,
+                    "slot_name": "filter_value",
+                    "field": first_unresolvable.field_name,
+                    "requested_value": first_unresolvable.requested_value,
+                    "options": [],
+                    "resume_strategy": "langgraph_native",
+                }),
+                label="missing_slot",
+            )
+
+            confirmed_filters.append({
+                "field_name": first_unresolvable.field_name,
+                "original_value": first_unresolvable.requested_value,
+                "confirmed_value": replacement_value,
+            })
+            semantic_output = validator.apply_single_confirmation(
+                semantic_output,
+                first_unresolvable.field_name,
+                first_unresolvable.requested_value,
+                replacement_value,
+            )
+            summary = await validator.validate(
+                semantic_output=semantic_output,
+                data_model=data_model,
+                datasource_id=datasource_id,
+                **platform_kwargs,
+            )
+            continue
+        break
 
     logger.info(
-        f"filter_validator_node: 验证完成, all_valid={summary.all_valid}"
+        f"filter_validator_node: validation complete, all_valid={summary.all_valid}"
     )
 
     return {
         "semantic_output": semantic_output.model_dump(),
         "filter_validation_result": summary.model_dump(),
-        "confirmed_filters": existing_confirmations,
+        "confirmed_filters": confirmed_filters,
     }

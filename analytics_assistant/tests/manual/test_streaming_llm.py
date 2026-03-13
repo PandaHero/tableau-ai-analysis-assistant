@@ -790,6 +790,9 @@ async def _run_single_question(
         start = time.time()
 
         from analytics_assistant.src.agents.replanner.graph import run_replanner_agent
+        from analytics_assistant.src.orchestration.answer_graph.service import (
+            build_result_evidence_bundle,
+        )
 
         first_replan_thinking = True
         first_replan_token = True
@@ -814,7 +817,14 @@ async def _run_single_question(
             replan_decision = await run_replanner_agent(
                 insight_output_dict=insight_output.model_dump(),
                 semantic_output_dict=semantic_output_raw,
-                data_profile_dict=data_profile.model_dump(),
+                evidence_bundle_dict=build_result_evidence_bundle(
+                    source="single_query",
+                    question=question,
+                    semantic_raw=semantic_output_raw,
+                    result_manifest_ref=None,
+                    data_profile_dict=data_profile.model_dump(),
+                    query_id=getattr(execute_result, "query_id", None),
+                ),
                 analysis_depth="detailed",
                 on_token=on_replan_token,
                 on_thinking=on_replan_thinking,

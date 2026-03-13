@@ -30,7 +30,7 @@ logging:
 performance:
   enable_monitoring: true
   regression_threshold: 1.2  # 慢 20% 视为退化
-  baseline_file: analytics_assistant/tests/test_outputs/performance_baseline.json
+  baseline_file: analytics_assistant/tests/integration/baselines/performance_baseline.json
 
 # 并发配置
 concurrency:

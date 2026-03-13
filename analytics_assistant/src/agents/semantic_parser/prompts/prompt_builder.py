@@ -137,6 +137,7 @@ EVIDENCE_CONTEXT_TEMPLATE = '''<evidence_context>
 CURRENT_STEP_INTENT_TEMPLATE = '''<current_step_intent>
 你当前正在执行分析计划中的一个具体步骤，请优先完成这个步骤的目标：
 - 步骤标题: {title}
+- 步骤语义类型: {step_kind}
 - 步骤目标: {goal}
 - 依赖步骤: {depends_on}
 - 语义重点: {semantic_focus}
@@ -146,6 +147,30 @@ CURRENT_STEP_INTENT_TEMPLATE = '''<current_step_intent>
 </current_step_intent>'''
 
 # 问题和历史部分
+# 覆盖损坏模板，确保 why 多步问题的 evidence/step intent 可读且稳定。
+EVIDENCE_CONTEXT_TEMPLATE = '''<evidence_context>
+以下是前序步骤已经沉淀出的结构化证据，请在当前步骤中优先复用这些上下文，避免重复分析：
+- 原始问题: {primary_question}
+- 已完成步骤:
+{completed_steps}
+- 已定位异常对象: {anomalous_entities}
+- 已验证解释轴: {validated_axes}
+- 解释轴优先级: {axis_scores}
+- 尚未解决的问题: {open_questions}
+</evidence_context>'''
+
+CURRENT_STEP_INTENT_TEMPLATE = '''<current_step_intent>
+你当前正在执行分析计划中的一个具体步骤，请优先完成这个步骤的目标：
+- 步骤标题: {title}
+- 步骤语义类型: {step_kind}
+- 步骤目标: {goal}
+- 依赖步骤: {depends_on}
+- 语义重点: {semantic_focus}
+- 预期输出: {expected_output}
+- 候选解释轴/定位维度: {candidate_axes}
+- 如果缺少以下口径，应优先澄清: {clarification_if_missing}
+</current_step_intent>'''
+
 PROMPT_FOOTER = '''
 <user_question>
 {question}
@@ -378,6 +403,11 @@ class DynamicPromptBuilder:
             return ""
 
         goal = current_step_intent.goal or current_step_intent.purpose or "完成当前分析步骤"
+        step_kind = (
+            current_step_intent.step_kind.value
+            if current_step_intent.step_kind is not None
+            else "无"
+        )
         depends_on = "、".join(current_step_intent.depends_on) if current_step_intent.depends_on else "无"
         semantic_focus = "、".join(current_step_intent.semantic_focus) if current_step_intent.semantic_focus else "无"
         expected_output = current_step_intent.expected_output or "输出当前步骤的查询结果与关键证据"
@@ -390,6 +420,7 @@ class DynamicPromptBuilder:
 
         return CURRENT_STEP_INTENT_TEMPLATE.format(
             title=current_step_intent.title,
+            step_kind=step_kind,
             goal=goal,
             depends_on=depends_on,
             semantic_focus=semantic_focus,
@@ -434,6 +465,108 @@ class DynamicPromptBuilder:
             open_questions=open_questions,
         )
     
+    def _format_current_step_intent(
+        self,
+        current_step_intent: Optional[StepIntent],
+    ) -> str:
+        """格式化当前正在执行的步骤意图。"""
+        if not current_step_intent:
+            return ""
+
+        goal = current_step_intent.goal or current_step_intent.purpose or "完成当前分析步骤"
+        step_kind = (
+            current_step_intent.step_kind.value
+            if current_step_intent.step_kind is not None
+            else "未指定"
+        )
+        depends_on = "、".join(current_step_intent.depends_on) if current_step_intent.depends_on else "无"
+        semantic_focus = "、".join(current_step_intent.semantic_focus) if current_step_intent.semantic_focus else "无"
+        expected_output = current_step_intent.expected_output or "输出当前步骤的查询结果与关键证据"
+        candidate_axes = "、".join(current_step_intent.candidate_axes) if current_step_intent.candidate_axes else "无"
+        clarification_if_missing = (
+            "、".join(current_step_intent.clarification_if_missing)
+            if current_step_intent.clarification_if_missing
+            else "无"
+        )
+
+        return CURRENT_STEP_INTENT_TEMPLATE.format(
+            title=current_step_intent.title,
+            step_kind=step_kind,
+            goal=goal,
+            depends_on=depends_on,
+            semantic_focus=semantic_focus,
+            expected_output=expected_output,
+            candidate_axes=candidate_axes,
+            clarification_if_missing=clarification_if_missing,
+        )
+
+    def _format_evidence_context(
+        self,
+        evidence_context: Optional[EvidenceContext],
+    ) -> str:
+        """格式化多步分析的前序证据上下文。"""
+        if not evidence_context:
+            return ""
+
+        has_meaningful_evidence = any(
+            [
+                evidence_context.step_artifacts,
+                evidence_context.anomalous_entities,
+                evidence_context.validated_axes,
+                evidence_context.axis_scores,
+                evidence_context.open_questions,
+            ]
+        )
+        if not has_meaningful_evidence:
+            return ""
+
+        completed_steps = "\n".join(
+            f"- {artifact.title}: {artifact.table_summary or '已完成，等待进一步总结'}"
+            for artifact in evidence_context.step_artifacts[-3:]
+        ) or "- 暂无已完成步骤"
+        anomalous_entities = (
+            "、".join(evidence_context.anomalous_entities[:5])
+            if evidence_context.anomalous_entities
+            else "暂无"
+        )
+        validated_axes = (
+            "、".join(evidence_context.validated_axes[:5])
+            if evidence_context.validated_axes
+            else "暂无"
+        )
+        open_questions = (
+            "、".join(evidence_context.open_questions[:5])
+            if evidence_context.open_questions
+            else "暂无"
+        )
+
+        return EVIDENCE_CONTEXT_TEMPLATE.format(
+            primary_question=evidence_context.primary_question,
+            completed_steps=completed_steps,
+            anomalous_entities=anomalous_entities,
+            validated_axes=validated_axes,
+            axis_scores=self._format_axis_scores(evidence_context),
+            open_questions=open_questions,
+        )
+
+    def _format_axis_scores(
+        self,
+        evidence_context: EvidenceContext,
+    ) -> str:
+        """格式化 why 计划里的解释轴排序证据。"""
+        if not evidence_context.axis_scores:
+            return "暂无"
+
+        formatted_scores: list[str] = []
+        for score in evidence_context.axis_scores[:5]:
+            share_text = f"{score.explained_share:.0%}"
+            confidence_text = f"{score.confidence:.0%}"
+            reason_text = f"，原因: {score.reason}" if score.reason else ""
+            formatted_scores.append(
+                f"{score.axis}(解释占比 {share_text}, 置信度 {confidence_text}{reason_text})"
+            )
+        return "；".join(formatted_scores)
+
     def _get_primary_complexity(self, complexity_list: list[ComplexityType]) -> ComplexityType:
         """获取主要复杂度类型（按优先级）"""
         if not complexity_list:

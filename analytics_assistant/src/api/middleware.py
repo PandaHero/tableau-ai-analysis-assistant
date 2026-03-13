@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-中间件
+"""API middleware and exception handling."""
 
-统一异常处理器和请求日志中间件。
-"""
+from __future__ import annotations
 
 import logging
 import time
@@ -20,33 +18,31 @@ from analytics_assistant.src.infra.error_sanitizer import sanitize_error_message
 
 logger = logging.getLogger(__name__)
 
+
 def _get_request_id(request: Request) -> str:
-    """优先复用请求头中的 request id，否则生成新的。"""
+    """Reuse caller request id when present, otherwise generate one."""
     request_id = request.headers.get("X-Request-ID")
     if request_id:
         return request_id
     return uuid4().hex
 
+
 def _response_headers(request: Request) -> dict[str, str]:
-    """统一附加 request id 响应头，便于前后端和日志串联。"""
+    """Attach request id to all API responses."""
     request_id = getattr(request.state, "request_id", "")
     if not request_id:
         return {}
     return {"X-Request-ID": str(request_id)}
 
-def register_exception_handlers(app: FastAPI) -> None:
-    """注册全局异常处理器。
 
-    Args:
-        app: FastAPI 应用实例
-    """
+def register_exception_handlers(app: FastAPI) -> None:
+    """Register global exception handlers."""
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(
         request: Request,
         exc: StarletteHTTPException,
     ) -> JSONResponse:
-        """处理 HTTP 异常（401、403、404 等）。"""
         safe_detail = sanitize_error_message(str(exc.detail))
         return JSONResponse(
             status_code=exc.status_code,
@@ -59,16 +55,17 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        """处理请求参数验证错误。"""
         request_id = getattr(request.state, "request_id", "")
         logger.warning(
-            f"请求验证失败: request_id={request_id}, path={request.url.path}, "
-            f"errors={exc.errors()}"
+            "请求参数校验失败: request_id=%s path=%s errors=%s",
+            request_id,
+            request.url.path,
+            exc.errors(),
         )
         return JSONResponse(
             status_code=422,
             content={
-                "error": "请求参数验证失败",
+                "error": "请求参数校验失败",
                 "details": [
                     {
                         "field": ".".join(str(loc) for loc in err.get("loc", [])),
@@ -85,10 +82,12 @@ def register_exception_handlers(app: FastAPI) -> None:
         request: Request,
         exc: Exception,
     ) -> JSONResponse:
-        """处理未捕获的异常。"""
         request_id = getattr(request.state, "request_id", "")
         logger.exception(
-            f"未处理异常: request_id={request_id}, path={request.url.path}, error={exc}"
+            "未处理异常: request_id=%s path=%s error=%s",
+            request_id,
+            request.url.path,
+            exc,
         )
         safe_message = sanitize_error_message(str(exc))
         return JSONResponse(
@@ -97,15 +96,15 @@ def register_exception_handlers(app: FastAPI) -> None:
             headers=_response_headers(request),
         )
 
+
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """请求日志中间件，记录每个请求的用户名、端点、耗时。"""
+    """Log request path, caller and latency."""
 
     async def dispatch(
         self,
         request: Request,
         call_next: Callable,
     ) -> Response:
-        """处理请求并记录日志。"""
         start_time = time.time()
         request.state.request_id = _get_request_id(request)
         request_id = request.state.request_id
@@ -118,15 +117,24 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             response.headers["X-Request-ID"] = request_id
             elapsed = time.time() - start_time
             logger.info(
-                f"API 请求: request_id={request_id}, user={username}, "
-                f"method={method}, path={path}, status={response.status_code}, "
-                f"duration={elapsed:.3f}s"
+                "API 请求: request_id=%s user=%s method=%s path=%s status=%s duration=%.3fs",
+                request_id,
+                username,
+                method,
+                path,
+                response.status_code,
+                elapsed,
             )
             return response
-        except Exception as e:
+        except Exception as exc:
             elapsed = time.time() - start_time
             logger.error(
-                f"API 请求异常: request_id={request_id}, user={username}, "
-                f"method={method}, path={path}, duration={elapsed:.3f}s, error={e}"
+                "API 请求异常: request_id=%s user=%s method=%s path=%s duration=%.3fs error=%s",
+                request_id,
+                username,
+                method,
+                path,
+                elapsed,
+                exc,
             )
             raise

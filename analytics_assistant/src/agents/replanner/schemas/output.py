@@ -1,22 +1,26 @@
 # -*- coding: utf-8 -*-
-"""
-Replanner Agent 输出数据模型
+"""Replanner Agent 输出 schema。"""
 
-定义重规划决策相关的 Pydantic 模型。
-"""
+from __future__ import annotations
+
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CandidateQuestion(BaseModel):
-    """结构化候选问题。"""
+    """结构化 follow-up 候选问题。"""
 
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(description="候选后续问题")
     question_type: str = Field(default="followup", description="问题类型")
-    priority: int = Field(default=1, ge=1, le=10, description="优先级，越小越高")
+    priority: int = Field(
+        default=1,
+        ge=1,
+        le=10,
+        description="优先级，越小越优先",
+    )
     expected_info_gain: float = Field(
         default=0.5,
         ge=0.0,
@@ -26,12 +30,15 @@ class CandidateQuestion(BaseModel):
     rationale: str = Field(default="", description="推荐理由")
     estimated_mode: str = Field(
         default="single_query",
-        description="预估执行模式：single_query / complex_single_query / multi_step_analysis / why_analysis",
+        description=(
+            "预计执行模式：single_query / complex_single_query / "
+            "multi_step_analysis / why_analysis"
+        ),
     )
 
     @model_validator(mode="after")
     def validate_question(self) -> "CandidateQuestion":
-        """确保候选问题文本非空。"""
+        """保证字段文本稳定且问题本身非空。"""
         self.question = self.question.strip()
         self.question_type = self.question_type.strip() or "followup"
         self.rationale = self.rationale.strip()
@@ -40,29 +47,30 @@ class CandidateQuestion(BaseModel):
             raise ValueError("candidate_questions.question 不能为空")
         return self
 
+
 class ReplanDecision(BaseModel):
-    """重规划决策。"""
+    """最终重规划决策。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    should_replan: bool = Field(description="是否需要重规划")
+    should_replan: bool = Field(description="是否需要继续分析")
     reason: str = Field(description="决策原因")
     new_question: Optional[str] = Field(
         default=None,
-        description="新问题（自然语言，should_replan=True 时非空）",
+        description="主后续问题；当 should_replan=True 时必须可推出非空问题",
     )
     suggested_questions: list[str] = Field(
         default_factory=list,
-        description="建议问题列表",
+        description="兼容旧展示链路的候选问题文本",
     )
     candidate_questions: list[CandidateQuestion] = Field(
         default_factory=list,
-        description="结构化候选问题列表，包含优先级、信息增益和推荐理由",
+        description="结构化候选问题列表",
     )
 
     @model_validator(mode="after")
     def validate_consistency(self) -> "ReplanDecision":
-        """验证 should_replan 与 new_question/suggested_questions 的一致性。"""
+        """统一 candidate/suggested/new_question，避免输出自相矛盾。"""
         self.reason = self.reason.strip()
         self.new_question = self.new_question.strip() if self.new_question else None
         self.suggested_questions = [
@@ -127,12 +135,13 @@ class ReplanDecision(BaseModel):
             )
 
         self.candidate_questions = normalized_candidates
-
         if self.should_replan and not self.new_question:
             if self.candidate_questions:
                 self.new_question = self.candidate_questions[0].question
             else:
-                raise ValueError("should_replan=True 时 new_question 或 candidate_questions 不能为空")
+                raise ValueError(
+                    "should_replan=True 时，new_question 或 candidate_questions 不能为空"
+                )
 
         if not self.suggested_questions and self.candidate_questions:
             self.suggested_questions = [
@@ -141,3 +150,9 @@ class ReplanDecision(BaseModel):
                 if candidate.question != self.new_question
             ]
         return self
+
+
+__all__ = [
+    "CandidateQuestion",
+    "ReplanDecision",
+]

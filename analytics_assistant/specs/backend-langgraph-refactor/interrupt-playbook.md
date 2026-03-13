@@ -1,25 +1,39 @@
 # Interrupt Playbook
 
-> Status: Draft v1.0
-> Purpose: Catalog all interrupt types, triggers, payloads, and resume shapes.
-> Read order: 9/12
+> Status: Draft v1.1
+> Read order: 11/14
+> Upstream: [design.md](./design.md), [data-and-api.md](./data-and-api.md), [node-catalog.md](./node-catalog.md)
+> Downstream: [migration.md](./migration.md), [tasks.md](./tasks.md)
 
----
+## 1. 统一规则
 
-## 1. datasource_disambiguation
-**Trigger:** `resolve_datasource_identity` finds multiple matches.  
-**Payload (system → user):**
+- 所有业务级中断都必须通过 `interrupt()` 发出。
+- 所有恢复请求都必须通过 `/api/chat/resume`。
+- 恢复请求必须绑定：`session_id + interrupt_id`。
+- 恢复后继续运行同一 `thread_id`。
+
+## 2. 中断类型
+
+### 2.1 `datasource_disambiguation`
+
+触发：`resolve_datasource_identity` 匹配到多个候选数据源。
+
+系统 -> 用户 payload:
+
 ```json
 {
   "interrupt_id": "int_001",
   "interrupt_type": "datasource_disambiguation",
+  "message": "找到多个同名数据源，请选择。",
   "choices": [
     {"datasource_luid":"ds_1","project":"Sales","name":"Revenue"},
     {"datasource_luid":"ds_2","project":"Ops","name":"Revenue"}
   ]
 }
 ```
-**Resume (user → system):**
+
+用户 -> 系统 resume:
+
 ```json
 {
   "selection_type": "datasource",
@@ -27,20 +41,24 @@
 }
 ```
 
----
+### 2.2 `missing_slot`
 
-## 2. missing_slot
-**Trigger:** `semantic_guard` detects missing timeframe or key filter.  
-**Payload:**
+触发：`semantic_guard` 发现关键槽位缺失（如 timeframe）。
+
+系统 -> 用户 payload:
+
 ```json
 {
   "interrupt_id": "int_002",
   "interrupt_type": "missing_slot",
   "slot_name": "timeframe",
-  "options": ["last_7_days","last_30_days","last_90_days"]
+  "message": "缺少时间范围，请选择。",
+  "options": ["last_7_days", "last_30_days", "last_90_days"]
 }
 ```
-**Resume:**
+
+用户 -> 系统 resume:
+
 ```json
 {
   "selection_type": "slot_fill",
@@ -49,20 +67,24 @@
 }
 ```
 
----
+### 2.3 `value_confirm`
 
-## 3. value_confirm
-**Trigger:** `semantic_guard` finds ambiguous filter values.  
-**Payload:**
+触发：筛选值歧义，需用户确认。
+
+系统 -> 用户 payload:
+
 ```json
 {
-  "interrupt_id": "int_004",
+  "interrupt_id": "int_003",
   "interrupt_type": "value_confirm",
   "field": "region",
-  "candidates": ["华东","华南"]
+  "message": "检测到多个候选值，请确认。",
+  "candidates": ["华东", "华南"]
 }
 ```
-**Resume:**
+
+用户 -> 系统 resume:
+
 ```json
 {
   "selection_type": "value_confirm",
@@ -71,21 +93,24 @@
 }
 ```
 
----
+### 2.4 `high_risk_query_confirm`
 
-## 4. high_risk_query_confirm
-**Trigger:** `execute_tableau_query` detects high estimated scan cost before execution.  
-**Payload:**
+触发：查询预估扫描成本过高。
+
+系统 -> 用户 payload:
+
 ```json
 {
-  "interrupt_id": "int_005",
+  "interrupt_id": "int_004",
   "interrupt_type": "high_risk_query_confirm",
   "risk_level": "high",
   "estimated_rows": 5000000,
   "message": "该查询预计扫描量较大，是否继续？"
 }
 ```
-**Resume:**
+
+用户 -> 系统 resume:
+
 ```json
 {
   "selection_type": "high_risk_query",
@@ -93,25 +118,36 @@
 }
 ```
 
----
+### 2.5 `followup_select`
 
-## 5. followup_select
-**Trigger:** `followup_interrupt` emits candidates in user-select mode.  
-**Payload:**
+触发：`answer_graph` 在 user_select 模式下给出候选后续问题。
+
+系统 -> 用户 payload:
+
 ```json
 {
-  "interrupt_id": "int_003",
+  "interrupt_id": "int_005",
   "interrupt_type": "followup_select",
+  "message": "请选择后续问题。",
   "candidates": [
     {"id":"q1","question":"按产品线拆分趋势"},
     {"id":"q2","question":"按渠道拆分趋势"}
   ]
 }
 ```
-**Resume:**
+
+用户 -> 系统 resume:
+
 ```json
 {
   "selection_type": "followup_question",
   "selected_question_id": "q1"
 }
 ```
+
+## 3. 恢复失败处理
+
+- `interrupt_id` 不存在：返回 `SESSION_NOT_FOUND` 或 `INTERRUPT_NOT_FOUND`。
+- `session_id` 不匹配：返回 `TENANT_AUTH_ERROR`。
+- payload schema 不合法：返回 `CLIENT_VALIDATION_ERROR`。
+- 中断已解决：返回 `INTERRUPT_ALREADY_RESOLVED`。

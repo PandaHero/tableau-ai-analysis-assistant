@@ -1,93 +1,75 @@
 # Backend Refactor Design
 
-> 状态: Draft v1.0
-> 读取顺序: 3/12
-> 上游文档: [requirements.md](./requirements.md)
-> 下游文档: [middleware.md](./middleware.md), [data-and-api.md](./data-and-api.md), [migration.md](./migration.md)
-> 关联文档: [tasks.md](./tasks.md)
+> Status: Draft v1.2
+> Read order: 3/14
+> Upstream: [requirements.md](./requirements.md)
+> Downstream: [retrieval-and-memory.md](./retrieval-and-memory.md), [middleware.md](./middleware.md), [data-and-api.md](./data-and-api.md), [artifact-freshness-and-rebuild.md](./artifact-freshness-and-rebuild.md), [node-catalog.md](./node-catalog.md), [migration.md](./migration.md), [tasks.md](./tasks.md)
 
 ## 1. 设计摘要
 
-新的后端设计采用五层结构：
+后端升级为“薄 API + root_graph 主干 + 横切平面（检索/记忆/新鲜度）”架构。
 
-1. FastAPI 控制层
-2. LangGraph 运行层
-3. 领域服务层
-4. 存储与缓存层
-5. Artifact 与索引层
+核心原则：
 
-核心原则是：
+- 运行状态由 LangGraph 统一承载。
+- 业务流程由确定性节点编排，LLM 仅用于语义理解与洞察生成。
+- 大对象不进 state，仅保存引用（ref）。
+- 业务中断统一 `interrupt/resume`，不走私有协议。
 
-- 用 LangGraph 统一运行状态。
-- 用确定性节点承载业务逻辑。
-- 用 LangChain 仅承载模型接入与结构化输出。
-- 用结果文件中间件承载大结果洞察。
+## 2. 分层架构
 
-## 2. 当前功能点复审
-
-| 功能点 | 当前主要模块 | 当前问题 | 新设计结论 |
-| --- | --- | --- | --- |
-| 聊天入口 | `src/api/routers/chat.py` | 路由层知道过多编排细节 | 保留为薄控制层，内部改为 graph runner |
-| 请求日志与异常 | `src/api/middleware.py` | 能力可用，但错误分层不足 | 保留请求日志，错误码单独建模 |
-| 鉴权与租户隔离 | `src/api/dependencies.py`, `src/platform/tableau/auth.py` | API 身份和 Tableau 身份未统一成租户上下文 | 新增统一 tenant context |
-| 会话/设置/反馈 | `src/api/routers/sessions.py`, `settings.py`, `feedback.py` | 更像 KV 存档，不是正式业务层 | 迁移到正式业务表 |
-| 工作流编排 | `src/orchestration/workflow/executor.py` | 总控过重 | 逐步退役，由 `root_graph` 接管 |
-| 语义解析 | `src/agents/semantic_parser/graph.py` | 方向正确但只是局部子图 | 升级为 `semantic_graph` |
-| Tableau 集成 | `src/platform/tableau/*.py` | 认证、解析、元数据、执行耦合过深 | 收敛为只读领域服务 |
-| 洞察 | `src/agents/insight/*` | 当前为摘要驱动 + 伪文件模式 | 重构为文件驱动洞察 |
-| 重规划 | `src/agents/replanner/*` | 与前端事件协议耦合太深 | 统一改为 interrupt/resume |
-| 存储与缓存 | `src/infra/storage/*` | repository 同时当业务库和运行库 | 拆分业务表、checkpoint、Redis、artifact store |
-
-## 3. 总体架构
+1. API Control Layer  
+2. Graph Runtime Layer (`root_graph`)  
+3. Domain Services Layer  
+4. Storage & Cache Layer  
+5. Artifact Layer
 
 ```text
-API Control Layer
-  -> Root Graph Runtime
-     -> Context Graph
-     -> Semantic Graph
-     -> Query Graph
-     -> Answer Graph
+FastAPI Router
+  -> RootGraphRunner
+      -> context_graph
+      -> semantic_graph
+      -> query_graph
+      -> answer_graph
   -> Domain Services
-  -> Postgres / Checkpointer / Redis / Artifact Store
+  -> Postgres + Checkpointer + Redis + Artifact Store
 ```
 
-### 3.1 API 控制层职责
+## 3. API 层职责
 
-负责：
+API 层负责：
 
-- HTTP 请求校验
-- 用户鉴权
-- 启动或恢复 graph
-- graph stream 到 SSE / WebSocket 的转换
-- 会话、设置、反馈 CRUD
+- HTTP 参数校验、用户鉴权、会话路由。
+- 启动或恢复 graph run。
+- graph 事件转 SSE。
+- sessions/settings/feedback CRUD。
 
-不负责：
+API 层不负责：
 
-- 工作流主状态机
-- Tableau 查询编译
-- 洞察工具调度
+- 主状态机编排。
+- Tableau 查询编译与执行细节。
+- 洞察工具调度。
 
-### 3.2 LangGraph 运行层职责
+### 3.1 用户展示语义边界
 
-负责：
+流式协议内部可以同时存在两类底层输出：
 
-- `thread_id = session_id`
-- checkpoint
-- subgraph 组合
-- `interrupt/resume`
-- 流式事件输出
-- 运行状态聚合
+- LLM token 流：用于模型逐 token 生成最终回答草稿。
+- graph 业务事件流：用于节点状态、结果卡片、interrupt、replan 等业务事件。
 
-不负责：
+但这两类流都不是前端的直接展示协议。展示语义必须由后端定义，前端只负责渲染，不负责猜内部状态。
 
-- 长期业务数据存储
-- 大文件物理持久化
+约束：
 
-## 4. Root Graph 设计
+- 前端不得直接把“原始 LLM token 流”和“原始 graph 节点流”作为两块裸露 UI 呈现给用户。
+- 前端不得依赖内部节点名、内部路由名、内部 `thinking_token` 文本来推断展示语义。
+- 后端必须把内部运行事件投影为稳定的用户可见对象，例如主回答区、活动时间线、决策卡片、结果卡片、artifact 面板。
+- 普通用户默认不看原始 thinking 文本；`thinking` 只允许在调试或显式开关下暴露，常规模式必须降维成简短进度摘要。
+- 任何影响用户交互决策的事件，都必须带稳定业务语义，不能把解释责任推给前端。
 
-### 4.1 根图结构
+## 4. root_graph 设计
 
-`root_graph` 包含四个子图：
+### 4.1 子图结构
 
 - `context_graph`
 - `semantic_graph`
@@ -108,27 +90,35 @@ API Control Layer
 
 ### 4.3 中断点
 
-统一使用 LangGraph `interrupt()` 处理：
+统一由 `interrupt()` 触发：
 
-- datasource 歧义
-- 缺失筛选槽位
-- 筛选值歧义确认（`value_confirm`）
-- 候选 follow-up 问题选择
-- 可能的高风险查询确认（`high_risk_query_confirm`）
+- datasource 歧义（`datasource_disambiguation`）
+- 缺失槽位（`missing_slot`）
+- 值确认（`value_confirm`）
+- 高风险查询确认（`high_risk_query_confirm`）
+- follow-up 选择（`followup_select`）
 
-说明：
+### 4.4 多问题语义边界
 
-- 这里说的“统一”是指业务级中断语义统一落在 `interrupt/resume` 上。
-- 如果某些工具调用需要审批，可以在节点内部叠加 `HumanInTheLoopMiddleware`。
-- 但 `HumanInTheLoopMiddleware` 不能替代业务级状态恢复协议。
+`root_graph` 需要明确区分两类“多个问题”：
 
-## 5. 子图详细设计
+- `analysis_plan.sub_questions`：复杂主问题内部的任务分解，属于同一轮运行内的 planner steps。
+- `candidate_questions`：当前轮回答完成后的 follow-up 候选分支，属于轮与轮之间的继续分析选择。
+
+设计约束：
+
+- planner 路径由 `root_graph` 统一编排，但 `query_graph` 与 `answer_graph` 仍保持独立职责；不能再把复杂问题整体黑盒委托给第二个总控。
+- `analysis_plan.sub_questions` 必须支持 DAG 执行模型：`depends_on` 控制先后顺序；互不依赖的 query steps 允许受控并行；`synthesis` 必须等待依赖满足。
+- planner 并行只适用于“同一主问题下的证据收集步骤”，不适用于后续候选分支；并行执行必须受并发上限、step 上限和预算控制。
+- `replan` 生成的 `candidate_questions` 只能形成单活跃分支：`user_select` 由用户选一个，`auto_continue` 由系统选一个；禁止把多个候选问题同时展开为搜索树。
+- `replan_history` 仅用于记录 follow-up 决策历史与防环，不参与 planner 内部 DAG 依赖表达。
+
+## 5. 子图职责
 
 ### 5.1 `context_graph`
 
 节点：
 
-- `load_runtime_context`
 - `resolve_tableau_auth`
 - `resolve_datasource_identity`
 - `load_metadata_snapshot`
@@ -136,24 +126,22 @@ API Control Layer
 
 输出：
 
-- tenant context
-- datasource identity
-- metadata/artifact refs
+- tenant/auth 引用
+- datasource identity（含 `datasource_luid` 与 `schema_hash`）
+- metadata/semantic/value artifact refs
 
 ### 5.2 `semantic_graph`
 
 节点：
 
 - `retrieve_semantic_candidates`
-- `semantic_parse`
+- `semantic_parse`（LLM）
 - `semantic_guard`
-- `clarification_interrupt`
 
-实现原则：
+原则：
 
-- `semantic_parse` 是 LLM 节点。
-- `semantic_guard` 是确定性校验节点。
-- 结构化输出必须是 schema-first。
+- parse 是模型能力，guard 是确定性校验。
+- 不合格语义必须中断澄清，不能直接执行查询。
 
 ### 5.3 `query_graph`
 
@@ -164,11 +152,10 @@ API Control Layer
 - `normalize_result_table`
 - `materialize_result_artifacts`
 
-实现原则：
+原则：
 
-- 查询计划由编译器生成，不由 LLM 直接生成。
-- `normalize_result_table` 负责把原始结果转换成统一表结构。
-- `materialize_result_artifacts` 负责把结果落盘为只读 artifact，供后续洞察使用。
+- 查询计划由编译器生成，禁止模型直出可执行查询。
+- 结果落盘为 manifest + chunk + profile。
 
 ### 5.4 `answer_graph`
 
@@ -177,91 +164,73 @@ API Control Layer
 - `prepare_insight_workspace`
 - `insight_generate`
 - `replan_decide`
-- `followup_interrupt`
+- `clarify_interrupt`
 
-实现原则：
+原则：
 
-- `insight_generate` 不再依赖压缩摘要作为唯一入口。
-- 洞察阶段通过文件工具探索结果文件。
-- `replan_decide` 最多允许一次低风险自动重规划，其余走用户选择。
+- 洞察必须文件驱动，读取受限。
+- 自动重规划有上限，超限转用户选择。
 
-## 6. 状态模型
+## 6. 状态模型（RunState）
 
 ```text
 RunState
 - request: request_id, session_id, trace_id, idempotency_key, locale
 - tenant: user_id, domain, site, principal, scopes, auth_ref
-- conversation: latest_user_message, recent_messages, session_summary
-- datasource: selector, datasource_luid, project_name, schema_hash, visibility_scope
-- artifacts: metadata_ref, field_semantic_ref, field_values_ref, result_manifest_ref
-- semantic: intent, measures, dimensions, filters, timeframe, grain, ambiguity, confidence
-- clarification: pending_type, interrupt_payload, resume_value
-- query: plan, retry_count, budget_ms, query_status
-- result: table_profile_ref, result_file_ref, row_count, empty_reason, truncated
-- answer: answer_text, evidence, caveats, followups
-- ops: warnings, error_code, metrics, token_usage, audit_ref
-```
-
-设计要求：
-
-### 6.1 减重原则
-
-- state 中只保存“引用、摘要、决策信号”，不保存大对象本体。
-- 大结果表内容、统计工件、长文本一律走 artifact store。
-- 高频但小体量字段可以保留在 state；中体量数据尽量走 Redis。
-- 任意字段只要可能超过 10KB，应拆为引用 + 边界元信息。
-
-### 6.2 建议的最小化状态结构
-
-```text
-RunState (minimized)
-- request: request_id, session_id, trace_id, idempotency_key, locale
-- tenant: user_id, domain, site, principal, scopes, auth_ref
 - conversation: latest_user_message, recent_messages_ref, session_summary_ref
 - datasource: datasource_luid, project_name, schema_hash
-- artifacts: result_manifest_ref, metadata_snapshot_ref, field_semantic_ref
+- artifacts: metadata_snapshot_ref, field_semantic_ref, field_values_ref, result_manifest_ref
 - semantic: intent, measures, dimensions, filters, timeframe, grain, confidence, ambiguity
 - clarification: pending_type, interrupt_id, resume_value_ref
 - query: plan_ref, retry_count, budget_ms, query_status
 - result: row_count, truncated, empty_reason
 - answer: answer_ref, evidence_ref, followup_ref
-- ops: error_code, metrics_ref, token_usage_ref, audit_ref
+- ops: error_code, metrics_ref, token_usage_ref, retrieval_trace_ref, memory_write_refs
 ```
 
-### 6.3 典型“降重替换”
+减重规则：
 
-- `recent_messages` → `recent_messages_ref`
-- `session_summary` → `session_summary_ref`
-- `query_plan` → `plan_ref`
-- `normalized_table` → `result_manifest_ref`
-- `answer_text` → `answer_ref`
-- `evidence` → `evidence_ref`
-- `metrics` → `metrics_ref`
+- 任何可能超过 10KB 的字段必须拆为 `*_ref`。
+- state 只保留决策信号，不保留全量表数据。
 
-## 7. 模块映射
+## 7. 现有模块映射
 
-| 现有模块 | 新模块定位 |
+| 现有模块 | 新架构定位 |
 | --- | --- |
-| `src/api/routers/chat.py` | 保留为兼容入口，内部改走 graph runner |
-| `src/orchestration/workflow/executor.py` | 过渡期兼容，最终退役 |
-| `src/agents/semantic_parser/graph.py` | 升级为 `semantic_graph` 的主体 |
-| `src/platform/tableau/query_builder.py` | 保留为查询计划编译核心 |
-| `src/platform/tableau/adapter.py` | 保留为执行适配层 |
-| `src/agents/insight/*` | 以文件驱动方式重构 |
-| `src/infra/storage/repository.py` | 业务表 repository，不能继续承担全部存储角色 |
+| `src/api/routers/chat.py` | 保留入口，内部改为 `RootGraphRunner` |
+| `src/orchestration/workflow/executor.py` | 过渡层，逐步下线 |
+| `src/agents/semantic_parser/graph.py` | 演进为 `semantic_graph` 核心 |
+| `src/platform/tableau/query_builder.py` | 查询编译核心 |
+| `src/platform/tableau/adapter.py` | 执行适配层 |
+| `src/agents/insight/*` | 重构为文件驱动洞察 |
+| `src/infra/storage/repository.py` | 仅保留业务表读写，不再承担全局运行存储 |
 
-## 8. 洞察节点重设计结论
+## 8. 横切平面与边界
 
-当前洞察链路不能作为最终方案，原因不是单一组件问题，而是整体模式有缺陷：
+- 检索平面：策略路由、rerank、trace 产出。
+- 记忆平面：query cache、few-shot、value memory、synonym learning。
+- 新鲜度平面：artifact readiness、degrade 策略、异步刷新。
 
-- prompt 仍然先锚定在压缩摘要上
-- 大结果访问仍然会回到整份 JSON 读入内存
-- 工具层没有真正的文件分页和 workspace 约束
+边界规则：
 
-因此新设计要求：
+- 检索/记忆只影响候选与提示，不可绕过 `semantic_guard` 与查询编译器。
+- 新鲜度平面决定“可用/降级/失败”，但不直接重写业务状态机。
 
-- 洞察主入口必须是结果文件 manifest
-- agent 先定位文件，再读取所需分片
-- 模型看到的是文件工具与局部结果，而不是整个结果集
+## 9. 展示投影层
 
-中间件细节见 [middleware.md](./middleware.md)。
+`root_graph` 输出到 SSE 前，必须经过一层“展示投影”约束。该层不改变业务决策，只负责把内部事件归一为用户可理解的展示对象。
+
+目标展示槽位：
+
+- `main_answer`: 用户正在阅读的主回答正文，允许来自 LLM token 流。
+- `activity_timeline`: 对当前阶段的人话描述，例如“正在理解问题”“正在执行查询”“正在生成洞察”。
+- `decision_card`: 所有需要用户继续决策的 interrupt 卡片。
+- `result_card`: 结构化结果卡片，例如表格、指标摘要、洞察摘要。
+- `artifact_panel`: 可下载文件、workspace、manifest、证据引用等附件区域。
+
+约束：
+
+- `main_answer` 与 `activity_timeline` 必须分离，不能把过程描述直接混入最终答案正文。
+- `decision_card` 必须来源于结构化 interrupt，不能由前端把任意错误或文本消息猜成弹窗。
+- `result_card` 必须由后端携带足够的标题、摘要、引用信息；前端不负责从原始表结构二次编文案。
+- 如果存在调试视图，必须与普通用户视图隔离，且不能影响正式业务事件契约。

@@ -1,79 +1,61 @@
-# -*- coding: utf-8 -*-
-"""
-用户设置和反馈属性测试
+﻿# -*- coding: utf-8 -*-
+"""设置与反馈属性测试。"""
 
-Property 15: Settings Round-Trip with Auto-Creation
-Property 16: Feedback Persistence with User Association
-"""
+from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings, strategies as st
 from fastapi.testclient import TestClient
-from langgraph.store.memory import InMemoryStore
+from hypothesis import given, settings, strategies as st
 
-from analytics_assistant.src.api.main import app
 from analytics_assistant.src.api import dependencies
-from analytics_assistant.src.infra.storage import BaseRepository
+from analytics_assistant.src.api.main import app
+from analytics_assistant.src.infra.business_storage import FeedbackRepository, SettingsRepository
+from analytics_assistant.tests.helpers.business_storage import create_test_business_database
 
 
 @pytest.fixture(autouse=True)
 def isolated_storage():
-    """每个测试使用独立的 InMemoryStore。"""
-    store = InMemoryStore()
+    """每个测试使用独立业务库。"""
+    database, db_path = create_test_business_database("settings_feedback_pbt")
     original_repos = dependencies._repositories.copy()
     dependencies._repositories.clear()
-    dependencies._repositories["user_settings"] = BaseRepository(
-        "user_settings", store=store,
-    )
-    dependencies._repositories["user_feedback"] = BaseRepository(
-        "user_feedback", store=store,
-    )
+    dependencies._repositories["user_settings"] = SettingsRepository(database=database)
+    dependencies._repositories["user_feedback"] = FeedbackRepository(database=database)
     yield
     dependencies._repositories.clear()
     dependencies._repositories.update(original_repos)
+    if db_path.exists():
+        db_path.unlink()
 
-
-# ========================================
-# 策略定义
-# ========================================
 
 language_strategy = st.sampled_from(["zh", "en"])
 depth_strategy = st.sampled_from(["detailed", "comprehensive"])
 theme_strategy = st.sampled_from(["light", "dark", "system"])
 bool_strategy = st.booleans()
-
-# ASCII 用户名（HTTP header 限制）
 username_strategy = st.text(
     alphabet=st.characters(whitelist_categories=("L", "N"), max_codepoint=127),
     min_size=1,
     max_size=30,
 )
-
 feedback_type_strategy = st.sampled_from(["positive", "negative"])
-message_id_strategy = st.text(min_size=1, max_size=50).filter(lambda s: s.strip())
+message_id_strategy = st.text(
+    alphabet=st.characters(blacklist_categories=("Cc", "Cs", "Zl", "Zp", "Zs"), max_codepoint=0x7E),
+    min_size=1,
+    max_size=50,
+).filter(lambda value: bool(value.strip()) and value == value.strip())
 
 
 class TestSettingsRoundTripPBT:
-    """Property 15: Settings Round-Trip with Auto-Creation
-
-    **Validates: Requirements 6.1, 6.2, 6.3**
-
-    *For any* authenticated user, GET `/api/settings` should always return valid
-    settings (creating defaults on first access), and any subsequent PUT should
-    persist changes that are reflected in the next GET.
-    """
-
     @given(username=username_strategy)
     @settings(max_examples=15, deadline=10000)
-    def test_auto_creation_on_first_access(self, username):
-        """首次访问自动创建默认设置。"""
+    def test_auto_creation_on_first_access(self, username: str) -> None:
         client = TestClient(app)
-        resp = client.get(
+        response = client.get(
             "/api/settings",
             headers={"X-Tableau-Username": username},
         )
-        assert resp.status_code == 200
-        data = resp.json()
+        assert response.status_code == 200
+        data = response.json()
         assert data["tableau_username"] == username
         assert data["language"] == "zh"
         assert data["analysis_depth"] == "detailed"
@@ -86,13 +68,17 @@ class TestSettingsRoundTripPBT:
         show_thinking=bool_strategy,
     )
     @settings(max_examples=20, deadline=10000)
-    def test_put_then_get_round_trip(self, language, depth, theme, show_thinking):
-        """PUT 更新后 GET 能看到变更。"""
+    def test_put_then_get_round_trip(
+        self,
+        language: str,
+        depth: str,
+        theme: str,
+        show_thinking: bool,
+    ) -> None:
         client = TestClient(app)
         headers = {"X-Tableau-Username": "roundtrip_user"}
 
-        # PUT 更新
-        resp = client.put(
+        response = client.put(
             "/api/settings",
             json={
                 "language": language,
@@ -102,12 +88,11 @@ class TestSettingsRoundTripPBT:
             },
             headers=headers,
         )
-        assert resp.status_code == 200
+        assert response.status_code == 200
 
-        # GET 验证
-        resp = client.get("/api/settings", headers=headers)
-        assert resp.status_code == 200
-        data = resp.json()
+        response = client.get("/api/settings", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
         assert data["language"] == language
         assert data["analysis_depth"] == depth
         assert data["theme"] == theme
@@ -115,14 +100,6 @@ class TestSettingsRoundTripPBT:
 
 
 class TestFeedbackPersistencePBT:
-    """Property 16: Feedback Persistence with User Association
-
-    **Validates: Requirements 7.1, 7.4**
-
-    *For any* valid feedback submission, the feedback should be persisted with
-    the correct `tableau_username`, `message_id`, and `type` fields.
-    """
-
     @given(
         username=username_strategy,
         message_id=message_id_strategy,
@@ -130,24 +107,22 @@ class TestFeedbackPersistencePBT:
     )
     @settings(max_examples=20, deadline=10000)
     def test_feedback_persisted_with_user(
-        self, username, message_id, feedback_type,
-    ):
-        """反馈提交后关联正确的用户和消息。"""
+        self,
+        username: str,
+        message_id: str,
+        feedback_type: str,
+    ) -> None:
         client = TestClient(app)
-        resp = client.post(
+        response = client.post(
             "/api/feedback",
-            json={
-                "message_id": message_id,
-                "type": feedback_type,
-            },
+            json={"message_id": message_id, "type": feedback_type},
             headers={"X-Tableau-Username": username},
         )
-        assert resp.status_code == 200
-        data = resp.json()
+        assert response.status_code == 200
+        data = response.json()
         assert data["message"] == "反馈已提交"
         assert "feedback_id" in data
 
-        # 验证持久化：通过 repo 直接查询
         repo = dependencies._repositories["user_feedback"]
         feedback_data = repo.find_by_id(data["feedback_id"])
         assert feedback_data is not None

@@ -16,7 +16,9 @@ from .global_understanding import global_understanding_node
 from .retrieval import field_retriever_node, few_shot_manager_node
 from .understanding import semantic_understanding_node
 from .validation import output_validator_node, filter_validator_node
-from .execution import query_adapter_node, error_corrector_node, feedback_learner_node
+from .query_adapter import query_adapter_node
+from .error_correction import error_corrector_node
+from .feedback import feedback_learner_node
 from .parallel import (
     unified_feature_and_understanding_node,
     prepare_prompt_node,

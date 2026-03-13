@@ -1,0 +1,117 @@
+cases:
+  - id: simple_single_query
+    question: "显示所有产品的销售额"
+    scenario: simple
+    expected:
+      business_event_types:
+        - parse_result
+        - data
+        - insight
+        - replan
+        - complete
+      planner_plan_mode: null
+      planner_execution_strategy: null
+      planner_step_titles: []
+      planner_step_kinds: []
+      insight_sources:
+        - single_query
+      replan:
+        source: single_query
+        mode: user_select
+        action: stop
+        should_replan: false
+        candidate_count: 0
+      complete_status: ok
+
+  - id: complex_multi_step
+    question: "比较各地区和渠道表现"
+    scenario: complex
+    expected:
+      business_event_types:
+        - planner
+        - parse_result
+        - plan_step
+        - plan_step
+        - data
+        - insight
+        - plan_step
+        - parse_result
+        - plan_step
+        - data
+        - insight
+        - insight
+        - replan
+        - complete
+      planner_plan_mode: decomposed_query
+      planner_execution_strategy: sequential
+      planner_step_titles:
+        - 拆解地区表现
+        - 拆解渠道表现
+      planner_step_kinds:
+        - null
+        - null
+      insight_sources:
+        - plan_step
+        - planner_synthesis
+      replan:
+        source: planner_synthesis
+        mode: user_select
+        action: stop
+        should_replan: false
+        candidate_count: 0
+      complete_status: ok
+
+  - id: why_screening_flow
+    question: "为什么华东区销售下降了？"
+    scenario: why
+    expected:
+      business_event_types:
+        - planner
+        - parse_result
+        - plan_step
+        - plan_step
+        - data
+        - insight
+        - plan_step
+        - parse_result
+        - plan_step
+        - data
+        - insight
+        - plan_step
+        - parse_result
+        - plan_step
+        - data
+        - insight
+        - plan_step
+        - parse_result
+        - plan_step
+        - data
+        - insight
+        - plan_step
+        - insight
+        - replan
+        - complete
+      planner_plan_mode: why_analysis
+      planner_execution_strategy: sequential
+      planner_step_titles:
+        - 验证异常
+        - 解释轴排序
+        - 筛查高优先解释轴
+        - 定位异常切片
+        - 归因总结
+      planner_step_kinds:
+        - verify_anomaly
+        - rank_explanatory_axes
+        - screen_top_axes
+        - locate_anomalous_slice
+        - synthesize_cause
+      insight_sources:
+        - plan_step
+        - planner_synthesis
+      replan:
+        source: planner_synthesis
+        mode: user_select
+        action: stop
+        should_replan: false
+        candidate_count: 0
+      complete_status: ok

@@ -35,7 +35,12 @@ message_strategy = st.fixed_dictionaries({
 })
 
 # 生成非空消息列表（至少 1 条，最多 20 条）
-messages_strategy = st.lists(message_strategy, min_size=1, max_size=20)
+@st.composite
+def chat_messages_strategy(draw):
+    """生成满足 chat 接口约束的消息列表：最后一条必须是 user。"""
+    messages = draw(st.lists(message_strategy, min_size=1, max_size=20))
+    messages[-1] = {"role": "user", "content": messages[-1]["content"] or "hello"}
+    return messages
 
 # 生成有效的数据源名称
 datasource_name_strategy = st.text(
@@ -56,7 +61,7 @@ class TestSSEResponseContentTypePBT:
 
     @given(
         datasource_name=datasource_name_strategy,
-        messages=messages_strategy,
+        messages=chat_messages_strategy(),
     )
     @settings(max_examples=20, deadline=10000)
     @patch("analytics_assistant.src.api.routers.chat.WorkflowExecutor")

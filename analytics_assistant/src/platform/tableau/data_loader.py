@@ -30,6 +30,15 @@ from typing import Any, Optional
 from analytics_assistant.src.core.schemas import DataModel, Field, LogicalTable, TableRelationship
 from analytics_assistant.src.core.exceptions import VizQLServerError, VizQLError
 from analytics_assistant.src.platform.tableau.auth import get_tableau_auth_async, TableauAuthContext
+from analytics_assistant.src.platform.tableau.artifact_keys import (
+    build_data_model_cache_key,
+    build_datasource_identity_cache_key,
+    build_field_index_prefix,
+    build_field_index_name,
+    build_field_values_index_prefix,
+    build_field_values_index_name,
+    build_prewarm_request_key,
+)
 from analytics_assistant.src.platform.tableau.client import VizQLClient
 from analytics_assistant.src.agents.field_semantic import (
     infer_field_semantic,
@@ -42,17 +51,128 @@ from analytics_assistant.src.infra.config import get_config
 # 字段样例数据类型
 FieldSamples = dict[str, dict[str, Any]]  # {field_caption: {sample_values: [...], unique_count: int}}
 
-# 字段索引名称前缀
-FIELD_INDEX_PREFIX = "fields_"
-
 # 进程级 DataModel 短 TTL 缓存，减少同数据源重复拉取 metadata。
 _DATA_MODEL_CACHE_TTL_SECONDS = 300
 _data_model_cache: dict[str, tuple[float, DataModel]] = {}
 _datasource_name_cache: dict[str, tuple[float, str]] = {}
-_prewarming_datasources: set[str] = set()
+_prewarming_requests: set[str] = set()
+_prewarm_tasks: dict[str, asyncio.Task[None]] = {}
 _prewarm_lock = Lock()
+_prewarm_semaphore: Optional[asyncio.Semaphore] = None
+_prewarm_loop: Optional[asyncio.AbstractEventLoop] = None
+_prewarm_concurrency_limit: Optional[int] = None
+_SUPPORTED_PREWARM_ARTIFACTS = frozenset({
+    "field_semantic_index",
+    "field_values_index",
+})
+_DEFAULT_PREWARM_MAX_CONCURRENCY = 2
+_DEFAULT_PREWARM_MAX_QUEUE_SIZE = 8
 
 logger = logging.getLogger(__name__)
+
+
+def _build_datasource_name_cache_key(
+    *,
+    datasource_name: str,
+    project_name: Optional[str],
+    site: Optional[str],
+) -> str:
+    return build_datasource_identity_cache_key(
+        datasource_name=datasource_name,
+        project_name=project_name,
+        site=site,
+    )
+
+
+def _normalize_refresh_request(
+    refresh_request: Optional[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """规范化 refresh request，避免后台 builder 依赖调用方传参细节。"""
+    if not isinstance(refresh_request, dict):
+        return None
+
+    requested_artifacts: list[str] = []
+    for artifact in refresh_request.get("requested_artifacts") or []:
+        normalized_artifact = str(artifact or "").strip()
+        if not normalized_artifact:
+            continue
+        if normalized_artifact not in requested_artifacts:
+            requested_artifacts.append(normalized_artifact)
+
+    return {
+        "datasource_luid": str(refresh_request.get("datasource_luid") or "").strip()
+        or None,
+        "trigger": str(refresh_request.get("trigger") or "").strip() or None,
+        "requested_artifacts": requested_artifacts,
+        "prefer_incremental": bool(refresh_request.get("prefer_incremental", True)),
+        "previous_schema_hash": (
+            str(refresh_request.get("previous_schema_hash") or "").strip() or None
+        ),
+        "schema_hash": str(refresh_request.get("schema_hash") or "").strip() or None,
+        "refresh_reason": str(refresh_request.get("refresh_reason") or "").strip()
+        or None,
+    }
+
+
+def _describe_refresh_request(refresh_request: Optional[dict[str, Any]]) -> str:
+    """为日志生成简短的 refresh request 摘要。"""
+    normalized_request = _normalize_refresh_request(refresh_request)
+    if normalized_request is None:
+        return "trigger=default requested_artifacts=all"
+
+    requested_artifacts = normalized_request.get("requested_artifacts") or []
+    requested_display = ",".join(requested_artifacts) if requested_artifacts else "none"
+    return (
+        f"trigger={normalized_request.get('trigger') or 'unknown'} "
+        f"requested_artifacts={requested_display} "
+        f"prefer_incremental={normalized_request.get('prefer_incremental', True)}"
+    )
+
+
+def _build_prewarm_request_key(
+    *,
+    datasource_id: str,
+    auth: Optional[TableauAuthContext],
+    refresh_request: Optional[dict[str, Any]],
+) -> str:
+    """构造预热锁 key，避免不同 artifact 请求互相误伤。"""
+    normalized_request = _normalize_refresh_request(refresh_request) or {}
+    return build_prewarm_request_key(
+        datasource_id=datasource_id,
+        site=getattr(auth, "site", None),
+        schema_hash=normalized_request.get("schema_hash"),
+        requested_artifacts=normalized_request.get("requested_artifacts") or ["all"],
+    )
+
+
+def _get_prewarm_runtime_limits() -> tuple[int, int]:
+    """读取后台预热 builder 的并发和队列上限。"""
+    app_config = get_config()
+    raw_config = getattr(app_config, "config", app_config)
+    tableau_config = raw_config.get("tableau", {})
+    refresh_config = tableau_config.get("artifact_refresh", {})
+    max_concurrency = int(
+        refresh_config.get("max_concurrency", _DEFAULT_PREWARM_MAX_CONCURRENCY)
+    )
+    max_queue_size = int(
+        refresh_config.get("max_queue_size", _DEFAULT_PREWARM_MAX_QUEUE_SIZE)
+    )
+    return max(1, max_concurrency), max(1, max_queue_size)
+
+
+def _get_prewarm_semaphore(max_concurrency: int) -> asyncio.Semaphore:
+    """按事件循环维度复用预热信号量，避免跨 loop 污染。"""
+    global _prewarm_semaphore, _prewarm_loop, _prewarm_concurrency_limit
+    current_loop = asyncio.get_running_loop()
+    if (
+        _prewarm_semaphore is None
+        or _prewarm_loop is not current_loop
+        or _prewarm_concurrency_limit != max_concurrency
+    ):
+        _prewarm_loop = current_loop
+        _prewarm_concurrency_limit = max_concurrency
+        _prewarm_semaphore = asyncio.Semaphore(max_concurrency)
+    return _prewarm_semaphore
 
 class TableauDataLoader:
     """
@@ -71,6 +191,7 @@ class TableauDataLoader:
         """
         self._client = client
         self._owns_client = client is None
+        self._current_auth: Optional[TableauAuthContext] = None
     
     async def _get_client(self) -> VizQLClient:
         """获取 VizQL 客户端"""
@@ -94,6 +215,7 @@ class TableauDataLoader:
         self,
         datasource_id: Optional[str] = None,
         datasource_name: Optional[str] = None,
+        project_name: Optional[str] = None,
         auth: Optional[TableauAuthContext] = None,
         skip_index_creation: bool = False,
     ) -> DataModel:
@@ -113,6 +235,7 @@ class TableauDataLoader:
         Args:
             datasource_id: 数据源 LUID（与 datasource_name 二选一）
             datasource_name: 数据源名称（与 datasource_id 二选一）
+            project_name: 项目名称，和 datasource_name 一起用于严格定位
             auth: 认证上下文（可选，默认自动获取）
         
         Returns:
@@ -127,6 +250,7 @@ class TableauDataLoader:
         # 获取认证
         if auth is None:
             auth = await get_tableau_auth_async()
+        self._current_auth = auth
         
         # 获取客户端
         client = await self._get_client()
@@ -134,19 +258,28 @@ class TableauDataLoader:
         # 如果只提供了名称，先获取 LUID
         if not datasource_id:
             logger.info(f"根据名称查找数据源: {datasource_name}")
-            datasource_id = self._get_cached_datasource_luid(datasource_name or "")
+            datasource_cache_key = _build_datasource_name_cache_key(
+                datasource_name=datasource_name or "",
+                project_name=project_name,
+                site=auth.site,
+            )
+            datasource_id = self._get_cached_datasource_luid(datasource_cache_key)
             if not datasource_id:
                 datasource_id = await client.get_datasource_luid_by_name(
                     datasource_name=datasource_name,
                     api_key=auth.api_key,
+                    project_name=project_name,
                 )
             if not datasource_id:
                 raise ValueError(f"未找到数据源: {datasource_name}")
             if datasource_name:
-                self._cache_datasource_luid(datasource_name, datasource_id)
+                self._cache_datasource_luid(datasource_cache_key, datasource_id)
             logger.info(f"找到数据源 LUID: {datasource_id}")
 
-        cached_model = self._get_cached_data_model(datasource_id)
+        cached_model = self._get_cached_data_model(
+            datasource_id,
+            site=getattr(auth, "site", None),
+        )
         if cached_model is not None:
             logger.info(f"复用 DataModel 缓存: {datasource_id}")
             return cached_model
@@ -219,46 +352,64 @@ class TableauDataLoader:
         except AttributeError:
             pass
 
-        self._cache_data_model(data_model)
+        self._cache_data_model(data_model, site=getattr(auth, "site", None))
 
         return data_model
 
-    def _get_cached_data_model(self, datasource_id: str) -> Optional[DataModel]:
+    def _get_cached_data_model(
+        self,
+        datasource_id: str,
+        *,
+        site: Optional[str] = None,
+    ) -> Optional[DataModel]:
         """获取 DataModel 进程级缓存。"""
-        cached = _data_model_cache.get(datasource_id)
+        cache_key = build_data_model_cache_key(
+            datasource_id=datasource_id,
+            site=site,
+        )
+        cached = _data_model_cache.get(cache_key)
         if cached is None:
             return None
 
         cached_at, data_model = cached
         if time.time() - cached_at > _DATA_MODEL_CACHE_TTL_SECONDS:
-            _data_model_cache.pop(datasource_id, None)
+            _data_model_cache.pop(cache_key, None)
             return None
 
         return copy.deepcopy(data_model)
 
-    def _cache_data_model(self, data_model: DataModel) -> None:
+    def _cache_data_model(
+        self,
+        data_model: DataModel,
+        *,
+        site: Optional[str] = None,
+    ) -> None:
         """写入 DataModel 进程级缓存。"""
-        _data_model_cache[data_model.datasource_id] = (
+        cache_key = build_data_model_cache_key(
+            datasource_id=data_model.datasource_id,
+            site=site,
+        )
+        _data_model_cache[cache_key] = (
             time.time(),
             copy.deepcopy(data_model),
         )
 
-    def _get_cached_datasource_luid(self, datasource_name: str) -> Optional[str]:
-        """获取 datasource_name -> LUID 的短 TTL 缓存。"""
-        cached = _datasource_name_cache.get(datasource_name)
+    def _get_cached_datasource_luid(self, cache_key: str) -> Optional[str]:
+        """获取 datasource identity -> LUID 的短 TTL 缓存。"""
+        cached = _datasource_name_cache.get(cache_key)
         if cached is None:
             return None
 
         cached_at, datasource_luid = cached
         if time.time() - cached_at > _DATA_MODEL_CACHE_TTL_SECONDS:
-            _datasource_name_cache.pop(datasource_name, None)
+            _datasource_name_cache.pop(cache_key, None)
             return None
 
         return datasource_luid
 
-    def _cache_datasource_luid(self, datasource_name: str, datasource_luid: str) -> None:
-        """写入 datasource_name -> LUID 的短 TTL 缓存。"""
-        _datasource_name_cache[datasource_name] = (
+    def _cache_datasource_luid(self, cache_key: str, datasource_luid: str) -> None:
+        """写入 datasource identity -> LUID 的短 TTL 缓存。"""
+        _datasource_name_cache[cache_key] = (
             time.time(),
             datasource_luid,
         )
@@ -269,19 +420,34 @@ class TableauDataLoader:
         data_model: DataModel,
     ) -> dict:
         """仅恢复已有索引中的产物，不在在线请求中创建索引。"""
-        index_name = f"{FIELD_INDEX_PREFIX}{datasource_id}"
+        # 在线恢复时只读取当前 schema 对应的字段索引，不再回退旧版本。
+        semantic_index_name = build_field_index_name(
+            datasource_id=datasource_id,
+            site=getattr(getattr(self, "_current_auth", None), "site", None),
+            schema_hash=data_model.schema_hash,
+        )
+        values_index_name = build_field_values_index_name(
+            datasource_id=datasource_id,
+            site=getattr(getattr(self, "_current_auth", None), "site", None),
+            schema_hash=data_model.schema_hash,
+        )
         try:
             rag_service = get_rag_service()
-            existing_index = rag_service.index.get_index(index_name)
-            if existing_index is None:
+            existing_semantic_index = rag_service.index.get_index(semantic_index_name)
+            existing_values_index = rag_service.index.get_index(values_index_name)
+            index_name = semantic_index_name
+            if existing_semantic_index is None and existing_values_index is None:
                 logger.info(
                     f"字段索引不存在，跳过在线创建: {index_name}"
                 )
                 return {}
 
-            self._restore_queryable_flags(rag_service, index_name, data_model)
-            self._restore_field_semantic(rag_service, index_name, data_model)
-            return self._restore_field_samples(rag_service, index_name)
+            if existing_semantic_index is not None:
+                self._restore_queryable_flags(rag_service, semantic_index_name, data_model)
+                self._restore_field_semantic(rag_service, semantic_index_name, data_model)
+            if existing_values_index is not None:
+                return self._restore_field_samples(rag_service, values_index_name)
+            return {}
         except Exception as e:
             logger.warning(f"恢复字段索引产物失败: {e}")
             return {}
@@ -290,6 +456,9 @@ class TableauDataLoader:
         self,
         datasource_id: str,
         data_model: DataModel,
+        *,
+        refresh_artifacts: Optional[set[str]] = None,
+        prefer_incremental: bool = True,
     ) -> dict:
         """
         异步创建字段索引（后台执行，不阻塞主流程）
@@ -302,7 +471,12 @@ class TableauDataLoader:
             field_samples 字典
         """
         try:
-            return await self._ensure_field_index(datasource_id, data_model)
+            return await self._ensure_field_index(
+                datasource_id,
+                data_model,
+                refresh_artifacts=refresh_artifacts,
+                prefer_incremental=prefer_incremental,
+            )
         except Exception as e:
             logger.warning(f"后台创建字段索引失败: {e}")
             return {}
@@ -311,12 +485,32 @@ class TableauDataLoader:
         self,
         datasource_id: str,
         auth: Optional[TableauAuthContext] = None,
+        refresh_request: Optional[dict[str, Any]] = None,
     ) -> None:
-        """后台预热 datasource 产物：field samples、field semantic、RAG index。"""
+        """后台预热 datasource 产物。
+
+        当前 builder 仍复用字段索引构建路径，但会显式接收 refresh request，
+        这样 context_graph 可以明确表达“为什么刷新、要刷新什么”。
+        """
         if auth is None:
             auth = await get_tableau_auth_async()
+        self._current_auth = auth
 
-        data_model = self._get_cached_data_model(datasource_id)
+        normalized_refresh_request = _normalize_refresh_request(refresh_request)
+        requested_artifacts = set(
+            (normalized_refresh_request or {}).get("requested_artifacts") or []
+        )
+        if normalized_refresh_request is not None and not requested_artifacts:
+            logger.info(
+                "跳过 datasource 预热：refresh request 未声明需要构建的 artifact, datasource=%s",
+                datasource_id,
+            )
+            return
+
+        data_model = self._get_cached_data_model(
+            datasource_id,
+            site=getattr(auth, "site", None),
+        )
         if data_model is None:
             data_model = await self.load_data_model(
                 datasource_id=datasource_id,
@@ -324,19 +518,303 @@ class TableauDataLoader:
                 skip_index_creation=True,
             )
 
-        field_samples = await self._ensure_field_index_async(datasource_id, data_model)
+        if normalized_refresh_request is not None:
+            logger.info(
+                "开始按 refresh request 预热 datasource 产物: datasource=%s %s",
+                datasource_id,
+                _describe_refresh_request(normalized_refresh_request),
+            )
+
+        should_prepare_field_index = (
+            normalized_refresh_request is None
+            or bool(requested_artifacts & _SUPPORTED_PREWARM_ARTIFACTS)
+        )
+        if not should_prepare_field_index:
+            logger.info(
+                "refresh request 未包含当前 builder 支持的 artifact，跳过字段索引预热: datasource=%s requested=%s",
+                datasource_id,
+                sorted(requested_artifacts),
+            )
+            return
+
+        field_samples = await self._ensure_field_index_async(
+            datasource_id,
+            data_model,
+            refresh_artifacts=requested_artifacts or None,
+            prefer_incremental=bool(
+                (normalized_refresh_request or {}).get("prefer_incremental", True)
+            ),
+        )
         if field_samples:
             try:
                 data_model._field_samples_cache = field_samples
             except AttributeError:
                 pass
 
-        self._cache_data_model(data_model)
-    
-    async def _ensure_field_index(
+        self._cache_data_model(data_model, site=getattr(auth, "site", None))
+
+    async def _fetch_field_samples_for_index(
+        self,
+        *,
+        datasource_id: str,
+        data_model: DataModel,
+    ) -> tuple[FieldSamples, set[str]]:
+        """单独刷新字段样例工件，供 field_values 路径复用。"""
+        try:
+            measure_field = next(
+                (
+                    f.caption or f.name
+                    for f in data_model.fields
+                    if f.role and f.role.upper() == "MEASURE" and not f.hidden
+                ),
+                None,
+            )
+            if not measure_field:
+                logger.warning("无可用度量字段，跳过字段样例获取")
+                return {}, set()
+            field_samples, unqueryable_captions = await self.fetch_field_samples(
+                datasource_id=datasource_id,
+                fields=data_model.fields,
+                measure_field=measure_field,
+            )
+            logger.info(f"字段样例获取完成: {len(field_samples)} 个字段有样例")
+            return field_samples, unqueryable_captions
+        except Exception as e:
+            logger.warning(f"获取字段样例失败，语义推断将不使用样例值: {e}")
+            return {}, set()
+
+    async def _infer_field_semantic_for_index(
+        self,
+        *,
+        datasource_id: str,
+        data_model: DataModel,
+        field_samples: Optional[FieldSamples] = None,
+    ) -> dict[str, FieldSemanticAttributes]:
+        """单独刷新字段语义工件，允许复用已有 sample_values。"""
+        logger.info(f"开始语义推断，字段数: {len(data_model.fields)}")
+        semantic_result = await infer_field_semantic(
+            datasource_luid=datasource_id,
+            fields=data_model.fields,
+            field_samples=field_samples or {},
+        )
+        logger.info("语义推断完成")
+        logger.debug(f"语义结果字段数: {len(semantic_result.field_semantic)}")
+        return semantic_result.field_semantic
+
+    def _build_field_index_documents(
+        self,
+        *,
+        data_model: DataModel,
+        field_semantic: Optional[dict[str, FieldSemanticAttributes]],
+        field_samples: Optional[FieldSamples],
+        unqueryable_captions: Optional[set[str]] = None,
+    ) -> list[IndexDocument]:
+        """基于当前 field_semantic / field_samples 构建字段索引文档。"""
+        documents: list[IndexDocument] = []
+        semantic_hit_count = 0
+        field_samples = field_samples or {}
+        unqueryable_captions = set(unqueryable_captions or set())
+
+        for field in data_model.fields:
+            field_caption = field.caption or field.name
+            role_str = field.role.lower() if field.role else "dimension"
+            data_type_str = field.data_type.lower() if field.data_type else "string"
+
+            semantic_attrs = (field_semantic or {}).get(field_caption)
+            if semantic_attrs:
+                semantic_hit_count += 1
+                field_sample_values = None
+                if field_caption in field_samples:
+                    field_sample_values = field_samples[field_caption].get("sample_values")
+
+                sem_category = None
+                sem_measure_category = None
+                if semantic_attrs.role == "dimension" and semantic_attrs.category:
+                    sem_category = semantic_attrs.category.value
+                elif semantic_attrs.role == "measure" and semantic_attrs.measure_category:
+                    sem_measure_category = semantic_attrs.measure_category.value
+
+                index_text = build_enhanced_index_text(
+                    caption=field_caption,
+                    business_description=semantic_attrs.business_description,
+                    aliases=semantic_attrs.aliases,
+                    role=role_str,
+                    data_type=data_type_str,
+                    category=sem_category,
+                    measure_category=sem_measure_category,
+                    sample_values=field_sample_values,
+                )
+            else:
+                index_text = (
+                    f"{field_caption}: {field.description or field_caption}。"
+                    f"类型: {role_str}, {data_type_str}"
+                )
+
+            metadata = {
+                "field_caption": field_caption,
+                "field_name": field.name,
+                "role": role_str,
+                "data_type": data_type_str,
+                "description": field.description or "",
+                "formula": field.calculation or "",
+            }
+
+            if semantic_attrs:
+                metadata["business_description"] = semantic_attrs.business_description
+                metadata["aliases"] = semantic_attrs.aliases
+                metadata["confidence"] = semantic_attrs.confidence
+                if semantic_attrs.role == "dimension":
+                    metadata["category"] = (
+                        semantic_attrs.category.value if semantic_attrs.category else ""
+                    )
+                    metadata["category_detail"] = semantic_attrs.category_detail or ""
+                    metadata["level"] = semantic_attrs.level
+                    metadata["granularity"] = semantic_attrs.granularity or ""
+                elif semantic_attrs.role == "measure":
+                    metadata["measure_category"] = (
+                        semantic_attrs.measure_category.value
+                        if semantic_attrs.measure_category
+                        else ""
+                    )
+
+            if field.upstream_tables:
+                table_names = [
+                    t.get("name", "") for t in field.upstream_tables if t.get("name")
+                ]
+                if table_names:
+                    metadata["logical_table_caption"] = table_names[0]
+
+            is_queryable = bool(getattr(field, "queryable", True))
+            if field_caption in unqueryable_captions:
+                is_queryable = False
+            metadata["queryable"] = is_queryable
+
+            if field_caption in field_samples:
+                sample_info = field_samples[field_caption]
+                sample_values = sample_info.get("sample_values", [])
+                if sample_values:
+                    metadata["sample_values"] = sample_values
+
+            documents.append(
+                IndexDocument(
+                    id=field.name,
+                    content=index_text,
+                    metadata=metadata,
+                )
+            )
+
+        logger.info(f"语义信息命中: {semantic_hit_count}/{len(data_model.fields)}")
+        return documents
+
+    def _build_field_values_index_documents(
+        self,
+        *,
+        data_model: DataModel,
+        field_samples: Optional[FieldSamples],
+        unqueryable_captions: Optional[set[str]] = None,
+    ) -> list[IndexDocument]:
+        """构建字段样例值索引文档，供字段值产物独立刷新与恢复。"""
+        documents: list[IndexDocument] = []
+        field_samples = field_samples or {}
+        unqueryable_captions = set(unqueryable_captions or set())
+
+        for field in data_model.fields:
+            field_caption = field.caption or field.name
+            sample_info = field_samples.get(field_caption) or {}
+            sample_values = list(sample_info.get("sample_values") or [])
+            unique_count = sample_info.get("unique_count")
+            sample_text = ", ".join(str(value) for value in sample_values[:5])
+
+            documents.append(
+                IndexDocument(
+                    id=field.name,
+                    content=f"{field_caption}: {sample_text or 'no_samples'}",
+                    metadata={
+                        "field_caption": field_caption,
+                        "field_name": field.name,
+                        "queryable": field_caption not in unqueryable_captions,
+                        "sample_values": sample_values,
+                        "unique_count": unique_count,
+                    },
+                )
+            )
+
+        return documents
+
+    def _build_field_index_config(self) -> IndexConfig:
+        """读取字段索引配置，供 create/update 共享。"""
+        app_config = get_config()
+        vector_cfg = app_config.config.get("vector_storage", {})
+        index_dir = vector_cfg.get("index_dir", "data/indexes")
+        retrieval_cfg = vector_cfg.get("retrieval", {})
+        return IndexConfig(
+            backend=IndexBackend.FAISS,
+            persist_directory=index_dir,
+            default_top_k=retrieval_cfg.get("default_top_k", 10),
+            score_threshold=retrieval_cfg.get("score_threshold", 0.5),
+        )
+
+    def _tombstone_deleted_index_documents(
+        self,
+        *,
+        rag_service: Any,
+        index_name: str,
+        current_field_ids: set[str],
+    ) -> int:
+        """把当前 schema 已删除的字段从索引中移除。"""
+        existing_fields = rag_service.index.get_index_fields(index_name)
+        existing_field_ids = {
+            str(field_info.get("field_name") or "").strip()
+            for field_info in existing_fields
+            if isinstance(field_info, dict)
+            and str(field_info.get("field_name") or "").strip()
+        }
+        obsolete_field_ids = sorted(existing_field_ids - current_field_ids)
+        if not obsolete_field_ids:
+            return 0
+
+        deleted_count = rag_service.index.delete_documents(index_name, obsolete_field_ids)
+        logger.info(
+            "字段索引 tombstone 完成: index=%s deleted=%s fields=%s",
+            index_name,
+            deleted_count,
+            obsolete_field_ids,
+        )
+        return deleted_count
+
+    def _compact_superseded_field_indexes(
+        self,
+        *,
+        rag_service: Any,
+        index_prefix: str,
+        current_index_name: str,
+    ) -> list[str]:
+        """删除同 datasource 下已被当前 schema 版本替代的旧索引。"""
+        deleted_indexes: list[str] = []
+        for index_info in rag_service.index.list_indexes():
+            index_name = str(getattr(index_info, "name", "") or "").strip()
+            if not index_name or index_name == current_index_name:
+                continue
+            if not index_name.startswith(index_prefix):
+                continue
+            if rag_service.index.delete_index(index_name):
+                deleted_indexes.append(index_name)
+
+        if deleted_indexes:
+            logger.info(
+                "已清理旧 schema 字段索引: current=%s deleted=%s",
+                current_index_name,
+                deleted_indexes,
+            )
+        return deleted_indexes
+
+    async def _ensure_field_index_legacy(
         self,
         datasource_id: str,
         data_model: DataModel,
+        *,
+        refresh_artifacts: Optional[set[str]] = None,
+        prefer_incremental: bool = True,
     ) -> dict:
         """
         确保字段索引存在（使用字段语义推断结果）
@@ -357,191 +835,149 @@ class TableauDataLoader:
         Returns:
             field_samples 字典（字段名 → 样例信息），索引已存在时从 metadata 恢复
         """
-        index_name = f"{FIELD_INDEX_PREFIX}{datasource_id}"
-        
+        # 物理索引名与 schema_hash 绑定，schema 变化后直接写入新版本索引。
+        semantic_index_name = build_field_index_name(
+            datasource_id=datasource_id,
+            site=getattr(getattr(self, "_current_auth", None), "site", None),
+            schema_hash=data_model.schema_hash,
+        )
+        values_index_name = build_field_values_index_name(
+            datasource_id=datasource_id,
+            site=getattr(getattr(self, "_current_auth", None), "site", None),
+            schema_hash=data_model.schema_hash,
+        )
+        normalized_refresh_artifacts = set(refresh_artifacts or set())
+        refresh_field_values = (
+            not normalized_refresh_artifacts
+            or "field_values_index" in normalized_refresh_artifacts
+        )
+        refresh_field_semantic = (
+            not normalized_refresh_artifacts
+            or "field_semantic_index" in normalized_refresh_artifacts
+        )
+
         try:
             rag_service = get_rag_service()
-            
-            # 检查索引是否已存在
-            existing_index = rag_service.index.get_index(index_name)
-            if existing_index is not None:
+
+            existing_semantic_index = rag_service.index.get_index(semantic_index_name)
+            existing_values_index = rag_service.index.get_index(values_index_name)
+            index_name = semantic_index_name
+            restored_field_samples: FieldSamples = {}
+            if existing_semantic_index is not None:
                 logger.debug(f"字段索引已存在: {index_name}")
-                # 从索引 metadata 恢复 queryable 标志到 DataModel
-                self._restore_queryable_flags(rag_service, index_name, data_model)
-                # 从索引 metadata 恢复字段语义，避免在线重复推断
-                self._restore_field_semantic(rag_service, index_name, data_model)
-                # 从索引 metadata 恢复 sample_values
-                return self._restore_field_samples(rag_service, index_name)
-            
-            logger.info(f"创建字段索引: {index_name}")
-            
-            # 先获取字段样例数据，再进行语义推断（样例值能显著提升推断准确性）
-            field_samples: FieldSamples = {}
-            unqueryable_captions: set[str] = set()
-            try:
-                measure_field = next(
-                    (f.caption or f.name for f in data_model.fields
-                     if f.role and f.role.upper() == "MEASURE" and not f.hidden),
-                    None,
-                )
-                if measure_field:
-                    field_samples, unqueryable_captions = await self.fetch_field_samples(
-                        datasource_id=datasource_id,
-                        fields=data_model.fields,
-                        measure_field=measure_field,
+                self._restore_queryable_flags(rag_service, semantic_index_name, data_model)
+                self._restore_field_semantic(rag_service, semantic_index_name, data_model)
+                if existing_values_index is not None:
+                    logger.debug("字段值索引已存在: %s", values_index_name)
+                    restored_field_samples = self._restore_field_samples(
+                        rag_service,
+                        values_index_name,
                     )
-                    logger.info(f"字段样例获取完成: {len(field_samples)} 个字段有样例")
-                else:
-                    logger.warning("无可用度量字段，跳过字段样例获取")
-            except Exception as e:
-                logger.warning(f"获取字段样例失败，语义推断将不使用样例值: {e}")
-            
-            # 调用字段语义推断（传入样例值提升准确性）
-            logger.info(f"开始语义推断，字段数: {len(data_model.fields)}")
-            semantic_result = await infer_field_semantic(
-                datasource_luid=datasource_id,
-                fields=data_model.fields,
-                field_samples=field_samples,
-            )
-            logger.info("语义推断完成")
-            logger.debug(f"语义结果字段数: {len(semantic_result.field_semantic)}")
-            
-            # 将推断结果缓存到 DataModel 扩展属性，供后续复用
-            try:
-                data_model._field_semantic_cache = semantic_result.field_semantic
-            except AttributeError:
-                pass  # DataModel 不支持动态属性，忽略
-            
-            # 构建 IndexDocument 列表
-            documents = []
-            semantic_hit_count = 0
-            for field in data_model.fields:
-                field_caption = field.caption or field.name
-                role_str = field.role.lower() if field.role else "dimension"
-                data_type_str = field.data_type.lower() if field.data_type else "string"
-                
-                # 获取字段语义信息
-                semantic_attrs = semantic_result.field_semantic.get(field_caption)
-                
-                # 构建增强索引文本
-                if semantic_attrs:
-                    semantic_hit_count += 1
-                    # 获取该字段的样例值
-                    field_sample_values = None
-                    if field_caption in field_samples:
-                        field_sample_values = field_samples[field_caption].get("sample_values")
-                    
-                    # 提取语义类别
-                    sem_category = None
-                    sem_measure_category = None
-                    if semantic_attrs.role == "dimension" and semantic_attrs.category:
-                        sem_category = semantic_attrs.category.value
-                    elif semantic_attrs.role == "measure" and semantic_attrs.measure_category:
-                        sem_measure_category = semantic_attrs.measure_category.value
-                    
-                    index_text = build_enhanced_index_text(
-                        caption=field_caption,
-                        business_description=semantic_attrs.business_description,
-                        aliases=semantic_attrs.aliases,
-                        role=role_str,
-                        data_type=data_type_str,
-                        category=sem_category,
-                        measure_category=sem_measure_category,
-                        sample_values=field_sample_values,
-                    )
-                else:
-                    # 无语义信息时使用基本格式
-                    index_text = f"{field_caption}: {field.description or field_caption}。类型: {role_str}, {data_type_str}"
-                
-                # 构建元数据
-                metadata = {
-                    "field_caption": field_caption,
-                    "field_name": field.name,
-                    "role": role_str,
-                    "data_type": data_type_str,
-                    "description": field.description or "",
-                    "formula": field.calculation or "",
-                }
-                
-                # 添加语义信息
-                if semantic_attrs:
-                    metadata["business_description"] = semantic_attrs.business_description
-                    metadata["aliases"] = semantic_attrs.aliases
-                    metadata["confidence"] = semantic_attrs.confidence
-                    
-                    # 维度特定属性
-                    if semantic_attrs.role == "dimension":
-                        metadata["category"] = semantic_attrs.category.value if semantic_attrs.category else ""
-                        metadata["category_detail"] = semantic_attrs.category_detail or ""
-                        metadata["level"] = semantic_attrs.level
-                        metadata["granularity"] = semantic_attrs.granularity or ""
-                    # 度量特定属性
-                    elif semantic_attrs.role == "measure":
-                        metadata["measure_category"] = semantic_attrs.measure_category.value if semantic_attrs.measure_category else ""
-                
-                # 添加逻辑表信息
-                if field.upstream_tables:
-                    table_names = [t.get("name", "") for t in field.upstream_tables if t.get("name")]
-                    if table_names:
-                        metadata["logical_table_caption"] = table_names[0]
-                
-                doc = IndexDocument(
-                    id=field.name,
-                    content=index_text,
-                    metadata=metadata,
-                )
-                documents.append(doc)
-            
-            logger.info(f"语义信息命中: {semantic_hit_count}/{len(data_model.fields)}")
-            
-            # 标记不可查询的幽灵字段（在 DataModel 和索引 metadata 中同步标记）
-            if unqueryable_captions:
-                for field in data_model.fields:
-                    field_caption = field.caption or field.name
-                    if field_caption in unqueryable_captions:
-                        field.queryable = False
+                if not normalized_refresh_artifacts:
+                    return restored_field_samples
                 logger.info(
-                    f"已标记 {len(unqueryable_captions)} 个幽灵字段为不可查询: "
-                    f"{sorted(unqueryable_captions)}"
+                    "按 refresh request 刷新字段索引: datasource=%s requested=%s prefer_incremental=%s",
+                    datasource_id,
+                    sorted(normalized_refresh_artifacts),
+                    prefer_incremental,
                 )
-            
-            # 将 sample_values 和 queryable 标志写入对应字段的 metadata
-            for doc in documents:
-                field_caption = doc.metadata.get("field_caption", "")
-                # 标记不可查询字段
-                if field_caption in unqueryable_captions:
-                    doc.metadata["queryable"] = False
-                else:
-                    doc.metadata["queryable"] = True
-                # 写入样例值
-                if field_caption in field_samples:
-                    sample_info = field_samples[field_caption]
-                    sample_values = sample_info.get("sample_values", [])
-                    if sample_values:
-                        doc.metadata["sample_values"] = sample_values
-            
-            # 获取索引配置
-            app_config = get_config()
-            vector_cfg = app_config.config.get("vector_storage", {})
-            index_dir = vector_cfg.get("index_dir", "data/indexes")
-            retrieval_cfg = vector_cfg.get("retrieval", {})
-            
-            # 创建索引配置
-            config = IndexConfig(
-                backend=IndexBackend.FAISS,
-                persist_directory=index_dir,
-                default_top_k=retrieval_cfg.get("default_top_k", 10),
-                score_threshold=retrieval_cfg.get("score_threshold", 0.5),
+            else:
+                logger.info(f"创建字段索引: {index_name}")
+
+            field_samples: FieldSamples = copy.deepcopy(restored_field_samples)
+            unqueryable_captions: set[str] = set()
+            if refresh_field_values or existing_values_index is None:
+                refreshed_field_samples, unqueryable_captions = (
+                    await self._fetch_field_samples_for_index(
+                        datasource_id=datasource_id,
+                        data_model=data_model,
+                    )
+                )
+                if refreshed_field_samples:
+                    field_samples = refreshed_field_samples
+
+            if field_samples:
+                try:
+                    data_model._field_samples_cache = field_samples
+                except AttributeError:
+                    pass
+
+            for field in data_model.fields:
+                if field.caption in unqueryable_captions or field.name in unqueryable_captions:
+                    field.queryable = False
+
+            field_semantic = getattr(data_model, "_field_semantic_cache", None)
+            if refresh_field_semantic or existing_semantic_index is None:
+                field_semantic = await self._infer_field_semantic_for_index(
+                    datasource_id=datasource_id,
+                    data_model=data_model,
+                    field_samples=field_samples,
+                )
+                try:
+                    data_model._field_semantic_cache = field_semantic
+                except AttributeError:
+                    pass
+
+            semantic_documents = self._build_field_index_documents(
+                data_model=data_model,
+                field_semantic=field_semantic,
+                field_samples=field_samples,
+                unqueryable_captions=unqueryable_captions,
             )
-            
-            # 创建索引
-            rag_service.index.create_index(
-                name=index_name,
-                config=config,
-                documents=documents,
+            values_documents = self._build_field_values_index_documents(
+                data_model=data_model,
+                field_samples=field_samples,
+                unqueryable_captions=unqueryable_captions,
             )
-            
-            logger.info(f"字段索引创建完成: {index_name}, {len(documents)} 个字段")
+            documents = semantic_documents
+            config = self._build_field_index_config()
+
+            if existing_semantic_index is None:
+                rag_service.index.create_index(
+                    name=semantic_index_name,
+                    config=config,
+                    documents=semantic_documents,
+                )
+                logger.info(f"字段索引创建完成: {index_name}, {len(documents)} 个字段")
+            elif refresh_field_semantic:
+                update_result = rag_service.index.update_documents(
+                    semantic_index_name,
+                    semantic_documents,
+                )
+                logger.info(
+                    "字段索引刷新完成: %s added=%s updated=%s metadata_only=%s unchanged=%s failed=%s",
+                    index_name,
+                    update_result.added,
+                    update_result.updated,
+                    update_result.metadata_only_updated,
+                    update_result.unchanged,
+                    update_result.failed,
+                )
+            if existing_values_index is None:
+                rag_service.index.create_index(
+                    name=values_index_name,
+                    config=config,
+                    documents=values_documents,
+                )
+                logger.info(
+                    "字段值索引创建完成: %s, %s 个字段",
+                    values_index_name,
+                    len(values_documents),
+                )
+            elif refresh_field_values:
+                values_update_result = rag_service.index.update_documents(
+                    values_index_name,
+                    values_documents,
+                )
+                logger.info(
+                    "字段值索引刷新完成: %s added=%s updated=%s metadata_only=%s unchanged=%s failed=%s",
+                    values_index_name,
+                    values_update_result.added,
+                    values_update_result.updated,
+                    values_update_result.metadata_only_updated,
+                    values_update_result.unchanged,
+                    values_update_result.failed,
+                )
             return field_samples
 
         except Exception as e:
@@ -549,6 +985,245 @@ class TableauDataLoader:
             logger.warning(f"创建字段索引失败: {e}")
             return {}
     
+    async def _ensure_field_index(
+        self,
+        datasource_id: str,
+        data_model: DataModel,
+        *,
+        refresh_artifacts: Optional[set[str]] = None,
+        prefer_incremental: bool = True,
+    ) -> dict:
+        """确保字段语义索引和字段值索引存在。
+
+        这里同时处理三件事：
+        1. 按 refresh request 决定走增量刷新还是全量重建。
+        2. 对当前 schema 已删除的字段做 tombstone，避免旧字段残留在索引里。
+        3. 在当前 schema 版本准备完成后，清理被替代的旧 schema 索引。
+        """
+        current_site = getattr(getattr(self, "_current_auth", None), "site", None)
+        semantic_index_name = build_field_index_name(
+            datasource_id=datasource_id,
+            site=current_site,
+            schema_hash=data_model.schema_hash,
+        )
+        values_index_name = build_field_values_index_name(
+            datasource_id=datasource_id,
+            site=current_site,
+            schema_hash=data_model.schema_hash,
+        )
+        semantic_index_prefix = build_field_index_prefix(
+            datasource_id=datasource_id,
+            site=current_site,
+        )
+        values_index_prefix = build_field_values_index_prefix(
+            datasource_id=datasource_id,
+            site=current_site,
+        )
+        normalized_refresh_artifacts = set(refresh_artifacts or set())
+        refresh_field_values = (
+            not normalized_refresh_artifacts
+            or "field_values_index" in normalized_refresh_artifacts
+        )
+        refresh_field_semantic = (
+            not normalized_refresh_artifacts
+            or "field_semantic_index" in normalized_refresh_artifacts
+        )
+        current_field_ids = {
+            str(field.name or "").strip()
+            for field in data_model.fields
+            if str(field.name or "").strip()
+        }
+
+        try:
+            rag_service = get_rag_service()
+
+            existing_semantic_index = rag_service.index.get_index(semantic_index_name)
+            existing_values_index = rag_service.index.get_index(values_index_name)
+
+            if (
+                existing_semantic_index is not None
+                and refresh_field_semantic
+                and not prefer_incremental
+            ):
+                logger.info(
+                    "按 refresh request 执行字段语义索引全量重建: datasource=%s index=%s",
+                    datasource_id,
+                    semantic_index_name,
+                )
+                rag_service.index.delete_index(semantic_index_name)
+                existing_semantic_index = None
+
+            if (
+                existing_values_index is not None
+                and refresh_field_values
+                and not prefer_incremental
+            ):
+                logger.info(
+                    "按 refresh request 执行字段值索引全量重建: datasource=%s index=%s",
+                    datasource_id,
+                    values_index_name,
+                )
+                rag_service.index.delete_index(values_index_name)
+                existing_values_index = None
+
+            restored_field_samples: FieldSamples = {}
+            if existing_semantic_index is not None:
+                logger.debug("字段语义索引已存在: %s", semantic_index_name)
+                self._restore_queryable_flags(rag_service, semantic_index_name, data_model)
+                self._restore_field_semantic(rag_service, semantic_index_name, data_model)
+            else:
+                logger.info("创建字段语义索引: %s", semantic_index_name)
+
+            if existing_values_index is not None:
+                logger.debug("字段值索引已存在: %s", values_index_name)
+                restored_field_samples = self._restore_field_samples(
+                    rag_service,
+                    values_index_name,
+                )
+            elif refresh_field_values:
+                logger.info("创建字段值索引: %s", values_index_name)
+
+            if existing_semantic_index is not None and not normalized_refresh_artifacts:
+                return restored_field_samples
+
+            if normalized_refresh_artifacts:
+                logger.info(
+                    "按 refresh request 刷新字段索引: datasource=%s requested=%s prefer_incremental=%s",
+                    datasource_id,
+                    sorted(normalized_refresh_artifacts),
+                    prefer_incremental,
+                )
+
+            field_samples: FieldSamples = copy.deepcopy(restored_field_samples)
+            unqueryable_captions: set[str] = set()
+            if refresh_field_values or existing_values_index is None:
+                refreshed_field_samples, unqueryable_captions = (
+                    await self._fetch_field_samples_for_index(
+                        datasource_id=datasource_id,
+                        data_model=data_model,
+                    )
+                )
+                if refreshed_field_samples:
+                    field_samples = refreshed_field_samples
+
+            if field_samples:
+                try:
+                    data_model._field_samples_cache = field_samples
+                except AttributeError:
+                    pass
+
+            for field in data_model.fields:
+                if field.caption in unqueryable_captions or field.name in unqueryable_captions:
+                    field.queryable = False
+
+            field_semantic = getattr(data_model, "_field_semantic_cache", None)
+            if refresh_field_semantic or existing_semantic_index is None:
+                field_semantic = await self._infer_field_semantic_for_index(
+                    datasource_id=datasource_id,
+                    data_model=data_model,
+                    field_samples=field_samples,
+                )
+                try:
+                    data_model._field_semantic_cache = field_semantic
+                except AttributeError:
+                    pass
+
+            semantic_documents = self._build_field_index_documents(
+                data_model=data_model,
+                field_semantic=field_semantic,
+                field_samples=field_samples,
+                unqueryable_captions=unqueryable_captions,
+            )
+            values_documents = self._build_field_values_index_documents(
+                data_model=data_model,
+                field_samples=field_samples,
+                unqueryable_captions=unqueryable_captions,
+            )
+            config = self._build_field_index_config()
+
+            if existing_semantic_index is None:
+                rag_service.index.create_index(
+                    name=semantic_index_name,
+                    config=config,
+                    documents=semantic_documents,
+                )
+                logger.info(
+                    "字段语义索引创建完成: %s fields=%s",
+                    semantic_index_name,
+                    len(semantic_documents),
+                )
+            elif refresh_field_semantic:
+                update_result = rag_service.index.update_documents(
+                    semantic_index_name,
+                    semantic_documents,
+                )
+                tombstoned_count = self._tombstone_deleted_index_documents(
+                    rag_service=rag_service,
+                    index_name=semantic_index_name,
+                    current_field_ids=current_field_ids,
+                )
+                logger.info(
+                    "字段语义索引刷新完成: %s added=%s updated=%s metadata_only=%s unchanged=%s failed=%s tombstoned=%s",
+                    semantic_index_name,
+                    update_result.added,
+                    update_result.updated,
+                    update_result.metadata_only_updated,
+                    update_result.unchanged,
+                    update_result.failed,
+                    tombstoned_count,
+                )
+
+            if existing_values_index is None:
+                rag_service.index.create_index(
+                    name=values_index_name,
+                    config=config,
+                    documents=values_documents,
+                )
+                logger.info(
+                    "字段值索引创建完成: %s fields=%s",
+                    values_index_name,
+                    len(values_documents),
+                )
+            elif refresh_field_values:
+                values_update_result = rag_service.index.update_documents(
+                    values_index_name,
+                    values_documents,
+                )
+                tombstoned_count = self._tombstone_deleted_index_documents(
+                    rag_service=rag_service,
+                    index_name=values_index_name,
+                    current_field_ids=current_field_ids,
+                )
+                logger.info(
+                    "字段值索引刷新完成: %s added=%s updated=%s metadata_only=%s unchanged=%s failed=%s tombstoned=%s",
+                    values_index_name,
+                    values_update_result.added,
+                    values_update_result.updated,
+                    values_update_result.metadata_only_updated,
+                    values_update_result.unchanged,
+                    values_update_result.failed,
+                    tombstoned_count,
+                )
+
+            if refresh_field_semantic and rag_service.index.get_index(semantic_index_name) is not None:
+                self._compact_superseded_field_indexes(
+                    rag_service=rag_service,
+                    index_prefix=semantic_index_prefix,
+                    current_index_name=semantic_index_name,
+                )
+            if refresh_field_values and rag_service.index.get_index(values_index_name) is not None:
+                self._compact_superseded_field_indexes(
+                    rag_service=rag_service,
+                    index_prefix=values_index_prefix,
+                    current_index_name=values_index_name,
+                )
+
+            return field_samples
+
+        except Exception as e:
+            logger.warning(f"创建字段索引失败: {e}")
+            return {}
+
     def _restore_queryable_flags(
         self,
         rag_service: Any,
@@ -1270,41 +1945,4 @@ class TableauDataLoader:
             }
         return results
 
-def schedule_datasource_artifact_preparation(
-    datasource_id: str,
-    auth: Optional[TableauAuthContext] = None,
-) -> bool:
-    """调度后台预热任务，避免在在线请求里做重准备。"""
-    with _prewarm_lock:
-        if datasource_id in _prewarming_datasources:
-            return False
-        _prewarming_datasources.add(datasource_id)
-
-    async def _run() -> None:
-        try:
-            async with TableauDataLoader() as loader:
-                await loader.prepare_datasource_artifacts(
-                    datasource_id=datasource_id,
-                    auth=auth,
-                )
-            logger.info(f"后台预热完成: datasource={datasource_id}")
-        except Exception as e:
-            logger.warning(f"后台预热失败: datasource={datasource_id}, error={e}")
-        finally:
-            with _prewarm_lock:
-                _prewarming_datasources.discard(datasource_id)
-
-    try:
-        asyncio.create_task(_run())
-        return True
-    except RuntimeError:
-        with _prewarm_lock:
-            _prewarming_datasources.discard(datasource_id)
-        logger.warning("当前上下文无运行中的事件循环，无法调度后台预热任务")
-        return False
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 导出
-# ══════════════════════════════════════════════════════════════════════════════
-
-__all__ = ["TableauDataLoader", "schedule_datasource_artifact_preparation"]
+__all__ = ["TableauDataLoader"]

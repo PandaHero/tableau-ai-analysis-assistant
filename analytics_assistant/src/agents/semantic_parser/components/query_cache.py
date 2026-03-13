@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 _query_cache_singleton: Optional["QueryCache"] = None
 _QUERY_CACHE_VERSION = "semantic-v3-planner-contract"
+_GLOBAL_SCOPE_KEY = "global"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 配置加载
@@ -77,6 +78,41 @@ def compute_question_hash(question: str, datasource_luid: str) -> str:
     """计算问题的 hash"""
     content = f"{datasource_luid}:{question.strip().lower()}"
     return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+
+def build_query_cache_scope_key(
+    *,
+    tenant_site: Optional[str] = None,
+    user_id: Optional[str] = None,
+    tenant_domain: Optional[str] = None,
+) -> str:
+    """构造 query cache 的租户/用户隔离键。"""
+    normalized_domain = str(tenant_domain or "").strip().lower()
+    normalized_site = str(tenant_site or "").strip().lower()
+    normalized_user_id = str(user_id or "").strip().lower()
+    if not normalized_domain and not normalized_site and not normalized_user_id:
+        return _GLOBAL_SCOPE_KEY
+
+    content = "|".join([
+        normalized_domain,
+        normalized_site,
+        normalized_user_id,
+    ])
+    return "scope_" + hashlib.md5(content.encode("utf-8")).hexdigest()[:16]
+
+
+def build_query_cache_partition_key(
+    datasource_luid: str,
+    scope_key: Optional[str] = None,
+) -> str:
+    """把 scope 与 datasource 合成为单一缓存分区键。"""
+    normalized_scope_key = str(scope_key or _GLOBAL_SCOPE_KEY).strip() or _GLOBAL_SCOPE_KEY
+    normalized_datasource_luid = str(datasource_luid or "").strip()
+    if not normalized_datasource_luid:
+        raise ValueError("datasource_luid must not be empty")
+    if normalized_scope_key == _GLOBAL_SCOPE_KEY:
+        return normalized_datasource_luid
+    return f"{normalized_scope_key}__{normalized_datasource_luid}"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # QueryCache 组件（继承 SemanticCache）
@@ -180,6 +216,10 @@ class QueryCache(SemanticCache[CachedQuery]):
         current_schema_hash = kwargs.get("current_schema_hash")
         if current_schema_hash and cached.schema_hash != current_schema_hash:
             return False
+
+        current_scope_key = str(kwargs.get("current_scope_key") or "").strip()
+        if current_scope_key and cached.scope_key != current_scope_key:
+            return False
         
         return True
     
@@ -208,6 +248,7 @@ class QueryCache(SemanticCache[CachedQuery]):
         question: str,
         datasource_luid: str,
         current_schema_hash: str,
+        scope_key: str = _GLOBAL_SCOPE_KEY,
     ) -> Optional[CachedQuery]:
         """精确匹配查询缓存
         
@@ -218,21 +259,29 @@ class QueryCache(SemanticCache[CachedQuery]):
         4. 检查 schema_hash 是否匹配当前数据模型
         """
         question_hash = compute_question_hash(question, datasource_luid)
+        partition_key = build_query_cache_partition_key(
+            datasource_luid,
+            scope_key=scope_key,
+        )
         
         try:
-            cached = self._get_by_key(question_hash, datasource_luid)
+            cached = self._get_by_key(question_hash, partition_key)
             
             if cached is None:
                 logger.debug(f"QueryCache 未命中: question_hash={question_hash[:8]}...")
                 return None
             
-            if not self._validate_cached(cached, current_schema_hash=current_schema_hash):
+            if not self._validate_cached(
+                cached,
+                current_schema_hash=current_schema_hash,
+                current_scope_key=scope_key,
+            ):
                 logger.debug(f"QueryCache 验证失败（TTL/版本/schema）: question_hash={question_hash[:8]}...")
                 return None
             
             # 更新命中计数
             cached.hit_count += 1
-            self._put_cached(datasource_luid, question_hash, cached)
+            self._put_cached(partition_key, question_hash, cached)
             
             logger.info(f"QueryCache 命中: question='{question[:20]}...', hit_count={cached.hit_count}")
             return cached
@@ -256,6 +305,7 @@ class QueryCache(SemanticCache[CachedQuery]):
         datasource_luid: str,
         current_schema_hash: str,
         threshold: Optional[float] = None,
+        scope_key: str = _GLOBAL_SCOPE_KEY,
     ) -> Optional[CachedQuery]:
         """语义相似匹配
         
@@ -263,9 +313,13 @@ class QueryCache(SemanticCache[CachedQuery]):
         """
         return super().get_similar(
             question=question,
-            datasource_luid=datasource_luid,
+            datasource_luid=build_query_cache_partition_key(
+                datasource_luid,
+                scope_key=scope_key,
+            ),
             threshold=threshold,
             current_schema_hash=current_schema_hash,
+            current_scope_key=scope_key,
         )
     
     def set(
@@ -279,10 +333,15 @@ class QueryCache(SemanticCache[CachedQuery]):
         global_understanding: Optional[dict[str, Any]] = None,
         ttl: Optional[int] = None,
         include_embedding: bool = True,
+        scope_key: str = _GLOBAL_SCOPE_KEY,
     ) -> bool:
         """设置缓存"""
         ttl = ttl or self._default_ttl
         question_hash = compute_question_hash(question, datasource_luid)
+        partition_key = build_query_cache_partition_key(
+            datasource_luid,
+            scope_key=scope_key,
+        )
         
         try:
             # 计算 embedding（如果可用）
@@ -302,6 +361,7 @@ class QueryCache(SemanticCache[CachedQuery]):
                 question_hash=question_hash,
                 question_embedding=question_embedding,
                 datasource_luid=datasource_luid,
+                scope_key=scope_key,
                 schema_hash=schema_hash,
                 parser_version=_QUERY_CACHE_VERSION,
                 semantic_output=semantic_output,
@@ -314,17 +374,17 @@ class QueryCache(SemanticCache[CachedQuery]):
             )
             
             # 存储
-            cache_manager = self._get_cache_manager(datasource_luid)
+            cache_manager = self._get_cache_manager(partition_key)
             if cache_manager is not None:
                 cache_manager.set(question_hash, cached.model_dump(), ttl=ttl)
             else:
-                namespace = self._make_namespace(datasource_luid)
+                namespace = self._make_namespace(partition_key)
                 ttl_minutes = ttl // 60
                 self._direct_store.put(namespace, question_hash, cached.model_dump(), ttl=ttl_minutes)
             
             # 添加到 FAISS 索引
             if question_embedding:
-                self._add_to_faiss(datasource_luid, question_hash, question_embedding)
+                self._add_to_faiss(partition_key, question_hash, question_embedding)
             
             logger.info(f"QueryCache 已缓存: question='{question[:20]}...', ttl={ttl}s")
             return True
@@ -364,10 +424,15 @@ class QueryCache(SemanticCache[CachedQuery]):
         self,
         datasource_luid: str,
         new_schema_hash: str,
+        scope_key: str = _GLOBAL_SCOPE_KEY,
     ) -> int:
         """当数据模型变更时，主动失效旧版本的缓存"""
         try:
-            cache_manager = self._get_cache_manager(datasource_luid)
+            partition_key = build_query_cache_partition_key(
+                datasource_luid,
+                scope_key=scope_key,
+            )
+            cache_manager = self._get_cache_manager(partition_key)
             if cache_manager is not None:
                 # 使用批量删除：仅删除 schema_hash 不匹配的条目
                 def _schema_mismatch(value: dict) -> bool:
@@ -375,15 +440,16 @@ class QueryCache(SemanticCache[CachedQuery]):
 
                 deleted = cache_manager.delete_by_filter(_schema_mismatch)
                 # 重置该数据源的 FAISS 索引（部分删除后索引不一致，需重建）
-                self._reset_faiss_for_datasource(datasource_luid)
+                self._reset_faiss_for_datasource(partition_key)
                 logger.info(
                     f"QueryCache schema 变更失效 {deleted} 条缓存: "
-                    f"datasource={datasource_luid}, new_hash={new_schema_hash[:8]}..."
+                    f"datasource={datasource_luid}, scope={scope_key}, "
+                    f"new_hash={new_schema_hash[:8]}..."
                 )
                 return deleted
             else:
                 store = self._get_store()
-                namespace = self._make_namespace(datasource_luid)
+                namespace = self._make_namespace(partition_key)
                 items = store.search(namespace, limit=10000)
                 count = 0
                 for item in items:
@@ -396,12 +462,13 @@ class QueryCache(SemanticCache[CachedQuery]):
                         continue
                     if cached.schema_hash != new_schema_hash:
                         store.delete(namespace, item.key)
-                        self._remove_from_faiss(datasource_luid, item.key)
+                        self._remove_from_faiss(partition_key, item.key)
                         count += 1
                 
                 logger.info(
                     f"QueryCache schema 变更失效 {count} 条缓存: "
-                    f"datasource={datasource_luid}, new_hash={new_schema_hash[:8]}..."
+                    f"datasource={datasource_luid}, scope={scope_key}, "
+                    f"new_hash={new_schema_hash[:8]}..."
                 )
                 return count
             
@@ -463,6 +530,8 @@ __all__ = [
     "get_query_cache",
     "compute_schema_hash",
     "compute_question_hash",
+    "build_query_cache_scope_key",
+    "build_query_cache_partition_key",
 ]
 
 def get_query_cache() -> QueryCache:

@@ -39,6 +39,23 @@ from analytics_assistant.src.core.exceptions import (
 
 logger = logging.getLogger(__name__)
 
+
+class TableauDatasourceAmbiguityError(ValueError):
+    """Raised when datasource name resolution returns multiple exact matches."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        datasource_name: str,
+        project_name: Optional[str] = None,
+        choices: Optional[list[dict[str, str]]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.datasource_name = datasource_name
+        self.project_name = project_name
+        self.choices = list(choices or [])
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SSL 配置辅助函数
 # ══════════════════════════════════════════════════════════════════════════════
@@ -520,12 +537,13 @@ class VizQLClient:
     ) -> Optional[str]:
         """
         通过数据源名称获取 LUID
-        
-        支持多种匹配策略：
-        1. 精确匹配（带项目名）
-        2. 精确匹配（不带项目名）
-        3. 前缀匹配（数据源名称是输入的前缀）
-        4. 模糊匹配（互相包含）
+
+        只允许精确匹配：
+        1. `datasource_luid` 优先，由上游直接传入
+        2. `datasource_name + project_name` 精确匹配
+        3. `datasource_name` 唯一精确匹配
+
+        默认禁止前缀/模糊命中，名称不唯一时必须由上游触发澄清。
         
         Args:
             datasource_name: 数据源名称（可能包含 "| 项目 : xxx" 后缀）
@@ -535,6 +553,17 @@ class VizQLClient:
         Returns:
             数据源 LUID，未找到返回 None
         """
+        normalized_name = str(datasource_name or "").strip()
+        normalized_project = str(project_name or "").strip()
+        if not normalized_name:
+            return None
+
+        project_marker = "| 项目 :"
+        if project_marker in normalized_name and not normalized_project:
+            base_name, _, suffix = normalized_name.partition(project_marker)
+            normalized_name = base_name.strip()
+            normalized_project = suffix.strip()
+
         # 查询所有数据源（Tableau Cloud 不支持 name filter）
         query = """
         query {
@@ -553,43 +582,67 @@ class VizQLClient:
         )
         
         datasources = result.get("data", {}).get("publishedDatasources", [])
-        
-        # 如果指定了项目名，先尝试精确匹配
-        if project_name:
-            for ds in datasources:
-                if ds.get("name") == datasource_name and ds.get("projectName") == project_name:
-                    logger.info(f"精确匹配（带项目）: {ds.get('name')} -> {ds.get('luid')}")
-                    return ds.get("luid")
-        
-        # 精确匹配名称
-        for ds in datasources:
-            if ds.get("name") == datasource_name:
-                logger.info(f"精确匹配: {ds.get('name')} -> {ds.get('luid')}")
-                return ds.get("luid")
-        
-        # 前缀匹配（数据源名称是输入的前缀）
-        # 例如：输入 "销售分析(IMPALA) | 项目 : 001-数据源"，数据源名称是 "销售分析(IMPALA)"
-        for ds in datasources:
-            ds_name = ds.get("name", "")
-            if ds_name and datasource_name.startswith(ds_name):
-                logger.info(f"前缀匹配: {ds_name} -> {ds.get('luid')} (输入: {datasource_name})")
-                return ds.get("luid")
-        
-        # 模糊匹配（互相包含）
-        name_lower = datasource_name.lower()
-        for ds in datasources:
-            ds_name = ds.get("name", "")
-            ds_name_lower = ds_name.lower()
-            if name_lower in ds_name_lower or ds_name_lower in name_lower:
-                logger.info(f"模糊匹配: {ds_name} -> {ds.get('luid')} (输入: {datasource_name})")
-                return ds.get("luid")
-        
-        logger.warning(f"未找到匹配的数据源: {datasource_name}")
-        logger.debug(f"可用数据源: {[ds.get('name') for ds in datasources]}")
+
+        exact_matches = [
+            ds for ds in datasources
+            if str(ds.get("name") or "").strip() == normalized_name
+        ]
+        exact_match_choices = [
+            {
+                "datasource_luid": str(ds.get("luid") or "").strip(),
+                "name": str(ds.get("name") or "").strip(),
+                "project": str(ds.get("projectName") or "").strip(),
+            }
+            for ds in exact_matches
+            if str(ds.get("luid") or "").strip()
+        ]
+        if normalized_project:
+            project_matches = [
+                ds for ds in exact_matches
+                if str(ds.get("projectName") or "").strip() == normalized_project
+            ]
+            if len(project_matches) == 1:
+                match = project_matches[0]
+                logger.info(
+                    "精确匹配（带项目）: %s / %s -> %s",
+                    match.get("name"),
+                    match.get("projectName"),
+                    match.get("luid"),
+                )
+                return match.get("luid")
+            if len(project_matches) > 1:
+                project_choices = [
+                    choice for choice in exact_match_choices
+                    if choice.get("project") == normalized_project
+                ]
+                raise TableauDatasourceAmbiguityError(
+                    "数据源名称与项目组合不唯一，请改用 datasource_luid",
+                    datasource_name=normalized_name,
+                    project_name=normalized_project,
+                    choices=project_choices,
+                )
+
+        if len(exact_matches) == 1:
+            match = exact_matches[0]
+            logger.info("精确匹配: %s -> %s", match.get("name"), match.get("luid"))
+            return match.get("luid")
+
+        if len(exact_matches) > 1:
+            raise TableauDatasourceAmbiguityError(
+                "数据源名称不唯一，请提供 project_name 或 datasource_luid",
+                datasource_name=normalized_name,
+                choices=exact_match_choices,
+            )
+
+        logger.warning("未找到匹配的数据源: %s", normalized_name)
+        logger.debug(
+            "可用数据源: %s",
+            [f"{ds.get('name')}|{ds.get('projectName')}" for ds in datasources],
+        )
         return None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 导出
 # ══════════════════════════════════════════════════════════════════════════════
 
-__all__ = ["VizQLClient"]
+__all__ = ["TableauDatasourceAmbiguityError", "VizQLClient"]

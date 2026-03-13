@@ -1,17 +1,16 @@
 # -*- coding: utf-8 -*-
-"""
-用户设置相关 Pydantic 模型
+"""用户设置相关 Pydantic 模型。"""
 
-定义用户设置的请求和响应数据结构。
-"""
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel
 
+
 class UserSettingsResponse(BaseModel):
-    """用户设置响应模型。"""
+    """用户设置响应。"""
 
     tableau_username: str
     language: Literal["zh", "en"] = "zh"
@@ -22,8 +21,9 @@ class UserSettingsResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
 class UpdateSettingsRequest(BaseModel):
-    """更新设置请求（部分更新，只更新非 None 字段）。"""
+    """用户设置更新请求。"""
 
     language: Optional[Literal["zh", "en"]] = None
     analysis_depth: Optional[Literal["detailed", "comprehensive"]] = None

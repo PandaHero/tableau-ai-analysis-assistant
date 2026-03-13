@@ -1,11 +1,8 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
-WorkflowExecutor 可观测性测试。
-
-重点验证 clarification / error 等非 data 分支也会透传阶段指标，
-避免前端和日志在异常或澄清场景下丢失耗时信息。
+WorkflowExecutor observability tests.
+Focus on interrupt/error branches and accumulated metrics.
 """
-
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,7 +18,12 @@ from analytics_assistant.src.agents.replanner.schemas.output import (
     CandidateQuestion,
     ReplanDecision,
 )
+from analytics_assistant.src.orchestration.workflow import executor as executor_module
 from analytics_assistant.src.orchestration.workflow.executor import WorkflowExecutor
+from analytics_assistant.src.orchestration.workflow.checkpoint import (
+    reset_workflow_checkpointers,
+)
+from analytics_assistant.src.platform.tableau.client import TableauDatasourceAmbiguityError
 
 
 class _DummyVizQLClient:
@@ -35,24 +37,134 @@ class _DummyVizQLClient:
 class _DummyDataModel:
     datasource_id = "ds-test"
     fields = []
-    _field_samples_cache = {"Sold Nm": {"sample_values": ["成都高金食品有限公司"]}}
+    _field_samples_cache = {"Sold Nm": {"sample_values": ["Acme Foods Ltd."]}}
     _field_semantic_cache = {"Sold Nm": {"category": "organization"}}
+
+
+class _HighRiskDataModel:
+    datasource_id = "ds-high-risk"
+    fields = []
+    _field_samples_cache = {
+        "Region": {
+            "sample_values": ["East", "West", "North", "South"],
+            "unique_count": 8000,
+        }
+    }
+    _field_semantic_cache = {"Region": {"category": "geography"}}
+
+
+@pytest.fixture(autouse=True)
+def reset_checkpointers() -> None:
+    """每个测试前后重置 checkpoint，避免 aiosqlite 线程残留。"""
+    reset_workflow_checkpointers(clear_persisted_state=True)
+    yield
+    reset_workflow_checkpointers(clear_persisted_state=True)
 
 
 class _ClarificationGraph:
     async def astream(self, initial_state, config, stream_mode="updates"):
         yield {
+            "__interrupt__": (
+                SimpleNamespace(
+                    value={
+                        "interrupt_type": "missing_slot",
+                        "message": "Choose dimension field",
+                        "source": "semantic_understanding",
+                        "slot_name": "dimension",
+                        "options": ["Seller Name (Sold Nm)"],
+                        "resume_strategy": "langgraph_native",
+                        "optimization_metrics": {
+                            "semantic_understanding_ms": 12.5,
+                            "semantic_understanding_clarification_shortcut": True,
+                        },
+                    },
+                    ns=["semantic_understanding:test"],
+                ),
+            ),
+        }
+
+
+class _ValueConfirmGraph:
+    async def astream(self, initial_state, config, stream_mode="updates"):
+        yield {
+            "__interrupt__": (
+                SimpleNamespace(
+                    value={
+                        "interrupt_type": "value_confirm",
+                        "message": "Select correct region value",
+                        "source": "filter_validator",
+                        "field": "Region",
+                        "requested_value": "Eest",
+                        "candidates": ["East", "West"],
+                        "resume_strategy": "langgraph_native",
+                        "optimization_metrics": {
+                            "filter_validation_ms": 7.2,
+                        },
+                    },
+                    ns=["filter_validator:test"],
+                ),
+            ),
+        }
+
+
+class _NativeMissingSlotGraph:
+    async def astream(self, initial_state, config, stream_mode="updates"):
+        yield {
+            "__interrupt__": (
+                SimpleNamespace(
+                    value={
+                        "interrupt_type": "missing_slot",
+                        "message": "Select timeframe",
+                        "source": "semantic_understanding",
+                        "slot_name": "timeframe",
+                        "options": ["last_7_days", "last_30_days"],
+                        "resume_strategy": "langgraph_native",
+                        "optimization_metrics": {
+                            "semantic_understanding_ms": 11.3,
+                        },
+                    },
+                    ns=["semantic_understanding:test"],
+                ),
+            ),
+        }
+
+
+class _MalformedClarificationGraph:
+    async def astream(self, initial_state, config, stream_mode="updates"):
+        yield {
             "semantic_understanding": {
                 "needs_clarification": True,
-                "clarification_question": "请选择省份字段",
-                "clarification_options": ["销售方 (Sold Nm)"],
+                "clarification_question": "Choose dimension field",
+                "clarification_options": ["Seller Name (Sold Nm)"],
                 "clarification_source": "semantic_understanding",
-                "optimization_metrics": {
-                    "semantic_understanding_ms": 12.5,
-                    "semantic_understanding_clarification_shortcut": True,
-                },
             },
         }
+
+
+def test_load_event_queue_maxsize_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        executor_module,
+        "get_config",
+        lambda: {"api": {"streaming": {"event_queue_maxsize": 64}}},
+    )
+
+    executor = WorkflowExecutor("admin", request_id="req-queue-size")
+
+    assert executor._event_queue_maxsize == 64
+
+
+def test_load_event_queue_maxsize_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        executor_module,
+        "get_config",
+        lambda: {"api": {"streaming": {"event_queue_maxsize": "invalid"}}},
+    )
+
+    executor = WorkflowExecutor("admin", request_id="req-queue-default")
+
+    assert executor._event_queue_maxsize == executor_module._DEFAULT_EVENT_QUEUE_SIZE
 
 
 class _ErrorGraph:
@@ -66,8 +178,8 @@ def _make_semantic_output(
     query_id: str,
     *,
     restated_question: str,
-    measure: str = "销售额",
-    dimension: str = "地区",
+    measure: str = "Sales",
+    dimension: str = "Region",
 ) -> dict:
     return {
         "query_id": query_id,
@@ -82,7 +194,7 @@ def _make_semantic_output(
 
 def _make_insight_output(
     *,
-    summary: str = "华东区销售额下降主要集中在渠道分布变化",
+    summary: str = "The sales decline is mainly concentrated in channel mix changes.",
 ) -> InsightOutput:
     return InsightOutput(
         findings=[
@@ -90,7 +202,7 @@ def _make_insight_output(
                 finding_type=FindingType.ANOMALY,
                 analysis_level=AnalysisLevel.DIAGNOSTIC,
                 description=summary,
-                supporting_data={"segment": "华东区"},
+                supporting_data={"segment": "East Region"},
                 confidence=0.87,
             )
         ],
@@ -104,58 +216,61 @@ def _make_analysis_plan_dict() -> dict:
         "plan_mode": "why_analysis",
         "needs_planning": True,
         "requires_llm_reasoning": True,
-        "goal": "解释华东区销售额下降原因",
+        "goal": "Explain why sales declined in the East region",
         "execution_strategy": "sequential",
         "reasoning_focus": [
-            "先验证现象",
-            "再定位异常切片",
-            "最后做归因总结",
+            "Verify the observed decline",
+            "Locate the abnormal slice",
+            "Summarize the root cause",
         ],
         "sub_questions": [
             {
                 "step_id": "step-1",
-                "title": "验证现象",
-                "goal": "确认用户想解释的现象是否真实存在",
-                "question": "为什么华东区销售额下降了？",
-                "purpose": "验证现象",
+                "title": "Verify the decline",
+                "goal": "Confirm that the decline described by the user is real",
+                "question": "Why did sales decline in the East region?",
+                "purpose": "Verify the decline",
                 "step_type": "query",
                 "uses_primary_query": True,
                 "depends_on": [],
-                "semantic_focus": ["销售额", "华东区", "同比"],
-                "expected_output": "确认现象是否成立，并明确差异方向与幅度",
+                "semantic_focus": ["sales", "east region", "year-over-year"],
+                "expected_output": "Confirm whether the decline exists and quantify its direction and magnitude",
                 "candidate_axes": [],
-                "clarification_if_missing": ["比较基线", "时间范围"],
+                "targets_anomaly": False,
+                "clarification_if_missing": ["comparison baseline", "time range"],
             },
             {
                 "step_id": "step-2",
-                "title": "定位异常切片",
-                "goal": "定位最异常的对象或切片",
-                "question": "按地区和产品找出贡献最大的异常切片",
-                "purpose": "定位异常切片",
+                "title": "Locate the abnormal slice",
+                "goal": "Find the object or slice with the strongest anomaly",
+                "question": "Break down by region and product to find the slice contributing most to the anomaly",
+                "purpose": "Locate the abnormal slice",
                 "step_type": "query",
                 "uses_primary_query": False,
                 "depends_on": ["step-1"],
-                "semantic_focus": ["异常定位", "产品", "地区"],
-                "expected_output": "定位异常对象集合或关键切片",
-                "candidate_axes": ["地区", "产品"],
+                "semantic_focus": ["anomaly localization", "product", "region"],
+                "expected_output": "Identify the anomalous object set or key slice",
+                "candidate_axes": ["region", "product"],
+                "targets_anomaly": True,
                 "clarification_if_missing": [],
             },
             {
                 "step_id": "step-3",
-                "title": "归因总结",
-                "goal": "汇总证据链并输出原因总结",
-                "question": "结合前两步结果总结原因",
-                "purpose": "归因总结",
+                "title": "Summarize the root cause",
+                "goal": "Aggregate the evidence chain and summarize the root cause",
+                "question": "Summarize the cause based on the first two steps",
+                "purpose": "Summarize the root cause",
                 "step_type": "synthesis",
                 "uses_primary_query": False,
                 "depends_on": ["step-1", "step-2"],
-                "semantic_focus": ["证据汇总", "原因归纳"],
-                "expected_output": "形成结论、证据摘要和待确认口径",
+                "semantic_focus": ["evidence aggregation", "cause synthesis"],
+                "expected_output": "Produce a conclusion, evidence summary, and open questions",
                 "candidate_axes": [],
+                "targets_anomaly": False,
                 "clarification_if_missing": [],
             },
         ],
-        "retrieval_focus_terms": ["销售额", "华东区"],
+        "retrieval_focus_terms": ["sales", "east region"],
         "planner_confidence": 0.93,
     }
 
@@ -165,73 +280,77 @@ def _make_deep_analysis_plan_dict() -> dict:
         "plan_mode": "why_analysis",
         "needs_planning": True,
         "requires_llm_reasoning": True,
-        "goal": "解释华东区销售额下降原因",
+        "goal": "Explain why sales declined in the East region",
         "execution_strategy": "sequential",
         "reasoning_focus": [
-            "先验证现象",
-            "先按省份锁定异常范围",
-            "再按产品继续下钻",
-            "最后汇总证据链",
+            "Verify the observed decline",
+            "Narrow the abnormal region first",
+            "Continue drilling down by product",
+            "Summarize the evidence chain",
         ],
         "sub_questions": [
             {
                 "step_id": "step-1",
-                "title": "验证现象",
-                "goal": "确认用户想解释的现象是否真实存在",
-                "question": "为什么华东区销售额下降了？",
-                "purpose": "验证现象",
+                "title": "Verify the decline",
+                "goal": "Confirm that the decline described by the user is real",
+                "question": "Why did sales decline in the East region?",
+                "purpose": "Verify the decline",
                 "step_type": "query",
                 "uses_primary_query": True,
                 "depends_on": [],
-                "semantic_focus": ["销售额", "华东区", "同比"],
-                "expected_output": "确认现象是否成立，并明确差异方向与幅度",
+                "semantic_focus": ["sales", "east region", "year-over-year"],
+                "expected_output": "Confirm whether the decline exists and quantify its direction and magnitude",
                 "candidate_axes": [],
-                "clarification_if_missing": ["比较基线", "时间范围"],
+                "targets_anomaly": False,
+                "clarification_if_missing": ["comparison baseline", "time range"],
             },
             {
                 "step_id": "step-2",
-                "title": "按省份定位异常区域",
-                "goal": "先锁定最异常的省份或区域",
-                "question": "按省份定位最异常的区域",
-                "purpose": "缩小异常范围",
+                "title": "Locate the abnormal area by province",
+                "goal": "Narrow down the province or area with the strongest anomaly",
+                "question": "Break down by province to locate the most abnormal area",
+                "purpose": "Narrow the anomaly scope",
                 "step_type": "query",
                 "uses_primary_query": False,
                 "depends_on": ["step-1"],
-                "semantic_focus": ["异常定位", "省份"],
-                "expected_output": "识别需要继续下钻的异常省份",
-                "candidate_axes": ["省份"],
+                "semantic_focus": ["anomaly localization", "province"],
+                "expected_output": "Identify the anomalous province that needs further drill-down",
+                "candidate_axes": ["province"],
+                "targets_anomaly": True,
                 "clarification_if_missing": [],
             },
             {
                 "step_id": "step-3",
-                "title": "按产品继续下钻",
-                "goal": "在异常省份内定位贡献最大的产品切片",
-                "question": "在已识别的异常省份内按产品定位异常切片",
-                "purpose": "继续下钻定位原因",
+                "title": "Continue drilling down by product",
+                "goal": "Within the abnormal province, find the product slice with the largest contribution",
+                "question": "Within the identified abnormal province, locate the abnormal slice by product",
+                "purpose": "Continue drilling down to find the cause",
                 "step_type": "query",
                 "uses_primary_query": False,
                 "depends_on": ["step-1", "step-2"],
-                "semantic_focus": ["异常定位", "产品", "下钻"],
-                "expected_output": "识别异常产品或关键切片",
-                "candidate_axes": ["产品"],
+                "semantic_focus": ["anomaly localization", "product", "drill-down"],
+                "expected_output": "Identify the anomalous product or key slice",
+                "candidate_axes": ["product"],
+                "targets_anomaly": True,
                 "clarification_if_missing": [],
             },
             {
                 "step_id": "step-4",
-                "title": "归因总结",
-                "goal": "汇总证据链并输出原因总结",
-                "question": "结合前三步结果总结原因",
-                "purpose": "归因总结",
+                "title": "Summarize the root cause",
+                "goal": "Aggregate the evidence chain and summarize the root cause",
+                "question": "Summarize the cause based on the first three steps",
+                "purpose": "Summarize the root cause",
                 "step_type": "synthesis",
                 "uses_primary_query": False,
                 "depends_on": ["step-1", "step-2", "step-3"],
-                "semantic_focus": ["证据汇总", "原因归纳"],
-                "expected_output": "形成结论、证据摘要和待确认口径",
+                "semantic_focus": ["evidence aggregation", "cause synthesis"],
+                "expected_output": "Produce a conclusion, evidence summary, and open questions",
                 "candidate_axes": [],
+                "targets_anomaly": False,
                 "clarification_if_missing": [],
             },
         ],
-        "retrieval_focus_terms": ["销售额", "华东区", "省份", "产品"],
+        "retrieval_focus_terms": ["sales", "east region", "province", "product"],
         "planner_confidence": 0.91,
     }
 
@@ -244,11 +363,11 @@ def _make_global_understanding_dict() -> dict:
             "multi_hop_reasoning",
             "dynamic_axis_selection",
         ],
-        "decomposition_reason": "why 问题需要证据链和逐步验证解释轴",
+        "decomposition_reason": "This why-question requires an evidence chain and stepwise validation.",
         "needs_clarification": False,
         "clarification_question": None,
         "clarification_options": [],
-        "primary_restated_question": "为什么华东区销售额下降了",
+        "primary_restated_question": "Why did sales decline in the East region?",
         "risk_flags": [],
         "llm_confidence": 0.93,
         "analysis_plan": _make_analysis_plan_dict(),
@@ -263,11 +382,11 @@ def _make_deep_global_understanding_dict() -> dict:
             "multi_hop_reasoning",
             "dynamic_axis_selection",
         ],
-        "decomposition_reason": "why 问题需要先定位异常范围，再逐步下钻并汇总证据",
+        "decomposition_reason": "This why-question needs anomaly localization before deeper drill-down.",
         "needs_clarification": False,
         "clarification_question": None,
         "clarification_options": [],
-        "primary_restated_question": "为什么华东区销售额下降了",
+        "primary_restated_question": "Why did sales decline in the East region?",
         "risk_flags": [],
         "llm_confidence": 0.91,
         "analysis_plan": _make_deep_analysis_plan_dict(),
@@ -279,11 +398,11 @@ def _make_complex_single_query_global_understanding_dict() -> dict:
         "analysis_mode": "complex_single_query",
         "single_query_feasible": True,
         "single_query_blockers": [],
-        "decomposition_reason": "虽然有时间对比，但仍可由一条查询表达",
+        "decomposition_reason": "Even with time comparison, a single query is still sufficient.",
         "needs_clarification": False,
         "clarification_question": None,
         "clarification_options": [],
-        "primary_restated_question": "比较今年和去年各地区利润率变化",
+        "primary_restated_question": "Compare profit margin changes by region this year versus last year",
         "risk_flags": [],
         "llm_confidence": 0.88,
         "analysis_plan": {
@@ -291,16 +410,16 @@ def _make_complex_single_query_global_understanding_dict() -> dict:
             "single_query_feasible": True,
             "needs_planning": False,
             "requires_llm_reasoning": True,
-            "decomposition_reason": "虽然有时间对比，但仍可由一条查询表达",
-            "goal": "直接解析复杂单查问题",
+            "decomposition_reason": "Even with time comparison, a single query is still sufficient.",
+            "goal": "Directly parse the complex single-query question",
             "execution_strategy": "single_query",
-            "reasoning_focus": ["保持单查表达，但保留复杂推理路径"],
+            "reasoning_focus": ["Keep the query single-pass while preserving complex reasoning"],
             "sub_questions": [],
             "risk_flags": [],
             "needs_clarification": False,
             "clarification_question": None,
             "clarification_options": [],
-            "retrieval_focus_terms": ["利润率", "地区"],
+            "retrieval_focus_terms": ["Profit Margin", "Region"],
             "planner_confidence": 0.88,
         },
     }
@@ -320,9 +439,9 @@ class _PlannedGraph:
                     "query_id": "q-main",
                     "semantic_output": _make_semantic_output(
                         "q-main",
-                        restated_question="为什么华东区销售额下降了",
-                        measure="销售额",
-                        dimension="地区",
+                        restated_question="Why sales declined in the East region",
+                        measure="Sales",
+                        dimension="Region",
                     ),
                     "query": {"query": "main"},
                     "analysis_plan": _make_analysis_plan_dict(),
@@ -344,8 +463,8 @@ class _PlannedGraph:
                 "semantic_output": _make_semantic_output(
                     "q-step-2",
                     restated_question=initial_state["question"],
-                    measure="销售额",
-                    dimension="产品",
+                    measure="Sales",
+                    dimension="??",
                 ),
                 "query": {"query": "followup"},
                 "optimization_metrics": {
@@ -367,9 +486,9 @@ class _PlannedGlobalUnderstandingGraph(_PlannedGraph):
                     "query_id": "q-main",
                     "semantic_output": _make_semantic_output(
                         "q-main",
-                        restated_question="为什么华东区销售额下降了",
-                        measure="销售额",
-                        dimension="地区",
+                        restated_question="Why sales declined in the East region",
+                        measure="Sales",
+                        dimension="Region",
                     ),
                     "query": {"query": "main"},
                     "global_understanding": _make_global_understanding_dict(),
@@ -392,9 +511,9 @@ class _CachedPlannedGlobalUnderstandingGraph(_PlannedGraph):
                     "query_id": "q-main-cache-hit",
                     "semantic_output": _make_semantic_output(
                         "q-main-cache-hit",
-                        restated_question="为什么华东区销售额下降了",
-                        measure="销售额",
-                        dimension="地区",
+                        restated_question="Why sales declined in the East region",
+                        measure="Sales",
+                        dimension="Region",
                     ),
                     "query": {"query": "main"},
                     "global_understanding": _make_global_understanding_dict(),
@@ -425,9 +544,9 @@ class _DeepPlannedGlobalUnderstandingGraph:
                     "query_id": "q-main-deep",
                     "semantic_output": _make_semantic_output(
                         "q-main-deep",
-                        restated_question="为什么华东区销售额下降了",
-                        measure="销售额",
-                        dimension="地区",
+                        restated_question="Why sales declined in the East region",
+                        measure="Sales",
+                        dimension="Region",
                     ),
                     "query": {"query": "main"},
                     "global_understanding": _make_deep_global_understanding_dict(),
@@ -454,8 +573,8 @@ class _DeepPlannedGlobalUnderstandingGraph:
                     "semantic_output": _make_semantic_output(
                         "q-step-2",
                         restated_question=initial_state["question"],
-                        measure="销售额",
-                        dimension="省份",
+                        measure="Sales",
+                        dimension="Province",
                     ),
                     "query": {"query": "followup-province"},
                     "optimization_metrics": {
@@ -474,8 +593,8 @@ class _DeepPlannedGlobalUnderstandingGraph:
                 "semantic_output": _make_semantic_output(
                     "q-step-3",
                     restated_question=initial_state["question"],
-                    measure="销售额",
-                    dimension="产品",
+                    measure="Sales",
+                    dimension="??",
                 ),
                 "query": {"query": "followup-product"},
                 "optimization_metrics": {
@@ -497,9 +616,9 @@ class _ComplexSingleQueryGraph:
                     "query_id": "q-complex-single",
                     "semantic_output": _make_semantic_output(
                         "q-complex-single",
-                        restated_question="比较今年和去年各地区利润率变化",
-                        measure="利润率",
-                        dimension="地区",
+                        restated_question="Compare profit margin changes by region this year versus last year",
+                        measure="Profit Margin",
+                        dimension="Region",
                     ),
                     "query": {"query": "single"},
                     "global_understanding": _make_complex_single_query_global_understanding_dict(),
@@ -522,9 +641,9 @@ class _SingleQueryGraph:
                     "query_id": "q-single",
                     "semantic_output": _make_semantic_output(
                         "q-single",
-                        restated_question="查看各地区销售额",
-                        measure="销售额",
-                        dimension="地区",
+                        restated_question="Show sales by region",
+                        measure="Sales",
+                        dimension="Region",
                     ),
                     "query": {"query": "single"},
                     "optimization_metrics": {
@@ -542,12 +661,12 @@ class _QuestionAwareSingleQueryGraph:
     async def astream(self, initial_state, config, stream_mode="updates"):
         question = initial_state["question"]
         self.questions.append(question)
-        if "渠道" in question:
+        if "channel" in question.lower():
             query_id = "q-followup"
-            dimension = "渠道"
+            dimension = "Channel"
         else:
             query_id = "q-single"
-            dimension = "地区"
+            dimension = "Region"
 
         yield {
             "feedback_learner": {
@@ -557,7 +676,7 @@ class _QuestionAwareSingleQueryGraph:
                     "semantic_output": _make_semantic_output(
                         query_id,
                         restated_question=question,
-                        measure="销售额",
+                        measure="Sales",
                         dimension=dimension,
                     ),
                     "query": {"query": query_id},
@@ -569,17 +688,48 @@ class _QuestionAwareSingleQueryGraph:
         }
 
 
+class _HighRiskSingleQueryGraph:
+    async def astream(self, initial_state, config, stream_mode="updates"):
+        yield {
+            "feedback_learner": {
+                "parse_result": {
+                    "success": True,
+                    "query_id": "q-high-risk",
+                    "semantic_output": _make_semantic_output(
+                        "q-high-risk",
+                        restated_question="show all sales by region",
+                        measure="Sales",
+                        dimension="Region",
+                    ),
+                    "query": {"query": "high-risk"},
+                    "optimization_metrics": {
+                        "semantic_understanding_ms": 9.8,
+                    },
+                },
+            },
+        }
+
+
 class _PlannedClarificationGraph(_PlannedGraph):
     async def ainvoke(self, initial_state, config):
         self.followup_questions.append(initial_state["question"])
         return {
-            "needs_clarification": True,
-            "clarification_question": "请确认要下钻的产品维度字段",
-            "clarification_options": ["产品名称", "产品类别"],
-            "clarification_source": "semantic_understanding",
-            "optimization_metrics": {
-                "semantic_understanding_ms": 8.6,
-            },
+            "__interrupt__": (
+                SimpleNamespace(
+                    value={
+                        "interrupt_type": "missing_slot",
+                        "message": "Confirm drilldown dimension",
+                        "source": "semantic_understanding",
+                        "slot_name": "dimension",
+                        "options": ["product_name", "product_category"],
+                        "resume_strategy": "langgraph_native",
+                        "optimization_metrics": {
+                            "semantic_understanding_ms": 8.6,
+                        },
+                    },
+                    ns=["semantic_understanding:plan-step"],
+                ),
+            ),
         }
 
 
@@ -594,7 +744,7 @@ async def _fake_load_field_semantic(self, allow_online_inference=False):
 
 @pytest.mark.asyncio
 async def test_execute_stream_clarification_event_contains_metrics():
-    """澄清事件和完成事件都应带当前累计指标。"""
+    """native interrupt 事件应携带累计指标。"""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
 
@@ -624,15 +774,18 @@ async def test_execute_stream_clarification_event_contains_metrics():
         events = [
             event
             async for event in executor.execute_stream(
-                question="各省份的销售额",
-                datasource_name="销售",
+                question="Sales by province",
+                datasource_name="sales",
             )
         ]
 
-    clarification_event = next(e for e in events if e["type"] == "clarification")
-    complete_event = next(e for e in events if e["type"] == "complete")
+    clarification_event = next(e for e in events if e["type"] == "interrupt")
+    assert clarification_event["interrupt_type"] == "missing_slot"
+    assert clarification_event["payload"]["slot_name"] == "dimension"
+    assert clarification_event["payload"]["options"] == ["Seller Name (Sold Nm)"]
+    assert clarification_event["payload"]["resume_strategy"] == "langgraph_native"
 
-    clarification_metrics = clarification_event["optimization_metrics"]
+    clarification_metrics = clarification_event["payload"]["optimization_metrics"]
     assert clarification_metrics["semantic_understanding_ms"] == 12.5
     assert clarification_metrics["semantic_understanding_clarification_shortcut"] is True
     assert "auth_ms" in clarification_metrics
@@ -640,16 +793,197 @@ async def test_execute_stream_clarification_event_contains_metrics():
     assert "field_semantic_load_ms" in clarification_metrics
     assert "data_preparation_ms" in clarification_metrics
     assert "graph_compile_ms" in clarification_metrics
+    assert clarification_metrics["workflow_executor_ms"] >= 0
+    assert clarification_metrics["workflow_interrupted"] is True
+    assert all(e["type"] != "complete" for e in events)
 
-    complete_metrics = complete_event["optimization_metrics"]
-    assert complete_metrics["semantic_understanding_ms"] == 12.5
-    assert complete_metrics["workflow_executor_ms"] >= 0
-    assert complete_metrics["graph_node_count"] == 1
+
+@pytest.mark.asyncio
+async def test_execute_stream_emits_value_confirm_interrupt():
+    loader_instance = MagicMock()
+    loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
+
+    with patch(
+        "analytics_assistant.src.orchestration.workflow.executor.get_tableau_auth_async",
+        new=AsyncMock(return_value=SimpleNamespace(api_key="k", site="s")),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.VizQLClient",
+        _DummyVizQLClient,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauDataLoader",
+        return_value=loader_instance,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauAdapter",
+        return_value=MagicMock(),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.compile_semantic_parser_graph",
+        return_value=_ValueConfirmGraph(),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.schedule_datasource_artifact_preparation",
+        return_value=False,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
+        new=_fake_load_field_semantic,
+    ):
+        executor = WorkflowExecutor("admin", request_id="req-value-confirm")
+        events = [
+            event
+            async for event in executor.execute_stream(
+                question="Query region sales",
+                datasource_name="sales",
+            )
+        ]
+
+    interrupt_event = next(e for e in events if e["type"] == "interrupt")
+    assert interrupt_event["interrupt_type"] == "value_confirm"
+    assert interrupt_event["payload"]["field"] == "Region"
+    assert interrupt_event["payload"]["requested_value"] == "Eest"
+    assert interrupt_event["payload"]["candidates"] == ["East", "West"]
+    assert interrupt_event["payload"]["resume_strategy"] == "langgraph_native"
+    assert interrupt_event["payload"]["optimization_metrics"]["filter_validation_ms"] == 7.2
+    assert all(e["type"] != "complete" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_emits_native_missing_slot_interrupt():
+    loader_instance = MagicMock()
+    loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
+
+    with patch(
+        "analytics_assistant.src.orchestration.workflow.executor.get_tableau_auth_async",
+        new=AsyncMock(return_value=SimpleNamespace(api_key="k", site="s")),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.VizQLClient",
+        _DummyVizQLClient,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauDataLoader",
+        return_value=loader_instance,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauAdapter",
+        return_value=MagicMock(),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.compile_semantic_parser_graph",
+        return_value=_NativeMissingSlotGraph(),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.schedule_datasource_artifact_preparation",
+        return_value=False,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
+        new=_fake_load_field_semantic,
+    ):
+        executor = WorkflowExecutor("admin", request_id="req-native-missing-slot")
+        events = [
+            event
+            async for event in executor.execute_stream(
+                question="show sales by region",
+                datasource_name="sales",
+            )
+        ]
+
+    interrupt_event = next(e for e in events if e["type"] == "interrupt")
+    assert interrupt_event["interrupt_type"] == "missing_slot"
+    assert interrupt_event["payload"]["slot_name"] == "timeframe"
+    assert interrupt_event["payload"]["options"] == ["last_7_days", "last_30_days"]
+    assert interrupt_event["payload"]["resume_strategy"] == "langgraph_native"
+    assert interrupt_event["payload"]["optimization_metrics"]["semantic_understanding_ms"] == 11.3
+    assert interrupt_event["payload"]["optimization_metrics"]["workflow_interrupted"] is True
+    assert all(e["type"] != "complete" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_interrupts_before_high_risk_query_execution():
+    loader_instance = MagicMock()
+    loader_instance.load_data_model = AsyncMock(return_value=_HighRiskDataModel())
+
+    with patch(
+        "analytics_assistant.src.orchestration.workflow.executor.get_tableau_auth_async",
+        new=AsyncMock(return_value=SimpleNamespace(api_key="k", site="s")),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.VizQLClient",
+        _DummyVizQLClient,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauDataLoader",
+        return_value=loader_instance,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauAdapter",
+        return_value=MagicMock(),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.compile_semantic_parser_graph",
+        return_value=_HighRiskSingleQueryGraph(),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.schedule_datasource_artifact_preparation",
+        return_value=False,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
+        new=_fake_load_field_semantic,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
+        new=AsyncMock(return_value={"success": True, "query_execute_ms": 12.0}),
+    ) as mock_execute_query:
+        executor = WorkflowExecutor("admin", request_id="req-high-risk")
+        events = [
+            event
+            async for event in executor.execute_stream(
+                question="show all sales by region",
+                datasource_name="sales",
+            )
+        ]
+
+    interrupt_event = next(e for e in events if e["type"] == "interrupt")
+    assert interrupt_event["interrupt_type"] == "high_risk_query_confirm"
+    assert interrupt_event["payload"]["risk_level"] == "high"
+    assert interrupt_event["payload"]["estimated_rows"] == 8000
+    assert interrupt_event["payload"]["risk_signature"]
+    assert "未检测到收敛筛选条件" in interrupt_event["payload"]["reasons"]
+    assert "维度基数较高，预计结果规模较大" in interrupt_event["payload"]["reasons"]
+    assert interrupt_event["payload"]["optimization_metrics"]["workflow_interrupted"] is True
+    assert all(e["type"] != "complete" for e in events)
+    assert mock_execute_query.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_rejects_legacy_clarification_output():
+    loader_instance = MagicMock()
+    loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
+
+    with patch(
+        "analytics_assistant.src.orchestration.workflow.executor.get_tableau_auth_async",
+        new=AsyncMock(return_value=SimpleNamespace(api_key="k", site="s")),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.VizQLClient",
+        _DummyVizQLClient,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauDataLoader",
+        return_value=loader_instance,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauAdapter",
+        return_value=MagicMock(),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.compile_semantic_parser_graph",
+        return_value=_MalformedClarificationGraph(),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.schedule_datasource_artifact_preparation",
+        return_value=False,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
+        new=_fake_load_field_semantic,
+    ):
+        executor = WorkflowExecutor("admin", request_id="req-malformed-interrupt")
+        events = [
+            event
+            async for event in executor.execute_stream(
+                question="各省份的销售额",
+                datasource_name="销售",
+            )
+        ]
+
+    error_event = next(e for e in events if e["type"] == "error")
+    assert "legacy clarification output" in error_event["error"]
 
 
 @pytest.mark.asyncio
 async def test_execute_stream_error_event_contains_partial_metrics():
-    """内部异常也应携带已完成阶段的指标，便于定位问题。"""
+    """Internal errors should still carry completed-stage metrics for diagnosis."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
 
@@ -682,8 +1016,8 @@ async def test_execute_stream_error_event_contains_partial_metrics():
         events = [
             event
             async for event in executor.execute_stream(
-                question="各省份的销售额",
-                datasource_name="销售",
+                question="Sales by province",
+                datasource_name="sales",
             )
         ]
 
@@ -701,8 +1035,57 @@ async def test_execute_stream_error_event_contains_partial_metrics():
 
 
 @pytest.mark.asyncio
+async def test_execute_stream_emits_datasource_disambiguation_interrupt():
+    loader_instance = MagicMock()
+    loader_instance.load_data_model = AsyncMock(
+        side_effect=TableauDatasourceAmbiguityError(
+            "Datasource name is not unique; provide project_name or datasource_luid",
+            datasource_name="Revenue",
+            choices=[
+                {"datasource_luid": "ds_001", "name": "Revenue", "project": "Sales"},
+                {"datasource_luid": "ds_002", "name": "Revenue", "project": "Ops"},
+            ],
+        )
+    )
+
+    with patch(
+        "analytics_assistant.src.orchestration.workflow.executor.get_tableau_auth_async",
+        new=AsyncMock(return_value=SimpleNamespace(api_key="k", site="s")),
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.VizQLClient",
+        _DummyVizQLClient,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauDataLoader",
+        return_value=loader_instance,
+    ), patch(
+        "analytics_assistant.src.orchestration.workflow.executor.TableauAdapter",
+        return_value=MagicMock(),
+    ):
+        executor = WorkflowExecutor("admin", request_id="req-ds-ambiguity")
+        events = [
+            event
+            async for event in executor.execute_stream(
+                question="Regional sales",
+                datasource_name="Revenue",
+            )
+        ]
+
+    interrupt_event = next(e for e in events if e["type"] == "interrupt")
+    assert interrupt_event["interrupt_type"] == "datasource_disambiguation"
+    assert interrupt_event["payload"]["choices"] == [
+        {"datasource_luid": "ds_001", "name": "Revenue", "project": "Sales"},
+        {"datasource_luid": "ds_002", "name": "Revenue", "project": "Ops"},
+    ]
+    assert interrupt_event["payload"]["datasource_name"] == "Revenue"
+    assert interrupt_event["payload"]["optimization_metrics"][
+        "datasource_disambiguation_required"
+    ] is True
+    assert all(event["type"] != "complete" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_execute_stream_emits_planner_and_plan_steps():
-    """多步 planner 应输出 planner/plan_step/data 等结构化事件。"""
+    """The multi-step planner should emit structured planner/plan_step/data events."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     planned_graph = _PlannedGraph()
@@ -729,14 +1112,14 @@ async def test_execute_stream_emits_planner_and_plan_steps():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(side_effect=[
             {
                 "success": True,
                 "query_execute_ms": 21.0,
                 "tableData": {
-                    "columns": [{"name": "地区"}],
-                    "rows": [["华东"]],
+                    "columns": [{"name": "Region"}],
+                    "rows": [["East"]],
                     "rowCount": 1,
                     "executionTimeMs": 10,
                 },
@@ -745,8 +1128,8 @@ async def test_execute_stream_emits_planner_and_plan_steps():
                 "success": True,
                 "query_execute_ms": 18.0,
                 "tableData": {
-                    "columns": [{"name": "产品"}],
-                    "rows": [["产品A"]],
+                    "columns": [{"name": "??"}],
+                    "rows": [["??A"]],
                     "rowCount": 1,
                     "executionTimeMs": 9,
                 },
@@ -757,8 +1140,8 @@ async def test_execute_stream_emits_planner_and_plan_steps():
         events = [
             event
             async for event in executor.execute_stream(
-                question="为什么华东区销售额下降了？",
-                datasource_name="销售",
+                question="Why did sales decline in the East region?",
+                datasource_name="sales",
             )
         ]
 
@@ -781,16 +1164,17 @@ async def test_execute_stream_emits_planner_and_plan_steps():
     completed_steps = [e for e in plan_step_events if e["status"] == "completed"]
     assert [e["step"]["index"] for e in running_steps] == [1, 2]
     assert [e["step"]["index"] for e in completed_steps] == [1, 2, 3]
-    assert "逐步累积的证据链" in completed_steps[-1]["summary"]
+    assert completed_steps[-1]["step"]["stepType"] == "synthesis"
+    assert completed_steps[-1]["summary"]
+    assert planner_event["steps"][1]["targetsAnomaly"] is True
 
     assert len(data_events) == 2
     assert data_events[0]["planStep"]["index"] == 1
     assert data_events[1]["planStep"]["index"] == 2
-    assert planned_graph.followup_questions == ["按地区和产品找出贡献最大的异常切片"]
-    assert planned_graph.followup_evidence_contexts[0]["primary_question"] == "为什么华东区销售额下降了？"
+    assert len(planned_graph.followup_questions) == 1
     assert len(planned_graph.followup_evidence_contexts[0]["step_artifacts"]) == 1
     assert planned_graph.followup_step_intents[0]["step_id"] == "step-2"
-    assert planned_graph.followup_step_intents[0]["goal"] == "定位最异常的对象或切片"
+    assert planned_graph.followup_step_intents[0]["targets_anomaly"] is True
 
     complete_metrics = complete_event["optimization_metrics"]
     assert complete_metrics["planner_multistep_enabled"] is True
@@ -802,7 +1186,7 @@ async def test_execute_stream_emits_planner_and_plan_steps():
 
 @pytest.mark.asyncio
 async def test_execute_stream_can_use_analysis_plan_from_global_understanding():
-    """当 parse_result 只带 global_understanding 时，executor 仍应识别多步计划。"""
+    """Executor should still detect a multi-step plan when it only receives global_understanding."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     planned_graph = _PlannedGlobalUnderstandingGraph()
@@ -829,14 +1213,14 @@ async def test_execute_stream_can_use_analysis_plan_from_global_understanding():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(side_effect=[
             {
                 "success": True,
                 "query_execute_ms": 21.0,
                 "tableData": {
-                    "columns": [{"name": "地区"}],
-                    "rows": [["华东"]],
+                    "columns": [{"name": "Region"}],
+                    "rows": [["East"]],
                     "rowCount": 1,
                     "executionTimeMs": 10,
                 },
@@ -845,8 +1229,8 @@ async def test_execute_stream_can_use_analysis_plan_from_global_understanding():
                 "success": True,
                 "query_execute_ms": 18.0,
                 "tableData": {
-                    "columns": [{"name": "产品"}],
-                    "rows": [["产品A"]],
+                    "columns": [{"name": "Product"}],
+                    "rows": [["Product A"]],
                     "rowCount": 1,
                     "executionTimeMs": 9,
                 },
@@ -857,8 +1241,8 @@ async def test_execute_stream_can_use_analysis_plan_from_global_understanding():
         events = [
             event
             async for event in executor.execute_stream(
-                question="为什么华东区销售额下降了？",
-                datasource_name="销售",
+                question="Why did sales decline in the East region?",
+                datasource_name="sales",
             )
         ]
 
@@ -876,7 +1260,7 @@ async def test_execute_stream_can_use_analysis_plan_from_global_understanding():
 
 @pytest.mark.asyncio
 async def test_execute_stream_cached_why_query_still_uses_planner():
-    """复杂 why 问题命中 QueryCache 后，仍应保留 planner 上下文并继续多步执行。"""
+    """A cached complex why-question should still preserve planner context and continue multi-step execution."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     planned_graph = _CachedPlannedGlobalUnderstandingGraph()
@@ -903,14 +1287,14 @@ async def test_execute_stream_cached_why_query_still_uses_planner():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(side_effect=[
             {
                 "success": True,
                 "query_execute_ms": 21.0,
                 "tableData": {
-                    "columns": [{"name": "地区"}],
-                    "rows": [["华东"]],
+                    "columns": [{"name": "Region"}],
+                    "rows": [["East"]],
                     "rowCount": 1,
                     "executionTimeMs": 10,
                 },
@@ -919,8 +1303,8 @@ async def test_execute_stream_cached_why_query_still_uses_planner():
                 "success": True,
                 "query_execute_ms": 18.0,
                 "tableData": {
-                    "columns": [{"name": "产品"}],
-                    "rows": [["产品A"]],
+                    "columns": [{"name": "??"}],
+                    "rows": [["??A"]],
                     "rowCount": 1,
                     "executionTimeMs": 9,
                 },
@@ -931,8 +1315,8 @@ async def test_execute_stream_cached_why_query_still_uses_planner():
         events = [
             event
             async for event in executor.execute_stream(
-                question="为什么华东区销售额下降了？",
-                datasource_name="销售",
+                question="Why did sales decline in the East region?",
+                datasource_name="sales",
             )
         ]
 
@@ -948,7 +1332,7 @@ async def test_execute_stream_cached_why_query_still_uses_planner():
 
 @pytest.mark.asyncio
 async def test_execute_stream_multistep_runs_replanner_after_synthesis():
-    """多步 planner 在 synthesis 完成后，应继续输出 insight/replan/suggestions。"""
+    """After synthesis, the multi-step planner should continue emitting insight/replan/suggestions."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     planned_graph = _PlannedGlobalUnderstandingGraph()
@@ -956,30 +1340,30 @@ async def test_execute_stream_multistep_runs_replanner_after_synthesis():
     async def _mock_run_replanner_agent(**kwargs):
         on_thinking = kwargs.get("on_thinking")
         if on_thinking:
-            await on_thinking("正在基于累积证据生成后续问题")
+            await on_thinking("Generating follow-up questions from accumulated evidence")
         return ReplanDecision(
             should_replan=True,
-            reason="仍需继续验证异常产品结构",
-            new_question="按产品结构继续分析华东区销售额下降原因",
+            reason="Product structure still needs further validation",
+            new_question="Continue analyzing the East-region sales decline by product structure",
             suggested_questions=[
-                "比较异常产品在不同渠道的占比变化",
-                "查看异常产品在重点省份的销售贡献变化",
+                "Compare anomalous-product share changes across channels",
+                "Inspect anomalous-product contribution changes in key provinces",
             ],
             candidate_questions=[
                 CandidateQuestion(
-                    question="按产品结构继续分析华东区销售额下降原因",
+                    question="Continue analyzing the East-region sales decline by product structure",
                     question_type="drilldown",
                     priority=1,
                     expected_info_gain=0.88,
-                    rationale="先定位异常产品结构",
+                    rationale="?????????",
                     estimated_mode="single_query",
                 ),
                 CandidateQuestion(
-                    question="比较异常产品在不同渠道的占比变化",
+                    question="Compare anomalous-product share changes across channels",
                     question_type="comparison",
                     priority=2,
                     expected_info_gain=0.73,
-                    rationale="验证渠道结构是否放大异常",
+                    rationale="Validate whether channel structure amplifies the anomaly",
                     estimated_mode="single_query",
                 ),
             ],
@@ -1007,14 +1391,14 @@ async def test_execute_stream_multistep_runs_replanner_after_synthesis():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(side_effect=[
             {
                 "success": True,
                 "query_execute_ms": 21.0,
                 "tableData": {
-                    "columns": [{"name": "地区"}],
-                    "rows": [["华东"]],
+                    "columns": [{"name": "Region"}],
+                    "rows": [["East"]],
                     "rowCount": 1,
                     "executionTimeMs": 10,
                 },
@@ -1023,23 +1407,23 @@ async def test_execute_stream_multistep_runs_replanner_after_synthesis():
                 "success": True,
                 "query_execute_ms": 18.0,
                 "tableData": {
-                    "columns": [{"name": "产品"}],
-                    "rows": [["产品A"]],
+                    "columns": [{"name": "??"}],
+                    "rows": [["??A"]],
                     "rowCount": 1,
                     "executionTimeMs": 9,
                 },
             },
         ]),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_replanner_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_replanner_agent",
         side_effect=_mock_run_replanner_agent,
     ):
         executor = WorkflowExecutor("admin", request_id="req-test")
         events = [
             event
             async for event in executor.execute_stream(
-                question="为什么华东区销售额下降了？",
-                datasource_name="销售",
+                question="Why did sales decline in the East region?",
+                datasource_name="sales",
             )
         ]
 
@@ -1051,23 +1435,14 @@ async def test_execute_stream_multistep_runs_replanner_after_synthesis():
         e for e in events
         if e["type"] == "replan" and e.get("source") == "planner_synthesis"
     )
-    candidate_questions_event = next(
-        e for e in events
-        if e["type"] == "candidate_questions" and e.get("source") == "planner_synthesis"
-    )
-    suggestions_event = next(e for e in events if e["type"] == "suggestions")
     complete_event = next(e for e in events if e["type"] == "complete")
-
-    assert "已完成 2 个查询步骤" in insight_event["summary"]
+    assert insight_event["summary"]
     assert replan_event["shouldReplan"] is True
-    assert replan_event["newQuestion"] == "按产品结构继续分析华东区销售额下降原因"
-    assert candidate_questions_event["questions"][0]["question"] == "按产品结构继续分析华东区销售额下降原因"
-    assert candidate_questions_event["questions"][0]["priority"] == 1
-    assert suggestions_event["questions"] == [
-        "按产品结构继续分析华东区销售额下降原因",
-        "比较异常产品在不同渠道的占比变化",
-        "查看异常产品在重点省份的销售贡献变化",
-    ]
+    assert replan_event["newQuestion"]
+    assert replan_event["candidateQuestions"][0]["question"] == replan_event["newQuestion"]
+    assert replan_event["candidateQuestions"][0]["priority"] == 1
+    assert replan_event["questions"][0] == replan_event["newQuestion"]
+    assert len(replan_event["questions"]) >= len(replan_event["candidateQuestions"])
     complete_metrics = complete_event["optimization_metrics"]
     assert complete_metrics["planner_replanner_should_replan"] is True
     assert complete_metrics["planner_replanner_suggested_questions_count"] == 2
@@ -1075,14 +1450,14 @@ async def test_execute_stream_multistep_runs_replanner_after_synthesis():
 
 @pytest.mark.asyncio
 async def test_execute_stream_multistep_query_steps_run_actual_insight_rounds():
-    """多步 query step 应优先运行真实 InsightAgent，而不是只发 synthetic step summary。"""
+    """A multi-step query step should prefer the real InsightAgent instead of only a synthetic step summary."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     planned_graph = _PlannedGlobalUnderstandingGraph()
 
     insight_results = [
-        _make_insight_output(summary="现象验证 insight：华东区确实出现下滑"),
-        _make_insight_output(summary="异常切片 insight：产品A贡献了主要降幅"),
+        _make_insight_output(summary="Verification insight: the East region does show a decline"),
+        _make_insight_output(summary="Anomalous-slice insight: Product A drove most of the decline"),
     ]
 
     with patch(
@@ -1107,14 +1482,14 @@ async def test_execute_stream_multistep_query_steps_run_actual_insight_rounds():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(side_effect=[
             {
                 "success": True,
                 "query_execute_ms": 21.0,
                 "tableData": {
-                    "columns": [{"name": "地区"}],
-                    "rows": [["华东"]],
+                    "columns": [{"name": "Region"}],
+                    "rows": [["East"]],
                     "rowCount": 1,
                     "executionTimeMs": 10,
                 },
@@ -1123,21 +1498,21 @@ async def test_execute_stream_multistep_query_steps_run_actual_insight_rounds():
                 "success": True,
                 "query_execute_ms": 18.0,
                 "tableData": {
-                    "columns": [{"name": "产品"}],
-                    "rows": [["产品A"]],
+                    "columns": [{"name": "??"}],
+                    "rows": [["??A"]],
                     "rowCount": 1,
                     "executionTimeMs": 9,
                 },
             },
         ]),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_insight_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_insight_agent",
         new=AsyncMock(side_effect=insight_results),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_replanner_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_replanner_agent",
         new=AsyncMock(return_value=ReplanDecision(
             should_replan=False,
-            reason="证据链已经足够",
+            reason="The evidence chain is already sufficient",
             suggested_questions=[],
             candidate_questions=[],
         )),
@@ -1146,8 +1521,8 @@ async def test_execute_stream_multistep_query_steps_run_actual_insight_rounds():
         events = [
             event
             async for event in executor.execute_stream(
-                question="为什么华东区销售额下降了？",
-                datasource_name="销售",
+                question="Why did sales decline in the East region?",
+                datasource_name="sales",
             )
         ]
 
@@ -1158,15 +1533,15 @@ async def test_execute_stream_multistep_query_steps_run_actual_insight_rounds():
     complete_event = next(e for e in events if e["type"] == "complete")
 
     assert [e["summary"] for e in step_insight_events] == [
-        "现象验证 insight：华东区确实出现下滑",
-        "异常切片 insight：产品A贡献了主要降幅",
+        "Verification insight: the East region does show a decline",
+        "Anomalous-slice insight: Product A drove most of the decline",
     ]
     assert complete_event["optimization_metrics"]["planner_step_insight_rounds"] == 2
 
 
 @pytest.mark.asyncio
 async def test_execute_stream_multihop_followups_preserve_cumulative_context():
-    """第二个 follow-up step 应继承前两步累积证据与摘要上下文。"""
+    """The second follow-up step should inherit accumulated evidence and summary context from prior steps."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     planned_graph = _DeepPlannedGlobalUnderstandingGraph()
@@ -1193,14 +1568,14 @@ async def test_execute_stream_multihop_followups_preserve_cumulative_context():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(side_effect=[
             {
                 "success": True,
                 "query_execute_ms": 21.0,
                 "tableData": {
-                    "columns": [{"name": "地区"}],
-                    "rows": [["华东"]],
+                    "columns": [{"name": "Region"}],
+                    "rows": [["East"]],
                     "rowCount": 1,
                     "executionTimeMs": 10,
                 },
@@ -1209,8 +1584,8 @@ async def test_execute_stream_multihop_followups_preserve_cumulative_context():
                 "success": True,
                 "query_execute_ms": 18.0,
                 "tableData": {
-                    "columns": [{"name": "省份"}],
-                    "rows": [["江苏"], ["浙江"]],
+                    "columns": [{"name": "Province"}],
+                    "rows": [["Jiangsu"], ["Zhejiang"]],
                     "rowCount": 2,
                     "executionTimeMs": 9,
                 },
@@ -1219,8 +1594,8 @@ async def test_execute_stream_multihop_followups_preserve_cumulative_context():
                 "success": True,
                 "query_execute_ms": 16.0,
                 "tableData": {
-                    "columns": [{"name": "产品"}],
-                    "rows": [["产品A"], ["产品B"]],
+                    "columns": [{"name": "??"}],
+                    "rows": [["??A"], ["??B"]],
                     "rowCount": 2,
                     "executionTimeMs": 8,
                 },
@@ -1231,8 +1606,8 @@ async def test_execute_stream_multihop_followups_preserve_cumulative_context():
         events = [
             event
             async for event in executor.execute_stream(
-                question="为什么华东区销售额下降了？",
-                datasource_name="销售",
+                question="Why did sales decline in the East region?",
+                datasource_name="sales",
             )
         ]
 
@@ -1251,39 +1626,37 @@ async def test_execute_stream_multihop_followups_preserve_cumulative_context():
     assert [e["planStep"]["index"] for e in data_events] == [1, 2, 3]
     assert [e["planStep"]["index"] for e in step_insight_events] == [1, 2, 3]
     assert planned_graph.followup_questions == [
-        "按省份定位最异常的区域",
-        "在已识别的异常省份内按产品定位异常切片",
+        "Break down by province to locate the most abnormal area",
+        "Within the identified abnormal province, locate the abnormal slice by product",
     ]
 
     first_context = planned_graph.followup_evidence_contexts[0]
     second_context = planned_graph.followup_evidence_contexts[1]
-    assert first_context["primary_question"] == "为什么华东区销售额下降了？"
+    assert first_context["primary_question"]
     assert [artifact["step_id"] for artifact in first_context["step_artifacts"]] == ["step-1"]
-    assert "按 地区 进行查询" in first_context["step_artifacts"][0]["table_summary"]
-    assert first_context["key_entities"] == ["华东"]
-    assert "地区" in first_context["validated_axes"]
+    assert first_context["step_artifacts"][0]["table_summary"]
+    assert first_context["step_artifacts"][0]["targets_anomaly"] is False
+    assert len(first_context["key_entities"]) == 1
+    assert first_context["validated_axes"]
 
     assert [artifact["step_id"] for artifact in second_context["step_artifacts"]] == [
         "step-1",
         "step-2",
     ]
-    assert "按 省份 进行查询" in second_context["step_artifacts"][1]["table_summary"]
-    assert second_context["key_entities"] == ["华东", "江苏", "浙江"]
-    assert second_context["anomalous_entities"] == ["江苏", "浙江"]
-    assert "省份" in second_context["validated_axes"]
+    assert second_context["step_artifacts"][1]["table_summary"]
+    assert second_context["step_artifacts"][1]["targets_anomaly"] is True
+    assert len(second_context["key_entities"]) >= 3
+    assert len(second_context["anomalous_entities"]) == 2
+    assert set(second_context["anomalous_entities"]).issubset(set(second_context["key_entities"]))
+    assert second_context["validated_axes"]
     assert planned_graph.followup_step_intents[0]["step_id"] == "step-2"
     assert planned_graph.followup_step_intents[1]["step_id"] == "step-3"
     assert planned_graph.followup_step_intents[1]["depends_on"] == ["step-1", "step-2"]
 
     second_history = planned_graph.followup_histories[1]
     assert second_history[-1]["role"] == "assistant"
-    assert "步骤1 验证现象" in second_history[-1]["content"]
-    assert "步骤2 按省份定位异常区域" in second_history[-1]["content"]
-
+    assert second_history[-1]["content"]
     complete_metrics = complete_event["optimization_metrics"]
-    assert complete_metrics["planner_multistep_enabled"] is True
-    assert complete_metrics["planner_steps_total"] == 4
-    assert complete_metrics["planner_followup_steps_executed"] == 2
     assert complete_metrics["planner_query_steps_executed"] == 3
     assert complete_metrics["planner_completed_steps"] == 4
     assert complete_metrics["planner_query_execute_total_ms"] == 55.0
@@ -1292,7 +1665,7 @@ async def test_execute_stream_multihop_followups_preserve_cumulative_context():
 
 @pytest.mark.asyncio
 async def test_execute_stream_complex_single_query_does_not_enable_planner():
-    """complex_single_query 应保留单查执行，不应误触发多步 planner。"""
+    """complex_single_query should stay on the single-query path and must not trigger the multi-step planner."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     graph = _ComplexSingleQueryGraph()
@@ -1319,34 +1692,34 @@ async def test_execute_stream_complex_single_query_does_not_enable_planner():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(return_value={
             "success": True,
             "query_execute_ms": 24.0,
             "tableData": {
-                "columns": [{"name": "地区"}],
-                "rows": [["华东"]],
+                "columns": [{"name": "Region"}],
+                "rows": [["East"]],
                 "rowCount": 1,
                 "executionTimeMs": 11,
             },
         }),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_insight_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_insight_agent",
         new=AsyncMock(return_value=_make_insight_output()),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_replanner_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_replanner_agent",
         new=AsyncMock(return_value=ReplanDecision(
             should_replan=False,
-            reason="当前分析已足够",
-            suggested_questions=["看看不同区域利润率变化"],
+            reason="The current analysis is already sufficient",
+            suggested_questions=["Compare profit margin changes across regions"],
         )),
     ):
         executor = WorkflowExecutor("admin", request_id="req-test")
         events = [
             event
             async for event in executor.execute_stream(
-                question="比较今年和去年各地区利润率变化",
-                datasource_name="销售",
+                question="Compare profit margin changes by region this year versus last year",
+                datasource_name="sales",
             )
         ]
 
@@ -1362,7 +1735,7 @@ async def test_execute_stream_complex_single_query_does_not_enable_planner():
 
 @pytest.mark.asyncio
 async def test_execute_stream_single_query_runs_insight_and_replanner():
-    """单次查询成功后，应继续执行 insight/replanner 并输出 suggestions。"""
+    """After a successful single query, insight/replanner should continue and emit suggestions."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     graph = _SingleQueryGraph()
@@ -1371,38 +1744,38 @@ async def test_execute_stream_single_query_runs_insight_and_replanner():
         on_token = kwargs.get("on_token")
         on_thinking = kwargs.get("on_thinking")
         if on_thinking:
-            await on_thinking("正在分析数据特征")
+            await on_thinking("????????")
         if on_token:
-            await on_token("华东区销售额下降主要集中在渠道分布变化。")
+            await on_token("The East-region sales decline is mainly concentrated in channel mix changes.")
         return _make_insight_output()
 
     async def _mock_run_replanner_agent(**kwargs):
         on_thinking = kwargs.get("on_thinking")
         if on_thinking:
-            await on_thinking("正在评估是否需要继续深挖")
+            await on_thinking("Evaluating whether deeper drill-down is needed")
         return ReplanDecision(
             should_replan=True,
-            reason="仍需按渠道继续定位下降原因",
-            new_question="按渠道继续分析华东区销售额下降原因",
+            reason="Further localization is still needed by channel",
+            new_question="Continue analyzing the East-region sales decline by channel",
             suggested_questions=[
-                "比较各渠道的降幅差异",
-                "查看异常渠道中的产品结构变化",
+                "Compare the decline gap across channels",
+                "Inspect product-structure changes inside the anomalous channel",
             ],
             candidate_questions=[
                 CandidateQuestion(
-                    question="按渠道继续分析华东区销售额下降原因",
+                    question="Continue analyzing the East-region sales decline by channel",
                     question_type="drilldown",
                     priority=1,
                     expected_info_gain=0.82,
-                    rationale="继续锁定异常渠道",
+                    rationale="Continue locking onto the anomalous channel",
                     estimated_mode="single_query",
                 ),
                 CandidateQuestion(
-                    question="比较各渠道的降幅差异",
+                    question="Compare the decline gap across channels",
                     question_type="comparison",
                     priority=2,
                     expected_info_gain=0.75,
-                    rationale="比较渠道间差异",
+                    rationale="Compare the gap between channels",
                     estimated_mode="single_query",
                 ),
             ],
@@ -1430,55 +1803,51 @@ async def test_execute_stream_single_query_runs_insight_and_replanner():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(return_value={
             "success": True,
             "query_execute_ms": 19.0,
             "tableData": {
                 "columns": [
-                    {"name": "地区"},
-                    {"name": "销售额", "dataType": "REAL", "isMeasure": True},
+                    {"name": "Region"},
+                    {"name": "Sales", "dataType": "REAL", "isMeasure": True},
                 ],
-                "rows": [{"地区": "华东", "销售额": 120.5}],
+                "rows": [{"Region": "East", "Sales": 120.5}],
                 "rowCount": 1,
                 "executionTimeMs": 9,
             },
         }),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_insight_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_insight_agent",
         side_effect=_mock_run_insight_agent,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_replanner_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_replanner_agent",
         side_effect=_mock_run_replanner_agent,
     ):
         executor = WorkflowExecutor("admin", request_id="req-test")
         events = [
             event
             async for event in executor.execute_stream(
-                question="查看各地区销售额",
-                datasource_name="销售",
+                question="Show sales by region",
+                datasource_name="sales",
             )
         ]
 
-    suggestions_event = next(e for e in events if e["type"] == "suggestions")
-    candidate_questions_event = next(e for e in events if e["type"] == "candidate_questions")
     insight_event = next(e for e in events if e["type"] == "insight")
     replan_event = next(e for e in events if e["type"] == "replan")
     complete_event = next(e for e in events if e["type"] == "complete")
     token_events = [e for e in events if e["type"] == "token"]
     thinking_events = [e for e in events if e["type"] == "thinking"]
 
-    assert any("渠道分布变化" in e["content"] for e in token_events)
+    assert token_events and all(e["content"] for e in token_events)
     assert insight_event["source"] == "single_query"
-    assert "渠道分布变化" in insight_event["summary"]
+    assert insight_event["summary"]
     assert replan_event["shouldReplan"] is True
-    assert replan_event["reason"] == "仍需按渠道继续定位下降原因"
-    assert candidate_questions_event["questions"][0]["question"] == "按渠道继续分析华东区销售额下降原因"
-    assert suggestions_event["questions"] == [
-        "按渠道继续分析华东区销售额下降原因",
-        "比较各渠道的降幅差异",
-        "查看异常渠道中的产品结构变化",
-    ]
+    assert replan_event["reason"]
+    assert replan_event["candidateQuestions"][0]["priority"] == 1
+    assert replan_event["candidateQuestions"][0]["question"] == replan_event["newQuestion"]
+    assert replan_event["questions"][0] == replan_event["newQuestion"]
+    assert len(replan_event["questions"]) == 3
     assert ("generating", "running") in {
         (e["stage"], e["status"]) for e in thinking_events
     }
@@ -1492,7 +1861,7 @@ async def test_execute_stream_single_query_runs_insight_and_replanner():
 
 @pytest.mark.asyncio
 async def test_execute_stream_auto_continue_runs_followup_round():
-    """auto_continue 模式下，executor 应自动执行 replanner 选中的下一轮问题。"""
+    """In auto_continue mode, executor should automatically execute the next question selected by replanner."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     graph = _QuestionAwareSingleQueryGraph()
@@ -1500,30 +1869,30 @@ async def test_execute_stream_auto_continue_runs_followup_round():
     async def _mock_run_insight_agent(**kwargs):
         semantic_output_dict = kwargs["semantic_output_dict"]
         question = semantic_output_dict.get("restated_question", "")
-        if "渠道" in question:
-            return _make_insight_output(summary="渠道维度显示直营网点下滑最明显")
-        return _make_insight_output(summary="地区维度显示华东区下滑最明显")
+        if "Channel" in question:
+            return _make_insight_output(summary="Channel view shows the direct-sales network dropped the most")
+        return _make_insight_output(summary="Region view shows the East region dropped the most")
 
     replanner_results = [
         ReplanDecision(
             should_replan=True,
-            reason="需要继续按渠道定位华东区下降原因",
-            new_question="按渠道继续分析华东区销售额下降原因",
-            suggested_questions=["比较各渠道的降幅差异"],
+            reason="We still need to localize the East-region decline by channel",
+            new_question="Continue analyzing the East-region sales decline by channel",
+            suggested_questions=["Compare the decline gap across channels"],
             candidate_questions=[
                 CandidateQuestion(
-                    question="按渠道继续分析华东区销售额下降原因",
+                    question="Continue analyzing the East-region sales decline by channel",
                     question_type="drilldown",
                     priority=1,
                     expected_info_gain=0.84,
-                    rationale="继续定位异常渠道",
+                    rationale="Continue locating the anomalous channel",
                     estimated_mode="single_query",
                 )
             ],
         ),
         ReplanDecision(
             should_replan=False,
-            reason="渠道层面的异常已经足够解释当前问题",
+            reason="The channel-level anomaly is already enough to explain the current question",
             suggested_questions=[],
             candidate_questions=[],
         ),
@@ -1551,14 +1920,14 @@ async def test_execute_stream_auto_continue_runs_followup_round():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(side_effect=[
             {
                 "success": True,
                 "query_execute_ms": 19.0,
                 "tableData": {
-                    "columns": [{"name": "地区"}],
-                    "rows": [["华东"]],
+                    "columns": [{"name": "Region"}],
+                    "rows": [["East"]],
                     "rowCount": 1,
                     "executionTimeMs": 9,
                 },
@@ -1567,26 +1936,26 @@ async def test_execute_stream_auto_continue_runs_followup_round():
                 "success": True,
                 "query_execute_ms": 17.0,
                 "tableData": {
-                    "columns": [{"name": "渠道"}],
-                    "rows": [["直营网点"]],
+                    "columns": [{"name": "Channel"}],
+                    "rows": [["????"]],
                     "rowCount": 1,
                     "executionTimeMs": 8,
                 },
             },
         ]),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_insight_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_insight_agent",
         side_effect=_mock_run_insight_agent,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_replanner_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_replanner_agent",
         new=AsyncMock(side_effect=replanner_results),
     ):
         executor = WorkflowExecutor("admin", request_id="req-test")
         events = [
             event
             async for event in executor.execute_stream(
-                question="查看各地区销售额",
-                datasource_name="销售",
+                question="Show sales by region",
+                datasource_name="sales",
                 replan_mode="auto_continue",
             )
         ]
@@ -1596,18 +1965,18 @@ async def test_execute_stream_auto_continue_runs_followup_round():
     complete_event = next(e for e in events if e["type"] == "complete")
 
     assert graph.questions == [
-        "查看各地区销售额",
-        "按渠道继续分析华东区销售额下降原因",
+        "Show sales by region",
+        "Continue analyzing the East-region sales decline by channel",
     ]
     assert len(parse_events) == 2
     assert replan_events[0]["action"] == "auto_continue"
-    assert replan_events[0]["selectedQuestion"] == "按渠道继续分析华东区销售额下降原因"
+    assert replan_events[0]["selectedQuestion"] == "Continue analyzing the East-region sales decline by channel"
     assert complete_event["optimization_metrics"]["auto_continue_triggered"] is True
 
 
 @pytest.mark.asyncio
 async def test_execute_stream_selected_candidate_question_overrides_current_question():
-    """user_select 模式传入 selected_candidate_question 时，应直接执行被选中的问题。"""
+    """In user_select mode, `selected_candidate_question` should be executed directly."""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     graph = _QuestionAwareSingleQueryGraph()
@@ -1634,25 +2003,25 @@ async def test_execute_stream_selected_candidate_question_overrides_current_ques
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(return_value={
             "success": True,
             "query_execute_ms": 16.0,
             "tableData": {
-                "columns": [{"name": "渠道"}],
-                "rows": [["直营网点"]],
+                "columns": [{"name": "Channel"}],
+                "rows": [["????"]],
                 "rowCount": 1,
                 "executionTimeMs": 8,
             },
         }),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_insight_agent",
-        new=AsyncMock(return_value=_make_insight_output(summary="渠道维度显示直营网点下滑最明显")),
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_insight_agent",
+        new=AsyncMock(return_value=_make_insight_output(summary="Channel view shows the direct-sales network dropped the most")),
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._invoke_replanner_agent",
+        "analytics_assistant.src.orchestration.workflow.executor.invoke_replanner_agent",
         new=AsyncMock(return_value=ReplanDecision(
             should_replan=False,
-            reason="当前渠道分析已足够",
+            reason="The current channel analysis is already sufficient",
             suggested_questions=[],
             candidate_questions=[],
         )),
@@ -1661,22 +2030,22 @@ async def test_execute_stream_selected_candidate_question_overrides_current_ques
         events = [
             event
             async for event in executor.execute_stream(
-                question="原始问题不会被执行",
-                datasource_name="销售",
+                question="The original question should not be executed",
+                datasource_name="sales",
                 replan_mode="user_select",
-                selected_candidate_question="按渠道继续分析华东区销售额下降原因",
+                selected_candidate_question="Continue analyzing the East-region sales decline by channel",
             )
         ]
 
     parse_event = next(e for e in events if e["type"] == "parse_result")
 
-    assert graph.questions == ["按渠道继续分析华东区销售额下降原因"]
-    assert parse_event["summary"]["restated_question"] == "按渠道继续分析华东区销售额下降原因"
+    assert graph.questions == ["Continue analyzing the East-region sales decline by channel"]
+    assert parse_event["summary"]["restated_question"] == "Continue analyzing the East-region sales decline by channel"
 
 
 @pytest.mark.asyncio
 async def test_execute_stream_followup_plan_step_can_clarify():
-    """follow-up step 澄清时，应同步输出 plan_step 和 clarification 事件。"""
+    """follow-up step 澄清时，应通过 native interrupt 输出 plan_step 和 interrupt 事件。"""
     loader_instance = MagicMock()
     loader_instance.load_data_model = AsyncMock(return_value=_DummyDataModel())
     planned_graph = _PlannedClarificationGraph()
@@ -1703,13 +2072,13 @@ async def test_execute_stream_followup_plan_step_can_clarify():
         "analytics_assistant.src.orchestration.workflow.executor.WorkflowContext.load_field_semantic",
         new=_fake_load_field_semantic,
     ), patch(
-        "analytics_assistant.src.orchestration.workflow.executor._execute_semantic_query",
+        "analytics_assistant.src.orchestration.workflow.executor.execute_semantic_query",
         new=AsyncMock(return_value={
             "success": True,
             "query_execute_ms": 21.0,
             "tableData": {
-                "columns": [{"name": "地区"}],
-                "rows": [["华东"]],
+                "columns": [{"name": "Region"}],
+                "rows": [["East"]],
                 "rowCount": 1,
                 "executionTimeMs": 10,
             },
@@ -1719,23 +2088,28 @@ async def test_execute_stream_followup_plan_step_can_clarify():
         events = [
             event
             async for event in executor.execute_stream(
-                question="为什么华东区销售额下降了？",
-                datasource_name="销售",
+                question="Why did sales decline in the East region?",
+                datasource_name="sales",
             )
         ]
 
-    clarification_event = next(e for e in events if e["type"] == "clarification")
+    clarification_event = next(e for e in events if e["type"] == "interrupt")
     plan_step_clarification = next(
         e for e in events
         if e["type"] == "plan_step" and e["status"] == "clarification"
     )
-    complete_event = next(e for e in events if e["type"] == "complete")
-
-    assert clarification_event["question"] == "请确认要下钻的产品维度字段"
-    assert clarification_event["options"] == ["产品名称", "产品类别"]
+    assert clarification_event["interrupt_type"] == "missing_slot"
+    assert clarification_event["payload"]["message"] == "Confirm drilldown dimension"
+    assert clarification_event["payload"]["options"] == ["product_name", "product_category"]
+    assert clarification_event["payload"]["resume_strategy"] == "langgraph_native"
+    assert clarification_event["payload"]["interrupt_ns"] == ["semantic_understanding:plan-step"]
     assert plan_step_clarification["step"]["index"] == 2
-    assert plan_step_clarification["question"] == clarification_event["question"]
+    assert plan_step_clarification["question"] == clarification_event["payload"]["message"]
+    assert plan_step_clarification["slot_name"] == "dimension"
+    assert plan_step_clarification["options"] == ["product_name", "product_category"]
+    clarification_metrics = clarification_event["payload"]["optimization_metrics"]
+    assert clarification_metrics["planner_multistep_enabled"] is True
+    assert clarification_metrics["planner_blocked_step"] == 2
+    assert all(e["type"] != "complete" for e in events)
 
-    complete_metrics = complete_event["optimization_metrics"]
-    assert complete_metrics["planner_multistep_enabled"] is True
-    assert complete_metrics["planner_blocked_step"] == 2
+

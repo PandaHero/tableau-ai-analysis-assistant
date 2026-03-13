@@ -7,7 +7,7 @@ Property 19: Error Message Safety
 
 from hypothesis import given, settings, strategies as st
 
-from analytics_assistant.src.api.middleware import _sanitize_error_message
+from analytics_assistant.src.infra.error_sanitizer import sanitize_error_message
 
 
 # 敏感内容策略
@@ -46,7 +46,7 @@ class TestErrorMessageSafetyPBT:
     @settings(max_examples=30, deadline=5000)
     def test_sensitive_content_sanitized(self, sensitive_msg):
         """包含敏感信息的错误消息被清理。"""
-        result = _sanitize_error_message(sensitive_msg)
+        result = sanitize_error_message(sensitive_msg)
         assert result == "服务内部错误，请稍后重试"
 
     @given(
@@ -61,7 +61,7 @@ class TestErrorMessageSafetyPBT:
     @settings(max_examples=10, deadline=5000)
     def test_safe_messages_preserved(self, safe_msg):
         """安全的错误消息保持不变。"""
-        result = _sanitize_error_message(safe_msg)
+        result = sanitize_error_message(safe_msg)
         assert result == safe_msg
 
     @given(
@@ -77,5 +77,5 @@ class TestErrorMessageSafetyPBT:
     def test_embedded_sensitive_keywords_caught(self, prefix, sensitive, suffix):
         """嵌入在任意文本中的敏感关键词也能被检测。"""
         msg = f"{prefix}{sensitive}{suffix}"
-        result = _sanitize_error_message(msg)
+        result = sanitize_error_message(msg)
         assert result == "服务内部错误，请稍后重试"

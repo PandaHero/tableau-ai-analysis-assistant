@@ -48,6 +48,19 @@ class PlanStepType(str, Enum):
     REPLAN = "replan"
 
 
+class PlanStepKind(str, Enum):
+    """步骤的稳定语义类型。"""
+
+    PRIMARY_QUERY = "primary_query"
+    VERIFY_ANOMALY = "verify_anomaly"
+    RANK_EXPLANATORY_AXES = "rank_explanatory_axes"
+    SCREEN_TOP_AXES = "screen_top_axes"
+    LOCATE_ANOMALOUS_SLICE = "locate_anomalous_slice"
+    SUPPLEMENTAL_QUERY = "supplemental_query"
+    SYNTHESIZE_CAUSE = "synthesize_cause"
+    RESULT_SYNTHESIS = "result_synthesis"
+
+
 class StepIntent(BaseModel):
     """V3 中单个分析步骤的语义意图。"""
 
@@ -61,6 +74,10 @@ class StepIntent(BaseModel):
     step_type: PlanStepType = Field(
         default=PlanStepType.QUERY,
         description="步骤类型：query 表示需要执行查询，synthesis 表示汇总前序结果",
+    )
+    step_kind: Optional[PlanStepKind] = Field(
+        default=None,
+        description="步骤的稳定语义类型",
     )
     uses_primary_query: bool = Field(
         default=False,
@@ -81,6 +98,10 @@ class StepIntent(BaseModel):
     candidate_axes: list[str] = Field(
         default_factory=list,
         description="why/复杂问题下候选定位维度或解释轴",
+    )
+    targets_anomaly: bool = Field(
+        default=False,
+        description="是否显式用于定位异常对象或异常切片",
     )
     clarification_if_missing: list[str] = Field(
         default_factory=list,
@@ -123,6 +144,7 @@ class StepArtifact(BaseModel):
     step_id: str = Field(description="步骤 ID")
     title: str = Field(description="步骤标题")
     step_type: PlanStepType = Field(default=PlanStepType.QUERY)
+    step_kind: Optional[PlanStepKind] = Field(default=None)
     query_id: Optional[str] = Field(default=None, description="执行查询 ID")
     restated_question: Optional[str] = Field(
         default=None,
@@ -139,6 +161,10 @@ class StepArtifact(BaseModel):
     entity_scope: list[str] = Field(
         default_factory=list,
         description="该步骤定位出的关键对象集合",
+    )
+    targets_anomaly: bool = Field(
+        default=False,
+        description="该步骤是否显式用于定位异常对象或异常切片",
     )
     validated_axes: list[str] = Field(
         default_factory=list,
@@ -354,6 +380,7 @@ __all__ = [
     "QueryFeasibilityBlocker",
     "PlanMode",
     "PlanStepType",
+    "PlanStepKind",
     "StepIntent",
     "AnalysisPlanStep",
     "AxisEvidenceScore",

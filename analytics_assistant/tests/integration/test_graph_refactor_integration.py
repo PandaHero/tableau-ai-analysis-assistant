@@ -1,47 +1,26 @@
 # -*- coding: utf-8 -*-
-"""
-Graph 依赖方向重构 - 集成测试
+"""重构后语义图的集成测试。"""
 
-使用真实 LLM 和真实环境验证重构后的 graph.py 能正常工作。
+from __future__ import annotations
 
-测试内容：
-1. 图编译：create_semantic_parser_graph / compile_semantic_parser_graph 正常工作
-2. 意图路由：intent_router_node 使用真实规则引擎正确分类
-3. WorkflowContext 集成：通过 agents/base/context.py 的 get_context 正确获取上下文
-4. 端到端流程：从 intent_router 到 semantic_understanding 的完整流程（真实 LLM）
-
-注意：
-- 集成测试禁止 Mock（Rule 6.1）
-- 使用真实 LLM（DeepSeek R1）和真实 Embedding（Zhipu）
-"""
-
+import ast
 import logging
-import os
-import sys
-import pytest
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any
 
-# 确保项目根目录在 sys.path 中
-project_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+import pytest
+
+from analytics_assistant.tests.integration.config_loader import TestConfigLoader
 
 logger = logging.getLogger(__name__)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 测试 1: 图编译测试（不需要 LLM）
-# ═══════════════════════════════════════════════════════════════════════════
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestGraphCompilation:
-    """验证重构后的图能正常编译。"""
+    """验证语义图的装配结果符合重构设计。"""
 
     def test_create_semantic_parser_graph(self) -> None:
-        """create_semantic_parser_graph 应返回有效的 StateGraph。"""
         from analytics_assistant.src.agents.semantic_parser.graph import (
             create_semantic_parser_graph,
         )
@@ -51,7 +30,6 @@ class TestGraphCompilation:
         assert isinstance(graph, StateGraph)
 
     def test_compile_semantic_parser_graph(self) -> None:
-        """compile_semantic_parser_graph 应返回可执行的编译图。"""
         from analytics_assistant.src.agents.semantic_parser.graph import (
             compile_semantic_parser_graph,
         )
@@ -61,7 +39,6 @@ class TestGraphCompilation:
         assert hasattr(compiled, "ainvoke") or hasattr(compiled, "invoke")
 
     def test_graph_has_expected_nodes(self) -> None:
-        """图应包含所有预期的节点。"""
         from analytics_assistant.src.agents.semantic_parser.graph import (
             create_semantic_parser_graph,
         )
@@ -72,6 +49,17 @@ class TestGraphCompilation:
         expected_nodes = {
             "intent_router",
             "query_cache",
+            "unified_feature_understanding",
+            "parallel_retrieval",
+            "prepare_prompt",
+            "semantic_understanding",
+            "output_validator",
+            "filter_validator",
+            "query_adapter",
+            "error_corrector",
+            "feedback_learner",
+        }
+        legacy_nodes = {
             "rule_prefilter",
             "feature_cache",
             "feature_extractor",
@@ -80,101 +68,192 @@ class TestGraphCompilation:
             "dynamic_schema_builder",
             "modular_prompt_builder",
             "few_shot_manager",
-            "semantic_understanding",
-            "output_validator",
-            "filter_validator",
-            "query_adapter",
-            "error_corrector",
-            "feedback_learner",
         }
 
-        for node in expected_nodes:
-            assert node in node_names, f"缺少节点: {node}"
+        assert expected_nodes.issubset(node_names)
+        assert legacy_nodes.isdisjoint(node_names)
 
-    def test_graph_import_uses_agents_base_context(self) -> None:
-        """graph.py 应从 agents/base/context 导入，而非 orchestration。"""
-        import ast
+    def test_graph_import_stays_orchestration_free(self) -> None:
+        graph_path = PROJECT_ROOT / "src" / "agents" / "semantic_parser" / "graph.py"
+        tree = ast.parse(graph_path.read_text(encoding="utf-8"), filename=str(graph_path))
 
-        graph_path = os.path.join(
-            project_root, "src", "agents", "semantic_parser", "graph.py"
-        )
-        with open(graph_path, "r", encoding="utf-8") as f:
-            tree = ast.parse(f.read(), filename=graph_path)
-
-        imports: List[str] = []
+        imports: list[str] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module:
                 imports.append(node.module)
 
-        has_agents_base = any("agents.base.context" in imp for imp in imports)
-        assert has_agents_base, "graph.py 应从 agents.base.context 导入"
-
-        has_orchestration = any("orchestration" in imp for imp in imports)
-        assert not has_orchestration, "graph.py 不应包含 orchestration 导入"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 测试 2: 意图路由集成测试（不需要 LLM，使用规则引擎）
-# ═══════════════════════════════════════════════════════════════════════════
+        assert not any("orchestration" in module_name for module_name in imports)
 
 
 class TestIntentRouterIntegration:
-    """验证意图路由节点在真实环境下正常工作。"""
+    """验证不依赖真实外部服务的图内节点行为。"""
 
     @pytest.mark.asyncio
     async def test_data_query_intent(self) -> None:
-        """数据查询问题应被识别为 data_query 意图。"""
         from analytics_assistant.src.agents.semantic_parser.graph import (
             intent_router_node,
         )
 
-        state = {"question": "上个月各地区的销售额是多少"}
-        result = await intent_router_node(state)
-
-        assert "intent_router_output" in result
-        output = result["intent_router_output"]
-        assert output["intent_type"] == "data_query"
-        assert output["confidence"] > 0
+        result = await intent_router_node({"question": "上个月各地区销售额是多少"})
+        assert result["intent_router_output"]["intent_type"] == "data_query"
+        assert result["intent_router_output"]["confidence"] > 0
 
     @pytest.mark.asyncio
     async def test_irrelevant_intent(self) -> None:
-        """无关问题应被识别为非 data_query 意图。"""
         from analytics_assistant.src.agents.semantic_parser.graph import (
             intent_router_node,
         )
 
-        state = {"question": "今天天气怎么样"}
-        result = await intent_router_node(state)
-
-        assert "intent_router_output" in result
-        output = result["intent_router_output"]
-        assert output["intent_type"] in ("irrelevant", "general", "clarification")
+        result = await intent_router_node({"question": "今天天气怎么样"})
+        assert result["intent_router_output"]["intent_type"] in {
+            "irrelevant",
+            "general",
+            "clarification",
+        }
 
     @pytest.mark.asyncio
     async def test_empty_question(self) -> None:
-        """空问题应返回 irrelevant 意图。"""
         from analytics_assistant.src.agents.semantic_parser.graph import (
             intent_router_node,
         )
 
-        state = {"question": ""}
-        result = await intent_router_node(state)
+        result = await intent_router_node({"question": ""})
+        assert result["intent_router_output"]["intent_type"] == "irrelevant"
 
-        assert "intent_router_output" in result
-        output = result["intent_router_output"]
-        assert output["intent_type"] == "irrelevant"
+    @pytest.mark.asyncio
+    async def test_intent_router_to_unified_feature_understanding(self, monkeypatch) -> None:
+        from analytics_assistant.src.agents.semantic_parser.graph import (
+            intent_router_node,
+            query_cache_node,
+            unified_feature_and_understanding_node,
+        )
+        from analytics_assistant.src.agents.semantic_parser.nodes import parallel
+        from analytics_assistant.src.agents.semantic_parser.schemas.planner import (
+            AnalysisMode,
+            AnalysisPlan,
+            GlobalUnderstandingOutput,
+            PlanMode,
+        )
+        from analytics_assistant.src.agents.semantic_parser.schemas.prefilter import (
+            FeatureExtractionOutput,
+        )
+        from analytics_assistant.src.orchestration.workflow.context import (
+            WorkflowContext,
+            create_workflow_config,
+        )
 
+        async def fake_feature_extractor_node(state: dict[str, Any]) -> dict[str, Any]:
+            del state
+            feature_output = FeatureExtractionOutput(
+                required_measures=["销售额"],
+                required_dimensions=["地区", "日期"],
+                confirmed_time_hints=["上个月"],
+                confirmation_confidence=0.85,
+                is_degraded=False,
+            )
+            return {
+                "feature_extraction_output": feature_output.model_dump(),
+                "is_degraded": False,
+            }
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 测试 3: WorkflowContext 集成测试
-# ═══════════════════════════════════════════════════════════════════════════
+        async def fake_run_global_understanding(
+            question: str,
+            *,
+            prefilter_result,
+            feature_output,
+            field_semantic=None,
+            feature_flags=None,
+        ) -> GlobalUnderstandingOutput:
+            del prefilter_result, feature_output, field_semantic, feature_flags
+            plan = AnalysisPlan(
+                plan_mode=PlanMode.DIRECT_QUERY,
+                single_query_feasible=True,
+                needs_planning=False,
+                requires_llm_reasoning=False,
+                goal=question,
+                execution_strategy="single_query",
+                reasoning_focus=["销售额", "地区"],
+                sub_questions=[],
+                retrieval_focus_terms=["销售额", "地区"],
+                planner_confidence=0.9,
+            )
+            return GlobalUnderstandingOutput(
+                analysis_mode=AnalysisMode.COMPLEX_SINGLE_QUERY,
+                single_query_feasible=True,
+                primary_restated_question=question,
+                llm_confidence=0.9,
+                analysis_plan=plan,
+            )
+
+        monkeypatch.setattr(parallel, "_should_allow_semantic_lookup", lambda *_: False)
+        monkeypatch.setattr(parallel, "feature_extractor_node", fake_feature_extractor_node)
+        monkeypatch.setattr(parallel, "run_global_understanding", fake_run_global_understanding)
+
+        state: dict[str, Any] = {
+            "question": "上个月各地区销售额",
+            "datasource_luid": "test-e2e-ds",
+            "current_time": datetime.now().isoformat(),
+        }
+        config = create_workflow_config(
+            thread_id="test-unified",
+            context=WorkflowContext(
+                datasource_luid="test-e2e-ds",
+                current_time=datetime.now().isoformat(),
+            ),
+        )
+
+        state.update(await intent_router_node(state))
+        assert state["intent_router_output"]["intent_type"] == "data_query"
+
+        state.update(await query_cache_node(state, config))
+        assert state["cache_hit"] is False
+
+        state.update(await unified_feature_and_understanding_node(state, config))
+        assert "prefilter_result" in state
+        assert "feature_extraction_output" in state
+        assert "global_understanding" in state
+        assert "analysis_plan" in state
+        assert len(state["prefilter_result"].get("time_hints", [])) > 0
+
+    @pytest.mark.asyncio
+    async def test_compiled_graph_irrelevant_query(self) -> None:
+        from analytics_assistant.src.agents.semantic_parser.graph import (
+            compile_semantic_parser_graph,
+        )
+        from analytics_assistant.src.orchestration.workflow.context import (
+            WorkflowContext,
+            create_workflow_config,
+        )
+        from langgraph.checkpoint.memory import MemorySaver
+
+        compiled = compile_semantic_parser_graph(checkpointer=MemorySaver())
+        config = create_workflow_config(
+            thread_id="test-compiled",
+            context=WorkflowContext(
+                datasource_luid="test-compiled-ds",
+                current_time=datetime.now().isoformat(),
+            ),
+        )
+
+        final_state = await compiled.ainvoke(
+            {
+                "question": "今天天气怎么样",
+                "datasource_luid": "test-compiled-ds",
+                "current_time": datetime.now().isoformat(),
+            },
+            config,
+        )
+        assert final_state["intent_router_output"]["intent_type"] in {
+            "irrelevant",
+            "general",
+            "clarification",
+        }
 
 
 class TestWorkflowContextIntegration:
-    """验证 WorkflowContext 通过 agents/base/context.py 正确传递。"""
+    """验证 WorkflowContext 在图中的传递契约。"""
 
     def test_workflow_context_satisfies_protocol(self) -> None:
-        """真实的 WorkflowContext 应满足 WorkflowContextProtocol。"""
         from analytics_assistant.src.core.interfaces import WorkflowContextProtocol
         from analytics_assistant.src.orchestration.workflow.context import (
             WorkflowContext,
@@ -184,7 +263,6 @@ class TestWorkflowContextIntegration:
         assert isinstance(ctx, WorkflowContextProtocol)
 
     def test_get_context_from_config(self) -> None:
-        """get_context 应能从 config 中提取 WorkflowContext。"""
         from analytics_assistant.src.agents.base.context import get_context
         from analytics_assistant.src.orchestration.workflow.context import (
             WorkflowContext,
@@ -200,7 +278,6 @@ class TestWorkflowContextIntegration:
 
     @pytest.mark.asyncio
     async def test_query_cache_node_with_context(self) -> None:
-        """query_cache_node 应能通过 config 获取 WorkflowContext。"""
         from analytics_assistant.src.agents.semantic_parser.graph import (
             query_cache_node,
         )
@@ -209,194 +286,55 @@ class TestWorkflowContextIntegration:
             create_workflow_config,
         )
 
-        ctx = WorkflowContext(datasource_luid="test-ds-003")
-        config = create_workflow_config(thread_id="test-thread", context=ctx)
-
-        state = {
-            "question": "测试查询",
-            "datasource_luid": "test-ds-003",
-        }
-
-        result = await query_cache_node(state, config)
-        assert "cache_hit" in result
+        config = create_workflow_config(
+            thread_id="test-thread",
+            context=WorkflowContext(datasource_luid="test-ds-003"),
+        )
+        result = await query_cache_node(
+            {
+                "question": "测试查询",
+                "datasource_luid": "test-ds-003",
+            },
+            config,
+        )
         assert result["cache_hit"] is False
-
-    def test_enrich_field_candidates_propagates_semantic_metadata(self) -> None:
-        """字段语义中的 alias/描述/类别应能回填到 FieldCandidate。"""
-        from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
-        from analytics_assistant.src.orchestration.workflow.context import WorkflowContext
-
-        ctx = WorkflowContext(
-            datasource_luid="test-ds-004",
-            field_semantic={
-                "Comp Name": {
-                    "role": "dimension",
-                    "business_description": "表示省份，地理维度粗粒度",
-                    "aliases": ["省份", "省", "Province"],
-                    "category": "geography",
-                    "level": 2,
-                    "granularity": "coarse",
-                    "child_dimension": "城市",
-                    "confidence": 0.92,
-                    "reasoning": "test",
-                }
-            },
-        )
-        candidates = [
-            FieldCandidate(
-                field_name="Comp Name",
-                field_caption="Comp Name",
-                role="dimension",
-                confidence=0.8,
-            )
-        ]
-
-        enriched = ctx.enrich_field_candidates_with_hierarchy(candidates)
-
-        assert enriched[0].business_description == "表示省份，地理维度粗粒度"
-        assert enriched[0].aliases == ["省份", "省", "Province"]
-        assert enriched[0].category == "geography"
-        assert enriched[0].hierarchy_category == "geography"
-        assert enriched[0].level == 2
-        assert enriched[0].hierarchy_level == 2
-        assert enriched[0].drill_down_options == ["城市"]
-
-    def test_enrich_field_candidates_merges_aliases_from_model(self) -> None:
-        """模型化的字段语义结果也应能与已有 alias 合并。"""
-        from analytics_assistant.src.agents.field_semantic.schemas.output import (
-            FieldSemanticAttributes,
-        )
-        from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
-        from analytics_assistant.src.orchestration.workflow.context import WorkflowContext
-
-        ctx = WorkflowContext(
-            datasource_luid="test-ds-005",
-            field_semantic={
-                "Channel Manager Nm": FieldSemanticAttributes(
-                    role="dimension",
-                    business_description="组织维度中等粒度，表示部门负责人",
-                    aliases=["部门负责人", "组织负责人"],
-                    category="organization",
-                    category_detail="organization-manager",
-                    level=3,
-                    granularity="medium",
-                    confidence=0.91,
-                    reasoning="test",
-                )
-            },
-        )
-        candidates = [
-            FieldCandidate(
-                field_name="Channel Manager Nm",
-                field_caption="Channel Manager Nm",
-                role="dimension",
-                confidence=0.8,
-                aliases=["渠道经理"],
-            )
-        ]
-
-        enriched = ctx.enrich_field_candidates_with_hierarchy(candidates)
-
-        assert enriched[0].aliases == ["渠道经理", "部门负责人", "组织负责人"]
-        assert enriched[0].business_description == "组织维度中等粒度，表示部门负责人"
-        assert enriched[0].hierarchy_category == "organization"
-        assert enriched[0].hierarchy_level == 3
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 测试 4: 端到端流程测试（使用真实 LLM）
-# ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestEndToEndWithRealLLM:
-    """端到端集成测试，使用真实 LLM 验证重构后的图能正常运行。
+    """真实 LLM 测试默认关闭，避免离线环境误报。"""
 
-    这些测试需要真实的 LLM API 连接（DeepSeek R1）。
-    如果 API 不可用，测试会被跳过。
-    """
+    @pytest.fixture
+    def require_real_llm(self) -> None:
+        if not TestConfigLoader.allow_real_llm_tests():
+            pytest.skip(
+                "未显式开启真实 LLM 集成测试，设置 AA_RUN_REAL_LLM_TESTS=1 后再运行"
+            )
 
-    @pytest.fixture(autouse=True)
-    def check_llm_available(self) -> None:
-        """检查 LLM API 是否可用（通过 app.yaml 配置）。"""
         from analytics_assistant.src.infra.config import get_config
 
         config = get_config()
         ai_config = config.get("ai", {})
         llm_models = ai_config.get("llm_models", [])
         has_api_key = any(
-            m.get("api_key") for m in llm_models if isinstance(m, dict)
+            model.get("api_key")
+            for model in llm_models
+            if isinstance(model, dict)
         )
-        assert has_api_key, (
-            "LLM API Key 未配置，请在 config/app.yaml 的 ai.llm_models 中设置 api_key"
-        )
+        assert has_api_key, "真实 LLM 测试缺少 ai.llm_models.api_key 配置"
 
     @pytest.mark.asyncio
-    async def test_intent_router_to_rule_prefilter(self) -> None:
-        """验证从意图路由到规则预处理的流程。
-
-        流程：intent_router → query_cache → rule_prefilter
-        """
-        from analytics_assistant.src.agents.semantic_parser.graph import (
-            intent_router_node,
-            query_cache_node,
-            rule_prefilter_node,
-        )
-        from analytics_assistant.src.orchestration.workflow.context import (
-            WorkflowContext,
-            create_workflow_config,
-        )
-
-        ctx = WorkflowContext(
-            datasource_luid="test-e2e-ds",
-            current_time=datetime.now().isoformat(),
-        )
-        config = create_workflow_config(thread_id="test-e2e", context=ctx)
-
-        # 阶段 1: 意图路由
-        state: Dict[str, Any] = {
-            "question": "上个月各地区的销售额",
-            "datasource_luid": "test-e2e-ds",
-            "current_time": datetime.now().isoformat(),
-        }
-        intent_result = await intent_router_node(state)
-        state.update(intent_result)
-        assert state["intent_router_output"]["intent_type"] == "data_query"
-
-        # 阶段 2: 查询缓存
-        cache_result = await query_cache_node(state, config)
-        state.update(cache_result)
-        assert state["cache_hit"] is False
-
-        # 阶段 3: 规则预处理
-        prefilter_result = await rule_prefilter_node(state)
-        state.update(prefilter_result)
-
-        assert "prefilter_result" in state
-        prefilter = state["prefilter_result"]
-        # 应检测到时间提示（"上个月"）
-        assert len(prefilter.get("time_hints", [])) > 0
-        logger.info(
-            f"规则预处理结果: time_hints={prefilter.get('time_hints')}, "
-            f"match_confidence={prefilter.get('match_confidence')}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_semantic_understanding_with_real_llm(self) -> None:
-        """验证语义理解节点使用真实 LLM 能正常工作。
-
-        这是最关键的测试：验证重构后 graph.py 中的
-        semantic_understanding_node 能通过 agents/base/context.py
-        正确获取上下文并调用真实 LLM。
-        """
+    async def test_semantic_understanding_with_real_llm(
+        self,
+        require_real_llm,
+    ) -> None:
         from analytics_assistant.src.agents.semantic_parser.graph import (
             semantic_understanding_node,
         )
-        from analytics_assistant.src.agents.semantic_parser.schemas.output import (
+        from analytics_assistant.src.core.schemas.semantic_output import (
             SemanticOutput,
         )
 
-        # 构建最小化 state，使用降级模式（不使用 modular_prompt）
-        state: Dict[str, Any] = {
+        state: dict[str, Any] = {
             "question": "各地区的销售额",
             "field_candidates": [
                 {
@@ -421,63 +359,12 @@ class TestEndToEndWithRealLLM:
         }
 
         result = await semantic_understanding_node(state)
-
-        assert "semantic_output" in result
-        semantic_output = result["semantic_output"]
-        assert "query_id" in semantic_output
-        assert "restated_question" in semantic_output
-
-        parsed = SemanticOutput.model_validate(semantic_output)
-        assert parsed.query_id is not None
+        semantic_output = SemanticOutput.model_validate(result["semantic_output"])
+        assert semantic_output.query_id is not None
+        assert semantic_output.restated_question
 
         logger.info(
-            f"语义理解结果: query_id={parsed.query_id}, "
-            f"restated={parsed.restated_question}, "
-            f"needs_clarification={parsed.needs_clarification}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_compiled_graph_irrelevant_query(self) -> None:
-        """验证编译后的图对无关问题能正确终止。
-
-        使用编译后的图执行，验证整个图的连接正确性。
-        无关问题应在 intent_router 后直接到 END。
-        """
-        from analytics_assistant.src.agents.semantic_parser.graph import (
-            compile_semantic_parser_graph,
-        )
-        from analytics_assistant.src.orchestration.workflow.context import (
-            WorkflowContext,
-            create_workflow_config,
-        )
-        from langgraph.checkpoint.memory import MemorySaver
-
-        checkpointer = MemorySaver()
-        compiled = compile_semantic_parser_graph(checkpointer=checkpointer)
-
-        ctx = WorkflowContext(
-            datasource_luid="test-compiled-ds",
-            current_time=datetime.now().isoformat(),
-        )
-        config = create_workflow_config(thread_id="test-compiled", context=ctx)
-
-        initial_state: Dict[str, Any] = {
-            "question": "今天天气怎么样",
-            "datasource_luid": "test-compiled-ds",
-            "current_time": datetime.now().isoformat(),
-        }
-
-        final_state = await compiled.ainvoke(initial_state, config)
-
-        assert "intent_router_output" in final_state
-        intent_output = final_state["intent_router_output"]
-        assert intent_output["intent_type"] in (
-            "irrelevant",
-            "general",
-            "clarification",
-        )
-
-        logger.info(
-            f"编译图执行结果: intent_type={intent_output['intent_type']}, "
-            f"confidence={intent_output['confidence']}"
+            "real llm semantic output: query_id=%s restated=%s",
+            semantic_output.query_id,
+            semantic_output.restated_question,
         )

@@ -159,8 +159,8 @@ class ErrorCorrector:
             '[TIMESTAMP]',
             error_info
         )
-        # 去除可变数值（行号/位置/数量等 3 位以上纯数字），保留错误码和短标识符
-        normalized = re.sub(r'\b\d{3,}\b', 'N', normalized)
+        # 去除可变数值（行号/位置/数量等独立数字），让同模板错误稳定归并。
+        normalized = re.sub(r'\b\d+\b', 'N', normalized)
         # 去除 UUID
         normalized = re.sub(
             r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',

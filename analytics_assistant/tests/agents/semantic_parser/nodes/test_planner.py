@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
-"""
-Analysis planner 节点回归测试
-"""
+"""Regression tests for strict planner and global understanding nodes."""
 
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 from analytics_assistant.src.agents.semantic_parser.nodes.global_understanding import (
     global_understanding_node,
 )
+from analytics_assistant.src.agents.semantic_parser.nodes.parallel import (
+    unified_feature_and_understanding_node,
+)
 from analytics_assistant.src.agents.semantic_parser.nodes.planner import (
     analysis_planner_node,
-    build_analysis_plan,
-    build_global_understanding_fallback,
+)
+from analytics_assistant.src.agents.semantic_parser.prompts.global_understanding_prompt import (
+    build_global_understanding_prompt,
 )
 from analytics_assistant.src.agents.semantic_parser.prompts.prompt_builder import (
     DynamicPromptBuilder,
@@ -24,139 +25,121 @@ from analytics_assistant.src.agents.semantic_parser.schemas.config import Semant
 from analytics_assistant.src.agents.semantic_parser.schemas.planner import (
     AnalysisMode,
     AnalysisPlan,
+    AxisEvidenceScore,
     EvidenceContext,
     GlobalUnderstandingOutput,
     PlanMode,
-    PlanStepType,
     QueryFeasibilityBlocker,
-    StepIntent,
     StepArtifact,
+    StepIntent,
 )
 from analytics_assistant.src.agents.semantic_parser.schemas.prefilter import (
     ComplexityType,
     FeatureExtractionOutput,
     PrefilterResult,
 )
+from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 
 
 class TestAnalysisPlanner:
-    """复杂问题 / why 问题的计划生成测试。"""
-
     @staticmethod
-    def _make_llm_global_understanding_output() -> AnalysisPlan:
+    def _make_why_plan() -> AnalysisPlan:
         return AnalysisPlan(
             plan_mode=PlanMode.WHY_ANALYSIS,
             single_query_feasible=False,
             needs_planning=True,
             requires_llm_reasoning=True,
-            goal="解释为什么华东区销售额下降",
+            goal="Explain why East region sales dropped",
             execution_strategy="sequential",
-            reasoning_focus=["先验证现象", "再定位异常切片", "最后汇总结论"],
+            reasoning_focus=[
+                "Validate the observed change",
+                "Locate the abnormal slice",
+                "Synthesize the likely cause",
+            ],
             sub_questions=[
                 {
                     "step_id": "step-1",
-                    "title": "验证现象",
-                    "goal": "确认现象成立",
-                    "question": "确认华东区销售额是否下降",
-                    "purpose": "先确认现象",
+                    "title": "Validate change",
+                    "goal": "Confirm the drop exists",
+                    "question": "Did East region sales decline?",
+                    "purpose": "Validate the observed change",
                     "step_type": "query",
                     "uses_primary_query": True,
-                    "semantic_focus": ["现象验证"],
-                    "expected_output": "确认降幅",
+                    "semantic_focus": ["sales", "east region"],
+                    "expected_output": "A confirmed decline",
                 },
                 {
                     "step_id": "step-2",
-                    "title": "定位异常切片",
-                    "goal": "找出异常切片",
-                    "question": "按地区和产品找出异常最大的切片",
-                    "purpose": "定位关键异常切片",
+                    "title": "Rank explanatory axes",
+                    "goal": "Prioritize the explanatory axes for screening",
+                    "question": "Rank the most likely explanatory axes for the decline",
+                    "purpose": "Identify the best axes to screen first",
                     "step_type": "query",
                     "depends_on": ["step-1"],
-                    "semantic_focus": ["异常定位", "产品", "地区"],
-                    "candidate_axes": ["地区", "产品"],
-                    "expected_output": "定位异常切片",
+                    "semantic_focus": ["screening priority", "product", "city"],
+                    "candidate_axes": ["product", "city"],
+                    "expected_output": "Ranked axis candidates",
                 },
                 {
                     "step_id": "step-3",
-                    "title": "归因总结",
-                    "goal": "汇总原因",
-                    "question": "结合前序结果总结原因",
-                    "purpose": "输出结论",
+                    "title": "Screen top axes",
+                    "goal": "Screen the top-ranked axes with real data",
+                    "question": "Screen the top-ranked axes to see which one best explains the decline",
+                    "purpose": "Use real data to narrow the best axis before locating the slice",
+                    "step_type": "query",
+                    "depends_on": ["step-2"],
+                    "semantic_focus": ["screening", "product", "city"],
+                    "candidate_axes": ["product", "city"],
+                    "targets_anomaly": True,
+                    "expected_output": "Screened axis candidates",
+                },
+                {
+                    "step_id": "step-4",
+                    "title": "Find abnormal slice",
+                    "goal": "Locate the slice with the largest anomaly",
+                    "question": "Break down the decline under the best axis",
+                    "purpose": "Identify the main contributing slice",
+                    "step_type": "query",
+                    "depends_on": ["step-2", "step-3"],
+                    "semantic_focus": ["anomaly", "product", "city"],
+                    "candidate_axes": ["product", "city"],
+                    "targets_anomaly": True,
+                    "expected_output": "Abnormal slice candidates",
+                },
+                {
+                    "step_id": "step-5",
+                    "title": "Synthesize cause",
+                    "goal": "Summarize the likely cause",
+                    "question": "Summarize the likely cause from prior evidence",
+                    "purpose": "Produce the final explanation",
                     "step_type": "synthesis",
-                    "depends_on": ["step-1", "step-2"],
-                    "semantic_focus": ["证据汇总", "原因归纳"],
-                    "expected_output": "形成原因总结",
+                    "depends_on": ["step-1", "step-2", "step-3", "step-4"],
+                    "semantic_focus": ["evidence", "cause"],
+                    "expected_output": "Root cause summary",
                 },
             ],
+            retrieval_focus_terms=["sales", "east region"],
             planner_confidence=0.86,
         )
 
-    def test_build_analysis_plan_for_why_question(self):
-        """why 问题应进入原因分析模式，并生成多步子问题。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.SIMPLE],
-            detected_language="zh",
+    @staticmethod
+    def _make_prefilter_result() -> PrefilterResult:
+        return PrefilterResult(
+            detected_complexity=[ComplexityType.TIME_COMPARE],
+            detected_language="en",
         )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["销售额"],
-            required_dimensions=["地区"],
+
+    @staticmethod
+    def _make_feature_output() -> FeatureExtractionOutput:
+        return FeatureExtractionOutput(
+            required_measures=["sales"],
+            required_dimensions=["region"],
             confirmation_confidence=0.92,
             is_degraded=False,
         )
-
-        plan = build_analysis_plan(
-            "为什么华东区销售额下降了？",
-            prefilter_result=prefilter_result,
-            feature_output=feature_output,
-        )
-
-        assert plan.plan_mode == PlanMode.WHY_ANALYSIS
-        assert plan.needs_planning is True
-        assert plan.requires_llm_reasoning is True
-        assert len(plan.sub_questions) >= 3
-        assert plan.sub_questions[0].uses_primary_query is True
-        assert plan.sub_questions[0].step_type == PlanStepType.QUERY
-        assert plan.sub_questions[-1].step_type == PlanStepType.SYNTHESIS
-        assert "销售额" in plan.retrieval_focus_terms
-
-    def test_build_analysis_plan_for_complex_query(self):
-        """复杂计算信号应进入拆解模式。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.TIME_COMPARE],
-            detected_language="zh",
-        )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["利润率"],
-            required_dimensions=["地区"],
-            confirmation_confidence=0.9,
-            is_degraded=False,
-        )
-
-        plan = build_analysis_plan(
-            "比较今年和去年各地区利润率变化，并输出差异最大的地区",
-            prefilter_result=prefilter_result,
-            feature_output=feature_output,
-        )
-
-        assert plan.plan_mode == PlanMode.DECOMPOSED_QUERY
-        assert plan.execution_strategy == "sequential"
-        assert plan.sub_questions[0].uses_primary_query is True
-        assert plan.sub_questions[1].step_type == PlanStepType.QUERY
-        assert plan.sub_questions[-1].step_type == PlanStepType.SYNTHESIS
 
     @pytest.mark.asyncio
     async def test_global_understanding_node_serializes_output(self):
-        """全局理解节点应优先返回 LLM 产出的统一契约。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.TIME_COMPARE],
-            detected_language="zh",
-        )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["销售额"],
-            required_dimensions=["地区"],
-            confirmation_confidence=0.92,
-            is_degraded=False,
-        )
         llm_output = GlobalUnderstandingOutput(
             analysis_mode=AnalysisMode.WHY_ANALYSIS,
             single_query_feasible=False,
@@ -164,10 +147,10 @@ class TestAnalysisPlanner:
                 QueryFeasibilityBlocker.MULTI_HOP_REASONING,
                 QueryFeasibilityBlocker.DYNAMIC_AXIS_SELECTION,
             ],
-            decomposition_reason="需要先验证现象，再逐步归因",
-            primary_restated_question="为什么华东区销售额下降了？",
+            decomposition_reason="Need to validate the change before explaining it",
+            primary_restated_question="Why did East region sales drop?",
             llm_confidence=0.9,
-            analysis_plan=self._make_llm_global_understanding_output(),
+            analysis_plan=self._make_why_plan(),
         )
 
         with patch(
@@ -179,36 +162,25 @@ class TestAnalysisPlanner:
         ):
             result = await global_understanding_node(
                 {
-                    "question": "为什么华东区销售额下降了？",
-                    "prefilter_result": prefilter_result.model_dump(),
-                    "feature_extraction_output": feature_output.model_dump(),
+                    "question": "Why did East region sales drop?",
+                    "prefilter_result": self._make_prefilter_result().model_dump(),
+                    "feature_extraction_output": self._make_feature_output().model_dump(),
                 }
             )
 
         assert result["global_understanding"]["analysis_mode"] == AnalysisMode.WHY_ANALYSIS.value
         assert result["global_understanding"]["single_query_feasible"] is False
-        assert result["optimization_metrics"]["global_understanding_mode"] == AnalysisMode.WHY_ANALYSIS.value
+        assert result["analysis_plan"]["plan_mode"] == PlanMode.WHY_ANALYSIS.value
         assert result["optimization_metrics"]["global_understanding_llm_used"] is True
         assert result["optimization_metrics"]["global_understanding_fallback_used"] is False
 
     @pytest.mark.asyncio
     async def test_global_understanding_node_backfills_plan_when_llm_omits_steps(self):
-        """如果 LLM 漏掉 analysis_plan，节点也应补出可用计划。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.TIME_COMPARE],
-            detected_language="zh",
-        )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["销售额"],
-            required_dimensions=["地区"],
-            confirmation_confidence=0.92,
-            is_degraded=False,
-        )
         llm_output = GlobalUnderstandingOutput(
             analysis_mode=AnalysisMode.WHY_ANALYSIS,
             single_query_feasible=False,
-            decomposition_reason="这是一个 why 问题，需要证据链",
-            primary_restated_question="为什么华东区销售额下降了？",
+            decomposition_reason="Need a why-analysis workflow",
+            primary_restated_question="Why did East region sales drop?",
             llm_confidence=0.82,
         )
 
@@ -221,39 +193,115 @@ class TestAnalysisPlanner:
         ):
             result = await global_understanding_node(
                 {
-                    "question": "为什么华东区销售额下降了？",
-                    "prefilter_result": prefilter_result.model_dump(),
-                    "feature_extraction_output": feature_output.model_dump(),
+                    "question": "Why did East region sales drop?",
+                    "prefilter_result": self._make_prefilter_result().model_dump(),
+                    "feature_extraction_output": self._make_feature_output().model_dump(),
+                }
+        )
+
+        assert result["analysis_plan"]["plan_mode"] == PlanMode.WHY_ANALYSIS.value
+        assert len(result["analysis_plan"]["sub_questions"]) >= 5
+        assert result["global_understanding"]["analysis_plan"] is not None
+
+    @pytest.mark.asyncio
+    async def test_global_understanding_node_backfills_candidate_axes_from_field_semantic(self):
+        llm_output = GlobalUnderstandingOutput(
+            analysis_mode=AnalysisMode.WHY_ANALYSIS,
+            single_query_feasible=False,
+            decomposition_reason="Need a why-analysis workflow",
+            primary_restated_question="Why did East region sales drop?",
+            llm_confidence=0.82,
+        )
+
+        field_semantic = {
+            "region": {
+                "role": "dimension",
+                "hierarchy_category": "geography",
+                "hierarchy_level": "region",
+                "child_dimension": "city",
+            },
+            "channel": {
+                "role": "dimension",
+                "category": "channel",
+            },
+            "sales": {
+                "role": "measure",
+                "category": "sales_metric",
+            },
+        }
+
+        with patch(
+            "analytics_assistant.src.agents.semantic_parser.nodes.global_understanding.get_llm",
+            return_value=MagicMock(),
+        ), patch(
+            "analytics_assistant.src.agents.semantic_parser.nodes.global_understanding.stream_llm_structured",
+            new=AsyncMock(return_value=llm_output),
+        ):
+            result = await global_understanding_node(
+                {
+                    "question": "Why did East region sales drop?",
+                    "prefilter_result": self._make_prefilter_result().model_dump(),
+                    "feature_extraction_output": self._make_feature_output().model_dump(),
+                    "field_semantic": field_semantic,
                 }
             )
 
-        assert result["analysis_plan"] is not None
-        assert result["analysis_plan"]["plan_mode"] == PlanMode.WHY_ANALYSIS.value
-        assert result["global_understanding"]["analysis_plan"] is not None
-        assert result["global_understanding"]["analysis_plan"]["plan_mode"] == PlanMode.WHY_ANALYSIS.value
-        assert len(result["global_understanding"]["analysis_plan"]["sub_questions"]) >= 3
-        assert result["global_understanding"]["analysis_plan"]["reasoning_focus"][0].startswith(
-            "先验证现象"
+        step_two = result["analysis_plan"]["sub_questions"][1]
+        assert step_two["candidate_axes"] == ["geography", "channel"]
+        assert step_two["step_kind"] == "rank_explanatory_axes"
+
+        step_three = result["analysis_plan"]["sub_questions"][2]
+        assert step_three["step_kind"] == "screen_top_axes"
+        assert step_three["targets_anomaly"] is True
+
+        step_four = result["analysis_plan"]["sub_questions"][3]
+        assert step_four["step_kind"] == "locate_anomalous_slice"
+        assert step_four["targets_anomaly"] is True
+
+    @pytest.mark.asyncio
+    async def test_global_understanding_node_can_disable_why_screening_wave(self):
+        llm_output = GlobalUnderstandingOutput(
+            analysis_mode=AnalysisMode.WHY_ANALYSIS,
+            single_query_feasible=False,
+            decomposition_reason="Need a why-analysis workflow",
+            primary_restated_question="Why did East region sales drop?",
+            llm_confidence=0.82,
         )
+
+        with patch(
+            "analytics_assistant.src.agents.semantic_parser.nodes.global_understanding.get_llm",
+            return_value=MagicMock(),
+        ), patch(
+            "analytics_assistant.src.agents.semantic_parser.nodes.global_understanding.stream_llm_structured",
+            new=AsyncMock(return_value=llm_output),
+        ):
+            result = await global_understanding_node(
+                {
+                    "question": "Why did East region sales drop?",
+                    "prefilter_result": self._make_prefilter_result().model_dump(),
+                    "feature_extraction_output": self._make_feature_output().model_dump(),
+                    "feature_flags": {"why_screening_wave": False},
+                }
+            )
+
+        step_kinds = [
+            step["step_kind"]
+            for step in result["analysis_plan"]["sub_questions"]
+        ]
+        assert step_kinds == [
+            "verify_anomaly",
+            "rank_explanatory_axes",
+            "locate_anomalous_slice",
+            "synthesize_cause",
+        ]
 
     @pytest.mark.asyncio
     async def test_global_understanding_node_supports_complex_single_query_mode(self):
-        """复杂但仍可单查的问题应保留 complex_single_query 模式。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.TIME_COMPARE],
-            detected_language="zh",
-        )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["利润率"],
-            required_dimensions=["地区"],
-            confirmation_confidence=0.9,
-            is_degraded=False,
-        )
         llm_output = GlobalUnderstandingOutput(
             analysis_mode=AnalysisMode.COMPLEX_SINGLE_QUERY,
             single_query_feasible=True,
-            decomposition_reason="虽然有时间对比，但 Tableau 仍可单查表达",
-            primary_restated_question="比较今年和去年各地区利润率变化",
+            decomposition_reason="This is complex but still expressible in one query",
+            primary_restated_question="Compare profit margin by region year over year",
             llm_confidence=0.88,
         )
 
@@ -266,46 +314,36 @@ class TestAnalysisPlanner:
         ):
             result = await global_understanding_node(
                 {
-                    "question": "比较今年和去年各地区利润率变化",
-                    "prefilter_result": prefilter_result.model_dump(),
-                    "feature_extraction_output": feature_output.model_dump(),
+                    "question": "Compare profit margin by region year over year",
+                    "prefilter_result": self._make_prefilter_result().model_dump(),
+                    "feature_extraction_output": FeatureExtractionOutput(
+                        required_measures=["profit margin"],
+                        required_dimensions=["region"],
+                        confirmation_confidence=0.9,
+                        is_degraded=False,
+                    ).model_dump(),
                 }
             )
 
         plan = result["analysis_plan"]
         assert result["global_understanding"]["analysis_mode"] == AnalysisMode.COMPLEX_SINGLE_QUERY.value
-        assert result["global_understanding"]["single_query_feasible"] is True
         assert result["global_understanding"]["single_query_blockers"] == []
         assert plan["plan_mode"] == PlanMode.DIRECT_QUERY.value
         assert plan["needs_planning"] is False
         assert plan["requires_llm_reasoning"] is True
-        assert plan["retrieval_focus_terms"] == ["利润率", "地区"]
 
     @pytest.mark.asyncio
-    async def test_analysis_planner_node_serializes_plan(self):
-        """planner 节点应优先消费已有 global_understanding 并回填 analysis_plan。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.SIMPLE],
-            detected_language="zh",
-        )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["销售额"],
-            required_dimensions=["地区"],
-            confirmation_confidence=0.92,
-            is_degraded=False,
-        )
+    async def test_global_understanding_node_requires_explicit_clarification_flag(self):
         llm_output = GlobalUnderstandingOutput(
-            analysis_mode=AnalysisMode.WHY_ANALYSIS,
-            single_query_feasible=False,
-            single_query_blockers=[
-                QueryFeasibilityBlocker.MULTI_HOP_REASONING,
-                QueryFeasibilityBlocker.DYNAMIC_AXIS_SELECTION,
-            ],
-            decomposition_reason="需要先验证现象，再逐步归因",
-            primary_restated_question="为什么华东区销售额下降了？",
-            llm_confidence=0.9,
-            analysis_plan=self._make_llm_global_understanding_output(),
+            analysis_mode=AnalysisMode.SINGLE_QUERY,
+            single_query_feasible=True,
+            needs_clarification=False,
+            clarification_question="Please confirm the time range",
+            clarification_options=["This month", "Last month"],
+            primary_restated_question="What is sales this month?",
+            llm_confidence=0.81,
         )
+
         with patch(
             "analytics_assistant.src.agents.semantic_parser.nodes.global_understanding.get_llm",
             return_value=MagicMock(),
@@ -313,128 +351,144 @@ class TestAnalysisPlanner:
             "analytics_assistant.src.agents.semantic_parser.nodes.global_understanding.stream_llm_structured",
             new=AsyncMock(return_value=llm_output),
         ):
-            global_understanding_result = await global_understanding_node(
-                {
-                    "question": "为什么华东区销售额下降了？",
-                    "prefilter_result": prefilter_result.model_dump(),
-                    "feature_extraction_output": feature_output.model_dump(),
-                }
-            )
+            result = await global_understanding_node({"question": "What is sales this month?"})
 
+        assert result["global_understanding"]["needs_clarification"] is False
+        assert result["global_understanding"]["clarification_question"] is None
+        assert result["global_understanding"]["clarification_options"] == []
+
+    @pytest.mark.asyncio
+    async def test_analysis_planner_node_serializes_plan(self):
         result = await analysis_planner_node(
             {
-                "question": "为什么华东区销售额下降了？",
-                "global_understanding": global_understanding_result["global_understanding"],
+                "question": "Why did East region sales drop?",
+                "global_understanding": GlobalUnderstandingOutput(
+                    analysis_mode=AnalysisMode.WHY_ANALYSIS,
+                    single_query_feasible=False,
+                    single_query_blockers=[
+                        QueryFeasibilityBlocker.MULTI_HOP_REASONING,
+                        QueryFeasibilityBlocker.DYNAMIC_AXIS_SELECTION,
+                    ],
+                    primary_restated_question="Why did East region sales drop?",
+                    llm_confidence=0.9,
+                    analysis_plan=self._make_why_plan(),
+                ).model_dump(),
             }
         )
 
         assert result["analysis_plan"]["plan_mode"] == PlanMode.WHY_ANALYSIS.value
         assert result["global_understanding"]["analysis_mode"] == AnalysisMode.WHY_ANALYSIS.value
-        assert result["global_understanding"]["single_query_feasible"] is False
         assert result["optimization_metrics"]["analysis_planner_triggered"] is True
-        assert result["optimization_metrics"]["analysis_planner_compat_fallback"] is False
 
     @pytest.mark.asyncio
     async def test_analysis_planner_node_prefers_existing_global_understanding_plan(self):
-        """analysis_planner 应优先回填 global_understanding 中已有的 analysis_plan。"""
-        # 使用 dict 直写，避免遗漏全局理解字段。
-        state = {
-            "question": "本月销售额是多少",
-            "global_understanding": build_global_understanding_fallback(
-                "已有外部全局理解结果",
-                AnalysisPlan(
-                    plan_mode=PlanMode.DECOMPOSED_QUERY,
-                    single_query_feasible=False,
-                    needs_planning=True,
-                    requires_llm_reasoning=True,
-                    goal="已有外部全局理解结果",
-                    sub_questions=[
-                        {
-                            "title": "已有步骤",
-                            "question": "已有步骤问题",
-                            "step_type": "query",
-                        }
-                    ],
-                ),
-            ).model_dump(),
-        }
+        existing_plan = AnalysisPlan(
+            plan_mode=PlanMode.DECOMPOSED_QUERY,
+            single_query_feasible=False,
+            needs_planning=True,
+            requires_llm_reasoning=True,
+            goal="Existing decomposed plan",
+            sub_questions=[
+                {
+                    "title": "Existing step",
+                    "question": "Use existing plan",
+                    "step_type": "query",
+                }
+            ],
+        )
 
-        result = await analysis_planner_node(state)
-
-        assert result["analysis_plan"]["goal"] == "已有外部全局理解结果"
-        assert result["analysis_plan"]["plan_mode"] == PlanMode.DECOMPOSED_QUERY.value
-
-    @pytest.mark.asyncio
-    async def test_analysis_planner_node_uses_minimal_direct_query_compat_fallback(self):
-        """缺少 global_understanding 时，analysis_planner 只回退到最小 direct-query 兼容计划。"""
         result = await analysis_planner_node(
             {
-                "question": "本月销售额是多少",
+                "question": "What changed?",
+                "global_understanding": GlobalUnderstandingOutput(
+                    analysis_mode=AnalysisMode.MULTI_STEP_ANALYSIS,
+                    single_query_feasible=False,
+                    single_query_blockers=[QueryFeasibilityBlocker.RESULT_SET_DEPENDENCY],
+                    primary_restated_question="Existing decomposed plan",
+                    llm_confidence=0.84,
+                    analysis_plan=existing_plan,
+                ).model_dump(),
             }
         )
 
-        assert result["analysis_plan"]["plan_mode"] == PlanMode.DIRECT_QUERY.value
-        assert result["analysis_plan"]["needs_planning"] is False
-        assert result["global_understanding"]["single_query_feasible"] is True
-        assert result["optimization_metrics"]["analysis_planner_compat_fallback"] is True
+        assert result["analysis_plan"]["goal"] == "Existing decomposed plan"
+        assert result["analysis_plan"]["plan_mode"] == PlanMode.DECOMPOSED_QUERY.value
 
-    def test_global_understanding_fallback_maps_direct_query_to_single_query(self):
-        """direct_query 应映射为单查询可行的 fallback 结果。"""
-        plan = AnalysisPlan(
+    @pytest.mark.asyncio
+    async def test_analysis_planner_node_requires_global_understanding(self):
+        with pytest.raises(ValueError, match="requires global_understanding"):
+            await analysis_planner_node({"question": "What is sales this month?"})
+
+    @pytest.mark.asyncio
+    async def test_analysis_planner_node_backfills_embedded_plan_from_explicit_state_plan(self):
+        explicit_plan = AnalysisPlan(
             plan_mode=PlanMode.DIRECT_QUERY,
             single_query_feasible=True,
             needs_planning=False,
-            requires_llm_reasoning=False,
-            decomposition_reason="当前问题可单查",
+            requires_llm_reasoning=True,
+            goal="What is sales this month?",
+            execution_strategy="single_query",
             planner_confidence=0.91,
         )
 
-        result = build_global_understanding_fallback("本月销售额是多少", plan)
-
-        assert result.analysis_mode == AnalysisMode.SINGLE_QUERY
-        assert result.single_query_feasible is True
-        assert result.single_query_blockers == []
-        assert result.analysis_plan is not None
-
-    def test_global_understanding_fallback_maps_why_plan_to_blocked_multihop(self):
-        """why 模式的 fallback 结果应显式标记为非单查和多跳阻塞。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.SIMPLE],
-            detected_language="zh",
-        )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["销售额"],
-            required_dimensions=["地区"],
-            confirmation_confidence=0.92,
-            is_degraded=False,
+        result = await analysis_planner_node(
+            {
+                "question": "What is sales this month?",
+                "analysis_plan": explicit_plan.model_dump(),
+                "global_understanding": GlobalUnderstandingOutput(
+                    analysis_mode=AnalysisMode.SINGLE_QUERY,
+                    single_query_feasible=True,
+                    primary_restated_question="What is sales this month?",
+                    llm_confidence=0.91,
+                ).model_dump(),
+            }
         )
 
-        plan = build_analysis_plan(
-            "为什么华东区销售额下降了？",
-            prefilter_result=prefilter_result,
-            feature_output=feature_output,
-        )
-        result = build_global_understanding_fallback("为什么华东区销售额下降了？", plan)
-
-        assert result.analysis_mode == AnalysisMode.WHY_ANALYSIS
-        assert result.single_query_feasible is False
-        assert QueryFeasibilityBlocker.MULTI_HOP_REASONING in result.single_query_blockers
-        assert QueryFeasibilityBlocker.DYNAMIC_AXIS_SELECTION in result.single_query_blockers
+        assert result["analysis_plan"]["goal"] == "What is sales this month?"
+        assert result["global_understanding"]["analysis_plan"]["goal"] == "What is sales this month?"
 
     @pytest.mark.asyncio
-    async def test_global_understanding_node_falls_back_to_rules_when_llm_errors(self):
-        """LLM 失败时，global_understanding 应回退到规则 fallback。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.SIMPLE],
-            detected_language="zh",
-        )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["销售额"],
-            required_dimensions=["地区"],
-            confirmation_confidence=0.92,
-            is_degraded=False,
+    async def test_unified_feature_and_understanding_node_uses_llm_global_understanding(self):
+        feature_output = self._make_feature_output()
+        llm_output = GlobalUnderstandingOutput(
+            analysis_mode=AnalysisMode.SINGLE_QUERY,
+            single_query_feasible=True,
+            primary_restated_question="Sales by region this month",
+            llm_confidence=0.88,
+            analysis_plan=AnalysisPlan(
+                plan_mode=PlanMode.DIRECT_QUERY,
+                single_query_feasible=True,
+                needs_planning=False,
+                requires_llm_reasoning=False,
+                goal="Sales by region this month",
+                execution_strategy="single_query",
+            ),
         )
 
+        with patch(
+            "analytics_assistant.src.agents.semantic_parser.nodes.parallel.feature_extractor_node",
+            new=AsyncMock(
+                return_value={
+                    "feature_extraction_output": feature_output.model_dump(),
+                    "is_degraded": False,
+                }
+            ),
+        ), patch(
+            "analytics_assistant.src.agents.semantic_parser.nodes.parallel.run_global_understanding",
+            new=AsyncMock(return_value=llm_output),
+        ):
+            result = await unified_feature_and_understanding_node(
+                {"question": "Sales by region this month"}
+            )
+
+        assert result["global_understanding"]["analysis_mode"] == AnalysisMode.SINGLE_QUERY.value
+        assert result["analysis_plan"]["plan_mode"] == PlanMode.DIRECT_QUERY.value
+        assert result["optimization_metrics"]["global_understanding_llm_used"] is True
+        assert result["optimization_metrics"]["global_understanding_fallback_used"] is False
+        assert result["optimization_metrics"]["global_understanding_rule_only"] is False
+
+    @pytest.mark.asyncio
+    async def test_global_understanding_node_raises_when_llm_errors(self):
         with patch(
             "analytics_assistant.src.agents.semantic_parser.nodes.global_understanding.get_llm",
             return_value=MagicMock(),
@@ -442,69 +496,86 @@ class TestAnalysisPlanner:
             "analytics_assistant.src.agents.semantic_parser.nodes.global_understanding.stream_llm_structured",
             new=AsyncMock(side_effect=RuntimeError("llm boom")),
         ):
-            result = await global_understanding_node(
-                {
-                    "question": "为什么华东区销售额下降了？",
-                    "prefilter_result": prefilter_result.model_dump(),
-                    "feature_extraction_output": feature_output.model_dump(),
-                }
-            )
+            with pytest.raises(RuntimeError, match="llm boom"):
+                await global_understanding_node(
+                    {
+                        "question": "Why did East region sales drop?",
+                        "prefilter_result": self._make_prefilter_result().model_dump(),
+                        "feature_extraction_output": self._make_feature_output().model_dump(),
+                    }
+                )
 
-        assert result["global_understanding"]["analysis_mode"] == AnalysisMode.WHY_ANALYSIS.value
-        assert result["global_understanding"]["single_query_feasible"] is False
-        assert result["optimization_metrics"]["global_understanding_llm_used"] is False
-        assert result["optimization_metrics"]["global_understanding_fallback_used"] is True
+    def test_global_understanding_prompt_includes_dimension_semantics(self):
+        prompt = build_global_understanding_prompt(
+            question="Why did East region sales drop?",
+            field_semantic={
+                "region": {
+                    "role": "dimension",
+                    "hierarchy_category": "geography",
+                    "hierarchy_level": "region",
+                    "child_dimension": "city",
+                    "business_description": "Region hierarchy",
+                },
+                "sales": {
+                    "role": "measure",
+                    "category": "sales_metric",
+                },
+            },
+        )
+
+        assert "[Available Dimension Semantics]" in prompt
+        assert "region; category=geography; level=region; child=city" in prompt
+        assert "candidate_axes" in prompt
 
     def test_prompt_builder_includes_analysis_plan_section(self):
-        """planner 与 evidence_context 应被 prompt builder 注入到最终 prompt。"""
-        prefilter_result = PrefilterResult(
-            detected_complexity=[ComplexityType.SIMPLE],
-            detected_language="zh",
-        )
-        feature_output = FeatureExtractionOutput(
-            required_measures=["销售额"],
-            required_dimensions=["地区"],
-            confirmation_confidence=0.92,
-            is_degraded=False,
-        )
-        plan = build_analysis_plan(
-            "为什么华东区销售额下降了？",
-            prefilter_result=prefilter_result,
-            feature_output=feature_output,
-        )
         prompt_builder = DynamicPromptBuilder(low_confidence_threshold=0.7)
         prompt = prompt_builder.build(
-            question="为什么华东区销售额下降了？",
+            question="Why did East region sales drop?",
             config=SemanticConfig(current_date=date(2026, 3, 6)),
             field_candidates=[
                 FieldCandidate(
-                    field_name="Sale Amtws",
-                    field_caption="销售额",
+                    field_name="Sales",
+                    field_caption="Sales",
                     role="measure",
                     data_type="float",
                     confidence=0.95,
                 ),
             ],
             detected_complexity=[ComplexityType.SIMPLE],
-            analysis_plan=plan,
+            analysis_plan=self._make_why_plan(),
             current_step_intent=StepIntent(
                 step_id="step-2",
-                title="定位异常切片",
-                goal="定位最异常的对象或切片",
-                question="按地区和产品找出贡献最大的异常切片",
-                semantic_focus=["异常定位", "产品", "地区"],
-                expected_output="定位异常对象集合或关键切片",
-                candidate_axes=["地区", "产品"],
+                title="Find abnormal slice",
+                goal="Locate the slice with the largest anomaly",
+                question="Break down the decline by product and city",
+                semantic_focus=["anomaly", "product", "city"],
+                expected_output="Abnormal slice candidates",
+                candidate_axes=["product", "city"],
                 depends_on=["step-1"],
             ),
             evidence_context=EvidenceContext(
-                primary_question="为什么华东区销售额下降了？",
-                anomalous_entities=["江苏"],
+                primary_question="Why did East region sales drop?",
+                anomalous_entities=["Jiangsu"],
+                validated_axes=["channel", "product_line"],
+                axis_scores=[
+                    AxisEvidenceScore(
+                        axis="channel",
+                        explained_share=0.62,
+                        confidence=0.86,
+                        reason="Direct channel contributes most of the drop",
+                    ),
+                    AxisEvidenceScore(
+                        axis="product_line",
+                        explained_share=0.31,
+                        confidence=0.73,
+                        reason="Office category declines materially",
+                    ),
+                ],
                 step_artifacts=[
                     StepArtifact(
                         step_id="step-1",
-                        title="验证现象",
-                        table_summary="华东区 3 月销售额同比下降 12%",
+                        title="Validate change",
+                        table_summary="East region sales declined 12% in March",
                     )
                 ],
             ),
@@ -513,6 +584,7 @@ class TestAnalysisPlanner:
         assert "<analysis_plan>" in prompt
         assert "<current_step_intent>" in prompt
         assert "<evidence_context>" in prompt
-        assert "原因分析" in prompt
-        assert "定位最异常的对象或切片" in prompt
-        assert "华东区 3 月销售额同比下降 12%" in prompt
+        assert "Find abnormal slice" in prompt
+        assert "East region sales declined 12% in March" in prompt
+        assert "解释轴优先级" in prompt
+        assert "channel(解释占比 62%, 置信度 86%" in prompt

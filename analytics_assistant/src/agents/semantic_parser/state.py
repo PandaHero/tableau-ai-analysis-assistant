@@ -70,6 +70,9 @@ class SemanticParserState(TypedDict, total=False):
     
     current_time: Optional[str]
     """当前时间（ISO 格式），用于时间表达式解析"""
+
+    feature_flags: Optional[dict[str, bool]]
+    """当前请求解析出的会话级功能开关。"""
     
     # ═══════════════════════════════════════════════════════════════════════
     # 组件输出（存储为 dict，非 Pydantic 对象）
@@ -431,7 +434,26 @@ class SemanticParserState(TypedDict, total=False):
     
     modular_prompt: Optional[str]
     """ModularPromptBuilder 输出的增强 Prompt"""
-    
+
+    candidate_fields_ref: Optional[str]
+    """检索到的字段候选物化引用。
+
+    该 ref 由 retrieval plane 统一生成，供 root_graph 回放、审计和离线评估使用。
+    """
+
+    candidate_values_ref: Optional[str]
+    """检索到的值候选物化引用。
+
+    当前优先复用 field_samples / candidate.sample_values；
+    后续若接入专门的 value retrieval，可保持同一 ref 契约。
+    """
+
+    fewshot_examples_ref: Optional[str]
+    """Few-shot 检索结果物化引用。"""
+
+    retrieval_trace_ref: Optional[str]
+    """检索 trace 持久化引用。"""
+
     validation_result: Optional[dict[str, Any]]
     """OutputValidator 输出（ValidationResult 序列化后）
     

@@ -1,31 +1,29 @@
 # -*- coding: utf-8 -*-
-"""
-用户设置路由单元测试
+"""用户设置路由单元测试。"""
 
-测试 GET/PUT /api/settings 端点。
-"""
+from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
-from langgraph.store.memory import InMemoryStore
 
-from analytics_assistant.src.api.main import app
 from analytics_assistant.src.api import dependencies
-from analytics_assistant.src.infra.storage import BaseRepository
+from analytics_assistant.src.api.main import app
+from analytics_assistant.src.infra.business_storage import SettingsRepository
+from analytics_assistant.tests.helpers.business_storage import create_test_business_database
 
 
 @pytest.fixture(autouse=True)
 def isolated_storage():
-    """每个测试使用独立的 InMemoryStore。"""
-    store = InMemoryStore()
+    """每个测试使用独立业务库。"""
+    database, db_path = create_test_business_database("settings")
     original_repos = dependencies._repositories.copy()
     dependencies._repositories.clear()
-    dependencies._repositories["user_settings"] = BaseRepository(
-        "user_settings", store=store,
-    )
+    dependencies._repositories["user_settings"] = SettingsRepository(database=database)
     yield
     dependencies._repositories.clear()
     dependencies._repositories.update(original_repos)
+    if db_path.exists():
+        db_path.unlink()
 
 
 HEADERS = {"X-Tableau-Username": "alice"}
@@ -35,11 +33,10 @@ class TestGetSettings:
     """GET /api/settings 测试。"""
 
     def test_auto_create_defaults(self):
-        """首次访问自动创建默认设置。"""
         client = TestClient(app)
-        resp = client.get("/api/settings", headers=HEADERS)
-        assert resp.status_code == 200
-        data = resp.json()
+        response = client.get("/api/settings", headers=HEADERS)
+        assert response.status_code == 200
+        data = response.json()
         assert data["tableau_username"] == "alice"
         assert data["language"] == "zh"
         assert data["analysis_depth"] == "detailed"
@@ -48,48 +45,39 @@ class TestGetSettings:
         assert data["default_datasource_id"] is None
 
     def test_returns_existing_settings(self):
-        """返回已有设置。"""
         client = TestClient(app)
-        # 先创建
         client.get("/api/settings", headers=HEADERS)
-        # 再获取
-        resp = client.get("/api/settings", headers=HEADERS)
-        assert resp.status_code == 200
-        assert resp.json()["language"] == "zh"
+        response = client.get("/api/settings", headers=HEADERS)
+        assert response.status_code == 200
+        assert response.json()["language"] == "zh"
 
     def test_requires_auth(self):
-        """缺少认证头返回 401。"""
         client = TestClient(app)
-        resp = client.get("/api/settings")
-        assert resp.status_code == 401
+        response = client.get("/api/settings")
+        assert response.status_code == 401
 
 
 class TestUpdateSettings:
     """PUT /api/settings 测试。"""
 
     def test_partial_update(self):
-        """部分更新只修改指定字段。"""
         client = TestClient(app)
-        # 先获取默认值
         client.get("/api/settings", headers=HEADERS)
 
-        # 只更新 language
-        resp = client.put(
+        response = client.put(
             "/api/settings",
             json={"language": "en"},
             headers=HEADERS,
         )
-        assert resp.status_code == 200
-        data = resp.json()
+        assert response.status_code == 200
+        data = response.json()
         assert data["language"] == "en"
-        # 其他字段保持默认
         assert data["theme"] == "light"
         assert data["analysis_depth"] == "detailed"
 
     def test_update_multiple_fields(self):
-        """同时更新多个字段。"""
         client = TestClient(app)
-        resp = client.put(
+        response = client.put(
             "/api/settings",
             json={
                 "language": "en",
@@ -98,25 +86,19 @@ class TestUpdateSettings:
             },
             headers=HEADERS,
         )
-        assert resp.status_code == 200
-        data = resp.json()
+        assert response.status_code == 200
+        data = response.json()
         assert data["language"] == "en"
         assert data["theme"] == "dark"
         assert data["show_thinking_process"] is False
 
     def test_update_persists(self):
-        """更新后再次获取能看到变更。"""
         client = TestClient(app)
-        client.put(
-            "/api/settings",
-            json={"language": "en"},
-            headers=HEADERS,
-        )
-        resp = client.get("/api/settings", headers=HEADERS)
-        assert resp.json()["language"] == "en"
+        client.put("/api/settings", json={"language": "en"}, headers=HEADERS)
+        response = client.get("/api/settings", headers=HEADERS)
+        assert response.json()["language"] == "en"
 
     def test_requires_auth(self):
-        """缺少认证头返回 401。"""
         client = TestClient(app)
-        resp = client.put("/api/settings", json={"language": "en"})
-        assert resp.status_code == 401
+        response = client.put("/api/settings", json={"language": "en"})
+        assert response.status_code == 401

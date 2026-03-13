@@ -1,157 +1,93 @@
 # -*- coding: utf-8 -*-
-"""
-Semantic Parser Cache Models
+"""Semantic parser 相关缓存模型。"""
 
-缓存相关模型定义：
-- CachedQuery: 查询缓存条目（最终查询结果）
-- CachedFeature: 特征缓存条目（中间特征提取结果）
-- CachedFieldValues: 字段值缓存条目
-"""
-from typing import Any, Optional
+from __future__ import annotations
+
 from datetime import datetime
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+
 class CachedQuery(BaseModel):
-    """查询缓存条目
-    
-    缓存成功执行的查询，支持精确匹配和语义相似匹配。
-    通过 schema_hash 检测数据模型变更，自动失效过期缓存。
-    
-    缓存失效条件：
-    1. TTL 过期（默认 24 小时）
-    2. schema_hash 不匹配（数据模型变更）
-    3. 手动失效（按数据源批量失效）
+    """查询缓存条目。
+
+    用于缓存成功解析后的最终查询结果，并通过 `schema_hash` 与 `scope_key`
+    同时保证：
+    - 数据模型变化后不会误命中旧缓存
+    - 不同租户/站点/用户之间不会串缓存
     """
+
     model_config = ConfigDict(extra="forbid")
-    
-    question: str = Field(
-        description="用户原始问题"
-    )
-    question_hash: str = Field(
-        description="问题的 hash 值（用于精确匹配）"
-    )
+
+    question: str = Field(description="用户原始问题")
+    question_hash: str = Field(description="问题哈希，用于精确命中")
     question_embedding: Optional[list[float]] = Field(
         default=None,
-        description="问题的向量表示（用于语义相似匹配）"
+        description="问题向量，用于语义相似匹配",
     )
-    datasource_luid: str = Field(
-        description="数据源 LUID"
+    datasource_luid: str = Field(description="数据源 LUID")
+    scope_key: str = Field(
+        default="global",
+        description="query cache 的租户/用户隔离键",
     )
-    schema_hash: str = Field(
-        description="数据模型的 schema hash（用于失效检测）"
-    )
+    schema_hash: str = Field(description="当前数据模型的 schema hash")
     parser_version: Optional[str] = Field(
         default=None,
-        description="语义解析缓存版本（用于代码变更后的主动失效）"
+        description="语义解析缓存版本，用于代码升级后的主动失效",
     )
-    semantic_output: dict[str, Any] = Field(
-        description="语义理解输出（序列化的 SemanticOutput）"
-    )
-    query: Any = Field(
-        description="生成的查询对象（通常为 semantic_query，兼容 str / dict）"
-    )
+    semantic_output: dict[str, Any] = Field(description="序列化后的语义输出")
+    query: Any = Field(description="生成的查询对象，兼容 str / dict / schema")
     analysis_plan: Optional[dict[str, Any]] = Field(
         default=None,
-        description="与该缓存结果绑定的 analysis_plan 兼容字段"
+        description="复杂问题的 analysis_plan 快照",
     )
     global_understanding: Optional[dict[str, Any]] = Field(
         default=None,
-        description="与该缓存结果绑定的 global_understanding 输出"
+        description="复杂问题的 global_understanding 快照",
     )
-    created_at: datetime = Field(
-        default_factory=datetime.now,
-        description="创建时间"
-    )
-    expires_at: datetime = Field(
-        description="过期时间"
-    )
-    hit_count: int = Field(
-        default=0,
-        ge=0,
-        description="命中次数统计"
-    )
+    created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
+    expires_at: datetime = Field(description="过期时间")
+    hit_count: int = Field(default=0, ge=0, description="命中次数")
+
 
 class CachedFieldValues(BaseModel):
-    """字段值缓存条目
-    
-    缓存字段的可能值，用于筛选值验证。
-    采用 LRU 淘汰策略，每个字段最多缓存 1000 个值。
-    
-    预热策略：
-    - 只加载维度字段（DIMENSION role）
-    - 只加载低基数字段（<500 唯一值）
-    - 排除时间类型字段
-    """
+    """字段值缓存条目。"""
+
     model_config = ConfigDict(extra="forbid")
-    
-    field_name: str = Field(
-        description="字段名称"
-    )
-    datasource_luid: str = Field(
-        description="数据源 LUID"
-    )
-    values: list[str] = Field(
-        description="字段值列表（最多 1000 个）"
-    )
+
+    field_name: str = Field(description="字段名称")
+    datasource_luid: str = Field(description="数据源 LUID")
+    values: list[str] = Field(description="字段值列表")
     cardinality: Optional[int] = Field(
         default=None,
-        description="字段基数（唯一值数量）"
+        description="字段基数",
     )
-    expires_at: datetime = Field(
-        description="过期时间"
-    )
-    cached_at: datetime = Field(
-        default_factory=datetime.now,
-        description="缓存时间"
-    )
+    expires_at: datetime = Field(description="过期时间")
+    cached_at: datetime = Field(default_factory=datetime.now, description="缓存时间")
+
 
 class CachedFeature(BaseModel):
-    """特征缓存条目
-    
-    缓存 FeatureExtractor 的输出，支持精确匹配和语义相似匹配。
-    与 CachedQuery 不同：
-    - CachedQuery: 缓存最终查询结果，TTL 24 小时，需要 schema_hash 验证
-    - CachedFeature: 缓存中间特征提取结果，TTL 1 小时，无 schema_hash 验证
-    
-    缓存失效条件：
-    1. TTL 过期（默认 1 小时）
-    2. 手动失效（按数据源批量失效）
-    """
+    """特征缓存条目。"""
+
     model_config = ConfigDict(extra="forbid")
-    
-    question: str = Field(
-        description="用户原始问题"
-    )
-    question_hash: str = Field(
-        description="问题的 hash 值（用于精确匹配）"
-    )
+
+    question: str = Field(description="用户原始问题")
+    question_hash: str = Field(description="问题哈希，用于精确命中")
     question_embedding: list[float] = Field(
         default_factory=list,
-        description="问题的向量表示（用于语义相似匹配）"
+        description="问题向量，用于语义相似匹配",
     )
-    datasource_luid: str = Field(
-        description="数据源 LUID"
-    )
+    datasource_luid: str = Field(description="数据源 LUID")
     parser_version: Optional[str] = Field(
         default=None,
-        description="特征缓存版本（用于规则变更后的主动失效）"
+        description="特征缓存版本",
     )
-    feature_output: dict[str, Any] = Field(
-        description="特征提取输出（序列化的 FeatureExtractionOutput）"
-    )
-    created_at: datetime = Field(
-        default_factory=datetime.now,
-        description="创建时间"
-    )
-    expires_at: datetime = Field(
-        description="过期时间"
-    )
-    hit_count: int = Field(
-        default=0,
-        ge=0,
-        description="命中次数统计"
-    )
+    feature_output: dict[str, Any] = Field(description="序列化后的特征提取结果")
+    created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
+    expires_at: datetime = Field(description="过期时间")
+    hit_count: int = Field(default=0, ge=0, description="命中次数")
+
 
 __all__ = [
     "CachedQuery",

@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage
+from langgraph.types import interrupt
 from langgraph.types import RunnableConfig
 
 from analytics_assistant.src.agents.base.node import get_llm, stream_llm_structured
@@ -27,6 +28,7 @@ from ..node_utils import merge_metrics, parse_field_candidates
 from ..state import SemanticParserState
 from ..components.candidate_resolver import (
     CLARIFICATION_CANDIDATE_MIN_CONFIDENCE as _CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
+    SIMPLE_SHORTCUT_MIN_CONFIDENCE,
     CandidateMatchContext,
     _field_display_name,
     _build_runtime_semantic_lexicon,
@@ -583,6 +585,339 @@ def _backfill_confidence_from_signals(
     return result
 
 
+def _can_use_simple_shortcut(state: SemanticParserState) -> bool:
+    """判断当前状态是否允许走规则快捷路径。"""
+    if _analysis_plan_requires_reasoning(state):
+        return False
+    if _step_intent_requires_reasoning(state):
+        return False
+
+    prefilter_result = _get_prefilter_result(state)
+    if prefilter_result is None:
+        return False
+    if prefilter_result.detected_complexity != [ComplexityType.SIMPLE]:
+        return False
+    if prefilter_result.matched_computations:
+        return False
+
+    feature_output = _get_feature_output(state)
+    if feature_output is None or feature_output.is_degraded:
+        return False
+    if feature_output.confirmation_confidence < SIMPLE_SHORTCUT_MIN_CONFIDENCE:
+        return False
+
+    return bool(
+        feature_output.required_measures
+        or feature_output.required_dimensions
+        or feature_output.confirmed_time_hints
+    )
+
+
+def _build_shortcut_self_check(
+    *,
+    confidence: float,
+    needs_clarification: bool,
+) -> SelfCheck:
+    """为规则快捷路径构造稳定的自检结果。"""
+    normalized = max(0.0, min(float(confidence), 1.0))
+    overall_confidence = min(normalized, 0.6) if needs_clarification else normalized
+    return SelfCheck(
+        field_mapping_confidence=overall_confidence,
+        time_range_confidence=1.0,
+        computation_confidence=1.0,
+        overall_confidence=overall_confidence,
+        potential_issues=(
+            ["存在未确认字段，需要用户澄清"] if needs_clarification else []
+        ),
+    )
+
+
+def _try_build_simple_semantic_output(
+    state: SemanticParserState,
+    question: str,
+) -> Optional[SemanticOutput]:
+    """基于候选字段直接构造简单查询的语义输出。"""
+    if not _can_use_simple_shortcut(state):
+        return None
+
+    feature_output = _get_feature_output(state)
+    if feature_output is None:
+        return None
+
+    ctx = CandidateMatchContext.from_field_candidates(
+        parse_field_candidates(state.get("field_candidates", []))
+    )
+    required_measures = [
+        item.strip()
+        for item in feature_output.required_measures
+        if isinstance(item, str) and item.strip()
+    ]
+    required_dimensions = [
+        item.strip()
+        for item in feature_output.required_dimensions
+        if isinstance(item, str) and item.strip()
+    ]
+
+    selected_measure_candidates, unresolved_measures = _resolve_simple_candidates(
+        required_measures,
+        ctx.measure_candidates,
+        ctx.measure_matcher,
+        allow_partial=False,
+        min_confidence=SIMPLE_SHORTCUT_MIN_CONFIDENCE,
+    )
+    selected_dimension_candidates, unresolved_dimensions = _resolve_simple_candidates(
+        required_dimensions,
+        ctx.dimension_candidates,
+        ctx.dimension_matcher,
+        allow_partial=False,
+        min_confidence=SIMPLE_SHORTCUT_MIN_CONFIDENCE,
+    )
+
+    if unresolved_measures or unresolved_dimensions:
+        return None
+    if required_measures and not selected_measure_candidates:
+        return None
+    if required_dimensions and not selected_dimension_candidates:
+        return None
+
+    result = SemanticOutput(
+        restated_question=str(question or state.get("question") or "").strip(),
+        what=What.model_validate(
+            {
+                "measures": [
+                    {
+                        "field_name": candidate.field_name,
+                        "aggregation": AggregationType.SUM.value,
+                    }
+                    for candidate in selected_measure_candidates
+                ]
+            }
+        ),
+        where=Where.model_validate(
+            {
+                "dimensions": [
+                    {"field_name": candidate.field_name}
+                    for candidate in selected_dimension_candidates
+                ],
+                "filters": [],
+            }
+        ),
+        needs_clarification=False,
+        self_check=_build_shortcut_self_check(
+            confidence=feature_output.confirmation_confidence,
+            needs_clarification=False,
+        ),
+    )
+    result = _backfill_top_n_filter(result, state)
+    result = _backfill_confidence_from_signals(result, state)
+    return _post_process_semantic_output(result)
+
+
+def _try_build_simple_clarification_output(
+    state: SemanticParserState,
+    question: str,
+) -> Optional[SemanticOutput]:
+    """在简单查询中保留已确认字段，并对未确认字段直接生成澄清输出。"""
+    if not _can_use_simple_shortcut(state):
+        return None
+
+    feature_output = _get_feature_output(state)
+    if feature_output is None:
+        return None
+
+    candidates = parse_field_candidates(state.get("field_candidates", []))
+    ctx = CandidateMatchContext.from_field_candidates(candidates)
+    required_measures = [
+        item.strip()
+        for item in feature_output.required_measures
+        if isinstance(item, str) and item.strip()
+    ]
+    required_dimensions = [
+        item.strip()
+        for item in feature_output.required_dimensions
+        if isinstance(item, str) and item.strip()
+    ]
+
+    # 澄清场景对已命中的度量候选更宽松，尽量保留真实字段，避免前端只看到占位词。
+    selected_measure_candidates, unresolved_measures = _resolve_simple_candidates(
+        required_measures,
+        ctx.measure_candidates,
+        ctx.measure_matcher,
+        allow_partial=True,
+        min_confidence=0.0,
+    )
+    selected_dimension_candidates, unresolved_dimensions = _resolve_simple_candidates(
+        required_dimensions,
+        ctx.dimension_candidates,
+        ctx.dimension_matcher,
+        allow_partial=True,
+        min_confidence=_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
+    )
+
+    if not unresolved_measures and not unresolved_dimensions:
+        return None
+
+    clarification_question: Optional[str] = None
+    clarification_options: list[str] = []
+    if unresolved_dimensions:
+        target_dimension = unresolved_dimensions[0]
+        if _should_use_missing_dimension_question(
+            [target_dimension],
+            ctx.dimension_candidates,
+            ctx.lexicon,
+        ):
+            clarification_question = _build_missing_dimension_question(target_dimension)
+        else:
+            clarification_question = _build_clarification_question(target_dimension, "维度")
+        clarification_options = _collect_clarification_options(
+            [target_dimension],
+            ctx.dimension_candidates,
+            ctx.dimension_matcher,
+            exclude_field_names={
+                candidate.field_name for candidate in selected_dimension_candidates
+            },
+            min_confidence=_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
+            fallback_scorer=lambda required_terms, candidate: (
+                _score_dimension_fallback_candidate(required_terms, candidate, ctx.lexicon)
+            ),
+        )
+    elif unresolved_measures:
+        target_measure = unresolved_measures[0]
+        clarification_question = _build_clarification_question(target_measure, "度量")
+        clarification_options = _collect_clarification_options(
+            [target_measure],
+            ctx.measure_candidates,
+            ctx.measure_matcher,
+            exclude_field_names={
+                candidate.field_name for candidate in selected_measure_candidates
+            },
+            min_confidence=0.0,
+        )
+
+    if not clarification_question or not clarification_options:
+        return None
+
+    result = SemanticOutput(
+        restated_question=str(question or state.get("question") or "").strip(),
+        what=What.model_validate(
+            {
+                "measures": [
+                    {
+                        "field_name": candidate.field_name,
+                        "aggregation": AggregationType.SUM.value,
+                    }
+                    for candidate in selected_measure_candidates
+                ]
+            }
+        ),
+        where=Where.model_validate(
+            {
+                "dimensions": [
+                    {"field_name": candidate.field_name}
+                    for candidate in selected_dimension_candidates
+                ],
+                "filters": [],
+            }
+        ),
+        needs_clarification=True,
+        clarification_question=clarification_question,
+        clarification_options=clarification_options,
+        self_check=_build_shortcut_self_check(
+            confidence=feature_output.confirmation_confidence,
+            needs_clarification=True,
+        ),
+    )
+    return _post_process_semantic_output(result)
+
+
+def _collect_clarification_resolution_state(
+    state: SemanticParserState,
+) -> dict[str, Any]:
+    feature_output = _get_feature_output(state)
+    required_measures = [
+        item.strip()
+        for item in (feature_output.required_measures if feature_output else [])
+        if isinstance(item, str) and item.strip()
+    ]
+    required_dimensions = [
+        item.strip()
+        for item in (feature_output.required_dimensions if feature_output else [])
+        if isinstance(item, str) and item.strip()
+    ]
+    candidates = parse_field_candidates(state.get("field_candidates", []))
+    ctx = CandidateMatchContext.from_field_candidates(candidates)
+    selected_measure_candidates, unresolved_measures = _resolve_simple_candidates(
+        required_measures,
+        ctx.measure_candidates,
+        ctx.measure_matcher,
+        allow_partial=True,
+        min_confidence=_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
+    )
+    selected_dimension_candidates, unresolved_dimensions = _resolve_simple_candidates(
+        required_dimensions,
+        ctx.dimension_candidates,
+        ctx.dimension_matcher,
+        allow_partial=True,
+        min_confidence=_CLARIFICATION_CANDIDATE_MIN_CONFIDENCE,
+    )
+    return {
+        "required_measures": required_measures,
+        "required_dimensions": required_dimensions,
+        "has_time_hints": bool(
+            feature_output and getattr(feature_output, "confirmed_time_hints", [])
+        ),
+        "ctx": ctx,
+        "selected_measure_candidates": selected_measure_candidates,
+        "selected_dimension_candidates": selected_dimension_candidates,
+        "unresolved_measures": unresolved_measures,
+        "unresolved_dimensions": unresolved_dimensions,
+    }
+
+
+def _resolve_missing_slot_name(
+    clarification_state: dict[str, Any],
+) -> str:
+    unresolved_measures = clarification_state.get("unresolved_measures") or []
+    unresolved_dimensions = clarification_state.get("unresolved_dimensions") or []
+    required_measures = clarification_state.get("required_measures") or []
+    required_dimensions = clarification_state.get("required_dimensions") or []
+    has_time_hints = bool(clarification_state.get("has_time_hints"))
+    selected_measure_candidates = clarification_state.get("selected_measure_candidates") or []
+    selected_dimension_candidates = clarification_state.get("selected_dimension_candidates") or []
+
+    if unresolved_measures or (required_measures and not selected_measure_candidates):
+        return "measure"
+
+    if unresolved_dimensions or (required_dimensions and not selected_dimension_candidates):
+        return "timeframe" if has_time_hints else "dimension"
+
+    return "field"
+
+
+def _append_clarification_turn(
+    history: Optional[list[dict[str, Any]]],
+    *,
+    assistant_message: str,
+    slot_name: str,
+    user_value: str,
+) -> list[dict[str, Any]]:
+    updated_history = list(history or [])
+    normalized_assistant_message = assistant_message.strip()
+    normalized_slot_name = slot_name.strip() or "field"
+    normalized_user_value = user_value.strip()
+
+    if normalized_assistant_message:
+        updated_history.append({
+            "role": "assistant",
+            "content": normalized_assistant_message,
+        })
+    updated_history.append({
+        "role": "user",
+        "content": f"{normalized_slot_name}: {normalized_user_value}",
+    })
+    return updated_history
+
+
 def _enrich_clarification_output(
     result: SemanticOutput,
     state: SemanticParserState,
@@ -813,11 +1148,33 @@ async def semantic_understanding_node(
 
     if not question:
         logger.warning("semantic_understanding_node: 问题为空")
-        return {
-            "needs_clarification": True,
-            "clarification_question": "请输入您的问题",
-            "clarification_source": ClarificationSource.SEMANTIC_UNDERSTANDING.value,
-        }
+        clarified_question = str(
+            interrupt({
+                "interrupt_type": "missing_slot",
+                "message": "请输入您的问题",
+                "source": ClarificationSource.SEMANTIC_UNDERSTANDING.value,
+                "slot_name": "question",
+                "options": [],
+                "resume_strategy": "langgraph_native",
+            })
+            or ""
+        ).strip()
+        if not clarified_question:
+            raise ValueError("missing_slot resume value for question must not be empty")
+
+        resumed_history = list(state.get("chat_history") or [])
+        resumed_history.append({
+            "role": "assistant",
+            "content": "请输入您的问题",
+        })
+        resumed_history.append({
+            "role": "user",
+            "content": clarified_question,
+        })
+        resumed_state = dict(state)
+        resumed_state["question"] = clarified_question
+        resumed_state["chat_history"] = resumed_history
+        return await semantic_understanding_node(resumed_state, config)
 
     # 获取 modular_prompt_builder_node 构建的 Prompt
     modular_prompt = state.get("modular_prompt")
@@ -1004,9 +1361,35 @@ async def semantic_understanding_node(
     result = _post_process_semantic_output(result)
     result = _backfill_computations(result, state)
 
+    clarification_state: Optional[dict[str, Any]] = None
     if result.needs_clarification:
         result.clarification_source = ClarificationSource.SEMANTIC_UNDERSTANDING
+        clarification_state = _collect_clarification_resolution_state(state)
         result = _enrich_clarification_output(result, state)
+        clarification_slot_name = _resolve_missing_slot_name(clarification_state)
+        clarified_value = str(
+            interrupt({
+                "interrupt_type": "missing_slot",
+                "message": str(result.clarification_question or "").strip(),
+                "source": ClarificationSource.SEMANTIC_UNDERSTANDING.value,
+                "slot_name": clarification_slot_name,
+                "options": list(result.clarification_options or []),
+                "resume_strategy": "langgraph_native",
+            })
+            or ""
+        ).strip()
+        if not clarified_value:
+            raise ValueError("missing_slot resume value must not be empty")
+
+        resumed_state = dict(state)
+        resumed_state.pop("modular_prompt", None)
+        resumed_state["chat_history"] = _append_clarification_turn(
+            state.get("chat_history"),
+            assistant_message=str(result.clarification_question or ""),
+            slot_name=clarification_slot_name,
+            user_value=clarified_value,
+        )
+        return await semantic_understanding_node(resumed_state, config)
 
     result = _backfill_top_n_filter(result, state)
     result = _backfill_confidence_from_signals(result, state)
@@ -1024,18 +1407,11 @@ async def semantic_understanding_node(
 
     output = {
         "semantic_output": semantic_output_dump,
-        "needs_clarification": result.needs_clarification,
         "thinking": thinking if thinking else None,
     }
 
-    if result.needs_clarification:
-        output["clarification_question"] = result.clarification_question
-        output["clarification_options"] = result.clarification_options
-        output["clarification_source"] = (
-            result.clarification_source.value
-            if result.clarification_source
-            else ClarificationSource.SEMANTIC_UNDERSTANDING.value
-        )
+    if state.get("chat_history") is not None:
+        output["chat_history"] = list(state.get("chat_history") or [])
 
     # 复杂查询：用 LLM 的全局理解判断更新 state 中的 global_understanding
     if complex_global_fields:

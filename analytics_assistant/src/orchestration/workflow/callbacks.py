@@ -1,22 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-SSE 回调机制
+"""工作流到 SSE 事件的回调适配层。"""
 
-将后端工作流事件（token 流、思考过程、节点状态）转换为 SSE 事件，
-通过 asyncio.Queue 传递给 StreamingResponse。
-
-使用示例:
-    event_queue = asyncio.Queue()
-    callbacks = SSECallbacks(event_queue)
-
-    # 注入到 RunnableConfig
-    config = create_workflow_config(
-        thread_id="xxx",
-        context=ctx,
-        on_token=callbacks.on_token,
-        on_thinking=callbacks.on_thinking,
-    )
-"""
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -24,11 +9,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ========================================
-# ProcessingStage 节点映射
-# ========================================
-
-# LLM 调用节点 → ProcessingStage
+# LLM 调用节点 -> ProcessingStage。
 _LLM_NODE_MAPPING: dict[str, str] = {
     "feature_extractor": "understanding",
     "global_understanding_stage": "understanding",
@@ -39,7 +20,7 @@ _LLM_NODE_MAPPING: dict[str, str] = {
     "field_semantic": "understanding",
 }
 
-# 用户可见节点（不调用 LLM，但需要展示进度）
+# 用户可见节点，不一定调用 LLM，但需要展示进度。
 _VISIBLE_NODE_MAPPING: dict[str, str] = {
     "authentication": "preparing",
     "data_preparation": "preparing",
@@ -55,10 +36,8 @@ _VISIBLE_NODE_MAPPING: dict[str, str] = {
     "error_corrector": "understanding",
 }
 
-# 合并映射
 _ALL_NODE_MAPPING: dict[str, str] = {**_LLM_NODE_MAPPING, **_VISIBLE_NODE_MAPPING}
 
-# 阶段显示名称
 _STAGE_NAMES_ZH: dict[str, str] = {
     "preparing": "准备数据",
     "understanding": "理解问题",
@@ -79,114 +58,68 @@ _STAGE_NAMES_EN: dict[str, str] = {
     "replanning": "Replanning",
 }
 
+
 def get_processing_stage(node_name: str) -> Optional[str]:
-    """根据节点名称返回 ProcessingStage。
-
-    只有涉及 LLM 调用或用户可见的节点才返回 stage，
-    其他节点返回 None（不发送前端事件）。
-
-    Args:
-        node_name: LangGraph 节点名称
-
-    Returns:
-        ProcessingStage 字符串，或 None
-    """
+    """根据节点名返回稳定的 ProcessingStage。"""
     return _ALL_NODE_MAPPING.get(node_name)
 
+
 def get_stage_display_name(stage: str, language: str = "zh") -> str:
-    """获取阶段的显示名称（支持中英文）。
-
-    Args:
-        stage: ProcessingStage
-        language: 语言（"zh" 或 "en"）
-
-    Returns:
-        显示名称
-    """
+    """获取阶段展示名，支持中英文。"""
     if language == "en":
         return _STAGE_NAMES_EN.get(stage, stage)
     return _STAGE_NAMES_ZH.get(stage, stage)
 
+
 class SSECallbacks:
-    """SSE 回调函数集合。
-
-    负责将后端事件转换为 SSE 事件字典，放入 asyncio.Queue。
-    通过 RunnableConfig.configurable 注入到 LangGraph 节点。
-
-    Attributes:
-        event_queue: 事件队列
-        _language: 显示语言
-    """
+    """把工作流回调写入事件队列。"""
 
     def __init__(
         self,
         event_queue: "asyncio.Queue[Optional[dict]]",
         language: str = "zh",
     ):
-        """初始化回调函数。
-
-        Args:
-            event_queue: 事件队列（用于发送 SSE 事件）
-            language: 显示语言
-        """
         self.event_queue = event_queue
         self._language = language
 
     async def on_token(self, token: str) -> None:
-        """Token 回调：LLM 返回 token 时触发。
-
-        Args:
-            token: LLM 生成的 token
-        """
+        """转发普通答案 token。"""
         await self.event_queue.put({
             "type": "token",
             "content": token,
         })
 
     async def on_thinking(self, thinking: str) -> None:
-        """Thinking 回调：R1 模型思考过程。
-
-        Args:
-            thinking: 思考内容
-        """
+        """转发 reasoning token。"""
         await self.event_queue.put({
             "type": "thinking_token",
             "content": thinking,
         })
 
     async def on_node_start(self, node_name: str) -> None:
-        """节点开始回调。
-
-        仅对有 ProcessingStage 映射的节点发送事件。
-
-        Args:
-            node_name: LangGraph 节点名称
-        """
+        """节点开始时发出阶段 running 事件。"""
         stage = get_processing_stage(node_name)
-        if stage:
-            await self.event_queue.put({
-                "type": "thinking",
-                "stage": stage,
-                "name": get_stage_display_name(stage, self._language),
-                "status": "running",
-            })
+        if stage is None:
+            return
+        await self.event_queue.put({
+            "type": "thinking",
+            "stage": stage,
+            "name": get_stage_display_name(stage, self._language),
+            "status": "running",
+        })
 
     async def on_node_end(self, node_name: str) -> None:
-        """节点完成回调。
-
-        仅对有 ProcessingStage 映射的节点发送事件。
-
-        Args:
-            node_name: LangGraph 节点名称
-        """
+        """节点结束时发出阶段 completed 事件。"""
         stage = get_processing_stage(node_name)
-        if stage:
-            await self.event_queue.put({
-                "type": "thinking",
-                "stage": stage,
-                "name": get_stage_display_name(stage, self._language),
-                "status": "completed",
-            })
+        if stage is None:
+            return
+        await self.event_queue.put({
+            "type": "thinking",
+            "stage": stage,
+            "name": get_stage_display_name(stage, self._language),
+            "status": "completed",
+        })
+
 
 __all__ = [
     "SSECallbacks",

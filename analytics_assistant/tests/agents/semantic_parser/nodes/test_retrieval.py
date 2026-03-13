@@ -4,10 +4,14 @@
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from analytics_assistant.src.agents.semantic_parser.components import (
+    build_query_cache_partition_key,
+    compute_question_hash,
+)
 from analytics_assistant.src.agents.semantic_parser.nodes.retrieval import (
     _apply_step_intent_hints,
     field_retriever_node,
@@ -17,6 +21,10 @@ from analytics_assistant.src.agents.semantic_parser.schemas.planner import StepI
 from analytics_assistant.src.agents.semantic_parser.schemas.prefilter import (
     FeatureExtractionOutput,
     FieldRAGResult,
+)
+from analytics_assistant.src.orchestration.retrieval_memory import (
+    MemoryStore,
+    RetrievalRouter,
 )
 
 
@@ -64,7 +72,9 @@ async def test_field_retriever_enables_rerank_for_step_intent_context():
     fake_ctx = SimpleNamespace(
         data_model=None,
         datasource_luid="ds-test",
+        schema_hash="schema-test-123",
         field_semantic=None,
+        auth=SimpleNamespace(site="site-a"),
     )
     fake_rag_result = FieldRAGResult(measures=[], dimensions=[], time_fields=[])
     fake_retrieve = AsyncMock(return_value=fake_rag_result)
@@ -81,6 +91,8 @@ async def test_field_retriever_enables_rerank_for_step_intent_context():
         result = await field_retriever_node(state, config={})
 
     assert mock_retriever_cls.call_args.kwargs["enable_rerank"] is True
+    assert fake_retrieve.await_args.kwargs["tenant_site"] == "site-a"
+    assert fake_retrieve.await_args.kwargs["schema_hash"] == "schema-test-123"
     assert result["optimization_metrics"]["field_retriever_step_intent_focus"] is True
 
 
@@ -108,3 +120,73 @@ async def test_few_shot_manager_does_not_skip_when_step_intent_exists():
 
     assert result["optimization_metrics"]["few_shot_skipped"] is False
     assert result["optimization_metrics"]["few_shot_step_intent_focus"] is True
+
+
+@pytest.mark.asyncio
+async def test_retrieval_router_materializes_candidate_refs():
+    """统一检索路由器应产出稳定 ref，供 root_graph 与审计层复用。"""
+    mock_store = MagicMock()
+    router = RetrievalRouter(
+        field_retriever=AsyncMock(return_value={
+            "field_candidates": [
+                {"field_name": "Region", "sample_values": ["East", "West"]},
+            ],
+            "optimization_metrics": {
+                "field_retriever_rerank_enabled": True,
+            },
+        }),
+        fewshot_retriever=AsyncMock(return_value={
+            "few_shot_examples": [
+                {"id": "ex-1", "question": "show revenue by region"},
+            ],
+            "optimization_metrics": {
+                "few_shot_skipped": False,
+            },
+        }),
+        memory_store=MemoryStore(store=mock_store),
+    )
+
+    state = {
+        "question": "show revenue by region",
+        "datasource_luid": "ds-test",
+    }
+    config = {
+        "configurable": {
+            "workflow_context": SimpleNamespace(
+                datasource_luid="ds-test",
+                schema_hash="schema-1",
+                query_cache_scope_key="scope_demo",
+                field_samples={"Region": {"sample_values": ["East", "West"]}},
+            ),
+            "request_id": "req-test",
+            "session_id": "sess-test",
+        }
+    }
+
+    result = await router.retrieve(state=state, config=config)
+    expected_key = (
+        "schema-1-"
+        + compute_question_hash("show revenue by region", "ds-test")
+    )
+    expected_partition = build_query_cache_partition_key(
+        "ds-test",
+        scope_key="scope_demo",
+    )
+
+    assert result["candidate_fields_ref"] == (
+        f"kv://retrieval_memory/candidate_fields/{expected_partition}/{expected_key}"
+    )
+    assert result["candidate_values_ref"] == (
+        f"kv://retrieval_memory/candidate_values/{expected_partition}/{expected_key}"
+    )
+    assert result["fewshot_examples_ref"] == (
+        f"kv://retrieval_memory/fewshot_examples/{expected_partition}/{expected_key}"
+    )
+    assert result["optimization_metrics"]["retrieval_strategy"] == [
+        "exact",
+        "bm25",
+        "embedding",
+        "hybrid",
+        "rerank",
+    ]
+    assert mock_store.put.call_count == 3

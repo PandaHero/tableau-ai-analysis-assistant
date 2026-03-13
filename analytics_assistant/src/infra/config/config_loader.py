@@ -71,7 +71,9 @@ class AppConfig:
         self.config_path = Path(config_path) if config_path else self._find_config_path()
         self.fallback_path = self._find_fallback_path()
         self.config: dict[str, Any] = {}
+        self._loaded_dotenv_values: dict[str, str] = {}
         
+        self._load_dotenv_files()
         self._load_config()
         self._initialized = True
     
@@ -104,6 +106,92 @@ class AppConfig:
                 return path
         
         return candidates[0]
+
+    def _find_dotenv_paths(self) -> list[Path]:
+        """查找支持的 dotenv 文件路径。"""
+        active_config_path = self.config_path if self.config_path.exists() else self.fallback_path
+        config_dir = active_config_path.resolve().parent
+
+        candidate_roots = [config_dir.parent.parent, config_dir.parent]
+        dotenv_paths: list[Path] = []
+        seen: set[Path] = set()
+
+        for root in candidate_roots:
+            for filename in (".env", ".env.local"):
+                path = root / filename
+                if path in seen:
+                    continue
+                seen.add(path)
+                dotenv_paths.append(path)
+
+        return dotenv_paths
+
+    def _parse_dotenv_file(self, path: Path) -> dict[str, str]:
+        """解析 dotenv 文件。"""
+        values: dict[str, str] = {}
+
+        try:
+            # Accept UTF-8 BOM because PowerShell often writes `.env` files with BOM on Windows.
+            with open(path, "r", encoding="utf-8-sig") as file:
+                lines = file.readlines()
+        except Exception as exc:
+            raise ConfigLoadError(f"dotenv 文件读取失败: {path} ({exc})") from exc
+
+        for line_number, raw_line in enumerate(lines, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+
+            if "=" not in line:
+                logger.warning("忽略格式错误的 dotenv 行: %s:%s", path, line_number)
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                logger.warning("忽略空 dotenv key: %s:%s", path, line_number)
+                continue
+
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                value = value[1:-1]
+
+            values[key] = value
+
+        return values
+
+    def _apply_dotenv_values(self, values: dict[str, str]) -> None:
+        """合并 dotenv 值到当前进程环境，不覆盖真实环境变量。"""
+        previous_values = dict(self._loaded_dotenv_values)
+
+        for key, old_value in previous_values.items():
+            current_value = os.environ.get(key)
+            if current_value == old_value and key not in values:
+                os.environ.pop(key, None)
+
+        loaded_values: dict[str, str] = {}
+        for key, value in values.items():
+            current_value = os.environ.get(key)
+            if current_value is None or (key in previous_values and current_value == previous_values[key]):
+                os.environ[key] = value
+                loaded_values[key] = value
+
+        self._loaded_dotenv_values = loaded_values
+
+    def _load_dotenv_files(self) -> None:
+        """在展开 YAML 环境变量前加载 dotenv。"""
+        dotenv_values: dict[str, str] = {}
+
+        for path in self._find_dotenv_paths():
+            if not path.exists():
+                continue
+            dotenv_values.update(self._parse_dotenv_file(path))
+            logger.info(f"加载 dotenv 文件: {path}")
+
+        self._apply_dotenv_values(dotenv_values)
     
     def _load_config(self):
         """加载配置文件"""
@@ -546,6 +634,7 @@ class AppConfig:
 
     def reload(self):
         """重新加载配置"""
+        self._load_dotenv_files()
         self._load_config()
 
 # ============================================
@@ -581,4 +670,3 @@ __all__ = [
     "ConfigLoadError",
     "get_config",
 ]
-

@@ -450,17 +450,19 @@ class TestMiddlewareIntegration:
 
     def test_sanitize_error_message(self):
         """敏感信息过滤。"""
-        from analytics_assistant.src.api.middleware import _sanitize_error_message
+        from analytics_assistant.src.infra.error_sanitizer import (
+            sanitize_error_message,
+        )
 
         # 包含敏感关键词 → 替换
-        assert _sanitize_error_message("connection_string: sqlite:///...") == "服务内部错误，请稍后重试"
-        assert _sanitize_error_message("api_key=sk-xxx") == "服务内部错误，请稍后重试"
-        assert _sanitize_error_message("password: 123456") == "服务内部错误，请稍后重试"
-        assert _sanitize_error_message('File "/app/main.py"') == "服务内部错误，请稍后重试"
+        assert sanitize_error_message("connection_string: sqlite:///...") == "服务内部错误，请稍后重试"
+        assert sanitize_error_message("api_key=sk-xxx") == "服务内部错误，请稍后重试"
+        assert sanitize_error_message("password: 123456") == "服务内部错误，请稍后重试"
+        assert sanitize_error_message('File "/app/main.py"') == "服务内部错误，请稍后重试"
 
         # 不包含敏感关键词 → 保留原文
-        assert _sanitize_error_message("数据源不存在") == "数据源不存在"
-        assert _sanitize_error_message("字段映射失败") == "字段映射失败"
+        assert sanitize_error_message("数据源不存在") == "数据源不存在"
+        assert sanitize_error_message("字段映射失败") == "字段映射失败"
 
     def test_validation_error_returns_422(self):
         """请求验证错误返回 422。"""

@@ -100,7 +100,7 @@ async def field_retriever_node(
 
     # 从 config 获取 WorkflowContext
     logger.info("[field_retriever_node] 获取 WorkflowContext...")
-    ctx = get_context(config) if config else None
+    ctx = get_context(config) if config is not None else None
     data_model = ctx.data_model if ctx else None
     datasource_luid = ctx.datasource_luid if ctx else None
     logger.info(f"[field_retriever_node] datasource_luid={datasource_luid}")
@@ -179,6 +179,8 @@ async def field_retriever_node(
             feature_output=feature_output,
             data_model=data_model,
             datasource_luid=datasource_luid,
+            tenant_site=getattr(getattr(ctx, "auth", None), "site", None),
+            schema_hash=getattr(ctx, "schema_hash", None),
         )
         logger.info("[field_retriever_node] retriever.retrieve() 完成")
     except Exception as e:

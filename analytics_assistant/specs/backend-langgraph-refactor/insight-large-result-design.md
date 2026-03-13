@@ -1,151 +1,98 @@
 # Insight Large Result Design
 
-> Status: Draft v1.0
-> Read order: 6/12
-> Upstream: `requirements.md`, `design.md`, `middleware.md`, `data-and-api.md`
-> Downstream: `migration.md`, `tasks.md`
-> Purpose: Define how insight works when result size is large (e.g., 100k rows).
+> Status: Draft v1.1
+> Read order: 8/14
+> Upstream: [design.md](./design.md), [middleware.md](./middleware.md), [artifact-freshness-and-rebuild.md](./artifact-freshness-and-rebuild.md)
+> Downstream: [node-catalog.md](./node-catalog.md), [migration.md](./migration.md), [tasks.md](./tasks.md)
 
-## 1. Scope
+## 1. 设计问题
 
-This document answers four concrete questions:
+本文件回答四个问题：
 
-1. What does "full statistics computation" include?
-2. What does "on-demand file reading" mean in practice?
-3. If results are insufficient for insight, what is the requery flow?
-4. What is the relationship between replanning and insight?
+1. 全量统计到底要算哪些内容？
+2. “按需文件读取”在工程上如何落地？
+3. 当前结果不足时，如何触发可控补查？
+4. 洞察与重规划如何协同而不互相污染？
 
-## 2. Full Statistics Computation
+## 2. 全量统计（确定性）
 
-The large-result insight pipeline does **not** ask the model to scan all rows.
-Instead, it runs **deterministic, full-scan statistics** and stores them as artifacts.
+大结果洞察不应让模型扫全量行，而应先计算统计工件。
 
-### 2.1 Required (always computed)
+### 2.1 必算项
 
-- Row count, column count, schema (name, type).
-- Null rate per column.
-- Distinct count per column.
-- Basic numeric stats: min, max, mean, std, p5/p50/p95.
-- Top-K categorical values with counts and percentage.
-- Time coverage and granularity (min/max timestamp, suggested grain).
-- Primary sort and data ordering (if present).
+- 行数、列数、schema
+- 每列空值率、去重数
+- 数值列 min/max/mean/std/p5/p50/p95
+- 类别列 top-k + 占比
+- 时间覆盖区间与建议粒度
 
-### 2.2 Strongly recommended (computed when applicable)
+### 2.2 推荐项
 
-- Time rollups by day/week/month for key measures.
-- Segment contribution: top-N groups by a small set of candidate dimensions.
-- Outlier flags for numeric measures (IQR or z-score).
-- Duplicate key rate if a natural key exists.
-- "Change drivers" candidate summary: top-N positive/negative movers by dimension.
+- 关键度量的日/周/月 rollup
+- 关键维度贡献度（top-n）
+- 异常点标记（IQR/z-score）
+- 关键字段重复率
 
-### 2.3 Optional (cost-aware)
+### 2.3 产物文件
 
-- Correlation matrix for numeric measures (capped to top-M measures).
-- Histogram bins for large numeric columns.
-- Two-way pivot summaries (one dimension + one measure).
-
-### 2.4 Artifact outputs
-
-All above are materialized as small artifacts:
-
+- `result_manifest.json`
 - `profiles/column_profile.json`
 - `profiles/numeric_stats.json`
 - `profiles/category_topk.json`
 - `profiles/time_rollup_day.json`
 - `profiles/segment_contribution.json`
-- `profiles/outlier_flags.json`
-- `result_manifest.json` (always)
 
-## 3. On-Demand File Reading
+## 3. 按需文件读取
 
-On-demand means:
+### 3.1 原则
 
-- The model never sees the full dataset in a single prompt.
-- The model asks for **specific file slices** via tools.
-- Each tool call has a **bounded, paginated** response.
+- 模型不能一次性拿到完整结果集。
+- 只能通过只读工具按需拉取片段。
+- 每次读取必须分页且受限。
 
-### 3.1 Tool protocol
+### 3.2 典型流程
 
-Tools exposed by `InsightFilesystemMiddleware`:
+1. `list_result_files`
+2. `describe_result_file`
+3. `read_result_rows`（列裁剪 + 过滤 + 分页）
+4. 必要时继续下一页
 
-- `list_result_files`
-- `describe_result_file`
-- `read_result_file` (text artifacts, paginated)
-- `read_result_rows` (table rows, paginated, column/filters)
-- `read_spilled_artifact`
+### 3.3 防护
 
-### 3.2 Typical read flow
+- `limit` 上限强约束
+- 强制显式列选择
+- 过滤语法仅支持轻量操作
+- 路径必须在当前 run 工作区
 
-1. `list_result_files` to identify what is available.
-2. `describe_result_file` to see schema, row count, chunks, and columns.
-3. Use `read_result_rows` with `columns + limit + offset + filters`.
-4. Only request more pages if the answer truly needs more evidence.
+## 4. 结果不足时的处理
 
-### 3.3 Example interaction
+`answer_graph` 只能产出三种决策：
 
-```text
-list_result_files()
-describe_result_file(file="result.parquet")
-read_result_rows(file="result.parquet", columns=["date","region","sales"], filters={"date": "last_30_days"}, limit=200, offset=0)
-read_result_rows(file="result.parquet", columns=["date","region","sales"], filters={"date": "last_30_days", "region": "East"}, limit=200, offset=200)
-```
+- `answer_with_caveat`：给出结论并明确不确定性
+- `clarify_interrupt`：向用户澄清范围
+- `replan_query`：补查（受限）
 
-### 3.4 Guardrails
+补查路径：
 
-- Hard limit on `limit` per call.
-- Require explicit `columns`.
-- Allow only simple filters (equality, range).
-- All reads restricted to the current run's artifact root.
+- 复用当前 `semantic_state`
+- 仅调整 query 约束（粒度、过滤、时间窗、分组）
+- 回到 `query_graph`，不重跑全语义解析
 
-## 4. When Results Are Insufficient
+只有用户意图变化时才回到 `semantic_graph`。
 
-If the current result does not support an insight, the system does **not** blindly re-run the full semantic pipeline.
+## 5. 洞察与重规划的边界
 
-### 4.1 Decision points
+- 洞察负责解释，不负责构造可执行查询。
+- 重规划负责决策与约束组装，不负责解释证据。
+- 两者解耦保证可审计与可回放。
 
-The `answer_graph` issues one of three decisions:
+推荐循环上限：
 
-- `answer_with_caveat`: Output a weaker insight with explicit uncertainty.
-- `clarify_interrupt`: Ask the user to refine scope.
-- `replan_query`: Issue a requery with adjusted constraints.
+- 默认最多 1 次自动重规划
+- 后续需用户确认（interrupt）
 
-### 4.2 Requery path
+## 6. 与新鲜度/检索平面的关系
 
-If `replan_query` is chosen:
-
-- Reuse existing `semantic_state`.
-- Adjust only query constraints (time window, filters, grain, grouping).
-- Pass directly to `query_graph` without re-running semantic parsing.
-
-Only if the user **changes intent** do we re-run `semantic_graph`.
-
-## 5. Replanning vs Insight
-
-They are related but should not be merged.
-
-### 5.1 Why not merge
-
-- Insight is an **interpretation** step.
-- Replanning is a **query construction** step.
-- If merged, the model would be allowed to generate executable queries directly, which breaks determinism and auditability.
-
-### 5.2 How they cooperate
-
-1. Insight runs and detects "missing evidence".
-2. It emits a **replan request** with constraints.
-3. Replan node compiles a deterministic query plan.
-4. Query runs and produces new artifacts.
-5. Insight runs again (bounded loop).
-
-### 5.3 Loop limits
-
-- Max 1 automatic replan per user request.
-- Additional replans require user confirmation (`interrupt/resume`).
-
-## 6. Summary
-
-For 100k rows:
-
-- Full statistics are computed deterministically and stored as artifacts.
-- Insight reads artifacts and bounded file slices only.
-- Replanning is a controlled loop, not an open-ended model-driven cycle.
+- 检索与记忆仅提供提示增强，不可替代当前 run 的证据。
+- 洞察必须绑定当前 `result_manifest_ref` 版本。
+- 旧 run 的 artifact 可用于“候选问题生成”，不可用于“当前结论证据”。

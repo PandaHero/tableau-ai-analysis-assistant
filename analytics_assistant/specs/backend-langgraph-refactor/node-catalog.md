@@ -1,301 +1,160 @@
-# Backend Node Catalog (Detailed)
+# Backend Node Catalog
 
-> Status: Draft v1.0  
-> Purpose: Provide detailed node-by-node specs for the upgraded backend.  
-> Read order: 7/12
+> Status: Draft v1.1
+> Read order: 9/14
+> Upstream: [design.md](./design.md), [retrieval-and-memory.md](./retrieval-and-memory.md), [middleware.md](./middleware.md)
+> Downstream: [node-io-schemas.md](./node-io-schemas.md), [interrupt-playbook.md](./interrupt-playbook.md), [sse-event-catalog.md](./sse-event-catalog.md), [tasks.md](./tasks.md)
 
-This document lists every node in the upgraded backend, including:
-- inputs/outputs
-- state reads/writes
-- side effects
-- errors and retry
-- interrupt behavior
-- middleware/tool usage
+## 1. API 层（非图节点）
 
----
+### 1.1 RequestLoggingMiddleware
 
-## 0. API Layer (Non-Graph)
+- Role: 注入/透传 `request_id`，记录耗时
+- Input: HTTP request
+- Output: HTTP response（附 `X-Request-ID`）
+- Error: none
 
-### 0.1 RequestLoggingMiddleware
-**Role:** Inject `request_id/trace_id`, log latency.  
-**Inputs:** HTTP request.  
-**Outputs:** unchanged request.  
-**Side effects:** logs only.  
-**Errors:** none.  
+### 1.2 ExceptionHandlers
 
-### 0.2 ExceptionHandlers
-**Role:** Map exceptions to error codes and JSON responses.  
-**Inputs:** Exception.  
-**Outputs:** normalized error response.  
-**Side effects:** logs only.  
+- Role: 统一异常 -> 错误码 -> 响应体
+- Input: Exception
+- Output: 标准错误响应
+- Error: none
 
----
+## 2. root_graph 入口节点
 
-## 1. Root Graph Entry Nodes
+### 2.1 `ingress_validate`
 
-### 1.1 ingress_validate
-**Role:** Validate message schema and required fields.  
-**Inputs:**  
-- `messages[]`  
-- `session_id`  
-- `idempotency_key`  
-**Outputs:** `ValidatedRequest`  
-**State writes:** `request.*`  
-**Errors:** `CLIENT_VALIDATION_ERROR`  
-**Retry:** none  
-**Interrupt:** none  
+- 作用: 校验请求、提取用户问题、初始化 request context
+- 关键输出: `request_id/session_id/latest_user_message`
+- 可能错误: `CLIENT_VALIDATION_ERROR`
+- 中断: 无
 
-Example output:
-```json
-{
-  "request_id": "req_123",
-  "session_id": "sess_001",
-  "user_message": "最近30天华东销售为何下降?"
-}
-```
+### 2.2 `hydrate_business_context`
 
-### 1.2 hydrate_business_context
-**Role:** Load session summary and settings.  
-**Inputs:** `session_id`  
-**Outputs:** `session_summary_ref`, `settings_ref`, `last_interrupt_ref`  
-**State writes:** `conversation.*`  
-**Errors:** `SESSION_NOT_FOUND`  
-**Retry:** none  
-**Interrupt:** none  
+- 作用: 读取会话摘要、用户设置、上次中断引用
+- 关键输出: `session_summary_ref/settings_ref/last_interrupt_ref`
+- 可能错误: `SESSION_NOT_FOUND`
+- 中断: 无
 
-### 1.3 resolve_tenant_context
-**Role:** Build tenant identity (domain/site/scopes).  
-**Inputs:** `user_id`, auth headers  
-**Outputs:** `tenant_context`  
-**State writes:** `tenant.*`  
-**Errors:** `TENANT_AUTH_ERROR`  
-**Retry:** none  
-**Interrupt:** none  
+### 2.3 `resolve_tenant_context`
 
----
+- 作用: 解析租户身份与权限范围
+- 关键输出: `tenant.domain/site/principal/scopes`
+- 可能错误: `TENANT_AUTH_ERROR`
+- 中断: 无
 
-## 2. context_graph
+## 3. `context_graph`
 
-### 2.1 resolve_tableau_auth
-**Role:** Acquire Tableau token for tenant.  
-**Inputs:** `tenant_context`  
-**Outputs:** `tableau_token_ref`  
-**State writes:** `tenant.auth_ref`  
-**Errors:** `TABLEAU_AUTH_ERROR`  
-**Retry:** yes (bounded, e.g. 1-2 times)  
-**Interrupt:** none  
-**Side effects:** token cache populate (Redis).  
+### 3.1 `resolve_tableau_auth`
 
-### 2.2 resolve_datasource_identity
-**Role:** Resolve a unique datasource.  
-**Inputs:**  
-- `datasource_luid` (preferred)  
-- `datasource_name` + `project_name`  
-**Outputs:** `datasource_luid`  
-**State writes:** `datasource.*`  
-**Errors:** `DATASOURCE_RESOLUTION_ERROR`  
-**Interrupt:** `datasource_disambiguation` if multiple matches  
+- 作用: 获取 Tableau token（含缓存）
+- 输出: `tenant.auth_ref`
+- 错误: `TABLEAU_AUTH_ERROR`
+- 重试: 有界重试（建议 1-2 次）
 
-Interrupt payload (example):
-```json
-{
-  "interrupt_type": "datasource_disambiguation",
-  "choices": [
-    {"datasource_luid":"ds_1","project":"Sales","name":"Revenue"},
-    {"datasource_luid":"ds_2","project":"Ops","name":"Revenue"}
-  ]
-}
-```
+### 3.2 `resolve_datasource_identity`
 
-### 2.3 load_metadata_snapshot
-**Role:** Load schema snapshot and schema hash.  
-**Inputs:** `datasource_luid`  
-**Outputs:** `metadata_snapshot_ref`, `schema_hash`  
-**State writes:** `datasource.schema_hash`, `artifacts.metadata_snapshot_ref`  
-**Errors:** `METADATA_NOT_READY`  
-**Retry:** yes (bounded)  
+- 作用: 唯一化 datasource
+- 输入优先级: `datasource_luid` > `datasource_name + project_name`
+- 输出: `datasource_luid/project/schema_hash?`
+- 错误: `DATASOURCE_RESOLUTION_ERROR`
+- 中断: `datasource_disambiguation`
 
-### 2.4 load_ready_artifacts
-**Role:** Load prebuilt field semantic/sample artifacts.  
-**Inputs:** `schema_hash`  
-**Outputs:** `field_semantic_ref`, `field_values_ref`  
-**State writes:** `artifacts.*`  
-**Errors:** `ARTIFACT_NOT_READY` (allow soft degradation)  
-**Retry:** no (prefer degrade)  
+### 3.3 `load_metadata_snapshot`
 
----
+- 作用: 加载 metadata snapshot 与 schema hash
+- 输出: `metadata_snapshot_ref/schema_hash`
+- 错误: `METADATA_NOT_READY`
 
-## 3. semantic_graph
+### 3.4 `load_ready_artifacts`
 
-### 3.1 retrieve_semantic_candidates
-**Role:** RAG-style retrieval for candidate fields.  
-**Inputs:** `user_question`, `metadata_snapshot_ref`, `field_semantic_ref`  
-**Outputs:** candidate fields list  
-**State writes:** `semantic.candidates_ref`  
-**Errors:** `FIELD_RETRIEVAL_ERROR`  
-**Retry:** optional (bounded)  
+- 作用: 加载 semantic/value artifacts + freshness report
+- 输出: `field_semantic_ref/field_values_ref/freshness_ref/degrade_flags`
+- 错误: `ARTIFACT_NOT_READY`（允许降级）
 
-### 3.2 semantic_parse (LLM)
-**Role:** Convert question to structured semantics.  
-**Inputs:** `user_question`, candidate fields  
-**Outputs:** `SemanticOutput`  
-**State writes:** `semantic.*`  
-**Errors:** `SEMANTIC_PARSE_ERROR`  
-**Retry:** optional via `ModelRetryMiddleware`  
+## 4. `semantic_graph`
 
-Example output:
-```json
-{
-  "intent": "trend_explain",
-  "measures": ["sales"],
-  "dimensions": ["region","date"],
-  "filters": {"region":"East","date":"last_30_days"},
-  "confidence": 0.82,
-  "ambiguity": []
-}
-```
+### 4.1 `retrieve_semantic_candidates`
 
-### 3.3 semantic_guard
-**Role:** Deterministic validation and normalization.  
-**Inputs:** `SemanticOutput`  
-**Outputs:** `VerifiedSemanticOutput`  
-**Errors:** `SEMANTIC_VALIDATION_ERROR`  
-**Interrupt:**  
-- `missing_slot`  
-- `value_confirm`  
-**Retry:** none  
+- 作用: 检索候选字段/值/few-shot
+- 输出: `candidate_fields_ref/candidate_values_ref/fewshot_examples_ref/retrieval_trace_ref`
+- 错误: `FIELD_RETRIEVAL_ERROR`
 
----
+### 4.2 `semantic_parse`（LLM）
 
-## 4. query_graph
+- 作用: 结构化语义解析（schema-first）
+- 输出: `semantic.intent/measures/dimensions/filters/timeframe/grain/confidence`
+- 错误: `SEMANTIC_PARSE_ERROR`
 
-### 4.1 build_query_plan
-**Role:** Compile verified semantics into deterministic query plan.  
-**Inputs:** `VerifiedSemanticOutput`  
-**Outputs:** `QueryPlan`  
-**State writes:** `query.plan_ref`  
-**Errors:** `QUERY_PLAN_ERROR`  
+### 4.3 `semantic_guard`
 
-Example output:
-```json
-{
-  "select": ["sales","date","region"],
-  "filters": [{"field":"region","op":"=","value":"East"}],
-  "group_by": ["date","region"],
-  "timeframe": "last_30_days",
-  "limit": 50000
-}
-```
+- 作用: 确定性校验与补全
+- 输出: `verified_semantic`
+- 错误: `SEMANTIC_VALIDATION_ERROR`
+- 中断: `missing_slot` / `value_confirm`
 
-### 4.2 execute_tableau_query
-**Role:** Execute query via Tableau adapter.  
-**Inputs:** `QueryPlan`  
-**Outputs:** `ExecuteResult`  
-**Errors:** `QUERY_EXECUTION_ERROR`, `TABLEAU_TIMEOUT`, `EMPTY_RESULT`  
-**Interrupt:** `high_risk_query_confirm` (when estimated scan cost exceeds threshold)  
-**Retry:** yes (bounded)  
-**Side effects:** query audit log entry  
+## 5. `query_graph`
 
-### 4.3 normalize_result_table
-**Role:** Normalize types/timezone/null semantics.  
-**Inputs:** `ExecuteResult`  
-**Outputs:** `NormalizedTable`  
-**Errors:** `NORMALIZATION_ERROR`  
-**Retry:** no  
+### 5.1 `build_query_plan`
 
-### 4.4 materialize_result_artifacts
-**Role:** Persist results and compute full statistics.  
-**Inputs:** `NormalizedTable`  
-**Outputs:**  
-- `result_manifest_ref`  
-- `profiles_ref`  
-- `chunks_ref`  
-**Errors:** `ARTIFACT_WRITE_ERROR`  
-**Side effects:** artifact store writes  
+- 作用: 将 verified semantic 编译为确定性 query plan
+- 输出: `query.plan_ref`
+- 错误: `QUERY_PLAN_ERROR`
 
-Artifacts created:
-- `result_manifest.json`
-- `chunks/chunk-xxxx.jsonl`
-- `profiles/column_profile.json`
-- `profiles/numeric_stats.json`
-- `profiles/category_topk.json`
-- `profiles/time_rollup_day.json`
+### 5.2 `execute_tableau_query`
 
----
+- 作用: 执行查询
+- 输出: `execute_result_ref/row_count`
+- 错误: `QUERY_EXECUTION_ERROR`, `TABLEAU_TIMEOUT`, `EMPTY_RESULT`
+- 中断: `high_risk_query_confirm`
 
-## 5. answer_graph (Insight + Replan coordination)
+### 5.3 `normalize_result_table`
 
-### 5.1 prepare_insight_workspace
-**Role:** Build allowlist and workspace context.  
-**Inputs:** `result_manifest_ref`  
-**Outputs:** `insight_workspace`  
-**Errors:** `WORKSPACE_INIT_ERROR`  
+- 作用: 统一数据类型、空值、时间语义
+- 输出: `normalized_result_ref`
+- 错误: `NORMALIZATION_ERROR`
 
-### 5.2 insight_generate (ReAct loop)
-**Role:** Explore artifacts and produce evidence-backed insight.  
-**Inputs:** `insight_workspace`, `profiles_ref`  
-**Outputs:** `InsightOutput`, optional `replan_request`, optional `followup_candidates`  
-**LLM calls:** 1+ (loop)  
-**Errors:** `INSIGHT_GENERATION_ERROR`  
-**Tools:**  
-- `list_result_files`  
-- `describe_result_file`  
-- `read_result_file`  
-- `read_result_rows`  
-- `read_spilled_artifact`  
-**Middleware:**  
-- `InsightFilesystemMiddleware`  
-- `ModelRetryMiddleware`  
-- `ToolRetryMiddleware`  
-- `SummarizationMiddleware`  
-- `HumanInTheLoopMiddleware` (optional tool approvals)  
+### 5.4 `materialize_result_artifacts`
 
-Text-based ReAct fallback:
-```
-Thought: ...
-Action: {"tool":"read_result_rows","args":{...}}
-Observation: ...
-```
+- 作用: 结果落盘并产出 manifest/chunks/profiles
+- 输出: `result_manifest_ref/profiles_ref/chunks_ref`
+- 错误: `ARTIFACT_WRITE_ERROR`
 
-### 5.3 replan_decide
-**Role:** Deterministic gate for requery decision.  
-**Inputs:** `replan_request`  
-**Outputs:** `answer_with_caveat` / `replan_query` / `followup_interrupt` / `stop`  
-**Errors:** `REPLAN_EXHAUSTED`  
-**Side effects:** loop control to `query_graph`  
+## 6. `answer_graph`
 
-### 5.4 followup_interrupt
-**Role:** Emit follow-up candidate interrupt when user selection is required.  
-**Inputs:** `followup_candidates`  
-**Outputs:** interrupt payload  
-**Interrupt:** `followup_select`  
-**Errors:** none  
+### 6.1 `prepare_insight_workspace`
 
----
+- 作用: 构建洞察工作区与 allowlist
+- 输出: `insight_workspace_ref`
+- 错误: `WORKSPACE_INIT_ERROR`
 
-## 6. Finalization
+### 6.2 `insight_generate`（LLM + file tools）
 
-### 6.1 persist_run_artifacts
-**Role:** Persist run summary refs.  
-**Inputs:** run_id + refs  
-**Errors:** `PERSIST_ERROR`  
+- 作用: 基于文件证据生成洞察
+- 输出: `answer_ref/evidence_ref/replan_request?`
+- 错误: `INSIGHT_GENERATION_ERROR`
 
-### 6.2 finalize_stream
-**Role:** Stream SSE events to user.  
-**Inputs:** event stream  
-**Errors:** none (best-effort)  
+### 6.3 `replan_decide`
 
----
+- 作用: 决策是否补查
+- 输出: `answer_with_caveat | replan_query | clarify_interrupt | stop`
+- 错误: `REPLAN_EXHAUSTED`
 
-## 7. Tool Schemas (Summary)
-See `middleware.md` section 6.5.1 for full examples.
+### 6.4 `clarify_interrupt`
 
----
+- 作用: 发送答案阶段澄清/选择中断
+- 输出: interrupt payload
+- 中断: `followup_select`
 
-## 8. Interrupt Payloads
-See `data-and-api.md` section 6.4 for full examples.
+## 7. 结束节点
 
----
+### 7.1 `persist_run_artifacts`
 
-## 9. Error Messages
-See `data-and-api.md` section 8.1 for user-facing hints.
+- 作用: 持久化运行摘要与引用
+- 错误: `PERSIST_ERROR`
+
+### 7.2 `finalize_stream`
+
+- 作用: 输出 SSE 完成事件
+- 错误: best effort，不影响主运行状态

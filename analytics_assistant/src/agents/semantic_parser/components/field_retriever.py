@@ -45,6 +45,7 @@ from analytics_assistant.src.infra.rag import get_rag_service
 from analytics_assistant.src.infra.rag.exceptions import IndexNotFoundError
 from analytics_assistant.src.infra.rag.models import FieldChunk, RetrievalResult, RetrievalSource
 from analytics_assistant.src.infra.rag.reranker import LLMReranker
+from analytics_assistant.src.platform.tableau.artifact_keys import build_field_index_name
 from analytics_assistant.src.core.schemas.field_candidate import FieldCandidate
 
 from ..schemas.prefilter import FeatureExtractionOutput, FieldRAGResult
@@ -159,8 +160,6 @@ class FieldRetriever:
         >>> print(f"度量: {len(result.measures)}, 维度: {len(result.dimensions)}")
     """
 
-    INDEX_PREFIX = "fields_"
-
     # 默认配置
     _DEFAULT_TOP_K = 5
     _DEFAULT_FALLBACK_MULTIPLIER = 2.0
@@ -232,6 +231,8 @@ class FieldRetriever:
         feature_output: FeatureExtractionOutput,
         data_model: Optional[Any] = None,
         datasource_luid: Optional[str] = None,
+        tenant_site: Optional[str] = None,
+        schema_hash: Optional[str] = None,
     ) -> FieldRAGResult:
         """基于特征提取输出检索字段。
 
@@ -259,7 +260,11 @@ class FieldRetriever:
         )
 
         # 获取索引名称
-        index_name = self._get_index_name(datasource_luid)
+        index_name = self._get_index_name(
+            datasource_luid,
+            tenant_site=tenant_site,
+            schema_hash=schema_hash,
+        )
 
         # 检查索引是否存在
         index_exists = self._check_index_exists(index_name)
@@ -290,17 +295,43 @@ class FieldRetriever:
             f"time_fields={len(time_candidates)}"
         )
 
+        field_samples = getattr(data_model, "_field_samples_cache", None)
+        if field_samples:
+            measure_candidates = self._attach_cached_sample_values(
+                measure_candidates,
+                field_samples,
+            )
+            dimension_candidates = self._attach_cached_sample_values(
+                dimension_candidates,
+                field_samples,
+            )
+            time_candidates = self._attach_cached_sample_values(
+                time_candidates,
+                field_samples,
+            )
+
         return FieldRAGResult(
             measures=measure_candidates,
             dimensions=dimension_candidates,
             time_fields=time_candidates,
         )
 
-    def _get_index_name(self, datasource_luid: Optional[str]) -> Optional[str]:
+    def _get_index_name(
+        self,
+        datasource_luid: Optional[str],
+        *,
+        tenant_site: Optional[str] = None,
+        schema_hash: Optional[str] = None,
+    ) -> Optional[str]:
         """获取索引名称。"""
-        if not datasource_luid:
+        # 读取路径必须和写入路径使用同一份 schema 版本键，避免命中旧索引。
+        if not datasource_luid or not schema_hash:
             return None
-        return f"{self.INDEX_PREFIX}{datasource_luid}"
+        return build_field_index_name(
+            datasource_id=datasource_luid,
+            site=tenant_site,
+            schema_hash=schema_hash,
+        )
 
     def _check_index_exists(self, index_name: Optional[str]) -> bool:
         """检查索引是否存在。"""
@@ -312,6 +343,28 @@ class FieldRetriever:
         except Exception as e:
             logger.warning(f"检查索引是否存在失败: index={index_name}, error={e}")
             return False
+
+    def _attach_cached_sample_values(
+        self,
+        candidates: list[FieldCandidate],
+        field_samples: dict[str, Any],
+    ) -> list[FieldCandidate]:
+        """用 values artifact 恢复字段样例，避免依赖语义索引中的旧样例。"""
+        if not candidates or not field_samples:
+            return candidates
+
+        for candidate in candidates:
+            if candidate.sample_values:
+                continue
+            sample_info = (
+                field_samples.get(candidate.field_caption)
+                or field_samples.get(candidate.field_name)
+                or {}
+            )
+            sample_values = list(sample_info.get("sample_values") or [])
+            if sample_values:
+                candidate.sample_values = sample_values[:5]
+        return candidates
 
     async def _retrieve_by_terms(
         self,

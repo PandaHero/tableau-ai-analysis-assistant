@@ -5,7 +5,7 @@ Pydantic 请求/响应模型
 定义 API 层的所有请求和响应数据模型。
 """
 
-from .chat import ChatRequest, Message
+from .chat import ChatRequest, ChatResumeRequest, Message
 from .common import ErrorResponse, HealthResponse
 from .feedback import FeedbackRequest
 from .session import (
@@ -20,6 +20,7 @@ from .settings import UpdateSettingsRequest, UserSettingsResponse
 __all__ = [
     "Message",
     "ChatRequest",
+    "ChatResumeRequest",
     "CreateSessionRequest",
     "CreateSessionResponse",
     "SessionResponse",

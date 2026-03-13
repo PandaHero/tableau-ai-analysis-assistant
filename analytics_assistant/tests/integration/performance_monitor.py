@@ -61,17 +61,23 @@ class PerformanceMonitor:
         has_regression = monitor.check_regression(metric, threshold=1.2)
     """
     
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, baseline_file: Optional[Path] = None):
         """初始化性能监控器
         
         Args:
             output_dir: 性能数据输出目录
+            baseline_file: 基线文件路径，默认使用 output_dir/performance_baseline.json
         """
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.baseline_file = baseline_file or (self.output_dir / "performance_baseline.json")
         self._metrics: list[PerformanceMetric] = []
         
-        logger.info(f"性能监控器初始化: output_dir={output_dir}")
+        logger.info(
+            "性能监控器初始化: output_dir=%s baseline_file=%s",
+            output_dir,
+            self.baseline_file,
+        )
     
     def record_metric(self, metric: PerformanceMetric):
         """记录性能指标
@@ -129,7 +135,7 @@ class PerformanceMonitor:
     def get_baseline(self, test_name: str) -> Optional[PerformanceMetric]:
         """获取性能基线
         
-        从 baseline.json 文件中读取指定测试的基线性能。
+        从基线文件中读取指定测试的基线性能。
         
         Args:
             test_name: 测试名称
@@ -137,14 +143,12 @@ class PerformanceMonitor:
         Returns:
             基线性能指标，如果不存在返回 None
         """
-        baseline_file = self.output_dir / "baseline.json"
-        
-        if not baseline_file.exists():
-            logger.debug(f"基线文件不存在: {baseline_file}")
+        if not self.baseline_file.exists():
+            logger.debug("基线文件不存在: %s", self.baseline_file)
             return None
         
         try:
-            with open(baseline_file, "r", encoding="utf-8") as f:
+            with open(self.baseline_file, "r", encoding="utf-8") as f:
                 baselines = json.load(f)
             
             if test_name not in baselines:

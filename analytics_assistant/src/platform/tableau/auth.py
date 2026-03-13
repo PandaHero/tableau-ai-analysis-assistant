@@ -17,6 +17,7 @@ Token 自动缓存（TTL 从配置读取，默认 10 分钟）
     # 使用 token
     headers = {"X-Tableau-Auth": auth.api_key}
 """
+import hashlib
 import time
 import logging
 from typing import Any, Optional
@@ -316,6 +317,7 @@ def _get_auth_params() -> dict[str, Any]:
             "secret_id": jwt_config.get("secret_id", "").strip(),
             "secret": jwt_config.get("secret", "").strip(),
             "user": jwt_config.get("user", "").strip(),
+            "scopes": jwt_config.get("scopes") or ["tableau:content:read"],
         },
         "pat_config": {
             "name": pat_config.get("name", "").strip(),
@@ -340,6 +342,88 @@ def _build_auth_result(
         "api_key": api_key,
         "auth_method": auth_method,
     }
+
+
+def _normalize_scopes(scopes: Optional[list[str]]) -> list[str]:
+    normalized = sorted({
+        str(scope).strip()
+        for scope in (scopes or [])
+        if str(scope).strip()
+    })
+    return normalized
+
+
+def _build_scope_hash(scopes: Optional[list[str]]) -> str:
+    normalized = _normalize_scopes(scopes)
+    if not normalized:
+        return "noscope"
+    digest = hashlib.sha1(",".join(normalized).encode("utf-8")).hexdigest()
+    return digest[:12]
+
+
+def _build_auth_cache_key(
+    *,
+    domain: str,
+    site: str,
+    principal: str,
+    auth_method: str,
+    scopes: Optional[list[str]],
+) -> str:
+    normalized_domain = str(domain or "").strip().lower().rstrip("/")
+    normalized_site = str(site or "").strip().lower()
+    normalized_principal = str(principal or "").strip().lower()
+    scope_hash = _build_scope_hash(scopes)
+    return (
+        f"tableau:token:{normalized_domain}:{normalized_site}:"
+        f"{normalized_principal}:{auth_method}:{scope_hash}"
+    )
+
+
+def _build_cache_candidates(params: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    jwt_cfg = params["jwt_config"]
+    pat_cfg = params["pat_config"]
+
+    if all([jwt_cfg["client_id"], jwt_cfg["secret_id"], jwt_cfg["secret"], jwt_cfg["user"]]):
+        candidates.append(_build_auth_cache_key(
+            domain=params["domain"],
+            site=params["site"],
+            principal=jwt_cfg["user"],
+            auth_method="jwt",
+            scopes=jwt_cfg.get("scopes"),
+        ))
+
+    if all([pat_cfg["name"], pat_cfg["secret"]]):
+        candidates.append(_build_auth_cache_key(
+            domain=params["domain"],
+            site=params["site"],
+            principal=pat_cfg["name"],
+            auth_method="pat",
+            scopes=[],
+        ))
+
+    return candidates
+
+
+def _resolve_cache_key_for_auth(params: dict[str, Any], auth_method: str) -> str:
+    if auth_method == "jwt":
+        jwt_cfg = params["jwt_config"]
+        return _build_auth_cache_key(
+            domain=params["domain"],
+            site=params["site"],
+            principal=jwt_cfg["user"],
+            auth_method="jwt",
+            scopes=jwt_cfg.get("scopes"),
+        )
+
+    pat_cfg = params["pat_config"]
+    return _build_auth_cache_key(
+        domain=params["domain"],
+        site=params["site"],
+        principal=pat_cfg["name"],
+        auth_method="pat",
+        scopes=[],
+    )
 
 def _authenticate_from_config() -> dict[str, Any]:
     """
@@ -371,7 +455,7 @@ def _authenticate_from_config() -> dict[str, Any]:
                 domain=domain, site=site, api_version=api_version,
                 user=jwt_cfg["user"], client_id=jwt_cfg["client_id"],
                 secret_id=jwt_cfg["secret_id"], secret=jwt_cfg["secret"],
-                scopes=["tableau:content:read"],
+                scopes=_normalize_scopes(jwt_cfg.get("scopes")),
             )
             api_key = _extract_api_key(response)
             if api_key:
@@ -434,7 +518,7 @@ async def _authenticate_from_config_async() -> dict[str, Any]:
                 domain=domain, site=site, api_version=api_version,
                 user=jwt_cfg["user"], client_id=jwt_cfg["client_id"],
                 secret_id=jwt_cfg["secret_id"], secret=jwt_cfg["secret"],
-                scopes=["tableau:content:read"],
+                scopes=_normalize_scopes(jwt_cfg.get("scopes")),
             )
             api_key = _extract_api_key(response)
             if api_key:
@@ -509,12 +593,13 @@ def _build_auth_context(auth_data: dict[str, Any], cache_ttl: float) -> TableauA
         auth_method=auth_data.get("auth_method", "unknown"),
     )
 
-def _get_cache_params() -> tuple[str, float]:
-    """获取缓存键和 TTL（公共逻辑）。"""
+def _get_cache_params() -> tuple[list[str], float, dict[str, Any]]:
+    """获取候选缓存键、TTL 和认证参数。"""
     config = get_config()
     cache_ttl = config.get_tableau_token_cache_ttl()
-    cache_key = config.get_tableau_domain().lower().rstrip("/")
-    return cache_key, cache_ttl
+    params = _get_auth_params()
+    cache_candidates = _build_cache_candidates(params)
+    return cache_candidates, cache_ttl, params
 
 def get_tableau_auth(force_refresh: bool = False) -> TableauAuthContext:
     """
@@ -524,14 +609,16 @@ def get_tableau_auth(force_refresh: bool = False) -> TableauAuthContext:
     1. 内存缓存（如果未过期）
     2. 调用认证 API 获取新 token
     """
-    cache_key, cache_ttl = _get_cache_params()
+    cache_candidates, cache_ttl, params = _get_cache_params()
     
     if not force_refresh:
-        cached = _check_cache(cache_key, cache_ttl)
-        if cached:
-            return cached
+        for cache_key in cache_candidates:
+            cached = _check_cache(cache_key, cache_ttl)
+            if cached:
+                return cached
     
     auth_data = _authenticate_from_config()
+    cache_key = _resolve_cache_key_for_auth(params, auth_data["auth_method"])
     _update_cache(cache_key, auth_data)
     return _build_auth_context(auth_data, cache_ttl)
 
@@ -543,14 +630,16 @@ async def get_tableau_auth_async(force_refresh: bool = False) -> TableauAuthCont
     1. 内存缓存（如果未过期）
     2. 调用认证 API 获取新 token
     """
-    cache_key, cache_ttl = _get_cache_params()
+    cache_candidates, cache_ttl, params = _get_cache_params()
     
     if not force_refresh:
-        cached = _check_cache(cache_key, cache_ttl)
-        if cached:
-            return cached
+        for cache_key in cache_candidates:
+            cached = _check_cache(cache_key, cache_ttl)
+            if cached:
+                return cached
     
     auth_data = await _authenticate_from_config_async()
+    cache_key = _resolve_cache_key_for_auth(params, auth_data["auth_method"])
     _update_cache(cache_key, auth_data)
     return _build_auth_context(auth_data, cache_ttl)
 

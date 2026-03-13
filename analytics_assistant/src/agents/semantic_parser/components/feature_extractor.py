@@ -39,7 +39,7 @@ from ..prompts.feature_extractor_prompt import (
 
 logger = logging.getLogger(__name__)
 
-_RULE_FAST_PATH_MIN_CONFIDENCE = 0.85
+_RULE_FAST_PATH_MIN_CONFIDENCE = 0.70
 _RULE_FAST_PATH_MAX_TERMS = 3
 _ASCII_TERM_PATTERN = re.compile(r"^[a-z0-9_ ]+$")
 _TIME_DIMENSION_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (

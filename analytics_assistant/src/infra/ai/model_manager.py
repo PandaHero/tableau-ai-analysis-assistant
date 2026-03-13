@@ -64,6 +64,10 @@ from ..storage import CacheManager
 
 logger = logging.getLogger(__name__)
 
+# 全局单例只允许通过 get_model_manager() 暴露，避免构造函数承担隐藏兼容语义。
+_manager_instance: Optional["ModelManager"] = None
+_manager_lock = threading.Lock()
+
 class ModelManager:
     """
     模型管理器（门面类）
@@ -78,8 +82,10 @@ class ModelManager:
     - YAML 配置文件中的模型：只读，不持久化（重启后从 YAML 重新加载）
     - 通过 API 动态添加的模型：持久化到 SQLite（重启后自动恢复）
     """
-    
     def __init__(self):
+        if getattr(self, "_initialized", False):
+            return
+
         # 初始化子模块
         self._registry = ModelRegistry()
         self._factory = ModelFactory()
@@ -96,6 +102,7 @@ class ModelManager:
         
         # 从持久化存储加载动态配置
         self._load_from_persistence()
+        self._initialized = True
     
     # ═══════════════════════════════════════════════════════════════════════
     # 配置加载
@@ -551,17 +558,14 @@ class ModelManager:
 # 全局单例访问
 # ═══════════════════════════════════════════════════════════════════════════
 
-_model_manager_instance: Optional[ModelManager] = None
-_model_manager_lock = threading.Lock()
-
 def get_model_manager() -> ModelManager:
-    """获取 ModelManager 单例实例（线程安全）"""
-    global _model_manager_instance
-    if _model_manager_instance is None:
-        with _model_manager_lock:
-            if _model_manager_instance is None:
-                _model_manager_instance = ModelManager()
-    return _model_manager_instance
+    """获取 ModelManager 单例实例（线程安全）。"""
+    global _manager_instance
+    if _manager_instance is None:
+        with _manager_lock:
+            if _manager_instance is None:
+                _manager_instance = ModelManager()
+    return _manager_instance
 
 def get_embeddings(model_id: Optional[str] = None, **kwargs) -> Embeddings:
     """获取 Embedding 实例（便捷函数）"""

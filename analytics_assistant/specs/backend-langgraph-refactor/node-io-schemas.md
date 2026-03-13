@@ -1,8 +1,10 @@
 # Node IO Schemas (Examples)
 
-> Status: Draft v1.0
-> Purpose: Concrete IO payload examples for each node.
-> Read order: 8/12
+> Status: Draft v1.1
+> Purpose: Concrete IO payload examples for root/context/semantic/query/answer nodes.
+> Read order: 10/14
+> Upstream: [node-catalog.md](./node-catalog.md), [data-and-api.md](./data-and-api.md)
+> Downstream: [interrupt-playbook.md](./interrupt-playbook.md), [tasks.md](./tasks.md)
 
 ---
 
@@ -57,7 +59,7 @@
 **Output:**
 ```json
 {
-  "tableau_token_ref": "token_cache/tableau_token:site=sales:principal=alice"
+  "tableau_token_ref": "token_cache/tableau:token:example.tableau.com:sales:alice@example.com:pat:scope_5f2a"
 }
 ```
 
@@ -250,7 +252,16 @@
 }
 ```
 
-### 5.4 followup_interrupt
+**Output (clarify_interrupt):**
+```json
+{
+  "decision": "clarify_interrupt",
+  "interrupt_type": "followup_select",
+  "reason": "需要用户选择下一步分析方向。"
+}
+```
+
+### 5.4 clarify_interrupt
 **Output (interrupt):**
 ```json
 {
